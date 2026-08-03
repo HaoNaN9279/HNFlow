@@ -16,12 +16,13 @@ export type NodeStatus =
   | "Skipped"
   | "WaitingForHuman";
 
-/** 合法转移表：以 Record<NodeStatus, ...> 穷尽枚举全部来源状态，遗漏即编译错误。 */
+/** 合法转移表：以 Record<NodeStatus, ...> 穷尽枚举全部来源状态，遗漏即编译错误。
+ *  Failed -> Running 为断点续跑语义：失败节点恢复后重跑。 */
 const LEGAL_TRANSITIONS: Record<NodeStatus, readonly NodeStatus[]> = {
   Idle: ["Running"],
   Running: ["Success", "Failed", "Skipped", "WaitingForHuman"],
   Success: [],
-  Failed: [],
+  Failed: ["Running"],
   Skipped: [],
   WaitingForHuman: ["Running", "Skipped"],
 };
@@ -56,6 +57,11 @@ export class NodeStateMachine {
       throw new NodeStateTransitionError(this.#status, next);
     }
     this.#status = next;
+  }
+
+  /** 断点恢复用：直接设状态，不校验转移表（仅 rebuildMachines 恢复时使用）。 */
+  restore(status: NodeStatus): void {
+    this.#status = status;
   }
 
   reset(): void {

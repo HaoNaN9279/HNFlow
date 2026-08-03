@@ -2,6 +2,7 @@
 // Node / Port / VariablePath 来自 model 层（T2），此处仅消费，不重复定义。
 // NodeExecutionContext 由 T4 的 WorkflowContext 实现，T5/T7 据此消费。
 
+import type { HumanTaskStore } from "../human/HumanTaskStore.js";
 import type { HumanTaskSpec } from "../human/types.js";
 import type { Node, Port, VariablePath } from "../model/types.js";
 
@@ -30,6 +31,8 @@ export interface NodeExecutionContext {
   /** 当前执行的节点 */
   node: Node;
   workflowId: string;
+  /** 引擎注入的人工任务存储（subworkflow 节点透传给子引擎复用，保证跨重启任务可查）。 */
+  readonly humanTaskStore?: HumanTaskStore;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

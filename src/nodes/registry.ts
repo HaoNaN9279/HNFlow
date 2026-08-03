@@ -10,6 +10,7 @@ import { ifElseNode } from "./ifElse.js";
 import { logNode } from "./log.js";
 import { setVariableNode } from "./setVariable.js";
 import { startNode } from "./start.js";
+import { subworkflowNode } from "./subworkflow.js";
 
 /** 重复注册同一 type */
 export class DuplicateNodeTypeError extends Error {
@@ -66,6 +67,7 @@ export const builtinNodes: INodeDefinition[] = [
   fileNode,
   logNode,
   humanTaskNode,
+  subworkflowNode,
 ];
 
 export const registry = new NodeRegistry();
