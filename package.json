@@ -1,0 +1,17 @@
+{
+  "name": "@hnflow/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "dev": "tsc --watch --noEmit"
+  },
+  "dependencies": {
+    "typescript": "^7.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14"
+  }
+}
