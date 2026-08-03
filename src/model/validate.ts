@@ -112,5 +112,16 @@ export function validateWorkflow(workflow: Workflow): { ok: true } | { ok: false
     }
   }
 
+  // 递归校验嵌套子图：subworkflow 错误带 "node <id>.subworkflow: " 前缀。
+  for (const node of workflow.nodes) {
+    if (node.subworkflow === undefined) continue;
+    const nested = validateWorkflow(node.subworkflow);
+    if (!nested.ok) {
+      for (const error of nested.errors) {
+        errors.push(`node "${node.id}".subworkflow: ${error}`);
+      }
+    }
+  }
+
   return errors.length === 0 ? { ok: true } : { ok: false, errors };
 }

@@ -41,6 +41,7 @@ export function fromJSON(json: unknown): Workflow {
     nodes: data.nodes.map(nodeFromJSON),
     edges: data.edges.map(edgeFromJSON),
     ...(data.globalVariables === undefined ? {} : { globalVariables: data.globalVariables }),
+    ...(data.draftOf === undefined ? {} : { draftOf: data.draftOf }),
   };
 }
 
@@ -81,6 +82,7 @@ function nodeFromJSON(node: NodeJSON): Node {
     inputs: node.inputs.map(portFromJSON),
     outputs: node.outputs.map(portFromJSON),
     ...(node.position === undefined ? {} : { position: node.position }),
+    ...(node.subworkflow === undefined ? {} : { subworkflow: fromJSON(node.subworkflow) }),
   };
 }
 

@@ -20,6 +20,7 @@ export interface Node {
   readonly inputs: readonly Port[];
   readonly outputs: readonly Port[];
   readonly position?: { readonly x: number; readonly y: number };
+  readonly subworkflow?: Workflow; // 嵌套子图（编辑态深拷贝/校验需递归处理）
 }
 
 export interface Edge {
@@ -37,6 +38,7 @@ export interface Workflow {
   readonly nodes: readonly Node[];
   readonly edges: readonly Edge[];
   readonly globalVariables?: Readonly<Record<string, unknown>>;
+  readonly draftOf?: string; // 草稿溯源：指向原工作流 id（Draft 扩展用）
 }
 
 export type ScopeName = "global" | "workflow" | `node:${string}`;
