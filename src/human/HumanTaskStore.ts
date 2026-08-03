@@ -77,6 +77,12 @@ export class HumanTaskStore {
     return this.tasks.find((task) => task.id === id);
   }
 
+  /** 查找指定 workflow+node 的待处理任务（引擎挂起前查重用）。 */
+  async findPending(workflowId: string, nodeId: string): Promise<HumanTask | undefined> {
+    await this.ensureLoaded();
+    return this.tasks.find((t) => t.status === "pending" && t.workflowId === workflowId && t.nodeId === nodeId);
+  }
+
   async complete(id: string, result?: unknown): Promise<HumanTask> {
     return this.transition(id, "pending", (task) => ({
       ...task,
