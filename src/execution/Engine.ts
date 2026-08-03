@@ -8,6 +8,8 @@ import { NodeStateMachine } from "./NodeState.js";
 import type { NodeExecutionContext } from "./types.js";
 import type { NodeRegistry } from "../nodes/registry.js";
 import { registry } from "../nodes/registry.js";
+import { HumanTaskStore, InvalidTaskStateError } from "../human/HumanTaskStore.js";
+import type { HumanTask, HumanTaskSpec } from "../human/types.js";
 
 /** 节点快照：nodeId → 最终状态。 */
 export interface EngineNodeSnapshot {
@@ -17,7 +19,9 @@ export interface EngineNodeSnapshot {
 /** 一次 run 的完整执行结果。 */
 export interface ExecutionResult {
   readonly workflowId: string;
-  readonly status: "success" | "failed";
+  readonly status: "success" | "failed" | "waiting";
+  /** 挂起（status="waiting"）时携带的人工任务记录。 */
+  readonly waitingTask?: HumanTask;
   /** nodeId → 最终状态（未执行的节点保持 Idle）。 */
   readonly nodeStates: Record<string, NodeStatus>;
   /** nodeId → 输出端口值映射（仅成功执行的节点有记录）。 */
@@ -36,11 +40,15 @@ export interface ExecutionEvents {
   }) => void;
   readonly onComplete?: (result: ExecutionResult) => void;
   readonly onError?: (error: Error) => void;
+  /** 人工任务已创建并持久化（挂起发生时）。 */
+  readonly onHumanTaskCreated?: (task: HumanTask) => void;
 }
 export interface ExecutionEngineOptions {
   /** 节点注册表，默认全局 registry。 */
   readonly registry?: NodeRegistry;
   readonly events?: ExecutionEvents;
+  /** 人工任务存储，默认懒加载 HumanTaskStore（human_tasks.json）。 */
+  readonly humanTaskStore?: HumanTaskStore;
   /** 初始 workflow 级变量。 */
   readonly workflowVariables?: Record<string, unknown>;
 }
@@ -53,6 +61,19 @@ export interface EngineLogEntry {
 function assertNever(value: never): never {
   throw new Error(`unreachable value: ${String(value)}`);
 }
+/** 节点请求人工介入的信号：由 ctx.suspend 抛出，引擎识别后转入挂起流程（不视为失败）。 */
+export class HumanTaskRequiredError extends Error {
+  readonly name = "HumanTaskRequiredError";
+
+  constructor(readonly spec: HumanTaskSpec) {
+    super(`human task required: ${spec.title}`);
+  }
+}
+/** runNode 的三种结局：ok=Success/Skipped，failed=失败消息，waiting=挂起（携带已创建任务）。 */
+type RunNodeOutcome =
+  | { readonly kind: "ok" }
+  | { readonly kind: "failed"; readonly message: string }
+  | { readonly kind: "waiting"; readonly task: HumanTask };
 /** Kahn 拓扑排序：预检已拦截环；孤立节点 indegree=0 自然入队。 */
 function topoSort(workflow: Workflow): string[] {
   const indegree = new Map<string, number>();
@@ -111,6 +132,8 @@ export class ExecutionEngine {
   #outputs = new Map<string, Record<string, unknown>>();
   #machines = new Map<string, NodeStateMachine>();
   #logs: EngineLogEntry[] = [];
+  #pendingNodeId: string | undefined;
+  #humanTaskStore: HumanTaskStore | undefined;
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
     this.#options = options;
@@ -118,10 +141,15 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
+    this.#pendingNodeId = undefined;
   }
   /** 执行期间节点产生的日志。 */
   get logs(): readonly EngineLogEntry[] {
     return [...this.#logs];
+  }
+  /** 当前挂起节点 id（未挂起为 undefined）。 */
+  get pendingNodeId(): string | undefined {
+    return this.#pendingNodeId;
   }
   async run(): Promise<ExecutionResult> {
     this.resetState();
@@ -137,33 +165,55 @@ export class ExecutionEngine {
       this.#options.events?.onComplete?.(result);
       return result;
     }
-    for (const nodeId of topoSort(this.#workflow)) {
-      const failedMessage = await this.runNode(nodeId);
-      if (failedMessage !== undefined) {
-        // 失败即停：后续节点保持 Idle。
-        const result = this.buildResult("failed", startTime, failedMessage);
-        this.#options.events?.onComplete?.(result);
-        return result;
+    return this.runRemaining(topoSort(this.#workflow), 0, startTime);
+  }
+  /** 从 startIndex 起执行拓扑序剩余节点：跑完返回 success；失败即停；挂起返回 waiting。 */
+  private async runRemaining(
+    order: readonly string[],
+    startIndex: number,
+    startTime: number,
+  ): Promise<ExecutionResult> {
+    for (const nodeId of order.slice(startIndex)) {
+      const outcome = await this.runNode(nodeId);
+      switch (outcome.kind) {
+        case "failed": {
+          // 失败即停：后续节点保持 Idle。
+          const result = this.buildResult("failed", startTime, outcome.message);
+          this.#options.events?.onComplete?.(result);
+          return result;
+        }
+        case "waiting": {
+          this.#pendingNodeId = nodeId;
+          const result = this.buildResult("waiting", startTime, undefined, outcome.task);
+          this.#options.events?.onComplete?.(result);
+          return result;
+        }
+        case "ok":
+          break;
+        default:
+          assertNever(outcome);
       }
     }
     const result = this.buildResult("success", startTime);
     this.#options.events?.onComplete?.(result);
     return result;
   }
-  /** 调度单个节点。返回 undefined=正常（Success/Skipped），否则为失败消息。 */
-  private async runNode(nodeId: string): Promise<string | undefined> {
+  /** 调度单个节点。ok=正常（Success/Skipped），failed=失败消息，waiting=挂起。 */
+  private async runNode(nodeId: string): Promise<RunNodeOutcome> {
     const node = this.#nodeById.get(nodeId);
     const machine = this.#machines.get(nodeId);
-    if (node === undefined || machine === undefined) return undefined;
+    if (node === undefined || machine === undefined) return { kind: "ok" };
+    // 正常首次执行 previous 为 Idle；resume 恢复时为 WaitingForHuman。
+    const previous = this.#states.get(nodeId) ?? "Idle";
     machine.transitionTo("Running");
     this.#states.set(nodeId, "Running");
-    this.emitStateChange(nodeId, "Idle", "Running");
+    this.emitStateChange(nodeId, previous, "Running");
     const incoming = this.#incoming.get(nodeId) ?? [];
     if (!this.shouldExecute(incoming)) {
       machine.transitionTo("Skipped");
       this.#states.set(nodeId, "Skipped");
       this.emitStateChange(nodeId, "Running", "Skipped");
-      return undefined;
+      return { kind: "ok" };
     }
     this.transferPortData(node, incoming);
     try {
@@ -173,15 +223,80 @@ export class ExecutionEngine {
       machine.transitionTo("Success");
       this.#states.set(nodeId, "Success");
       this.emitStateChange(nodeId, "Running", "Success");
-      return undefined;
+      return { kind: "ok" };
     } catch (err) {
+      if (err instanceof HumanTaskRequiredError) {
+        return await this.suspendNode(node, machine, err);
+      }
       machine.transitionTo("Failed");
       this.#states.set(nodeId, "Failed");
       this.emitStateChange(nodeId, "Running", "Failed");
       const message = `${node.name}(${node.id}) failed: ${err instanceof Error ? err.message : String(err)}`;
       this.#options.events?.onError?.(err instanceof Error ? err : new Error(message));
-      return message;
+      return { kind: "failed", message };
     }
+  }
+  /** 挂起流程：转入 WaitingForHuman → 创建并持久化任务 → 触发 onHumanTaskCreated。 */
+  private async suspendNode(
+    node: Node,
+    machine: NodeStateMachine,
+    signal: HumanTaskRequiredError,
+  ): Promise<RunNodeOutcome> {
+    machine.transitionTo("WaitingForHuman");
+    this.#states.set(node.id, "WaitingForHuman");
+    this.emitStateChange(node.id, "Running", "WaitingForHuman");
+    const task = await this.humanTaskStore().create({
+      workflowId: this.#workflow.id,
+      nodeId: node.id,
+      nodeName: node.name,
+      ...signal.spec,
+    });
+    this.#options.events?.onHumanTaskCreated?.(task);
+    return { kind: "waiting", task };
+  }
+  /** 恢复执行：写入人工产物 → 标记任务完成 → 从挂起节点重跑剩余节点。 */
+  async resume(taskId: string, result?: unknown): Promise<ExecutionResult> {
+    const task = await this.requirePendingTask(taskId);
+    this.#context.set("workflow", `task_result:${task.nodeId}`, result);
+    await this.humanTaskStore().complete(taskId, result);
+    const order = topoSort(this.#workflow);
+    const startIndex = order.indexOf(task.nodeId);
+    if (startIndex === -1) {
+      throw new Error(`resume failed: task node not in workflow: ${task.nodeId}`);
+    }
+    return this.runRemaining(order, startIndex, Date.now());
+  }
+  /** 跳过执行：任务节点置 Skipped → 标记任务跳过 → 从其后一节点继续（下游自动跳过传播）。 */
+  async skip(taskId: string): Promise<ExecutionResult> {
+    const task = await this.requirePendingTask(taskId);
+    const machine = this.#machines.get(task.nodeId);
+    if (machine !== undefined) {
+      machine.transitionTo("Skipped");
+      this.#states.set(task.nodeId, "Skipped");
+      this.emitStateChange(task.nodeId, "WaitingForHuman", "Skipped");
+    }
+    await this.humanTaskStore().skip(taskId);
+    const order = topoSort(this.#workflow);
+    const startIndex = order.indexOf(task.nodeId);
+    if (startIndex === -1) {
+      throw new Error(`skip failed: task node not in workflow: ${task.nodeId}`);
+    }
+    return this.runRemaining(order, startIndex + 1, Date.now());
+  }
+  /** 校验任务存在且 pending，否则抛 InvalidTaskStateError。 */
+  private async requirePendingTask(taskId: string): Promise<HumanTask> {
+    const task = await this.humanTaskStore().getById(taskId);
+    if (task === undefined || task.status !== "pending") {
+      throw new InvalidTaskStateError(taskId, task?.status ?? "not found");
+    }
+    return task;
+  }
+  /** 人工任务存储：惰性初始化一次（未注入则新建 HumanTaskStore，落盘 human_tasks.json）。 */
+  private humanTaskStore(): HumanTaskStore {
+    if (this.#humanTaskStore === undefined) {
+      this.#humanTaskStore = this.#options.humanTaskStore ?? new HumanTaskStore();
+    }
+    return this.#humanTaskStore;
   }
   /** 分支跳过（OR 汇合）：入边空 → true；任一入边激活 → true；全部不激活 → false。 */
   private shouldExecute(incoming: readonly Edge[]): boolean {
@@ -222,6 +337,9 @@ export class ExecutionEngine {
       getByPath: (path) => context.getByPath(path),
       setByPath: (path, value) => context.setByPath(path, value),
       getAll: (scope) => context.getAll(scope),
+      suspend: (spec) => {
+        throw new HumanTaskRequiredError(spec);
+      },
       logger: {
         info: (msg, data) => this.recordLog(workflowId, node, "info", msg, data),
         warn: (msg, data) => this.recordLog(workflowId, node, "warn", msg, data),
@@ -266,9 +384,10 @@ export class ExecutionEngine {
   }
 
   private buildResult(
-    status: "success" | "failed",
+    status: "success" | "failed" | "waiting",
     startTime: number,
     errorMessage?: string,
+    waitingTask?: HumanTask,
   ): ExecutionResult {
     const nodeStates: Record<string, NodeStatus> = {};
     for (const node of this.#workflow.nodes) {
@@ -286,9 +405,11 @@ export class ExecutionEngine {
       startTime,
       endTime: Date.now(),
     };
-    return errorMessage === undefined
-      ? { ...base }
-      : { ...base, error: errorMessage };
+    const withError =
+      errorMessage === undefined ? base : { ...base, error: errorMessage };
+    return status === "waiting" && waitingTask !== undefined
+      ? { ...withError, waitingTask }
+      : withError;
   }
 
   private resetState(): void {
@@ -297,6 +418,7 @@ export class ExecutionEngine {
     this.#machines = new Map();
     this.#logs = [];
     this.#context = this.createContext();
+    this.#pendingNodeId = undefined;
     for (const node of this.#workflow.nodes) {
       this.#machines.set(node.id, new NodeStateMachine());
     }

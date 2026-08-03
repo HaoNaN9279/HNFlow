@@ -2,6 +2,7 @@
 // Node / Port / VariablePath 来自 model 层（T2），此处仅消费，不重复定义。
 // NodeExecutionContext 由 T4 的 WorkflowContext 实现，T5/T7 据此消费。
 
+import type { HumanTaskSpec } from "../human/types.js";
 import type { Node, Port, VariablePath } from "../model/types.js";
 
 /**
@@ -39,6 +40,8 @@ export interface NodeExecutionContext {
   setByPath(path: VariablePath, value: unknown): void;
   /** 读取指定作用域下的全部变量快照 */
   getAll(scope: string): Record<string, unknown>;
+  /** 请求人工介入：引擎捕获该信号并挂起当前工作流。返回 never 表示调用后节点执行不会正常返回。 */
+  suspend(spec: HumanTaskSpec): never;
   logger: NodeLogger;
 }
 

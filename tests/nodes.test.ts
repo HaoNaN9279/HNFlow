@@ -45,6 +45,9 @@ function createMockContext(node: Node, initial: Readonly<Record<string, unknown>
       }
       return result;
     },
+    suspend() {
+      throw new Error("suspend not implemented in test mock");
+    },
     logger: {
       info: () => {},
       warn: () => {},
@@ -155,8 +158,8 @@ describe("end 节点", () => {
 });
 
 describe("registry 注册表", () => {
-  test("4 个内置节点已注册", () => {
-    expect(registry.list()).toHaveLength(4);
+  test("9 个内置节点已注册", () => {
+    expect(registry.list()).toHaveLength(9);
     expect(registry.list()).toEqual(expect.arrayContaining(["start", "end", "ifElse", "setVariable"]));
   });
 
@@ -172,6 +175,6 @@ describe("registry 注册表", () => {
     const fresh = new NodeRegistry();
     for (const def of builtinNodes) fresh.register(def);
     expect(fresh.has("start")).toBe(true);
-    expect(fresh.list()).toHaveLength(4);
+    expect(fresh.list()).toHaveLength(9);
   });
 });

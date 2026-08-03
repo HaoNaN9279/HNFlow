@@ -1,8 +1,13 @@
 // 节点注册表：按 type 注册/查询节点定义，模块加载时注册全部内置节点。
 
 import type { INodeDefinition } from "../execution/types.js";
+import { commandNode } from "./command.js";
 import { endNode } from "./end.js";
+import { fileNode } from "./file.js";
+import { httpNode } from "./http.js";
+import { humanTaskNode } from "./humanTask.js";
 import { ifElseNode } from "./ifElse.js";
+import { logNode } from "./log.js";
 import { setVariableNode } from "./setVariable.js";
 import { startNode } from "./start.js";
 
@@ -56,6 +61,11 @@ export const builtinNodes: INodeDefinition[] = [
   endNode,
   ifElseNode,
   setVariableNode,
+  commandNode,
+  httpNode,
+  fileNode,
+  logNode,
+  humanTaskNode,
 ];
 
 export const registry = new NodeRegistry();
