@@ -5,6 +5,7 @@ import { detectCycle } from "../model/validate.js";
 import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
+import { shouldExecute, transferPortData, type EngineReadState } from "./engine-util.js";
 import type { NodeExecutionContext } from "./types.js";
 import type { NodeRegistry } from "../nodes/registry.js";
 import { registry } from "../nodes/registry.js";
@@ -141,15 +142,15 @@ export class ExecutionEngine {
     startTime: number,
   ): Promise<ExecutionResult> {
     const persist = this.#options.persist === true;
+    let savedError: string | undefined;
     for (const nodeId of order.slice(startIndex)) {
       const outcome = await this.runNode(nodeId);
       switch (outcome.kind) {
         case "failed": {
-          if (persist) await this.persistRunState("failed", { error: outcome.message });
-          this.#runActive = false;
-          const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "failed", startTime, outcome.message);
-          this.#options.events?.onComplete?.(result);
-          return result;
+          // finally 链：保留首个主错误并立即持久化（避免后续 finally 含挂起时丢失），不终止循环，finally 仍可执行。
+          savedError ??= outcome.message;
+          if (persist) await this.persistRunState("failed", { error: savedError });
+          break;
         }
         case "waiting": {
           this.#pendingNodeId = nodeId;
@@ -159,11 +160,19 @@ export class ExecutionEngine {
           return result;
         }
         case "ok":
-          if (persist) await this.persistRunState("running");
+          // 已进入失败模式（savedError 非空）时不再覆盖为 running：后续 finally/Skipped 节点执行不应回退断点状态。
+          if (persist && savedError === undefined) await this.persistRunState("running");
           break;
         default:
           assertNever(outcome);
       }
+    }
+    if (savedError !== undefined) {
+      // 主错误保留：全部 finally 已尝试，最终以 failed 收尾（此前每步已持久化，此处不再重复落盘）。
+      this.#runActive = false;
+      const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "failed", startTime, savedError);
+      this.#options.events?.onComplete?.(result);
+      return result;
     }
     if (persist) await this.persistRunState("success");
     this.#runActive = false;
@@ -181,13 +190,14 @@ export class ExecutionEngine {
     this.#states.set(nodeId, "Running");
     this.emitStateChange(nodeId, previous, "Running");
     const incoming = this.#incoming.get(nodeId) ?? [];
-    if (!this.shouldExecute(incoming)) {
+    const state: EngineReadState = { states: this.#states, outputs: this.#outputs, nodeById: this.#nodeById };
+    if (!shouldExecute(incoming, state)) {
       machine.transitionTo("Skipped");
       this.#states.set(nodeId, "Skipped");
       this.emitStateChange(nodeId, "Running", "Skipped");
       return { kind: "ok" };
     }
-    this.transferPortData(node, incoming);
+    transferPortData(node, incoming, state, (path, val) => this.#context.setByPath(path, val));
     // AI 中断事务：ai 节点 + SQLite 共享连接时在 execute 前开启，覆盖 checkpoint+HumanTask+RunState 三写（AC3）；无中断 rollback，中断 → suspendAiNode 事务内三写后 commit。
     const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node);
     try {
@@ -338,36 +348,6 @@ export class ExecutionEngine {
     return this.#runStateStore;
   }
   getWorkflowVariable(key: string): unknown { return this.#context.get("workflow", key); }
-  private shouldExecute(incoming: readonly Edge[]): boolean {
-    if (incoming.length === 0) return true;
-    return incoming.some((edge) => this.isActiveIncoming(edge));
-  }
-  private isActiveIncoming(edge: Edge): boolean {
-    if (this.#states.get(edge.sourceNodeId) !== "Success") return false;
-    const sourceNode = this.#nodeById.get(edge.sourceNodeId);
-    if (sourceNode?.type === "ifElse") {
-      const outputs = this.#outputs.get(edge.sourceNodeId);
-      if (outputs !== undefined && outputs[edge.sourcePortId] === false) return false;
-    }
-    return true;
-  }
-  /** 端口数据流：上游成功输出写入下游输入端口 binding 槽；多激活入边聚合为数组。 */
-  private transferPortData(node: Node, incoming: readonly Edge[]): void {
-    for (const port of node.inputs) {
-      if (port.binding === undefined) continue;
-      const values: unknown[] = [];
-      for (const edge of incoming) {
-        if (edge.targetPortId !== port.id) continue;
-        if (!this.isActiveIncoming(edge)) continue;
-        const sourceOutputs = this.#outputs.get(edge.sourceNodeId);
-        if (sourceOutputs === undefined) continue;
-        values.push(sourceOutputs[edge.sourcePortId]);
-      }
-      if (values.length === 0) continue;
-      const value = values.length === 1 ? values[0] : values;
-      this.#context.setByPath(port.binding, value);
-    }
-  }
   private createNodeContext(node: Node): NodeExecutionContext {
     const workflowId = this.#workflow.id;
     const context = this.#context;
@@ -375,6 +355,7 @@ export class ExecutionEngine {
       node,
       workflowId,
       humanTaskStore: this.humanTaskStore,
+      registry: this.#registry,
       ...(this.#options.aiCheckpoint !== undefined ? { aiCheckpoint: this.#options.aiCheckpoint } : {}), // AI 中断 checkpoint 配置透传（T5.1）
       get: (scope, key) => context.get(scope, key),
       set: (scope, key, value) => context.set(scope, key, value),
@@ -382,6 +363,10 @@ export class ExecutionEngine {
       setByPath: (path, value) => context.setByPath(path, value),
       getAll: (scope) => context.getAll(scope),
       suspend: (spec) => { throw new HumanTaskRequiredError(spec); },
+      // 节点执行进度钩子：子图容器（loop）每迭代完成后调用，触发断点持久化（快照内容由容器写入 node 级上下文，引擎不理解快照含义）。
+      progress: async () => {
+        if (this.#options.persist === true) await this.persistRunState("running");
+      },
       logger: {
         info: (msg, data) => this.recordLog(workflowId, node, "info", msg, data),
         warn: (msg, data) => this.recordLog(workflowId, node, "warn", msg, data),

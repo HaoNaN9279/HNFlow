@@ -242,7 +242,7 @@ describe("执行失败与边界", () => {
     }).run();
 
     expect(result.status).toBe("failed");
-    expect(result.nodeStates).toEqual({ start: "Success", boom: "Failed", end: "Idle" });
+    expect(result.nodeStates).toEqual({ start: "Success", boom: "Failed", end: "Skipped" });
     if (result.error === undefined) {
       throw new Error("expected error message");
     }

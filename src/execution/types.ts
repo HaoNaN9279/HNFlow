@@ -6,6 +6,8 @@ import type { SqliteDatabase } from "../db/index.js";
 import type { HumanTaskStoreLike } from "../db/stores/types.js";
 import type { HumanTaskSpec } from "../human/types.js";
 import type { Node, Port, VariablePath } from "../model/types.js";
+// type-only import：仅编译期使用，避免与 nodes/registry.ts（import execution/types）形成运行时循环依赖。
+import type { NodeRegistry } from "../nodes/registry.js";
 
 /**
  * 节点定义：引擎按 type 查注册表获得执行逻辑。
@@ -36,6 +38,8 @@ export interface NodeExecutionContext {
   readonly humanTaskStore?: HumanTaskStoreLike;
   /** AI 中断 checkpoint 持久化配置（ai 节点 interrupt 时注入，T5.1 修复）。 */
   readonly aiCheckpoint?: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase };
+  /** 引擎节点注册表：子图容器（loop/tryCatch/subworkflow/finally）透传给子引擎（自定义节点扩展用）。 */
+  readonly registry?: NodeRegistry;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */
@@ -48,6 +52,8 @@ export interface NodeExecutionContext {
   getAll(scope: string): Record<string, unknown>;
   /** 请求人工介入：引擎捕获该信号并挂起当前工作流。返回 never 表示调用后节点执行不会正常返回。 */
   suspend(spec: HumanTaskSpec): never;
+  /** 节点执行进度持久化钩子：子图容器节点（loop）每迭代完成后调用，引擎据此落盘断点快照。 */
+  readonly progress?: (snapshot: unknown) => Promise<void>;
   logger: NodeLogger;
 }
 
