@@ -1,7 +1,9 @@
 // 编辑态纯函数：只读态查询、草稿创建（深拷贝隔离）、草稿提交（校验 + 继承原图元信息）。
 // 通过 EngineStateQuery 最小接口消费引擎状态，避免直接依赖 ExecutionEngine。
-import type { Edge, Node, Port, Workflow } from "../model/types.js";
+// 深拷贝复用公共 utils/deepCopy（含嵌套 subworkflow）。
+import type { Workflow } from "../model/types.js";
 import { validateWorkflow } from "../model/validate.js";
+import { deepCopyWorkflow } from "../utils/deepCopy.js";
 
 /** 引擎状态查询最小接口：供 isReadOnly/workflowSnapshot 消费，避免直接依赖 ExecutionEngine。 */
 export interface EngineStateQuery {
@@ -67,75 +69,4 @@ export function commitDraft(draft: Draft, original: Workflow): Workflow {
     edges: copy.edges,
     ...(copy.globalVariables === undefined ? {} : { globalVariables: copy.globalVariables }),
   };
-}
-
-function deepCopyWorkflow(workflow: Workflow): Workflow {
-  const copy: Workflow = {
-    id: workflow.id,
-    name: workflow.name,
-    version: workflow.version,
-    nodes: workflow.nodes.map(deepCopyNode),
-    edges: workflow.edges.map(deepCopyEdge),
-  };
-  return workflow.globalVariables === undefined
-    ? copy
-    : { ...copy, globalVariables: deepCopyRecord(workflow.globalVariables) };
-}
-
-function deepCopyNode(node: Node): Node {
-  const copy: Node = {
-    id: node.id,
-    type: node.type,
-    name: node.name,
-    params: deepCopyRecord(node.params),
-    inputs: node.inputs.map(deepCopyPort),
-    outputs: node.outputs.map(deepCopyPort),
-  };
-  const withPosition =
-    node.position === undefined ? copy : { ...copy, position: { ...node.position } };
-  return node.subworkflow === undefined
-    ? withPosition
-    : { ...withPosition, subworkflow: deepCopyWorkflow(node.subworkflow) };
-}
-
-function deepCopyPort(port: Port): Port {
-  return {
-    id: port.id,
-    name: port.name,
-    type: port.type,
-    direction: port.direction,
-    ...(port.binding === undefined ? {} : { binding: port.binding }),
-  };
-}
-
-function deepCopyEdge(edge: Edge): Edge {
-  return {
-    id: edge.id,
-    sourceNodeId: edge.sourceNodeId,
-    sourcePortId: edge.sourcePortId,
-    targetNodeId: edge.targetNodeId,
-    targetPortId: edge.targetPortId,
-  };
-}
-
-function deepCopyRecord(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
-  const copy: Record<string, unknown> = {};
-  for (const key of Object.keys(record)) {
-    copy[key] = deepCopyValue(record[key]);
-  }
-  return copy;
-}
-
-function deepCopyValue(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(deepCopyValue);
-  }
-  if (isPlainObject(value)) {
-    return deepCopyRecord(value);
-  }
-  return value;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
