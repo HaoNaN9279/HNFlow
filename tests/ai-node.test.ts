@@ -1,6 +1,11 @@
-// AI 节点测试：params 解析、工具引用解析、execute 单测、stream 进度日志、ExecutionEngine 集成、registry。
-import { afterEach, describe, expect, test } from "bun:test";
+// AI 节点测试：params 解析、工具引用解析、execute 单测、stream 进度日志、
+// interrupt 中断（工具审批）、ExecutionEngine 集成、registry。
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { mkdir, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
+import { aiExecutor } from "../src/ai/executor-instance.js";
+import { AiInterruptRequiredError, type AIExecutionRequest } from "../src/ai/executor.js";
 import { clearTools, registerTool } from "../src/ai/toolRegistry.js";
 import { UnknownToolReferenceError } from "../src/ai/tool.js";
 import type { FakeScriptStep } from "../src/ai/fake-llm.js";
@@ -26,11 +31,12 @@ function makeNode(
   return { id, type, name: id, params, inputs: def.inputs, outputs: def.outputs };
 }
 
-function createMockContext(node: Node, logs: LogEntry[] = []): NodeExecutionContext {
+function createMockContext(node: Node, logs: LogEntry[] = [], aiCheckpoint?: NodeExecutionContext["aiCheckpoint"]): NodeExecutionContext {
   const store: Record<string, unknown> = {};
   return {
     node,
     workflowId: "test-wf",
+    ...(aiCheckpoint !== undefined ? { aiCheckpoint } : {}),
     get(scope, key) {
       return store[`${scope}:${key}`];
     },
@@ -83,6 +89,31 @@ const reactScript: FakeScriptStep[] = [
 afterEach(() => {
   clearTools();
 });
+
+/** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows sqlite 句柄释放可达数秒。 */
+async function rmRetry(path: string, retries = 40): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function getErrnoCode(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = error.code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
+}
 
 describe("ai 节点 execute 单测", () => {
   test("FakeLLM 工具调用流：output 取最终文本，toolCalls 汇总", async () => {
@@ -171,6 +202,146 @@ describe("ai 节点 stream 进度日志", () => {
       "工具结果: demo.getWeather",
       "晴",
     ]);
+  });
+});
+
+describe("ai 节点 interrupt 中断（工具审批）", () => {
+  const TEMP_BASE = "C:\\Users\\ZHANGH~1\\AppData\\Local\\Temp\\opencode\\ai-node-interrupt-test";
+  let fileCounter = 0;
+  function nextDbPath(prefix: string): string {
+    return join(TEMP_BASE, `${prefix}-${Date.now()}-${fileCounter++}.db`);
+  }
+
+  beforeAll(async () => {
+    await mkdir(TEMP_BASE, { recursive: true });
+  });
+
+  afterAll(async () => {
+    await rmRetry(TEMP_BASE);
+  }, 30000);
+
+  /** 包装共享执行器仅记录 request 并透传真实执行（节点单测不经引擎：ctx.aiCheckpoint 由测试注入模拟引擎装配）。 */
+  async function captureRequest(run: () => unknown): Promise<AIExecutionRequest> {
+    const original = aiExecutor.execute;
+    let captured: AIExecutionRequest | undefined;
+    aiExecutor.execute = async (req) => {
+      captured = req;
+      return original.call(aiExecutor, req);
+    };
+    try {
+      await run();
+    } finally {
+      aiExecutor.execute = original;
+    }
+    if (captured === undefined) {
+      throw new Error("aiExecutor.execute 未被调用");
+    }
+    return captured;
+  }
+
+  test("interrupt=true：request 组装正确（interruptOn 覆盖全部工具 + threadId 稳定）", async () => {
+    registerTool(weatherTool());
+    const dbPath = nextDbPath("capture");
+    const node = makeNode("ai", "ai", {
+      model: {
+        provider: "fake",
+        model: "test",
+        fakeScript: [{ kind: "tool_call", toolCall: { name: "demo.getWeather", args: { city: "北京" } } }],
+      },
+      inputMessages: "北京天气？",
+      tools: ["demo.getWeather"],
+      interrupt: true,
+    });
+    const ctx = createMockContext(node, [], { dbPath });
+    const request = await captureRequest(() =>
+      expect(aiNode.execute(ctx)).rejects.toThrow(AiInterruptRequiredError));
+    expect(request.interrupt).toEqual({
+      interruptOn: { "demo.getWeather": { allowedDecisions: ["approve", "reject"] } },
+    });
+    // 稳定线程键：同节点多轮中断/恢复复用同一 thread。
+    expect(request.threadId).toBe("test-wf:ai");
+    // T5.1：节点从 ctx.aiCheckpoint 组装 checkpointDb（真实路径，非包装补丁）。
+    expect(request.checkpointDb).toEqual({ dbPath });
+  });
+
+  test("interrupt 对象：request 携带静态配置并抛 AiInterruptRequiredError", async () => {
+    registerTool(weatherTool());
+    const dbPath = nextDbPath("capture");
+    const node = makeNode("ai", "ai", {
+      model: {
+        provider: "fake",
+        model: "test",
+        fakeScript: [{ kind: "tool_call", toolCall: { name: "demo.getWeather", args: { city: "北京" } } }],
+      },
+      inputMessages: "北京天气？",
+      tools: ["demo.getWeather"],
+      interrupt: {
+        interruptOn: {
+          "demo.getWeather": { allowedDecisions: ["approve", "reject"], description: "查询天气需审批" },
+        },
+      },
+    });
+    const ctx = createMockContext(node, [], { dbPath });
+    const request = await captureRequest(() =>
+      expect(aiNode.execute(ctx)).rejects.toThrow(AiInterruptRequiredError));
+    expect(request.interrupt).toEqual({
+      interruptOn: {
+        "demo.getWeather": { allowedDecisions: ["approve", "reject"], description: "查询天气需审批" },
+      },
+    });
+    expect(request.threadId).toBe("test-wf:ai");
+    expect(request.checkpointDb).toEqual({ dbPath });
+  });
+
+  test("interrupt 启用但引擎未注入 aiCheckpoint：节点抛 InvalidAIParamsError（T5.1 装配错误）", async () => {
+    registerTool(weatherTool());
+    const node = makeNode("ai", "ai", {
+      model: {
+        provider: "fake",
+        model: "test",
+        fakeScript: [{ kind: "tool_call", toolCall: { name: "demo.getWeather", args: { city: "北京" } } }],
+      },
+      inputMessages: "北京天气？",
+      tools: ["demo.getWeather"],
+      interrupt: true,
+    });
+    await expect(aiNode.execute(createMockContext(node))).rejects.toThrow("aiCheckpoint");
+  });
+
+  test("interrupt 非 true/对象抛 InvalidAIParamsError", async () => {
+    const node = makeNode("ai", "ai", { interrupt: "yes" });
+    const ctx = createMockContext(node);
+    await expect(aiNode.execute(ctx)).rejects.toThrow(InvalidAIParamsError);
+  });
+
+  test("interrupt.interruptOn 缺失抛 InvalidAIParamsError", async () => {
+    const node = makeNode("ai", "ai", { interrupt: { allowedDecisions: ["approve"] } });
+    const ctx = createMockContext(node);
+    await expect(aiNode.execute(ctx)).rejects.toThrow(InvalidAIParamsError);
+  });
+
+  test("interrupt.allowedDecisions 非法枚举抛 InvalidAIParamsError", async () => {
+    const node = makeNode("ai", "ai", {
+      interrupt: { interruptOn: { "demo.getWeather": { allowedDecisions: ["edit"] } } },
+    });
+    const ctx = createMockContext(node);
+    await expect(aiNode.execute(ctx)).rejects.toThrow(InvalidAIParamsError);
+  });
+
+  test("interrupt.allowedDecisions 非数组抛 InvalidAIParamsError", async () => {
+    const node = makeNode("ai", "ai", {
+      interrupt: { interruptOn: { "demo.getWeather": { allowedDecisions: "approve" } } },
+    });
+    const ctx = createMockContext(node);
+    await expect(aiNode.execute(ctx)).rejects.toThrow(InvalidAIParamsError);
+  });
+
+  test("interrupt.interruptOn 条目含 when 抛 InvalidAIParamsError（v0.2.1 仅静态配置）", async () => {
+    const node = makeNode("ai", "ai", {
+      interrupt: { interruptOn: { "demo.getWeather": { when: "x" } } },
+    });
+    const ctx = createMockContext(node);
+    await expect(aiNode.execute(ctx)).rejects.toThrow(InvalidAIParamsError);
   });
 });
 

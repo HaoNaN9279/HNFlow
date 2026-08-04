@@ -158,8 +158,8 @@ describe("end 节点", () => {
 });
 
 describe("registry 注册表", () => {
-  test("11 个内置节点已注册", () => {
-    expect(registry.list()).toHaveLength(11);
+  test("12 个内置节点已注册", () => {
+    expect(registry.list()).toHaveLength(12);
     expect(registry.list()).toEqual(expect.arrayContaining(["start", "end", "ifElse", "setVariable"]));
   });
 
@@ -175,6 +175,6 @@ describe("registry 注册表", () => {
     const fresh = new NodeRegistry();
     for (const def of builtinNodes) fresh.register(def);
     expect(fresh.has("start")).toBe(true);
-    expect(fresh.list()).toHaveLength(11);
+    expect(fresh.list()).toHaveLength(12);
   });
 });

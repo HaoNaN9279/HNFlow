@@ -1,13 +1,17 @@
-// AI 节点：调用大模型完成文本/工具调用任务。
+// AI 节点：调用大模型完成文本/工具调用任务（v0.2.1 支持工具审批中断）。
 // params 边界解析（非法抛 InvalidAIParamsError）→ resolveModel → 工具引用解析 →
-// LangGraphExecutor 执行；stream 模式把进度事件转发到节点 logger。
-import { LangGraphExecutor } from "../ai/langgraph-executor.js";
+// 统一 AIExecutor 执行；stream 模式把进度事件转发到节点 logger。
+// interrupt 启用时 request 组装 interrupt+threadId+checkpointDb：checkpointDb 来自 ctx.aiCheckpoint（T5.1 修复，
+// 引擎 createNodeContext 注入）；引擎未配置时节点级抛 InvalidAIParamsError（装配错误比 executor 模糊提示更清晰）。
+// AiInterruptRequiredError 不在此捕获，抛给引擎转 HumanTask（T5 识别）。
+import { aiExecutor } from "../ai/executor-instance.js";
 import type { AIExecutionRequest, AIProgressEvent } from "../ai/executor.js";
 import type { FakeScriptStep } from "../ai/fake-llm.js";
 import { resolveModel, type InputMessage, type ModelConfig } from "../ai/model.js";
 import { availableTools } from "../ai/toolRegistry.js";
 import { resolveToolReferences } from "../ai/tool.js";
 import type { INodeDefinition, NodeLogger } from "../execution/types.js";
+import { allToolsInterrupt, parseInterrupt, type InterruptParam } from "./ai-interrupt.js";
 
 /** ai 节点 params 非法：字段缺失/类型错误（携带原始值片段与原因）。 */
 export class InvalidAIParamsError extends Error {
@@ -25,6 +29,7 @@ interface AIParams {
   readonly inputMessages?: InputMessage[];
   readonly tools?: readonly string[];
   readonly stream?: boolean;
+  readonly interrupt?: InterruptParam;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -46,8 +51,8 @@ function parseOptionalString(
   return raw;
 }
 
-/** 解析 model 配置：provider 必填且受支持，可选字段类型校验。 */
-function parseModel(value: unknown): ModelConfig {
+/** 解析 model 配置：provider 必填且受支持，可选字段类型校验；llm 节点复用。 */
+export function parseModel(value: unknown): ModelConfig {
   if (!isRecord(value)) {
     throw new InvalidAIParamsError(value, "model 必须是对象");
   }
@@ -164,17 +169,19 @@ function parseParams(params: Readonly<Record<string, unknown>>): AIParams {
     params["inputMessages"] === undefined ? undefined : parseInputMessages(params["inputMessages"]);
   const tools = params["tools"] === undefined ? undefined : parseTools(params["tools"]);
   const stream = params["stream"] === undefined ? undefined : parseStream(params["stream"]);
+  const interrupt = params["interrupt"] === undefined ? undefined : parseInterrupt(params["interrupt"], InvalidAIParamsError);
   return {
     ...(model !== undefined ? { model } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
     ...(inputMessages !== undefined ? { inputMessages } : {}),
     ...(tools !== undefined ? { tools } : {}),
     ...(stream !== undefined ? { stream } : {}),
+    ...(interrupt !== undefined ? { interrupt } : {}),
   };
 }
 
-/** 进度事件 → 节点 logger（仅 stream 模式启用，避免刷屏）。 */
-function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) => void {
+/** 进度事件 → 节点 logger（仅 stream 模式启用，避免刷屏）；llm 节点复用。 */
+export function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) => void {
   return (event) => {
     switch (event.kind) {
       case "tool_call":
@@ -190,8 +197,6 @@ function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) => void {
   };
 }
 
-const executor = new LangGraphExecutor();
-
 export const aiNode: INodeDefinition = {
   type: "ai",
   name: "AI 节点",
@@ -203,14 +208,32 @@ export const aiNode: INodeDefinition = {
     const model = resolveModel(params.model ?? { provider: "openai" });
     const tools = resolveToolReferences(params.tools ?? [], availableTools());
     const inputMessages = params.inputMessages ?? [];
+    // interrupt:true 展开为覆盖全部已解析工具的默认审批配置；对象配置原样透传。
+    const interrupt = params.interrupt === undefined
+      ? undefined
+      : params.interrupt === true
+        ? allToolsInterrupt(tools)
+        : params.interrupt;
+    // checkpointDb 由引擎经 ctx.aiCheckpoint 注入（T5.1 修复）：interrupt 启用但未注入属装配错误，节点级抛错更清晰。
+    if (interrupt !== undefined && ctx.aiCheckpoint === undefined) {
+      throw new InvalidAIParamsError(ctx.node.params, "interrupt 启用但引擎未配置 aiCheckpoint");
+    }
     const request: AIExecutionRequest = {
       model,
       tools,
       inputMessages,
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.stream === true ? { stream: true, onProgress: forwardProgress(ctx.logger) } : {}),
+      // AiInterruptRequiredError 不在此捕获，抛给引擎转 HumanTask。
+      ...(interrupt !== undefined
+        ? {
+            interrupt,
+            threadId: `${ctx.workflowId}:${ctx.node.id}`,
+            ...(ctx.aiCheckpoint !== undefined ? { checkpointDb: ctx.aiCheckpoint } : {}),
+          }
+        : {}),
     };
-    const result = await executor.execute(request);
+    const result = await aiExecutor.execute(request);
     return { output: result.output, messages: result.messages, toolCalls: result.toolCalls };
   },
 };

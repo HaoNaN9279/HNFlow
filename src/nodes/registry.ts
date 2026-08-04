@@ -8,6 +8,7 @@ import { fileNode } from "./file.js";
 import { httpNode } from "./http.js";
 import { humanTaskNode } from "./humanTask.js";
 import { ifElseNode } from "./ifElse.js";
+import { llmNode } from "./llm.js";
 import { logNode } from "./log.js";
 import { setVariableNode } from "./setVariable.js";
 import { startNode } from "./start.js";
@@ -70,6 +71,7 @@ export const builtinNodes: INodeDefinition[] = [
   humanTaskNode,
   subworkflowNode,
   aiNode,
+  llmNode,
 ];
 
 export const registry = new NodeRegistry();
