@@ -5,14 +5,17 @@ import { aiNode } from "./ai.js";
 import { commandNode } from "./command.js";
 import { endNode } from "./end.js";
 import { fileNode } from "./file.js";
+import { finallyNode } from "./finallyNode.js";
 import { httpNode } from "./http.js";
 import { humanTaskNode } from "./humanTask.js";
 import { ifElseNode } from "./ifElse.js";
 import { llmNode } from "./llm.js";
 import { logNode } from "./log.js";
+import { loopNode } from "./loop.js";
 import { setVariableNode } from "./setVariable.js";
 import { startNode } from "./start.js";
 import { subworkflowNode } from "./subworkflow.js";
+import { tryCatchNode } from "./tryCatch.js";
 
 /** 重复注册同一 type */
 export class DuplicateNodeTypeError extends Error {
@@ -72,6 +75,9 @@ export const builtinNodes: INodeDefinition[] = [
   subworkflowNode,
   aiNode,
   llmNode,
+  tryCatchNode,
+  finallyNode,
+  loopNode,
 ];
 
 export const registry = new NodeRegistry();
