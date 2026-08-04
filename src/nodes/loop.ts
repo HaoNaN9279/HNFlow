@@ -113,12 +113,16 @@ export const loopNode: INodeDefinition = {
     for (let i = start; i < items.length; i++) {
       // 执行前写进度：挂起/失败中断后恢复时从本迭代重跑，不丢迭代。
       ctx.set(progressScope, PROGRESS_KEY, i);
+      // 分支上下文快照：迭代输入变量浅拷贝写 node:loop:branch:<迭代索引>（调试 CLI 查看分支作用域，
+      // 含父继承 + 迭代注入；仅调试呈现，不影响执行语义）。
+      const workflowVariables = buildWorkflowVariables(ctx, items, i);
+      ctx.set(progressScope, `branch:${i}`, { ...workflowVariables });
       await ctx.progress?.({ loopIndex: i });
       try {
         const { endResult } = await runSubgraph(
           ctx,
           rawBody,
-          buildWorkflowVariables(ctx, items, i),
+          workflowVariables,
           ctx.registry,
         );
         results.push(endResult);

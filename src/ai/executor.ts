@@ -10,6 +10,8 @@ export interface AIProgressEvent {
   readonly kind: "llm_message" | "tool_call" | "tool_result";
   /** llm_message 时：模型输出文本。 */
   readonly message?: string;
+  /** llm_message 时：模型调用 token 用量（从 response_metadata.token_usage 提取，向后兼容）。 */
+  readonly tokenUsage?: unknown;
   /** tool_call/tool_result 时：工具名。 */
   readonly toolName?: string;
   /** tool_call 时：调用参数。 */

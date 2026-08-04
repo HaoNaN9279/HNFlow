@@ -180,18 +180,18 @@ function parseParams(params: Readonly<Record<string, unknown>>): AIParams {
   };
 }
 
-/** 进度事件 → 节点 logger（仅 stream 模式启用，避免刷屏）；llm 节点复用。 */
+/** 进度事件 → 节点 logger（stream/invoke 均启用；data 结构化携带 kind/toolName/args/result，trace 时间线渲染用）；llm 节点复用。 */
 export function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) => void {
   return (event) => {
     switch (event.kind) {
       case "tool_call":
-        logger.info(`工具调用: ${event.toolName ?? ""}`, event.toolArgs);
+        logger.info(`工具调用: ${event.toolName ?? ""}`, { kind: "tool_call", toolName: event.toolName, args: event.toolArgs });
         break;
       case "tool_result":
-        logger.info(`工具结果: ${event.toolName ?? ""}`, event.toolResult);
+        logger.info(`工具结果: ${event.toolName ?? ""}`, { kind: "tool_result", toolName: event.toolName, result: event.toolResult });
         break;
       case "llm_message":
-        logger.info(event.message ?? "");
+        logger.info(event.message ?? "", { kind: "llm_message", message: event.message });
         break;
     }
   };
@@ -223,7 +223,9 @@ export const aiNode: INodeDefinition = {
       tools,
       inputMessages,
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
-      ...(params.stream === true ? { stream: true, onProgress: forwardProgress(ctx.logger) } : {}),
+      ...(params.stream === true ? { stream: true } : {}),
+      // 无条件挂进度转发：invoke 模式由执行器回放补发事件（v0.2.4 轨迹补全），stream 模式增量上报。
+      onProgress: forwardProgress(ctx.logger),
       // AiInterruptRequiredError 不在此捕获，抛给引擎转 HumanTask。
       ...(interrupt !== undefined
         ? {

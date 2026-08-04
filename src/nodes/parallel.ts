@@ -186,6 +186,9 @@ export const parallelNode: INodeDefinition = {
             // 每分支完成立即追加 doneBranches + progress：断点快照携带已完成分支标记，恢复跳过分叉。
             done.add(branch.id);
             ctx.set(progressScope, DONE_KEY, [...done]);
+            // 分支上下文快照：分支终态 workflow 变量浅拷贝写 node:par:branch:<branchId>
+            // （父继承 + 分支修改，调试 CLI 查看分支作用域；仅调试呈现，不影响执行语义）。
+            ctx.set(progressScope, `branch:${branch.id}`, { ...branchResult.variables });
             await ctx.progress?.({ branchId: branch.id });
             return {
               kind: "success",

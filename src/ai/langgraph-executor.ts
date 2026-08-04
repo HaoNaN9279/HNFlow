@@ -117,9 +117,12 @@ export class LangGraphExecutor implements AIExecutor {
     return this.#extract(result.messages);
   }
 
-  /** invoke 模式：一次调用取最终状态，提取 output/轨迹/工具调用汇总。 */
+  /** invoke 模式：一次调用取最终状态，回放全部消息补发进度事件（与 stream diff 等价，不改变执行语义）。 */
   async #invoke(agent: ReturnType<typeof createAgent>, request: AIExecutionRequest): Promise<AIExecutionResult> {
     const result = await agent.invoke({ messages: toLangChainMessages(request.inputMessages) });
+    const onProgress = request.onProgress ?? (() => {});
+    const toolCallNames = new Map<string, string>();
+    for (const message of result.messages) this.#emit(message, toolCallNames, onProgress);
     return this.#extract(result.messages);
   }
 
@@ -197,7 +200,14 @@ export class LangGraphExecutor implements AIExecutor {
       }
       if (toolCalls.length === 0) {
         const text = fromLangChainMessage(message).content;
-        if (text !== "") onProgress({ kind: "llm_message", message: text });
+        if (text !== "") {
+          const tokenUsage = message.response_metadata?.["token_usage"];
+          onProgress({
+            kind: "llm_message",
+            message: text,
+            ...(tokenUsage === undefined ? {} : { tokenUsage }),
+          });
+        }
       }
       return;
     }
