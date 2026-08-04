@@ -83,6 +83,9 @@ async function executeSubEngine(
       workflowVariables,
       ...(ctx.humanTaskStore === undefined ? {} : { humanTaskStore: ctx.humanTaskStore }),
       ...(debug === undefined ? {} : { debugController: debug }),
+      // 崩溃转人工（v0.2.5 T4）：子引擎继承父 runId（任务查重一致）+ 幂等键（子图内非幂等节点判定）。
+      ...(ctx.runId === undefined ? {} : { runId: ctx.runId }),
+      ...(ctx.idempotencyKey === undefined ? {} : { idempotencyKey: ctx.idempotencyKey }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {

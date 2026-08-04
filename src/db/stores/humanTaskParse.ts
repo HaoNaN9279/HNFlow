@@ -8,6 +8,7 @@ export function parseTaskRow(row: SqliteRow): HumanTask {
   const completedAt = optionalNumber(row, "completed_at");
   const metaRaw = optionalNonNull(row, "meta");
   const resultRaw = optionalNonNull(row, "result");
+  const runId = optionalString(row, "run_id");
   return {
     id: requiredString(row, "id"),
     workflowId: requiredString(row, "workflow_id"),
@@ -21,6 +22,7 @@ export function parseTaskRow(row: SqliteRow): HumanTask {
     ...(completedAt === undefined ? {} : { completedAt }),
     ...(metaRaw === undefined ? {} : { meta: parseMetaObject(metaRaw) }),
     ...(resultRaw === undefined ? {} : { result: parseResultValue(resultRaw) }),
+    ...(runId === undefined ? {} : { runId }),
   };
 }
 

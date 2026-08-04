@@ -55,6 +55,7 @@ export class HumanTaskStore implements HumanTaskStoreLike {
       createdAt: Date.now(),
       ...(spec.description === undefined ? {} : { description: spec.description }),
       ...(spec.meta === undefined ? {} : { meta: spec.meta }),
+      ...(spec.runId === undefined ? {} : { runId: spec.runId }),
     };
     this.tasks = [...this.tasks, task];
     await this.save();
@@ -78,10 +79,15 @@ export class HumanTaskStore implements HumanTaskStoreLike {
     return this.tasks.find((task) => task.id === id);
   }
 
-  /** 查找指定 workflow+node 的待处理任务（引擎挂起前查重用）。 */
-  async findPending(workflowId: string, nodeId: string): Promise<HumanTask | undefined> {
+  /** 查找指定 workflow+node 的待处理任务（引擎挂起前查重用）；runId 传参时按 (workflowId, nodeId, runId) 精确查重。 */
+  async findPending(workflowId: string, nodeId: string, runId?: string): Promise<HumanTask | undefined> {
     await this.ensureLoaded();
-    return this.tasks.find((t) => t.status === "pending" && t.workflowId === workflowId && t.nodeId === nodeId);
+    return this.tasks.find((t) =>
+      t.status === "pending" &&
+      t.workflowId === workflowId &&
+      t.nodeId === nodeId &&
+      (runId === undefined ? true : t.runId === runId),
+    );
   }
 
   /** 查找指定 workflow+node 最近创建的任务（任意状态；tasks 按创建序追加，取最后一个匹配）。 */
@@ -134,6 +140,7 @@ export class HumanTaskStore implements HumanTaskStoreLike {
       ...(task.description === undefined ? {} : { description: task.description }),
       ...(meta === undefined ? (task.meta === undefined ? {} : { meta: task.meta }) : { meta }),
       ...(task.result === undefined ? {} : { result: task.result }),
+      ...(task.runId === undefined ? {} : { runId: task.runId }),
     }));
   }
 

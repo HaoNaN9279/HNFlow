@@ -43,7 +43,7 @@ export const subworkflowNode: INodeDefinition = {
         workflowVariables[key] = value;
       }
     }
-    const { endResult } = await runSubgraph(ctx, raw, workflowVariables);
+    const { endResult } = await runSubgraph(ctx, raw, workflowVariables, ctx.registry);
     return { out: endResult };
   },
 };

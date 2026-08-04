@@ -30,8 +30,8 @@ export class SqliteHumanTaskStore implements HumanTaskStoreLike {
     const createdAt = Date.now();
     const fallback = spec.fallback ?? "manual";
     db.db.prepare(
-      `INSERT INTO human_tasks (id, workflow_id, node_id, node_name, title, status, description, meta, result, fallback, created_at, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO human_tasks (id, workflow_id, node_id, node_name, title, status, description, meta, result, fallback, run_id, created_at, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       id,
       spec.workflowId,
@@ -43,6 +43,7 @@ export class SqliteHumanTaskStore implements HumanTaskStoreLike {
       spec.meta === undefined ? null : JSON.stringify(spec.meta),
       null,
       fallback,
+      spec.runId === undefined ? null : spec.runId,
       createdAt,
       null,
     );
@@ -57,6 +58,7 @@ export class SqliteHumanTaskStore implements HumanTaskStoreLike {
       createdAt,
       ...(spec.description === undefined ? {} : { description: spec.description }),
       ...(spec.meta === undefined ? {} : { meta: spec.meta }),
+      ...(spec.runId === undefined ? {} : { runId: spec.runId }),
     };
   }
 
@@ -76,12 +78,16 @@ export class SqliteHumanTaskStore implements HumanTaskStoreLike {
     return row === undefined ? undefined : parseTaskRow(row);
   }
 
-  /** 查找指定 workflow+node 的待处理任务（引擎挂起前查重用）。 */
-  async findPending(workflowId: string, nodeId: string): Promise<HumanTask | undefined> {
+  /** 查找指定 workflow+node 的待处理任务；runId 传参时按 (workflowId, nodeId, runId) 精确查重（v0.2.5 T4）。 */
+  async findPending(workflowId: string, nodeId: string, runId?: string): Promise<HumanTask | undefined> {
     const db = await this.ensureOpened();
-    const row = db.db.prepare(
-      "SELECT * FROM human_tasks WHERE workflow_id = ? AND node_id = ? AND status = 'pending' LIMIT 1",
-    ).get(workflowId, nodeId);
+    const row = runId === undefined
+      ? db.db.prepare(
+          "SELECT * FROM human_tasks WHERE workflow_id = ? AND node_id = ? AND status = 'pending' LIMIT 1",
+        ).get(workflowId, nodeId)
+      : db.db.prepare(
+          "SELECT * FROM human_tasks WHERE workflow_id = ? AND node_id = ? AND run_id = ? AND status = 'pending' LIMIT 1",
+        ).get(workflowId, nodeId, runId);
     return row === undefined ? undefined : parseTaskRow(row);
   }
 

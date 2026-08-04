@@ -34,7 +34,7 @@ export const finallyNode: INodeDefinition = {
       }
     }
     try {
-      const { endResult } = await runSubgraph(ctx, raw, workflowVariables);
+      const { endResult } = await runSubgraph(ctx, raw, workflowVariables, ctx.registry);
       return { out: endResult };
     } catch (err) {
       // 挂起不是失败：透传父引擎（复用子图已创建任务，引擎转 waiting，不吞）。

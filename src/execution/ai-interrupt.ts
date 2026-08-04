@@ -1,7 +1,6 @@
 // AI 中断挂起/恢复支持（v0.2.1）：引擎将 AiInterruptRequiredError 转 HumanTask、恢复时经注入 handler 继续。
-// 独立模块保持 Engine.ts ≤440 行（logs-integration 约束测试）。事务边界由 Engine 控制：
-// ai 节点执行前 begin → checkpoint（executor 写入）→ HumanTask create → RunState update 同事务（AC3），
-// 无中断 rollback（checkpoint 不落库），中断 commit。引擎私有状态经 AiOps 参数化注入，无循环依赖。
+// 独立模块保持 Engine.ts ≤440 行。事务边界由 Engine 控制：ai 节点执行前 begin → checkpoint → HumanTask → RunState 同事务，
+// 无中断 rollback，中断 commit。引擎私有状态经 AiOps 参数化注入，无循环依赖。
 import { AiInterruptRequiredError, type AIExecutionResult } from "../ai/executor.js";
 import type { SqliteDatabase, SqliteTransaction } from "../db/index.js";
 import type { HumanTaskStoreLike } from "../db/stores/types.js";
@@ -80,20 +79,16 @@ export function beginAiTransaction(
 }
 
 /** AI 挂起任务 upsert：先查 pending 复用；无则查最近任务（多轮中断）reopen + 更新 meta；否则新建。
- *  多轮中断复用同一任务 id，meta 更新为新 checkpointId（同一审批流持续）。 */
+ *  多轮中断复用同一任务 id，meta 更新为新 checkpointId。runId（v0.2.5 T4）：findPending 精确查重 + 新建携带。 */
 export async function upsertAiTask(
   store: HumanTaskStoreLike,
   workflowId: string,
   node: Node,
   signal: AiInterruptRequiredError,
+  runId: string,
 ): Promise<HumanTask> {
-  const meta = {
-    kind: "ai_interrupt",
-    threadId: signal.threadId,
-    checkpointId: signal.checkpointId,
-    interruptValue: signal.interruptValue,
-  };
-  const pending = await store.findPending(workflowId, node.id);
+  const meta = { kind: "ai_interrupt", threadId: signal.threadId, checkpointId: signal.checkpointId, interruptValue: signal.interruptValue };
+  const pending = await store.findPending(workflowId, node.id, runId);
   if (pending !== undefined) return pending;
   const recent = await store.findRecent(workflowId, node.id);
   if (recent !== undefined) {
@@ -101,6 +96,7 @@ export async function upsertAiTask(
   }
   return store.create({
     workflowId,
+    runId,
     nodeId: node.id,
     nodeName: node.name,
     title: buildAiTaskTitle(signal),
@@ -118,6 +114,7 @@ export interface AiOps {
   readonly states: Map<string, NodeStatus>;
   readonly outputs: Map<string, Record<string, unknown>>;
   readonly store: HumanTaskStoreLike;
+  readonly runId: string; // 执行实例标识（v0.2.5 T4）：AI 中断任务查重/创建携带 runId
   readonly ai: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase } | undefined;
   readonly aiResumeHandler: ((context: AIResumeContext) => Promise<AIExecutionResult>) | undefined;
   readonly events: ExecutionEvents | undefined;
@@ -146,7 +143,7 @@ export async function suspendAiNode(
       ops.states.set(node.id, "WaitingForHuman");
       ops.emit(node.id, "Running", "WaitingForHuman");
     }
-    const task = await upsertAiTask(ops.store, ops.workflow.id, node, signal);
+    const task = await upsertAiTask(ops.store, ops.workflow.id, node, signal, ops.runId);
     await ops.persistWaiting(node.id, task.id);
     aiTx?.commit();
     ops.events?.onHumanTaskCreated?.(task);
