@@ -67,6 +67,12 @@ export class RunStateStore implements RunStateStoreLike {
     return this.runs.filter((run) => run.workflowId === workflowId);
   }
 
+  /** 按运行状态过滤（调试 CLI 用：paused 等 v0.2.4 新状态可查）。 */
+  async listByStatus(status: RunState["status"]): Promise<RunState[]> {
+    await this.ensureLoaded();
+    return this.runs.filter((run) => run.status === status);
+  }
+
   /** 显式落盘：公共 atomicWriteFile 写 tmp → 读回 JSON.parse 校验 → rename 原子替换。 */
   async save(): Promise<void> {
     await this.ensureLoaded(); // 防止用未加载的空状态覆盖已有文件

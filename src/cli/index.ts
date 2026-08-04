@@ -1,5 +1,6 @@
 // HNFlow CLI 主入口：解析子命令并分发。main 为纯函数（便于测试），
 // 直接执行时按返回码 process.exit；被 import 时不退出。
+import { cmdDebug } from "./debug.js";
 import { cmdLogs } from "./logs.js";
 import { cmdRun } from "./run.js";
 import { cmdRuns } from "./runs.js";
@@ -13,6 +14,7 @@ function printUsage(): void {
   console.error("  runs [storePath]          列出运行记录（默认 ./run_states.json）");
   console.error("  logs <runId> [storePath]  查看运行详情与节点状态（--workflow 附结构）");
   console.error("  run <workflowPath>        加载并执行工作流");
+  console.error("  debug <子命令>            调试视图（runs/context/trace/logs）");
 }
 
 /**
@@ -31,11 +33,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdLogs(args);
     case "run":
       return cmdRun(args);
+    case "debug":
+      return cmdDebug(args);
     case undefined:
       printUsage();
       return 1;
     default:
-      return fail(`未知命令: ${command}`, "workflows|runs|logs|run");
+      return fail(`未知命令: ${command}`, "workflows|runs|logs|run|debug");
   }
 }
 

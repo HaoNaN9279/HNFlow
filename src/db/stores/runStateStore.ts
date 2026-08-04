@@ -51,6 +51,15 @@ export class SqliteRunStateStore implements RunStateStoreLike {
       .map(parseRunStateRow);
   }
 
+  /** 按运行状态过滤（调试 CLI 用：paused 等 v0.2.4 新状态可查）。 */
+  async listByStatus(status: RunState["status"]): Promise<RunState[]> {
+    const db = await this.ensureOpened();
+    return db.db
+      .prepare("SELECT state FROM run_state WHERE status = ? ORDER BY updated_at, run_id")
+      .all(status)
+      .map(parseRunStateRow);
+  }
+
   /** 关闭连接；重复 close 幂等。共享连接不关闭（由共享方负责）。 */
   async close(): Promise<void> {
     if (this.sharedDb !== undefined) {
