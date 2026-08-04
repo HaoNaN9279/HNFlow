@@ -8,7 +8,7 @@ export class InvalidCommandParamsError extends Error {
 
   constructor(readonly params: unknown) {
     super(
-      "invalid command params: expected { command: string, args?, cwd?, timeoutMs?, failOnNonZero? }",
+      "invalid command params: expected { command: string, args?, cwd?, timeoutMs?, failOnNonZero?, retry? }",
     );
   }
 }
@@ -41,6 +41,12 @@ export class NonZeroExitError extends Error {
   }
 }
 
+/** 重试配置（v0.2.5 T3）：attempts=重试次数（总执行 attempts+1 次；0/缺省=不重试）；delayMs=每次重试前等待毫秒（缺省 100）。 */
+interface RetryOptions {
+  readonly attempts: number | undefined;
+  readonly delayMs: number;
+}
+
 /** 解析后的命令参数 */
 interface CommandParams {
   readonly command: string;
@@ -48,6 +54,7 @@ interface CommandParams {
   readonly cwd: string | undefined;
   readonly timeoutMs: number;
   readonly failOnNonZero: boolean;
+  readonly retry: RetryOptions | undefined;
 }
 
 /** 命令执行结果 */
@@ -59,6 +66,46 @@ interface CommandResult {
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+/** 解析 retry 配置：缺省返回 undefined（不重试）；结构非法返回 undefined（走参数错误）。 */
+function parseRetry(raw: unknown): RetryOptions | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as Readonly<Record<string, unknown>>;
+  const attempts = record["attempts"];
+  if (attempts !== undefined && typeof attempts !== "number") {
+    return undefined;
+  }
+  const delayMs = record["delayMs"];
+  if (delayMs !== undefined && typeof delayMs !== "number") {
+    return undefined;
+  }
+  return {
+    attempts: attempts === undefined ? undefined : attempts,
+    delayMs: delayMs === undefined ? 100 : delayMs,
+  };
+}
+
+/** 解析有效重试次数：attempts 缺省 → 0（不重试，总执行 1 次）。 */
+function resolveRetryAttempts(retry: RetryOptions | undefined): number {
+  if (retry === undefined || retry.attempts === undefined) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(retry.attempts));
+}
+
+/** 瞬时类错误才重试：超时 / 非零退出（后者仅在 failOnNonZero=true 时抛出）；参数错误在解析期抛出，不进循环。 */
+function isTransientError(error: unknown): boolean {
+  return error instanceof TimeoutError || error instanceof NonZeroExitError;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** 边界解析：从未知参数记录解析命令参数，非法返回 undefined */
@@ -83,12 +130,17 @@ function parseParams(params: Readonly<Record<string, unknown>>): CommandParams |
   if (failOnNonZero !== undefined && typeof failOnNonZero !== "boolean") {
     return undefined;
   }
+  const retry = parseRetry(params["retry"]);
+  if (retry === undefined && params["retry"] !== undefined) {
+    return undefined;
+  }
   return {
     command,
     args: args === undefined ? [] : args,
     cwd: cwd === undefined ? undefined : cwd,
     timeoutMs: timeoutMs === undefined ? 30000 : timeoutMs,
     failOnNonZero: failOnNonZero === undefined ? false : failOnNonZero,
+    retry,
   };
 }
 
@@ -141,11 +193,22 @@ export const commandNode: INodeDefinition = {
     if (params === undefined) {
       throw new InvalidCommandParamsError(ctx.node.params);
     }
-    const result = await runCommand(params);
-    return {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
+    const attempts = resolveRetryAttempts(params.retry);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const result = await runCommand(params);
+        return {
+          stdout: result.stdout,
+          stderr: result.stderr,
+          exitCode: result.exitCode,
+        };
+      } catch (error) {
+        // 达到重试上限或非瞬时错误：立即抛出；每次重试前重新 spawn（全新子进程）。
+        if (attempt >= attempts || !isTransientError(error)) {
+          throw error;
+        }
+        await sleep(params.retry?.delayMs ?? 100);
+      }
+    }
   },
 };

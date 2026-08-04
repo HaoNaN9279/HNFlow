@@ -13,7 +13,7 @@ function printUsage(): void {
   console.error("  workflows [dir]           列出工作流文件（默认 ./workflows）");
   console.error("  runs [storePath]          列出运行记录（默认 ./run_states.json）");
   console.error("  logs <runId> [storePath]  查看运行详情与节点状态（--workflow 附结构）");
-  console.error("  run <workflowPath>        加载并执行工作流");
+  console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>]  执行工作流（带幂等键开启持久化）");
   console.error("  debug <子命令>            调试视图（runs/context/trace/logs）");
 }
 
