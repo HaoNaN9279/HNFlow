@@ -63,23 +63,29 @@ export class NodeRegistry {
   }
 }
 
+// v0.2.5 T2 幂等标注：集中标注 16 个内置节点的 idempotent。
+// false=有副作用/非幂等（重复执行产生脏数据）：command（执行命令）、http（发请求）、
+// file（读写文件）、llm/ai（模型调用，消耗 token/产生外部影响）。
+// true=纯函数/可安全重跑：start/end/setVariable/ifElse/log/tryCatch/finally/subworkflow/loop/parallel
+// （容器与调度逻辑无副作用，副作用在子图节点上按各自标注判定）；
+// humanTask 挂起节点标 true——它不产生副作用仅等待人工介入，重跑不产生重复外部影响。
 export const builtinNodes: INodeDefinition[] = [
-  startNode,
-  endNode,
-  ifElseNode,
-  setVariableNode,
-  commandNode,
-  httpNode,
-  fileNode,
-  logNode,
-  humanTaskNode,
-  subworkflowNode,
-  aiNode,
-  llmNode,
-  tryCatchNode,
-  finallyNode,
-  loopNode,
-  parallelNode,
+  { ...startNode, idempotent: true },
+  { ...endNode, idempotent: true },
+  { ...ifElseNode, idempotent: true },
+  { ...setVariableNode, idempotent: true },
+  { ...commandNode, idempotent: false },
+  { ...httpNode, idempotent: false },
+  { ...fileNode, idempotent: false },
+  { ...logNode, idempotent: true },
+  { ...humanTaskNode, idempotent: true },
+  { ...subworkflowNode, idempotent: true },
+  { ...aiNode, idempotent: false },
+  { ...llmNode, idempotent: false },
+  { ...tryCatchNode, idempotent: true },
+  { ...finallyNode, idempotent: true },
+  { ...loopNode, idempotent: true },
+  { ...parallelNode, idempotent: true },
 ];
 
 export const registry = new NodeRegistry();

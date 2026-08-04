@@ -61,11 +61,40 @@ const TABLE_DDL = [
 
 /**
  * 确保表结构就绪：先切 WAL（文件库生效；内存库返回 memory 属正常，不报错），
- * 再逐表幂等建表。可重复调用。
+ * 再逐表幂等建表，最后执行增量迁移（v0.2.5 T2/T4：run_state.idempotency_key 列 + 唯一索引、
+ * human_tasks.run_id 列）。可重复调用；迁移段对既有库（列缺失）幂等补列，对新库（列已存在）跳过。
  */
 export function ensureSchema(db: SqliteAdapter): void {
   db.exec("PRAGMA journal_mode = WAL");
   for (const ddl of TABLE_DDL) {
     db.exec(ddl);
+  }
+  migrateRunStateIdempotency(db);
+  migrateHumanTasksRunId(db);
+}
+
+/**
+ * 增量迁移：PRAGMA table_info 探测 run_state.idempotency_key 列缺失 → ALTER TABLE ADD COLUMN，
+ * 再建 (workflow_id, idempotency_key) 唯一索引。SQLite 唯一索引允许多 NULL——
+ * 旧库既有行 idempotency_key 为 NULL 不参与判重，天然兼容；只对非 NULL 幂等键判重。
+ */
+function migrateRunStateIdempotency(db: SqliteAdapter): void {
+  const columns = db.prepare("PRAGMA table_info(run_state)").all();
+  const hasColumn = columns.some((column) => column.name === "idempotency_key");
+  if (!hasColumn) {
+    db.exec("ALTER TABLE run_state ADD COLUMN idempotency_key TEXT");
+  }
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_state_idempotency ON run_state (workflow_id, idempotency_key)");
+}
+
+/**
+ * 增量迁移：PRAGMA table_info 探测 human_tasks.run_id 列缺失 → ALTER TABLE ADD COLUMN。
+ * 旧库既有行 run_id 为 NULL，findPending 不传 runId 时按旧语义（workflowId+nodeId）匹配，天然兼容。
+ */
+function migrateHumanTasksRunId(db: SqliteAdapter): void {
+  const columns = db.prepare("PRAGMA table_info(human_tasks)").all();
+  const hasColumn = columns.some((column) => column.name === "run_id");
+  if (!hasColumn) {
+    db.exec("ALTER TABLE human_tasks ADD COLUMN run_id TEXT");
   }
 }

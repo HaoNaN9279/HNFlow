@@ -11,7 +11,7 @@ import type { NodeExecutionContext } from "./types.js";
 import type { NodeRegistry } from "../nodes/registry.js";
 import { registry } from "../nodes/registry.js";
 import { HumanTaskStore, InvalidTaskStateError } from "../human/HumanTaskStore.js";
-import type { HumanTask, HumanTaskSpec } from "../human/types.js";
+import type { HumanTask } from "../human/types.js";
 import { RunStateStore } from "../runstate/RunStateStore.js";
 import type { RunState } from "../runstate/types.js";
 import type { HumanTaskStoreLike, RunStateStoreLike } from "../db/stores/types.js";
@@ -19,9 +19,13 @@ import type { ExecutionLogStore } from "../logs/ExecutionLogStore.js";
 import { AiInterruptRequiredError, type AIExecutionResult } from "../ai/executor.js";
 import { SqliteHumanTaskStore, SqliteRunStateStore, type SqliteDatabase } from "../db/index.js";
 import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspendAiNode, type AiOps, type AIResumeContext } from "./ai-interrupt.js";
-import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, rebuildContext, rebuildMachines, topoSort } from "./runstate-persist.js";
+import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, persistRunState, rebuildContext, rebuildMachines, topoSort, type PersistRunStateOps } from "./runstate-persist.js";
+import { crashConfirmToWaiting, makeSuspendOps, shouldCrashConfirm, suspendToWaiting } from "./human-suspend.js";
+import { HumanTaskRequiredError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
+import { registerIdempotencyKey } from "./idempotency.js";
 export type { AIResumeContext } from "./ai-interrupt.js";
 export { topoSort } from "./runstate-persist.js";
+export { HumanTaskRequiredError, IdempotencyKeyConflictError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
 export interface ExecutionResult {
   readonly workflowId: string;
   readonly status: "success" | "failed" | "waiting" | "paused";
@@ -47,6 +51,8 @@ export interface ExecutionEngineOptions {
   readonly runStateStore?: RunStateStoreLike;
   readonly runId?: string;
   readonly persist?: boolean;
+  /** 幂等键（v0.2.5 T2）：与 workflowId 组成判重键；persist 开启时 run 启动按此原子注册，重复提交抛 IdempotencyKeyConflictError。 */
+  readonly idempotencyKey?: string;
   /** 执行日志持久化 store：节点 logger 产生的日志在记录内存日志的同时转发入缓冲（flush 由 store 自行管理）。 */
   readonly logStore?: ExecutionLogStore;
   /** AI 中断 checkpoint 配置：提供 sharedDb 时引擎在 ai 节点执行期间开启事务（AC3 三写同事务）。 */
@@ -59,21 +65,6 @@ export interface ExecutionEngineOptions {
 }
 export interface EngineLogEntry { readonly level: "info" | "warn" | "error"; readonly message: string; readonly data: unknown | undefined; }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
-/** 节点请求人工介入的信号：由 ctx.suspend 抛出，引擎识别后转入挂起流程（不视为失败）。 */
-export class HumanTaskRequiredError extends Error {
-  readonly name = "HumanTaskRequiredError";
-  constructor(readonly spec: HumanTaskSpec) { super(`human task required: ${spec.title}`); }
-}
-/** 子工作流挂起信号：由 subworkflow 节点抛出，父引擎透传（复用子图已创建任务，不重复创建）。 */
-export class SubworkflowWaitingError extends Error {
-  readonly name = "SubworkflowWaitingError";
-  constructor(readonly task: HumanTask) { super(`subworkflow waiting for human task: ${task.title}`); }
-}
-/** 子工作流暂停信号：子引擎断点 paused 透传，父引擎容器转 Paused（pendingNodeId=子图首节点，workflowId 链还原调用栈）。 */
-export class SubworkflowPausedError extends Error {
-  readonly name = "SubworkflowPausedError";
-  constructor(readonly pendingNodeId: string, readonly workflowId: string) { super(`subworkflow paused at node: ${pendingNodeId}`); }
-}
 type RunNodeOutcome = { readonly kind: "ok" } | { readonly kind: "failed"; readonly message: string } | { readonly kind: "waiting"; readonly task: HumanTask } | { readonly kind: "paused"; readonly pendingNodeId?: string; readonly workflowId?: string };
 export class ExecutionEngine {
   readonly #workflow: Workflow;
@@ -118,7 +109,17 @@ export class ExecutionEngine {
   }
   async runFrom(startIndex: number): Promise<ExecutionResult> {
     this.#runActive = true;
-    if (this.#options.persist === true) await this.persistRunState("running");
+    if (this.#options.persist === true) {
+      // 幂等注册（v0.2.5 T2）：persist("running") 之前按 workflowId+idempotencyKey 原子注册，重复提交抛冲突不执行。
+      if (this.#options.idempotencyKey !== undefined) {
+        await registerIdempotencyKey(this.runStateStore, buildRunStateFromEngine({
+          runId: this.#runId, workflow: this.#workflow, nodeStates: this.#states,
+          nodeOutputs: this.#outputs, contextSnapshot: this.#context.getSnapshot(),
+          status: "running", idempotencyKey: this.#options.idempotencyKey,
+        }));
+      }
+      await persistRunState(this.persistOps, "running");
+    }
     return this.runRemaining(topoSort(this.#workflow), startIndex, Date.now());
   }
   /** 从断点快照恢复内部状态（states/outputs/context/machines），之后可 runFrom/resume 继续。 */
@@ -145,22 +146,22 @@ export class ExecutionEngine {
       switch (outcome.kind) {
         case "failed": {
           savedError ??= outcome.message; // finally 链：保留首个主错误并立即持久化（后续 finally 仍可执行）
-          if (persist) await this.persistRunState("failed", { error: savedError });
+          if (persist) await persistRunState(this.persistOps, "failed", { error: savedError });
           break;
         }
         case "waiting": {
           this.#pendingNodeId = nodeId;
-          if (persist) await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: outcome.task.id });
+          if (persist) await persistRunState(this.persistOps, "waiting", { pendingNodeId: nodeId, pendingTaskId: outcome.task.id });
           return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "waiting", startTime, undefined, outcome.task));
         }
         case "paused": {
           const pauseNodeId = outcome.pendingNodeId ?? nodeId;
           this.#pendingNodeId = pauseNodeId;
-          if (persist) await this.persistRunState("paused", { pendingNodeId: pauseNodeId, ...(outcome.workflowId === undefined ? {} : { pausedWorkflowId: outcome.workflowId }) });
+          if (persist) await persistRunState(this.persistOps, "paused", { pendingNodeId: pauseNodeId, ...(outcome.workflowId === undefined ? {} : { pausedWorkflowId: outcome.workflowId }) });
           return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "paused", startTime, undefined, undefined, pauseNodeId));
         }
         case "ok":
-          if (persist && savedError === undefined) await this.persistRunState("running"); // 失败模式后不覆盖 running（finally/Skipped 不回退）
+          if (persist && savedError === undefined) await persistRunState(this.persistOps, "running"); // 失败模式后不覆盖 running（finally/Skipped 不回退）
           break;
         default:
           assertNever(outcome);
@@ -170,7 +171,7 @@ export class ExecutionEngine {
       this.#runActive = false; // 主错误保留：全部 finally 已尝试，最终以 failed 收尾
       return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "failed", startTime, savedError));
     }
-    if (persist) await this.persistRunState("success");
+    if (persist) await persistRunState(this.persistOps, "success");
     this.#runActive = false;
     return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "success", startTime));
   }
@@ -213,7 +214,10 @@ export class ExecutionEngine {
     } catch (err) {
       if (err instanceof HumanTaskRequiredError) {
         aiTx?.rollback();
-        return await this.suspendNode(node, machine, err);
+        this.markWaiting(node, machine);
+        const task = await suspendToWaiting(makeSuspendOps(this.#workflow.id, node, this.#runId, this.humanTaskStore), err.spec);
+        this.#options.events?.onHumanTaskCreated?.(task);
+        return { kind: "waiting", task };
       }
       if (err instanceof SubworkflowWaitingError) {
         // 子工作流透传：复用子图已创建任务，不重复创建。
@@ -237,26 +241,30 @@ export class ExecutionEngine {
         return await suspendAiNode(this.aiOps(), node, machine, err, aiTx);
       }
       aiTx?.rollback();
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (shouldCrashConfirm(this.#options.idempotencyKey, this.#registry.get(node.type).idempotent)) {
+        const crash = await crashConfirmToWaiting(makeSuspendOps(this.#workflow.id, node, this.#runId, this.humanTaskStore), errMsg);
+        if (crash.kind === "waiting") {
+          this.markWaiting(node, machine);
+          this.#options.events?.onHumanTaskCreated?.(crash.task);
+          return crash;
+        }
+      }
       machine.transitionTo("Failed");
       this.#states.set(nodeId, "Failed");
       this.emitStateChange(nodeId, "Running", "Failed");
-      const errMsg = err instanceof Error ? err.message : String(err);
       this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed" });
       const message = `${node.name}(${node.id}) failed: ${errMsg}`;
       this.#options.events?.onError?.(err instanceof Error ? err : new Error(message));
       return { kind: "failed", message };
     }
   }
-  /** 挂起流程：转入 WaitingForHuman → 创建并持久化任务（按 workflowId+nodeId 查 pending 复用）。 */
-  private async suspendNode(node: Node, machine: NodeStateMachine, signal: HumanTaskRequiredError): Promise<RunNodeOutcome> {
+  /** 转 WaitingForHuman：状态机 + 状态 + 事件 + 日志（挂起与崩溃确认共用，Running → WaitingForHuman 合法）。 */
+  private markWaiting(node: Node, machine: NodeStateMachine): void {
     machine.transitionTo("WaitingForHuman");
     this.#states.set(node.id, "WaitingForHuman");
     this.emitStateChange(node.id, "Running", "WaitingForHuman");
     this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
-    const existing = await this.humanTaskStore.findPending(this.#workflow.id, node.id);
-    const task = existing ?? (await this.humanTaskStore.create({ workflowId: this.#workflow.id, nodeId: node.id, nodeName: node.name, ...signal.spec }));
-    this.#options.events?.onHumanTaskCreated?.(task);
-    return { kind: "waiting", task };
   }
   /** 恢复执行：AI 中断任务走 resumeAiTask（agent 恢复，不重跑节点）；普通任务写入人工产物 → 标记完成 → 重跑剩余。 */
   async resume(taskId: string, result?: unknown): Promise<ExecutionResult> {
@@ -299,11 +307,12 @@ export class ExecutionEngine {
       states: this.#states,
       outputs: this.#outputs,
       store: this.humanTaskStore,
+      runId: this.#runId,
       ai: this.#options.aiCheckpoint,
       aiResumeHandler: this.#options.aiResumeHandler,
       events: this.#options.events,
       topoSort,
-      persistWaiting: async (nodeId, taskId) => { if (this.#options.persist === true) await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: taskId }); },
+      persistWaiting: async (nodeId, taskId) => { if (this.#options.persist === true) await persistRunState(this.persistOps, "waiting", { pendingNodeId: nodeId, pendingTaskId: taskId }); },
       emit: (nodeId, from, to) => this.emitStateChange(nodeId, from, to),
       setContext: (key, value) => this.#context.set("workflow", key, value),
       taskStartIndex: (task, order) => this.taskStartIndex(task, order),
@@ -365,6 +374,9 @@ export class ExecutionEngine {
       registry: this.#registry,
       ...(this.#options.debugController === undefined ? {} : { debugController: this.#options.debugController }),
       ...(this.#options.aiCheckpoint !== undefined ? { aiCheckpoint: this.#options.aiCheckpoint } : {}), // AI 中断 checkpoint 配置透传（T5.1）
+      // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定。
+      runId: this.#runId,
+      ...(this.#options.idempotencyKey === undefined ? {} : { idempotencyKey: this.#options.idempotencyKey }),
       get: (scope, key) => context.get(scope, key),
       set: (scope, key, value) => context.set(scope, key, value),
       getByPath: (path) => context.getByPath(path),
@@ -373,7 +385,7 @@ export class ExecutionEngine {
       suspend: (spec) => { throw new HumanTaskRequiredError(spec); },
       // 节点执行进度钩子：子图容器（loop）每迭代完成后调用，触发断点持久化（快照内容由容器写入 node 级上下文，引擎不理解快照含义）。
       progress: async () => {
-        if (this.#options.persist === true) await this.persistRunState("running");
+        if (this.#options.persist === true) await persistRunState(this.persistOps, "running");
       },
       logger: {
         info: (msg, data) => this.recordLog(workflowId, node, "info", msg, data),
@@ -406,24 +418,13 @@ export class ExecutionEngine {
       ...(this.#options.workflowVariables === undefined ? {} : { workflowVariables: this.#options.workflowVariables }),
     });
   }
-  /** 落盘当前断点快照：paused 状态自动携带 debug 断点集合（从注入的 DebugController 读取）。 */
-  private async persistRunState(status: RunState["status"], extra?: { readonly pendingNodeId?: string; readonly pendingTaskId?: string; readonly error?: string; readonly pausedWorkflowId?: string }): Promise<void> {
-    const runState = buildRunStateFromEngine({
-      runId: this.#runId,
-      workflow: this.#workflow,
-      nodeStates: this.#states,
-      nodeOutputs: this.#outputs,
-      contextSnapshot: this.#context.getSnapshot(),
-      status,
-      ...extra,
-      ...(status === "paused" ? {
-        debug: {
-          breakpoints: this.#options.debugController?.breakpointIds() ?? [],
-          ...(extra?.pausedWorkflowId === undefined ? {} : { pausedWorkflowId: extra?.pausedWorkflowId }),
-        },
-      } : {}),
-    });
-    await this.runStateStore.update(runState);
+  /** 断点快照落盘所需引擎状态（persistRunState 拆至 runstate-persist.ts 参数化函数，控制 Engine 行数）。 */
+  private get persistOps(): PersistRunStateOps {
+    return {
+      runId: this.#runId, workflow: this.#workflow, states: this.#states, outputs: this.#outputs,
+      contextSnapshot: this.#context.getSnapshot(), idempotencyKey: this.#options.idempotencyKey,
+      debugController: this.#options.debugController, store: this.runStateStore,
+    };
   }
   private resetState(): void {
     this.#states = new Map();

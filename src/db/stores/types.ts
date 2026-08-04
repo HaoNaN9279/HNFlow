@@ -5,6 +5,11 @@ import type { RunState } from "../../runstate/types.js";
 /** RunState 断点存储公共接口。 */
 export interface RunStateStoreLike {
   create(run: RunState): Promise<void>;
+  /**
+   * 原子注册（v0.2.5 T2）：同 runId 或同 (workflowId+idempotencyKey) 已存在 → 返回 false 不写入；
+   * 否则插入并返回 true。幂等键判重入口，冲突不抛错（由调用方决定语义）。
+   */
+  createIfAbsent(run: RunState): Promise<boolean>;
   update(run: RunState): Promise<void>;
   getById(runId: string): Promise<RunState | undefined>;
   list(): Promise<RunState[]>;
@@ -17,7 +22,8 @@ export interface HumanTaskStoreLike {
   listAll(): Promise<HumanTask[]>;
   listPending(): Promise<HumanTask[]>;
   getById(id: string): Promise<HumanTask | undefined>;
-  findPending(workflowId: string, nodeId: string): Promise<HumanTask | undefined>;
+  /** 查找指定 workflow+node 的待处理任务；runId 传参时按 (workflowId, nodeId, runId) 精确查重（v0.2.5 T4）。 */
+  findPending(workflowId: string, nodeId: string, runId?: string): Promise<HumanTask | undefined>;
   /** 查找指定 workflow+node 最近创建的任务（任意状态；AI 多轮中断复用任务用）。 */
   findRecent(workflowId: string, nodeId: string): Promise<HumanTask | undefined>;
   complete(id: string, result?: unknown): Promise<HumanTask>;

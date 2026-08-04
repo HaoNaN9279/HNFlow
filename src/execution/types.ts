@@ -19,6 +19,12 @@ export interface INodeDefinition {
   type: string;
   /** 展示名 */
   name: string;
+  /**
+   * 幂等标记（v0.2.5 T2）：true=纯函数/可安全重跑，重复执行不产生脏数据；
+   * false=有副作用/非幂等（写文件/发请求/执行命令/模型调用等），重跑会产生重复副作用。
+   * 缺省视为 true。T4 崩溃转人工确认据此判定：幂等键开启时非幂等节点 Failed → 转人工。
+   */
+  idempotent?: boolean;
   /** 默认端口模板 */
   inputs: Port[];
   outputs: Port[];
@@ -37,6 +43,10 @@ export interface NodeExecutionContext {
   workflowId: string;
   /** 引擎注入的人工任务存储（subworkflow 节点透传给子引擎复用，保证跨重启任务可查）。 */
   readonly humanTaskStore?: HumanTaskStoreLike;
+  /** 引擎 runId（v0.2.5 T4）：子图容器透传给子引擎，子图内任务 runId 与父一致（崩溃确认查重）。 */
+  readonly runId?: string;
+  /** 幂等键（v0.2.5 T4）：子图容器透传给子引擎，子图内崩溃转人工判定用。 */
+  readonly idempotencyKey?: string;
   /** AI 中断 checkpoint 持久化配置（ai 节点 interrupt 时注入，T5.1 修复）。 */
   readonly aiCheckpoint?: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase };
   /** 引擎节点注册表：子图容器（loop/tryCatch/subworkflow/finally）透传给子引擎（自定义节点扩展用）。 */

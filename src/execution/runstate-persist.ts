@@ -4,6 +4,8 @@ import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { HumanTask } from "../human/types.js";
 import type { Edge, Workflow } from "../model/types.js";
 import type { RunState } from "../runstate/types.js";
+import type { RunStateStoreLike } from "../db/stores/types.js";
+import type { DebugController } from "./DebugController.js";
 import { deepCopyRecord } from "../utils/deepCopy.js";
 import type { ExecutionResult } from "./Engine.js";
 import type { NodeStatus } from "./NodeState.js";
@@ -66,6 +68,8 @@ export interface EngineStateForPersist {
   readonly nodeOutputs: ReadonlyMap<string, Record<string, unknown>>;
   readonly contextSnapshot: RunState["contextSnapshot"];
   readonly status: RunState["status"];
+  /** 幂等键（v0.2.5 T2）：持久化到 RunState，供判重与审计；显式 string|undefined 兼容 exactOptionalPropertyTypes。 */
+  readonly idempotencyKey: string | undefined;
   readonly pendingNodeId?: string;
   readonly pendingTaskId?: string;
   readonly error?: string;
@@ -95,6 +99,7 @@ export function buildRunStateFromEngine(state: EngineStateForPersist): RunState 
   };
   return {
     ...base,
+    ...(state.idempotencyKey === undefined ? {} : { idempotencyKey: state.idempotencyKey }),
     ...(state.pendingNodeId === undefined ? {} : { pendingNodeId: state.pendingNodeId }),
     ...(state.pendingTaskId === undefined ? {} : { pendingTaskId: state.pendingTaskId }),
     ...(state.error === undefined ? {} : { error: state.error }),
@@ -131,6 +136,43 @@ export function rebuildMachines(
     machines.set(node.id, machine);
   }
   return machines;
+}
+
+/** 落盘断点快照所需引擎状态（Engine.persistRunState 拆出：参数化注入，控制 Engine ≤440 行）。 */
+export interface PersistRunStateOps {
+  readonly runId: string;
+  readonly workflow: Workflow;
+  readonly states: ReadonlyMap<string, NodeStatus>;
+  readonly outputs: ReadonlyMap<string, Record<string, unknown>>;
+  readonly contextSnapshot: RunState["contextSnapshot"];
+  readonly idempotencyKey: string | undefined;
+  readonly debugController: DebugController | undefined;
+  readonly store: RunStateStoreLike;
+}
+
+/** 落盘当前断点快照：paused 状态自动携带 debug 断点集合（从注入的 DebugController 读取）。 */
+export async function persistRunState(
+  ops: PersistRunStateOps,
+  status: RunState["status"],
+  extra?: { readonly pendingNodeId?: string; readonly pendingTaskId?: string; readonly error?: string; readonly pausedWorkflowId?: string },
+): Promise<void> {
+  const runState = buildRunStateFromEngine({
+    runId: ops.runId,
+    workflow: ops.workflow,
+    nodeStates: ops.states,
+    nodeOutputs: ops.outputs,
+    contextSnapshot: ops.contextSnapshot,
+    status,
+    idempotencyKey: ops.idempotencyKey,
+    ...extra,
+    ...(status === "paused" ? {
+      debug: {
+        breakpoints: ops.debugController?.breakpointIds() ?? [],
+        ...(extra?.pausedWorkflowId === undefined ? {} : { pausedWorkflowId: extra?.pausedWorkflowId }),
+      },
+    } : {}),
+  });
+  await ops.store.update(runState);
 }
 
 /** 组装 ExecutionResult（Engine.buildResult 移出，纯函数）：nodeStates 填满全部节点，nodeOutputs 透传。

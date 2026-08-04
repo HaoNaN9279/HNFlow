@@ -23,8 +23,20 @@ export class SqliteRunStateStore implements RunStateStoreLike {
   async create(run: RunState): Promise<void> {
     const db = await this.ensureOpened();
     db.db.prepare(
-      "INSERT OR REPLACE INTO run_state (run_id, workflow_id, status, state, updated_at) VALUES (?, ?, ?, ?, ?)",
-    ).run(run.runId, run.workflowId, run.status, JSON.stringify(run), run.updatedAt);
+      "INSERT OR REPLACE INTO run_state (run_id, workflow_id, status, state, updated_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(run.runId, run.workflowId, run.status, JSON.stringify(run), run.updatedAt, run.idempotencyKey ?? null);
+  }
+
+  /**
+   * 原子注册（v0.2.5 T2）：INSERT OR IGNORE，受 run_id 主键 + (workflow_id, idempotency_key) 唯一索引约束；
+   * 同 runId 或同 workflowId+idempotencyKey 已存在 → changes=0 返回 false（不覆盖旧行，区别于 create）。
+   */
+  async createIfAbsent(run: RunState): Promise<boolean> {
+    const db = await this.ensureOpened();
+    const result = db.db.prepare(
+      "INSERT OR IGNORE INTO run_state (run_id, workflow_id, status, state, updated_at, idempotency_key) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(run.runId, run.workflowId, run.status, JSON.stringify(run), run.updatedAt, run.idempotencyKey ?? null);
+    return result.changes === 1;
   }
 
   /** 同 create，upsert 语义。 */

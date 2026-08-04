@@ -6,6 +6,8 @@ import type { Workflow } from "../model/types.js";
 export interface RunState {
   readonly runId: string; // randomUUID
   readonly workflowId: string;
+  /** 幂等键（v0.2.5 T2）：与 workflowId 组成判重键；缺失视为非幂等运行（恢复路径天然豁免）。 */
+  readonly idempotencyKey?: string;
   readonly workflow: Workflow; // 完整快照（含内嵌子图），恢复时直接重建
   readonly nodeStates: Record<string, NodeStatus>;
   readonly nodeOutputs: Record<string, Record<string, unknown>>;

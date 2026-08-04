@@ -1,4 +1,5 @@
 // RunState 断点 JSON 文件持久化：懒加载 + 原子写入（公共 atomicWriteFile）。
+// 注意：createIfAbsent（幂等注册）为先查后建——非原子，仅单进程可用；多进程判重须用 SQLite 版（唯一索引原子约束）。
 import { readFile } from "node:fs/promises";
 import type { RunState } from "./types.js";
 import type { RunStateStoreLike } from "../db/stores/types.js";
@@ -50,6 +51,25 @@ export class RunStateStore implements RunStateStoreLike {
   /** 同 create，upsert 语义。 */
   async update(run: RunState): Promise<void> {
     await this.create(run);
+  }
+
+  /**
+   * 先查后建（v0.2.5 T2）：同 runId 或同 (workflowId+idempotencyKey) 记录已存在 → 返回 false 不写入；
+   * 否则追加并落盘返回 true。非原子，仅单进程可用。
+   */
+  async createIfAbsent(run: RunState): Promise<boolean> {
+    await this.ensureLoaded();
+    const conflict = run.idempotencyKey === undefined
+      ? this.runs.some((existing) => existing.runId === run.runId)
+      : this.runs.some((existing) =>
+          existing.runId === run.runId || (existing.workflowId === run.workflowId && existing.idempotencyKey === run.idempotencyKey),
+        );
+    if (conflict) {
+      return false;
+    }
+    this.runs = [...this.runs, run];
+    await this.save();
+    return true;
   }
 
   async getById(runId: string): Promise<RunState | undefined> {
