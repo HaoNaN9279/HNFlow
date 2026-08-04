@@ -7,6 +7,7 @@ import type { RunState } from "../runstate/types.js";
 import { ExecutionEngine } from "./Engine.js";
 import type { ExecutionEngineOptions, ExecutionResult } from "./Engine.js";
 import { topoSort } from "./Engine.js";
+import { DebugController } from "./DebugController.js";
 
 /** 由断点快照重建引擎：workflow 取快照、runId 固定为快照 runId、恢复内部状态后只读（isReadOnly=true）。 */
 export function buildEngineFromRunState(runState: RunState, options: ExecutionEngineOptions = {}): ExecutionEngine {
@@ -31,7 +32,7 @@ export async function continueRun(engine: ExecutionEngine, runState: RunState): 
   return engine.runFrom(order.indexOf(startId));
 }
 
-/** 按 runId 恢复执行（waiting 状态拒绝，改用 resumeTask）。 */
+/** 按 runId 恢复执行（waiting 拒绝用 resumeTask；paused 拒绝用 debugResume）。 */
 export async function resumeRun(runId: string, options: ExecutionEngineOptions = {}): Promise<ExecutionResult> {
   const store = options.runStateStore ?? new RunStateStore();
   const runState = await store.getById(runId);
@@ -41,7 +42,85 @@ export async function resumeRun(runId: string, options: ExecutionEngineOptions =
   if (runState.status === "waiting") {
     throw new Error("run is waiting, use resumeTask instead");
   }
+  if (runState.status === "paused") {
+    throw new Error("run is paused, use debugResume instead");
+  }
   return continueRun(buildEngineFromRunState(runState, options), runState);
+}
+
+/** 断点恢复单步意图（v0.2.4 T3）：over=停拓扑序下一节点；into=进入子图停首节点；continue/缺省=清单步只停断点。 */
+export type DebugResumeStep = { readonly mode: "over" | "into" | "continue" };
+
+export interface DebugResumeOptions extends ExecutionEngineOptions {
+  readonly step?: DebugResumeStep;
+}
+
+/** 断点恢复入口：按 runId 恢复执行（status="paused" 专属；从断点节点本身继续，不重跑断点前节点）。
+ *  从 RunState.debug.breakpoints 还原断点；构造/复用 DebugController；
+ *  consumeResumeNode(pendingNodeId) 消费断点节点一次命中，避免恢复后立即再次 pause 同一节点死循环；
+ *  子图暂停（pendingNodeId 为子图内部节点）用 pausedWorkflowId 链回溯容器节点后从容器重跑。 */
+export async function debugResume(runId: string, options: DebugResumeOptions = {}): Promise<ExecutionResult> {
+  const store = options.runStateStore ?? new RunStateStore();
+  const runState = await store.getById(runId);
+  if (runState === undefined) {
+    throw new RunStateNotFoundError(runId);
+  }
+  if (runState.status !== "paused") {
+    throw new Error(`run is not paused: ${runState.status}, use resumeRun/resumeTask instead`);
+  }
+  const pendingNodeId = runState.pendingNodeId;
+  if (pendingNodeId === undefined) {
+    throw new Error("paused run state missing pendingNodeId");
+  }
+  const controller = options.debugController ?? new DebugController();
+  controller.setBreakpoints(runState.debug?.breakpoints ?? []);
+  const engine = buildEngineFromRunState(runState, { ...options, debugController: controller });
+  const order = topoSort(runState.workflow);
+  // 子图暂停恢复：pendingNodeId 为子图内部节点（可能与父节点 id 冲突），用 pausedWorkflowId 链回溯容器节点；
+  // 普通断点暂停直接用 pendingNodeId。
+  let resumeNodeId: string;
+  let startIndex: number;
+  const pausedWorkflowId = runState.debug?.pausedWorkflowId;
+  if (pausedWorkflowId !== undefined) {
+    const containerId = containerFromWorkflowId(pausedWorkflowId, order);
+    if (containerId === undefined) {
+      throw new Error(`debugResume: container node not in workflow: ${pausedWorkflowId}`);
+    }
+    resumeNodeId = containerId;
+    startIndex = order.indexOf(containerId);
+  } else {
+    resumeNodeId = pendingNodeId;
+    startIndex = order.indexOf(pendingNodeId);
+    if (startIndex === -1) {
+      throw new Error(`debugResume: pending node not in workflow: ${pendingNodeId}`);
+    }
+  }
+  // 单步意图：over=armStepOver(order[index+1])；into=armStepInto（子引擎透传停首节点）；continue=清 mode。
+  const stepMode = options.step?.mode ?? "continue";
+  if (stepMode === "over") {
+    const nextNodeId = order[startIndex + 1];
+    if (nextNodeId === undefined) {
+      throw new Error("debugResume: step over at last node");
+    }
+    controller.armStepOver(nextNodeId);
+  } else if (stepMode === "into") {
+    controller.armStepInto();
+  } else {
+    controller.continueRun();
+  }
+  controller.consumeResumeNode(resumeNodeId);
+  return engine.runFrom(startIndex);
+}
+
+/** 子图暂停定位：pausedWorkflowId（父id:容器id...）从后往前逐段匹配父 order（照 Engine.taskStartIndex 冒号分段回溯）。 */
+function containerFromWorkflowId(workflowId: string | undefined, order: readonly string[]): string | undefined {
+  if (workflowId === undefined) return undefined;
+  const segments = workflowId.split(":");
+  for (let i = segments.length - 1; i >= 0; i--) {
+    const segment = segments[i];
+    if (segment !== undefined && order.includes(segment)) return segment;
+  }
+  return undefined;
 }
 
 /** 按人工任务 id 恢复执行：读任务 → 定位所属 runState（pendingTaskId 匹配）→ 重建引擎 → engine.resume。

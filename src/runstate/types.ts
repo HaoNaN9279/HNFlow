@@ -16,7 +16,13 @@ export interface RunState {
   }; // WorkflowContext.getSnapshot 形状
   readonly pendingNodeId?: string; // 挂起节点
   readonly pendingTaskId?: string; // 挂起任务
-  readonly status: "running" | "waiting" | "success" | "failed";
+  readonly status: "running" | "waiting" | "success" | "failed" | "paused";
   readonly error?: string;
+  /** 调试断点集合（v0.2.4）：暂停时落盘、恢复时还原。 */
+  readonly debug?: {
+    readonly breakpoints: readonly string[];
+    /** 子图暂停点 workflowId 链（v0.2.4 T3）：子引擎 paused 透传时记录（父id:容器id...），恢复回溯容器节点用。 */
+    readonly pausedWorkflowId?: string;
+  };
   readonly updatedAt: number;
 }

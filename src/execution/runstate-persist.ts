@@ -69,6 +69,8 @@ export interface EngineStateForPersist {
   readonly pendingNodeId?: string;
   readonly pendingTaskId?: string;
   readonly error?: string;
+  /** 调试断点集合（status="paused" 时落盘）。 */
+  readonly debug?: { readonly breakpoints: readonly string[]; readonly pausedWorkflowId?: string };
 }
 
 /** 组装断点快照：nodeStates 填满全部节点（未执行 Idle），nodeOutputs 值深拷贝保证快照独立。 */
@@ -96,6 +98,7 @@ export function buildRunStateFromEngine(state: EngineStateForPersist): RunState 
     ...(state.pendingNodeId === undefined ? {} : { pendingNodeId: state.pendingNodeId }),
     ...(state.pendingTaskId === undefined ? {} : { pendingTaskId: state.pendingTaskId }),
     ...(state.error === undefined ? {} : { error: state.error }),
+    ...(state.debug === undefined ? {} : { debug: { breakpoints: [...state.debug.breakpoints], ...(state.debug.pausedWorkflowId === undefined ? {} : { pausedWorkflowId: state.debug.pausedWorkflowId }) } }),
   };
 }
 
@@ -130,15 +133,17 @@ export function rebuildMachines(
   return machines;
 }
 
-/** 组装 ExecutionResult（Engine.buildResult 移出，纯函数）：nodeStates 填满全部节点，nodeOutputs 透传。 */
+/** 组装 ExecutionResult（Engine.buildResult 移出，纯函数）：nodeStates 填满全部节点，nodeOutputs 透传。
+ *  paused 结果携带 pendingNodeId（断点恢复定位用）。 */
 export function buildResultFromEngine(
   workflow: Workflow,
   states: ReadonlyMap<string, NodeStatus>,
   outputs: ReadonlyMap<string, Record<string, unknown>>,
-  status: "success" | "failed" | "waiting",
+  status: "success" | "failed" | "waiting" | "paused",
   startTime: number,
   errorMessage?: string,
   waitingTask?: HumanTask,
+  pendingNodeId?: string,
 ): ExecutionResult {
   const nodeStates: Record<string, NodeStatus> = {};
   for (const node of workflow.nodes) {
@@ -157,7 +162,8 @@ export function buildResultFromEngine(
     endTime: Date.now(),
   };
   const withError = errorMessage === undefined ? base : { ...base, error: errorMessage };
+  const withPending = pendingNodeId === undefined ? withError : { ...withError, pendingNodeId };
   return status === "waiting" && waitingTask !== undefined
-    ? { ...withError, waitingTask }
-    : withError;
+    ? { ...withPending, waitingTask }
+    : withPending;
 }

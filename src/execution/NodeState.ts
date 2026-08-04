@@ -6,8 +6,11 @@
 //                           --(wait)-----> WaitingForHuman --(resume)--> Running
 //                                                          --(skip)-----> Skipped
 //                                                          --(failure)--> Failed
+//                           --(pause)----> Paused --(resume)--> Running
+//                                                --(skip)-----> Skipped
 //   WaitingForHuman 为人工审批/输入预留；恢复（WaitingForHuman -> Running）、
 //   跳过（WaitingForHuman -> Skipped，skip 人工任务）、挂起流程失败（WaitingForHuman -> Failed）均为合法转移。
+//   Paused 为断点暂停态（v0.2.4）：Running -> Paused 后断点恢复从 Paused -> Running 重跑节点本身。
 
 export type NodeStatus =
   | "Idle"
@@ -15,17 +18,19 @@ export type NodeStatus =
   | "Success"
   | "Failed"
   | "Skipped"
-  | "WaitingForHuman";
+  | "WaitingForHuman"
+  | "Paused";
 
 /** 合法转移表：以 Record<NodeStatus, ...> 穷尽枚举全部来源状态，遗漏即编译错误。
- *  Failed -> Running 为断点续跑语义：失败节点恢复后重跑。 */
+ *  Failed -> Running 为断点续跑语义：失败节点恢复后重跑；Paused -> Running 为断点恢复语义。 */
 const LEGAL_TRANSITIONS: Record<NodeStatus, readonly NodeStatus[]> = {
   Idle: ["Running"],
-  Running: ["Success", "Failed", "Skipped", "WaitingForHuman"],
+  Running: ["Success", "Failed", "Skipped", "WaitingForHuman", "Paused"],
   Success: [],
   Failed: ["Running"],
   Skipped: [],
   WaitingForHuman: ["Running", "Skipped", "Failed"],
+  Paused: ["Running", "Skipped"],
 };
 
 /** 非法状态转移：携带 from/to 便于定位。 */

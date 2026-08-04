@@ -5,6 +5,7 @@ import { detectCycle } from "../model/validate.js";
 import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
+import { DebugController } from "./DebugController.js";
 import { shouldExecute, transferPortData, type EngineReadState } from "./engine-util.js";
 import type { NodeExecutionContext } from "./types.js";
 import type { NodeRegistry } from "../nodes/registry.js";
@@ -21,12 +22,11 @@ import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspen
 import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, rebuildContext, rebuildMachines, topoSort } from "./runstate-persist.js";
 export type { AIResumeContext } from "./ai-interrupt.js";
 export { topoSort } from "./runstate-persist.js";
-/** 节点快照：nodeId → 最终状态。 */
-export interface EngineNodeSnapshot { readonly nodeId: string; readonly status: NodeStatus; }
 export interface ExecutionResult {
   readonly workflowId: string;
-  readonly status: "success" | "failed" | "waiting";
+  readonly status: "success" | "failed" | "waiting" | "paused";
   readonly waitingTask?: HumanTask;
+  readonly pendingNodeId?: string;
   readonly nodeStates: Record<string, NodeStatus>;
   readonly nodeOutputs: Record<string, Record<string, unknown>>;
   readonly error?: string;
@@ -53,33 +53,28 @@ export interface ExecutionEngineOptions {
   readonly aiCheckpoint?: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase };
   /** AI 中断恢复回调：注入方闭包持有 model/tools/interrupt 配置，引擎传 thread/checkpoint/decisions。 */
   readonly aiResumeHandler?: (context: AIResumeContext) => Promise<AIExecutionResult>;
+  readonly debugController?: DebugController;
+  /** 容器节点判定回调（step-into 放行容器进入子图）：缺省由 DebugController 构造时注入。 */
+  readonly isContainer?: (nodeId: string) => boolean;
 }
-export interface EngineLogEntry {
-  readonly level: "info" | "warn" | "error";
-  readonly message: string;
-  readonly data: unknown | undefined;
-}
-function assertNever(value: never): never {
-  throw new Error(`unreachable value: ${String(value)}`);
-}
+export interface EngineLogEntry { readonly level: "info" | "warn" | "error"; readonly message: string; readonly data: unknown | undefined; }
+function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 /** 节点请求人工介入的信号：由 ctx.suspend 抛出，引擎识别后转入挂起流程（不视为失败）。 */
 export class HumanTaskRequiredError extends Error {
   readonly name = "HumanTaskRequiredError";
-  constructor(readonly spec: HumanTaskSpec) {
-    super(`human task required: ${spec.title}`);
-  }
+  constructor(readonly spec: HumanTaskSpec) { super(`human task required: ${spec.title}`); }
 }
 /** 子工作流挂起信号：由 subworkflow 节点抛出，父引擎透传（复用子图已创建任务，不重复创建）。 */
 export class SubworkflowWaitingError extends Error {
   readonly name = "SubworkflowWaitingError";
-  constructor(readonly task: HumanTask) {
-    super(`subworkflow waiting for human task: ${task.title}`);
-  }
+  constructor(readonly task: HumanTask) { super(`subworkflow waiting for human task: ${task.title}`); }
 }
-type RunNodeOutcome =
-  | { readonly kind: "ok" }
-  | { readonly kind: "failed"; readonly message: string }
-  | { readonly kind: "waiting"; readonly task: HumanTask };
+/** 子工作流暂停信号：子引擎断点 paused 透传，父引擎容器转 Paused（pendingNodeId=子图首节点，workflowId 链还原调用栈）。 */
+export class SubworkflowPausedError extends Error {
+  readonly name = "SubworkflowPausedError";
+  constructor(readonly pendingNodeId: string, readonly workflowId: string) { super(`subworkflow paused at node: ${pendingNodeId}`); }
+}
+type RunNodeOutcome = { readonly kind: "ok" } | { readonly kind: "failed"; readonly message: string } | { readonly kind: "waiting"; readonly task: HumanTask } | { readonly kind: "paused"; readonly pendingNodeId?: string; readonly workflowId?: string };
 export class ExecutionEngine {
   readonly #workflow: Workflow;
   readonly #options: ExecutionEngineOptions;
@@ -104,6 +99,9 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
+    if (options.isContainer !== undefined && options.debugController !== undefined && !options.debugController.hasContainerJudge()) {
+      options.debugController.setIsContainer(options.isContainer);
+    }
   }
   get logs(): readonly EngineLogEntry[] { return [...this.#logs]; }
   get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
@@ -115,16 +113,12 @@ export class ExecutionEngine {
   async run(): Promise<ExecutionResult> {
     this.resetState();
     const cycle = detectCycle(this.#workflow);
-    if (cycle.hasCycle) {
-      throw new Error(`workflow cycle detected: ${cycle.path.join(" -> ")}`);
-    }
+    if (cycle.hasCycle) throw new Error(`workflow cycle detected: ${cycle.path.join(" -> ")}`);
     return this.runFrom(0);
   }
   async runFrom(startIndex: number): Promise<ExecutionResult> {
     this.#runActive = true;
-    if (this.#options.persist === true) {
-      await this.persistRunState("running");
-    }
+    if (this.#options.persist === true) await this.persistRunState("running");
     return this.runRemaining(topoSort(this.#workflow), startIndex, Date.now());
   }
   /** 从断点快照恢复内部状态（states/outputs/context/machines），之后可 runFrom/resume 继续。 */
@@ -135,7 +129,10 @@ export class ExecutionEngine {
     this.#machines = rebuildMachines(this.#workflow, nodeStates);
     this.#runActive = true;
   }
-  /** 从 startIndex 起执行拓扑序剩余节点：跑完 success；失败即停；挂起 waiting。 */
+  private emitComplete(result: ExecutionResult): ExecutionResult {
+    this.#options.events?.onComplete?.(result);
+    return result;
+  }
   private async runRemaining(
     order: readonly string[],
     startIndex: number,
@@ -147,40 +144,36 @@ export class ExecutionEngine {
       const outcome = await this.runNode(nodeId);
       switch (outcome.kind) {
         case "failed": {
-          // finally 链：保留首个主错误并立即持久化（避免后续 finally 含挂起时丢失），不终止循环，finally 仍可执行。
-          savedError ??= outcome.message;
+          savedError ??= outcome.message; // finally 链：保留首个主错误并立即持久化（后续 finally 仍可执行）
           if (persist) await this.persistRunState("failed", { error: savedError });
           break;
         }
         case "waiting": {
           this.#pendingNodeId = nodeId;
           if (persist) await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: outcome.task.id });
-          const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "waiting", startTime, undefined, outcome.task);
-          this.#options.events?.onComplete?.(result);
-          return result;
+          return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "waiting", startTime, undefined, outcome.task));
+        }
+        case "paused": {
+          const pauseNodeId = outcome.pendingNodeId ?? nodeId;
+          this.#pendingNodeId = pauseNodeId;
+          if (persist) await this.persistRunState("paused", { pendingNodeId: pauseNodeId, ...(outcome.workflowId === undefined ? {} : { pausedWorkflowId: outcome.workflowId }) });
+          return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "paused", startTime, undefined, undefined, pauseNodeId));
         }
         case "ok":
-          // 已进入失败模式（savedError 非空）时不再覆盖为 running：后续 finally/Skipped 节点执行不应回退断点状态。
-          if (persist && savedError === undefined) await this.persistRunState("running");
+          if (persist && savedError === undefined) await this.persistRunState("running"); // 失败模式后不覆盖 running（finally/Skipped 不回退）
           break;
         default:
           assertNever(outcome);
       }
     }
     if (savedError !== undefined) {
-      // 主错误保留：全部 finally 已尝试，最终以 failed 收尾（此前每步已持久化，此处不再重复落盘）。
-      this.#runActive = false;
-      const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "failed", startTime, savedError);
-      this.#options.events?.onComplete?.(result);
-      return result;
+      this.#runActive = false; // 主错误保留：全部 finally 已尝试，最终以 failed 收尾
+      return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "failed", startTime, savedError));
     }
     if (persist) await this.persistRunState("success");
     this.#runActive = false;
-    const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "success", startTime);
-    this.#options.events?.onComplete?.(result);
-    return result;
+    return this.emitComplete(buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "success", startTime));
   }
-  /** 调度单个节点：ok=正常（Success/Skipped），failed=失败消息，waiting=挂起。 */
   private async runNode(nodeId: string): Promise<RunNodeOutcome> {
     const node = this.#nodeById.get(nodeId);
     const machine = this.#machines.get(nodeId);
@@ -189,24 +182,32 @@ export class ExecutionEngine {
     machine.transitionTo("Running");
     this.#states.set(nodeId, "Running");
     this.emitStateChange(nodeId, previous, "Running");
+    this.recordLog(this.#workflow.id, node, "info", `node:start ${nodeId}`);
     const incoming = this.#incoming.get(nodeId) ?? [];
     const state: EngineReadState = { states: this.#states, outputs: this.#outputs, nodeById: this.#nodeById };
     if (!shouldExecute(incoming, state)) {
       machine.transitionTo("Skipped");
       this.#states.set(nodeId, "Skipped");
       this.emitStateChange(nodeId, "Running", "Skipped");
+      this.recordLog(this.#workflow.id, node, "info", `node:skip ${nodeId}`);
       return { kind: "ok" };
     }
     transferPortData(node, incoming, state, (path, val) => this.#context.setByPath(path, val));
-    // AI 中断事务：ai 节点 + SQLite 共享连接时在 execute 前开启，覆盖 checkpoint+HumanTask+RunState 三写（AC3）；无中断 rollback，中断 → suspendAiNode 事务内三写后 commit。
-    const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node);
+    if (this.#options.debugController?.shouldPause(nodeId) === true) {
+      machine.transitionTo("Paused");
+      this.#states.set(nodeId, "Paused");
+      this.emitStateChange(nodeId, "Running", "Paused");
+      this.recordLog(this.#workflow.id, node, "info", `node:waiting ${nodeId}`, { status: "Paused" });
+      return { kind: "paused" };
+    }
+    const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node); // AI 中断事务：覆盖 checkpoint+HumanTask+RunState 三写（AC3）
     try {
-      const def = this.#registry.get(node.type);
-      const outputValues = await def.execute(this.createNodeContext(node));
+      const outputValues = await this.#registry.get(node.type).execute(this.createNodeContext(node));
       this.#outputs.set(node.id, outputValues);
       machine.transitionTo("Success");
       this.#states.set(nodeId, "Success");
       this.emitStateChange(nodeId, "Running", "Success");
+      this.recordLog(this.#workflow.id, node, "info", `node:end ${nodeId}`);
       aiTx?.rollback();
       return { kind: "ok" };
     } catch (err) {
@@ -220,8 +221,17 @@ export class ExecutionEngine {
         machine.transitionTo("WaitingForHuman");
         this.#states.set(node.id, "WaitingForHuman");
         this.emitStateChange(node.id, "Running", "WaitingForHuman");
+        this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
         this.#options.events?.onHumanTaskCreated?.(err.task);
         return { kind: "waiting", task: err.task };
+      }
+      if (err instanceof SubworkflowPausedError) {
+        aiTx?.rollback();
+        machine.transitionTo("Paused");
+        this.#states.set(node.id, "Paused");
+        this.emitStateChange(node.id, "Running", "Paused");
+        this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "Paused" });
+        return { kind: "paused", pendingNodeId: err.pendingNodeId, workflowId: err.workflowId };
       }
       if (err instanceof AiInterruptRequiredError) {
         return await suspendAiNode(this.aiOps(), node, machine, err, aiTx);
@@ -230,7 +240,9 @@ export class ExecutionEngine {
       machine.transitionTo("Failed");
       this.#states.set(nodeId, "Failed");
       this.emitStateChange(nodeId, "Running", "Failed");
-      const message = `${node.name}(${node.id}) failed: ${err instanceof Error ? err.message : String(err)}`;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed" });
+      const message = `${node.name}(${node.id}) failed: ${errMsg}`;
       this.#options.events?.onError?.(err instanceof Error ? err : new Error(message));
       return { kind: "failed", message };
     }
@@ -240,13 +252,9 @@ export class ExecutionEngine {
     machine.transitionTo("WaitingForHuman");
     this.#states.set(node.id, "WaitingForHuman");
     this.emitStateChange(node.id, "Running", "WaitingForHuman");
+    this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
     const existing = await this.humanTaskStore.findPending(this.#workflow.id, node.id);
-    const task = existing ?? (await this.humanTaskStore.create({
-      workflowId: this.#workflow.id,
-      nodeId: node.id,
-      nodeName: node.name,
-      ...signal.spec,
-    }));
+    const task = existing ?? (await this.humanTaskStore.create({ workflowId: this.#workflow.id, nodeId: node.id, nodeName: node.name, ...signal.spec }));
     this.#options.events?.onHumanTaskCreated?.(task);
     return { kind: "waiting", task };
   }
@@ -279,9 +287,7 @@ export class ExecutionEngine {
   private continueFrom(task: HumanTask, offset: number, failureMessage: string): Promise<ExecutionResult> {
     const order = topoSort(this.#workflow);
     const startIndex = this.taskStartIndex(task, order);
-    if (startIndex === -1) {
-      throw new Error(`${failureMessage}: task node not in workflow: ${task.nodeId}`);
-    }
+    if (startIndex === -1) throw new Error(`${failureMessage}: task node not in workflow: ${task.nodeId}`);
     this.#runActive = true;
     return this.runRemaining(order, startIndex + offset, Date.now());
   }
@@ -297,10 +303,7 @@ export class ExecutionEngine {
       aiResumeHandler: this.#options.aiResumeHandler,
       events: this.#options.events,
       topoSort,
-      persistWaiting: async (nodeId, taskId) => {
-        if (this.#options.persist !== true) return;
-        await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: taskId });
-      },
+      persistWaiting: async (nodeId, taskId) => { if (this.#options.persist === true) await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: taskId }); },
       emit: (nodeId, from, to) => this.emitStateChange(nodeId, from, to),
       setContext: (key, value) => this.#context.set("workflow", key, value),
       taskStartIndex: (task, order) => this.taskStartIndex(task, order),
@@ -317,16 +320,13 @@ export class ExecutionEngine {
   }
   private async requirePendingTask(taskId: string): Promise<HumanTask> {
     const task = await this.humanTaskStore.getById(taskId);
-    if (task === undefined || task.status !== "pending") {
-      throw new InvalidTaskStateError(taskId, task?.status ?? "not found");
-    }
+    if (task === undefined || task.status !== "pending") throw new InvalidTaskStateError(taskId, task?.status ?? "not found");
     return task;
   }
   private taskStartIndex(task: HumanTask, order: readonly string[]): number {
     const direct = order.indexOf(task.nodeId);
     if (direct !== -1) return direct;
-    // 子图任务：workflowId = 父id:容器节点id(:分支id)（parallel 分支带 :branchId 后缀）。
-    // 从后往前逐段试匹配父图节点：最后一段是分支 id 时找不到容器节点，需逐段回溯（T3 修复）。
+    // 子图任务：workflowId = 父id:容器节点id(:分支id)，从后往前逐段回溯匹配父图节点。
     const segments = task.workflowId.split(":");
     for (let i = segments.length - 1; i >= 0; i--) {
       const idx = order.indexOf(segments[i]!);
@@ -363,6 +363,7 @@ export class ExecutionEngine {
       workflowId,
       humanTaskStore: this.humanTaskStore,
       registry: this.#registry,
+      ...(this.#options.debugController === undefined ? {} : { debugController: this.#options.debugController }),
       ...(this.#options.aiCheckpoint !== undefined ? { aiCheckpoint: this.#options.aiCheckpoint } : {}), // AI 中断 checkpoint 配置透传（T5.1）
       get: (scope, key) => context.get(scope, key),
       set: (scope, key, value) => context.set(scope, key, value),
@@ -405,8 +406,8 @@ export class ExecutionEngine {
       ...(this.#options.workflowVariables === undefined ? {} : { workflowVariables: this.#options.workflowVariables }),
     });
   }
-  /** 落盘当前断点快照：组装 RunState（runstate-persist 纯函数）→ store.update（upsert）。 */
-  private async persistRunState(status: RunState["status"], extra?: { readonly pendingNodeId?: string; readonly pendingTaskId?: string; readonly error?: string }): Promise<void> {
+  /** 落盘当前断点快照：paused 状态自动携带 debug 断点集合（从注入的 DebugController 读取）。 */
+  private async persistRunState(status: RunState["status"], extra?: { readonly pendingNodeId?: string; readonly pendingTaskId?: string; readonly error?: string; readonly pausedWorkflowId?: string }): Promise<void> {
     const runState = buildRunStateFromEngine({
       runId: this.#runId,
       workflow: this.#workflow,
@@ -415,6 +416,12 @@ export class ExecutionEngine {
       contextSnapshot: this.#context.getSnapshot(),
       status,
       ...extra,
+      ...(status === "paused" ? {
+        debug: {
+          breakpoints: this.#options.debugController?.breakpointIds() ?? [],
+          ...(extra?.pausedWorkflowId === undefined ? {} : { pausedWorkflowId: extra?.pausedWorkflowId }),
+        },
+      } : {}),
     });
     await this.runStateStore.update(runState);
   }
