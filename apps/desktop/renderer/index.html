@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:"
+  />
+  <title>HNFlow</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span class="logo">HNFlow</span>
+        <button id="new-workflow" class="new-btn" title="新建工作流">＋</button>
+      </div>
+      <div class="sidebar-title">工作流</div>
+      <ul id="workflow-items" class="workflow-list"></ul>
+      <div id="workflow-empty" class="empty-tip">暂无工作流<br />点击上方 ＋ 新建</div>
+      <div class="sidebar-footer">
+        <span id="version"></span>
+      </div>
+    </aside>
+    <main class="main">
+      <section class="welcome">
+        <h1>欢迎使用 HNFlow</h1>
+        <p class="subtitle">工作流编排与数据流处理平台</p>
+        <div class="welcome-actions">
+          <button id="create-empty" class="primary">新建工作流</button>
+          <button id="open-file" class="secondary">打开工作流</button>
+        </div>
+        <p class="hint">从左侧选择已有工作流，或新建一个开始</p>
+      </section>
+    </main>
+  </div>
+  <script src="renderer.js"></script>
+</body>
+</html>
