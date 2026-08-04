@@ -41,17 +41,8 @@ export class SubworkflowDepthError extends Error {
 /** 子图挂起信号：由子引擎抛出，父引擎透传（复用子图已创建任务，不重复创建）。 */
 export { SubworkflowWaitingError };
 
-/**
- * 子图执行公共流程：形状/语义校验 → 深度限制 → 子引擎执行 → 结果转换。
- * success 返回 { endResult: value | undefined }（输出端口映射由调用方决定）；
- * failed 抛 SubworkflowFailedError；waiting 抛 SubworkflowWaitingError（含子图已创建任务）。
- */
-export async function runSubgraph(
-  ctx: NodeExecutionContext,
-  subworkflow: Workflow,
-  workflowVariables: Record<string, unknown>,
-  registryOverride?: NodeRegistry,
-): Promise<Record<string, unknown>> {
+/** 子图执行公共校验：形状/语义检查 → 深度限制，非法直接抛错（runSubgraph 与 runBranch 共用）。 */
+function assertSubworkflowExecutable(ctx: NodeExecutionContext, subworkflow: Workflow): void {
   if (!isWorkflow(subworkflow)) {
     throw new InvalidSubworkflowParamsError(
       "invalid subworkflow params: expected { subworkflow: Workflow }",
@@ -66,6 +57,20 @@ export async function runSubgraph(
   if (depth >= MAX_SUBWORKFLOW_DEPTH) {
     throw new SubworkflowDepthError(depth);
   }
+}
+
+/**
+ * 子图执行公共流程：形状/语义校验 → 深度限制 → 子引擎执行 → 结果转换。
+ * success 返回 { endResult: value | undefined }（输出端口映射由调用方决定）；
+ * failed 抛 SubworkflowFailedError；waiting 抛 SubworkflowWaitingError（含子图已创建任务）。
+ */
+export async function runSubgraph(
+  ctx: NodeExecutionContext,
+  subworkflow: Workflow,
+  workflowVariables: Record<string, unknown>,
+  registryOverride?: NodeRegistry,
+): Promise<Record<string, unknown>> {
+  assertSubworkflowExecutable(ctx, subworkflow);
   // 子引擎 workflowId 带路径：已是路径（含 :）则继承，否则 父id:子节点id（humanTask 任务定位用）。
   const subWorkflowId = subworkflow.id.includes(":") ? subworkflow.id : `${ctx.workflowId}:${ctx.node.id}`;
   // 子引擎 registry：优先用容器节点透传的 registry（自定义节点测试/扩展），缺省默认内置 registry。
@@ -87,4 +92,40 @@ export async function runSubgraph(
     throw new SubworkflowWaitingError(task);
   }
   return { endResult: subEngine.getWorkflowVariable("endResult") };
+}
+
+/**
+ * 并行分支执行：与 runSubgraph 同构（校验 → 深度限制 → 子引擎执行 → 结果转换），
+ * 额外返回 workflow 作用域全量变量拷贝供并行节点合并 diff，并支持 idSuffix 隔离分支 workflowId
+ * （避免并行多分支共用 workflowId 串 humanTask 任务定位 findPending(workflowId, nodeId)）。
+ * success 返回 { endResult, variables }；failed 抛 SubworkflowFailedError；waiting 抛 SubworkflowWaitingError。
+ */
+export async function runBranch(
+  ctx: NodeExecutionContext,
+  subworkflow: Workflow,
+  workflowVariables: Record<string, unknown>,
+  registryOverride?: NodeRegistry,
+  idSuffix?: string,
+): Promise<{ endResult: unknown; variables: Record<string, unknown> }> {
+  assertSubworkflowExecutable(ctx, subworkflow);
+  // 分支 workflowId：已是路径（含 :）则继承，否则 父id:子节点id + 分支标识（humanTask 任务定位隔离用）。
+  const subWorkflowId = subworkflow.id.includes(":") ? subworkflow.id : `${ctx.workflowId}:${ctx.node.id}${idSuffix ?? ""}`;
+  const subRegistry = registryOverride ?? registry;
+  const subEngine = new ExecutionEngine({ ...subworkflow, id: subWorkflowId }, {
+    registry: subRegistry,
+    workflowVariables,
+    ...(ctx.humanTaskStore === undefined ? {} : { humanTaskStore: ctx.humanTaskStore }),
+  });
+  const subResult = await subEngine.run();
+  if (subResult.status === "failed") {
+    throw new SubworkflowFailedError(subResult.error ?? "unknown error");
+  }
+  if (subResult.status === "waiting") {
+    const task = subResult.waitingTask;
+    if (task === undefined) {
+      throw new SubworkflowFailedError("子图挂起但缺少任务记录");
+    }
+    throw new SubworkflowWaitingError(task);
+  }
+  return { endResult: subEngine.getWorkflowVariable("endResult"), variables: subEngine.getWorkflowVariables() };
 }

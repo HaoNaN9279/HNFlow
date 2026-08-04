@@ -325,9 +325,14 @@ export class ExecutionEngine {
   private taskStartIndex(task: HumanTask, order: readonly string[]): number {
     const direct = order.indexOf(task.nodeId);
     if (direct !== -1) return direct;
+    // 子图任务：workflowId = 父id:容器节点id(:分支id)（parallel 分支带 :branchId 后缀）。
+    // 从后往前逐段试匹配父图节点：最后一段是分支 id 时找不到容器节点，需逐段回溯（T3 修复）。
     const segments = task.workflowId.split(":");
-    const subNodeId = segments[segments.length - 1];
-    return subNodeId === undefined ? -1 : order.indexOf(subNodeId);
+    for (let i = segments.length - 1; i >= 0; i--) {
+      const idx = order.indexOf(segments[i]!);
+      if (idx !== -1) return idx;
+    }
+    return -1;
   }
   get humanTaskStore(): HumanTaskStoreLike {
     if (this.#humanTaskStore === undefined) {
@@ -348,6 +353,8 @@ export class ExecutionEngine {
     return this.#runStateStore;
   }
   getWorkflowVariable(key: string): unknown { return this.#context.get("workflow", key); }
+  /** workflow 作用域全量变量拷贝（内部 getAll 为独立拷贝，供并行分支 diff 合并用，不共享引用）。 */
+  getWorkflowVariables(): Record<string, unknown> { return this.#context.getAll("workflow"); }
   private createNodeContext(node: Node): NodeExecutionContext {
     const workflowId = this.#workflow.id;
     const context = this.#context;
