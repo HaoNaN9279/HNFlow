@@ -12,6 +12,7 @@ import { ifElseNode } from "./ifElse.js";
 import { llmNode } from "./llm.js";
 import { logNode } from "./log.js";
 import { loopNode } from "./loop.js";
+import { parallelNode } from "./parallel.js";
 import { setVariableNode } from "./setVariable.js";
 import { startNode } from "./start.js";
 import { subworkflowNode } from "./subworkflow.js";
@@ -78,6 +79,7 @@ export const builtinNodes: INodeDefinition[] = [
   tryCatchNode,
   finallyNode,
   loopNode,
+  parallelNode,
 ];
 
 export const registry = new NodeRegistry();
