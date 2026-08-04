@@ -1,7 +1,7 @@
 // SQLite 表结构定义：幂等建表，供 openDatabase 初始化调用。
 import type { SqliteAdapter } from "./adapter.js";
 
-/** 三张业务表的 DDL（CREATE TABLE IF NOT EXISTS，可重复执行）。 */
+/** 五张业务表的 DDL（CREATE TABLE IF NOT EXISTS，可重复执行）。 */
 const TABLE_DDL = [
   `CREATE TABLE IF NOT EXISTS execution_logs (
     id TEXT PRIMARY KEY,
@@ -33,6 +33,29 @@ const TABLE_DDL = [
     fallback TEXT,
     created_at INTEGER,
     completed_at INTEGER
+  )`,
+  // langgraph checkpoint 约定：checkpoint/metadata 存序列化 bytes，checkpoint_ns 支持命名空间隔离。
+  `CREATE TABLE IF NOT EXISTS checkpoints (
+    thread_id TEXT NOT NULL,
+    checkpoint_ns TEXT NOT NULL DEFAULT '',
+    checkpoint_id TEXT NOT NULL,
+    parent_checkpoint_id TEXT,
+    type TEXT NOT NULL DEFAULT '',
+    checkpoint BLOB NOT NULL,
+    metadata BLOB NOT NULL,
+    updated_at INTEGER,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+  )`,
+  `CREATE TABLE IF NOT EXISTS checkpoint_writes (
+    thread_id TEXT NOT NULL,
+    checkpoint_ns TEXT NOT NULL,
+    checkpoint_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    channel TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT '',
+    blob BLOB NOT NULL,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
   )`,
 ];
 

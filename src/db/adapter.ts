@@ -27,12 +27,22 @@ export interface SqliteStatement {
   run(...params: SqliteBindValue[]): SqliteRunResult;
 }
 
+/** 事务句柄：调用方在 begin 后执行 SQL，最后 commit 或 rollback；事务中抛异常须由调用方负责 rollback。 */
+export interface SqliteTransaction {
+  /** 提交事务：持久化本次全部变更。 */
+  commit(): void;
+  /** 回滚事务：撤销本次全部变更。 */
+  rollback(): void;
+}
+
 /** SQLite 数据库统一接口。 */
 export interface SqliteAdapter {
   /** 执行不返回结果的 SQL（DDL、PRAGMA 等）。 */
   exec(sql: string): void;
   /** 预编译 SQL 语句。 */
   prepare(sql: string): SqliteStatement;
+  /** 开启事务（执行 BEGIN）并返回事务句柄；当前连接已在事务中时抛错（不支持嵌套事务）。 */
+  begin(): SqliteTransaction;
   /** 关闭连接；重复调用由驱动决定是否安全，调用方保证只关一次。 */
   close(): void;
 }
@@ -55,6 +65,7 @@ export async function openAdapter(driver: DriverKind, filePath: string): Promise
 /** bun:sqlite 包装：query → prepare、get 的 null → undefined。 */
 class BunSqliteAdapter implements SqliteAdapter {
   private readonly db: import("bun:sqlite").Database;
+  private inTransaction = false;
 
   constructor(db: import("bun:sqlite").Database) {
     this.db = db;
@@ -73,6 +84,30 @@ class BunSqliteAdapter implements SqliteAdapter {
     };
   }
 
+  begin(): SqliteTransaction {
+    if (this.inTransaction) {
+      throw new Error("嵌套事务不支持：当前连接已在事务中");
+    }
+    this.db.run("BEGIN");
+    this.inTransaction = true;
+    return {
+      commit: () => {
+        try {
+          this.db.run("COMMIT");
+        } finally {
+          this.inTransaction = false;
+        }
+      },
+      rollback: () => {
+        try {
+          this.db.run("ROLLBACK");
+        } finally {
+          this.inTransaction = false;
+        }
+      },
+    };
+  }
+
   close(): void {
     this.db.close();
   }
@@ -81,6 +116,7 @@ class BunSqliteAdapter implements SqliteAdapter {
 /** node:sqlite 包装：run() 的 changes 可能为 bigint，统一转 number。 */
 class NodeSqliteAdapter implements SqliteAdapter {
   private readonly db: import("node:sqlite").DatabaseSync;
+  private inTransaction = false;
 
   constructor(db: import("node:sqlite").DatabaseSync) {
     this.db = db;
@@ -96,6 +132,30 @@ class NodeSqliteAdapter implements SqliteAdapter {
       get: (...params) => stmt.get(...params),
       all: (...params) => stmt.all(...params),
       run: (...params) => normalizeRunResult(stmt.run(...params)),
+    };
+  }
+
+  begin(): SqliteTransaction {
+    if (this.inTransaction) {
+      throw new Error("嵌套事务不支持：当前连接已在事务中");
+    }
+    this.db.exec("BEGIN");
+    this.inTransaction = true;
+    return {
+      commit: () => {
+        try {
+          this.db.exec("COMMIT");
+        } finally {
+          this.inTransaction = false;
+        }
+      },
+      rollback: () => {
+        try {
+          this.db.exec("ROLLBACK");
+        } finally {
+          this.inTransaction = false;
+        }
+      },
     };
   }
 

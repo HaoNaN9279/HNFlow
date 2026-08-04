@@ -10,6 +10,7 @@ export type {
   SqliteRow,
   SqliteRunResult,
   SqliteStatement,
+  SqliteTransaction,
 } from "./adapter.js";
 
 // T6：store 持久化实现（RunState/HumanTask 的 SQLite 版）入口 re-export。
