@@ -180,6 +180,21 @@ describe("SqliteHumanTaskStore", () => {
     }
   });
 
+  test("runId 字段（v0.2.5 T4）：create 携带、findPending(runId) 精确匹配、不带 runId 旧语义命中", async () => {
+    const store = new SqliteHumanTaskStore(nextDbPath("human"));
+    try {
+      const a = await store.create({ ...makeSpec(), runId: "r-1", title: "a" });
+      const b = await store.create({ ...makeSpec(), runId: "r-2", title: "b" });
+      expect((await store.getById(a.id))?.runId).toBe("r-1");
+      expect((await store.findPending("wf-human", "node-1", "r-1"))?.id).toBe(a.id);
+      expect((await store.findPending("wf-human", "node-1", "r-2"))?.id).toBe(b.id);
+      expect(await store.findPending("wf-human", "node-1", "r-x")).toBeUndefined();
+      expect((await store.findPending("wf-human", "node-1"))?.id).toBe(a.id); // 不带 runId：旧语义命中首个 pending
+    } finally {
+      await store.close();
+    }
+  });
+
   test("complete 设置 status/completedAt/result", async () => {
     const store = new SqliteHumanTaskStore(nextDbPath("human"));
     try {

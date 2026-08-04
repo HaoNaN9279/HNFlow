@@ -180,6 +180,9 @@ class FailWaitingRunStore implements RunStateStoreLike {
   async create(run: RunState): Promise<void> {
     return this.inner.create(run);
   }
+  async createIfAbsent(run: RunState): Promise<boolean> {
+    return this.inner.createIfAbsent(run);
+  }
   async update(run: RunState): Promise<void> {
     if (run.status === "waiting") {
       throw new Error("模拟 RunState 写入失败");

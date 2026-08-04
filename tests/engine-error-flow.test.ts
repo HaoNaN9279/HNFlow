@@ -347,6 +347,7 @@ describe("progress 进度钩子", () => {
     const updates: RunState[] = [];
     const fakeStore: RunStateStoreLike = {
       create: async (run) => { updates.push(run); },
+      createIfAbsent: async (run) => { updates.push(run); return true; },
       update: async (run) => { updates.push(run); },
       getById: async () => undefined,
       list: async () => [],

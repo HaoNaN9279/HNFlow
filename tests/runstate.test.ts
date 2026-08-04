@@ -158,6 +158,17 @@ describe("HumanTaskStore.findPending 查重", () => {
     await store.complete(created.id);
     expect(await store.findPending("wf-fp", "human")).toBeUndefined();
   });
+
+  test("runId 精确查重（v0.2.5 T4）：runId 传参按 (wf,node,runId) 匹配，不传保持旧语义", async () => {
+    const store = new HumanTaskStore({ filePath: nextHumanStorePath() });
+    const a = await store.create({ workflowId: "wf-fp", nodeId: "human", nodeName: "审批", title: "a", runId: "r-1" });
+    await store.create({ workflowId: "wf-fp", nodeId: "human", nodeName: "审批", title: "b", runId: "r-2" });
+
+    expect((await store.findPending("wf-fp", "human", "r-1"))?.id).toBe(a.id);
+    expect(await store.findPending("wf-fp", "human", "r-x")).toBeUndefined();
+    // 不带 runId：旧语义命中首个 pending（不筛 runId）。
+    expect((await store.findPending("wf-fp", "human"))?.id).toBe(a.id);
+  });
 });
 
 describe("RunStateStore upsert 语义", () => {

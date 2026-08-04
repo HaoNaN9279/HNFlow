@@ -33,11 +33,12 @@ function makeSubworkflowNode(id: string, subWorkflow: Workflow): Node {
   };
 }
 
-function makeCtx(workflowId: string, node: Node, humanTaskStore?: HumanTaskStore): NodeExecutionContext {
+function makeCtx(workflowId: string, node: Node, humanTaskStore?: HumanTaskStore, runId?: string): NodeExecutionContext {
   return {
     node,
     workflowId,
     ...(humanTaskStore === undefined ? {} : { humanTaskStore }),
+    ...(runId === undefined ? {} : { runId }),
     get: () => undefined,
     set: () => {},
     getByPath: () => undefined,
@@ -163,7 +164,7 @@ describe("runSubgraph 错误转换", () => {
 });
 
 describe("runSubgraph humanTaskStore 透传", () => {
-  test("子图 humanTask 挂起复用任务：同一 store 两次执行只创建 1 个任务", async () => {
+  test("子图 humanTask 挂起复用任务：同 runId 两次执行只创建 1 个任务", async () => {
     const sub: Workflow = {
       id: "sub-reuse",
       name: "子工作流",
@@ -178,7 +179,8 @@ describe("runSubgraph humanTaskStore 透传", () => {
       ],
     };
     const store = new HumanTaskStore({ filePath: nextStorePath() });
-    const ctx = makeCtx("parent-reuse", makeSubworkflowNode("sub", sub), store);
+    // 同 runId 复用（v0.2.5 T4：findPending 带 runId 精确查重）；不同 runId 不串任务由 idempotency-crash-confirm.test.ts 覆盖。
+    const ctx = makeCtx("parent-reuse", makeSubworkflowNode("sub", sub), store, "sub-reuse-run-1");
     await expect(runSubgraph(ctx, sub, {})).rejects.toThrow(SubworkflowWaitingError);
     await expect(runSubgraph(ctx, sub, {})).rejects.toThrow(SubworkflowWaitingError);
     expect(await store.listPending()).toHaveLength(1);

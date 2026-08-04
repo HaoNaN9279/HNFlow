@@ -285,6 +285,19 @@ class FakeRunStateStore implements RunStateStoreLike {
     this.states.set(run.runId, run);
   }
 
+  async createIfAbsent(run: RunState): Promise<boolean> {
+    const conflict = run.idempotencyKey === undefined
+      ? this.states.has(run.runId)
+      : [...this.states.values()].some((existing) =>
+          existing.runId === run.runId || (existing.workflowId === run.workflowId && existing.idempotencyKey === run.idempotencyKey),
+        );
+    if (conflict) {
+      return false;
+    }
+    this.states.set(run.runId, run);
+    return true;
+  }
+
   async update(run: RunState): Promise<void> {
     this.states.set(run.runId, run);
   }
