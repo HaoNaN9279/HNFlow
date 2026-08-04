@@ -180,3 +180,54 @@ describe("人工节点边界", () => {
     expect(stored?.status).toBe("deferred");
   });
 });
+
+describe("reopen 回退（恢复失败/多轮中断）", () => {
+  test("reopen 将 completed 回退 pending：result 保留（AC4 不丢用户输入），completedAt 清除", async () => {
+    const store = new HumanTaskStore({ filePath: nextStorePath() });
+    const created = await store.create({
+      workflowId: "wf-reopen",
+      nodeId: "ai",
+      nodeName: "AI 节点",
+      title: "AI 工具审批",
+      meta: { kind: "ai_interrupt", threadId: "t-1", checkpointId: "cp-1" },
+    });
+    const completed = await store.complete(created.id, { type: "approve" });
+    expect(completed.status).toBe("completed");
+    expect(completed.result).toEqual({ type: "approve" });
+
+    const reopened = await store.reopen(completed.id);
+    expect(reopened.status).toBe("pending");
+    expect(reopened.result).toEqual({ type: "approve" });
+    expect(reopened.completedAt).toBeUndefined();
+    // 持久化后可查。
+    const stored = await store.getById(created.id);
+    expect(stored?.status).toBe("pending");
+    expect(stored?.result).toEqual({ type: "approve" });
+    expect(stored?.completedAt).toBeUndefined();
+  });
+
+  test("reopen 可选更新 meta（多轮中断更新 checkpointId）", async () => {
+    const store = new HumanTaskStore({ filePath: nextStorePath() });
+    const created = await store.create({
+      workflowId: "wf-reopen-meta",
+      nodeId: "ai",
+      nodeName: "AI 节点",
+      title: "AI 工具审批",
+      meta: { kind: "ai_interrupt", threadId: "t-1", checkpointId: "cp-1" },
+    });
+    await store.complete(created.id);
+    const reopened = await store.reopen(created.id, { kind: "ai_interrupt", threadId: "t-1", checkpointId: "cp-2" });
+    expect(reopened.meta?.["checkpointId"]).toBe("cp-2");
+  });
+
+  test("reopen 非 completed 任务抛 InvalidTaskStateError", async () => {
+    const store = new HumanTaskStore({ filePath: nextStorePath() });
+    const created = await store.create({
+      workflowId: "wf-reopen-err",
+      nodeId: "ai",
+      nodeName: "AI 节点",
+      title: "AI 工具审批",
+    });
+    await expect(store.reopen(created.id)).rejects.toThrow(InvalidTaskStateError);
+  });
+});

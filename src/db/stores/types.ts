@@ -18,7 +18,14 @@ export interface HumanTaskStoreLike {
   listPending(): Promise<HumanTask[]>;
   getById(id: string): Promise<HumanTask | undefined>;
   findPending(workflowId: string, nodeId: string): Promise<HumanTask | undefined>;
+  /** 查找指定 workflow+node 最近创建的任务（任意状态；AI 多轮中断复用任务用）。 */
+  findRecent(workflowId: string, nodeId: string): Promise<HumanTask | undefined>;
   complete(id: string, result?: unknown): Promise<HumanTask>;
   skip(id: string): Promise<HumanTask>;
   defer(id: string): Promise<HumanTask>;
+  /**
+   * 回退已完成任务到 pending：恢复失败（AC4）或多轮中断复用任务。
+   * 仅 completed 可回退；result 保留（用户输入不丢）；meta 可选覆盖（多轮中断更新 checkpoint 上下文）。
+   */
+  reopen(id: string, meta?: Readonly<Record<string, unknown>>): Promise<HumanTask>;
 }

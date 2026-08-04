@@ -84,6 +84,16 @@ export class HumanTaskStore implements HumanTaskStoreLike {
     return this.tasks.find((t) => t.status === "pending" && t.workflowId === workflowId && t.nodeId === nodeId);
   }
 
+  /** 查找指定 workflow+node 最近创建的任务（任意状态；tasks 按创建序追加，取最后一个匹配）。 */
+  async findRecent(workflowId: string, nodeId: string): Promise<HumanTask | undefined> {
+    await this.ensureLoaded();
+    let recent: HumanTask | undefined;
+    for (const task of this.tasks) {
+      if (task.workflowId === workflowId && task.nodeId === nodeId) recent = task;
+    }
+    return recent;
+  }
+
   async complete(id: string, result?: unknown): Promise<HumanTask> {
     return this.transition(id, "pending", (task) => ({
       ...task,
@@ -106,6 +116,24 @@ export class HumanTaskStore implements HumanTaskStoreLike {
       ...task,
       status: "deferred",
       completedAt: Date.now(),
+    }));
+  }
+
+  /** 回退已完成任务到 pending：仅 completed 可回退；result 保留（AC4 不丢用户输入）；meta 可选覆盖。
+   *  恢复失败回退后重试可直接复用原 result；多轮中断时用 meta 更新最新 checkpoint 上下文。 */
+  async reopen(id: string, meta?: Readonly<Record<string, unknown>>): Promise<HumanTask> {
+    return this.transition(id, "completed", (task) => ({
+      id: task.id,
+      workflowId: task.workflowId,
+      nodeId: task.nodeId,
+      nodeName: task.nodeName,
+      title: task.title,
+      status: "pending",
+      fallback: task.fallback,
+      createdAt: task.createdAt,
+      ...(task.description === undefined ? {} : { description: task.description }),
+      ...(meta === undefined ? (task.meta === undefined ? {} : { meta: task.meta }) : { meta }),
+      ...(task.result === undefined ? {} : { result: task.result }),
     }));
   }
 

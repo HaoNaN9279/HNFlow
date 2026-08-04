@@ -8,9 +8,15 @@ import type { RunStateStoreLike } from "./types.js";
 export class SqliteRunStateStore implements RunStateStoreLike {
   private db: SqliteDatabase | undefined;
   private readonly dbPath: string;
+  private readonly sharedDb: SqliteDatabase | undefined;
 
-  constructor(dbPath: string) {
+  /**
+   * @param sharedDb 可选共享连接：传入后复用其 db（不自行 openDatabase/ensureSchema/close），
+   * 由共享方负责建表与关闭；缺省则维持独立连接行为（懒打开 + 自动建表）。
+   */
+  constructor(dbPath: string, sharedDb?: SqliteDatabase) {
     this.dbPath = dbPath;
+    this.sharedDb = sharedDb;
   }
 
   /** 写入断点：INSERT OR REPLACE（同 runId 覆盖，upsert 语义）。 */
@@ -45,8 +51,11 @@ export class SqliteRunStateStore implements RunStateStoreLike {
       .map(parseRunStateRow);
   }
 
-  /** 关闭连接；重复 close 幂等。 */
+  /** 关闭连接；重复 close 幂等。共享连接不关闭（由共享方负责）。 */
   async close(): Promise<void> {
+    if (this.sharedDb !== undefined) {
+      return;
+    }
     if (this.db !== undefined) {
       this.db.close();
       this.db = undefined;
@@ -54,6 +63,9 @@ export class SqliteRunStateStore implements RunStateStoreLike {
   }
 
   private async ensureOpened(): Promise<SqliteDatabase> {
+    if (this.sharedDb !== undefined) {
+      return this.sharedDb;
+    }
     if (this.db === undefined) {
       const db = await openDatabase(this.dbPath);
       db.ensureSchema();

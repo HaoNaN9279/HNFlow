@@ -241,6 +241,49 @@ describe("SqliteHumanTaskStore", () => {
       await store.close();
     }
   });
+
+  test("reopen 将 completed 回退 pending：result 保留、completedAt 清除、meta 可覆盖", async () => {
+    const store = new SqliteHumanTaskStore(nextDbPath("human"));
+    try {
+      const created = await store.create({
+        ...makeSpec(),
+        title: "reopen",
+        meta: { kind: "ai_interrupt", threadId: "t-1", checkpointId: "cp-1" },
+      });
+      await store.complete(created.id, { type: "approve" });
+      const reopened = await store.reopen(created.id);
+      expect(reopened.status).toBe("pending");
+      expect(reopened.result).toEqual({ type: "approve" }); // result 保留（AC4）
+      expect(reopened.completedAt).toBeUndefined();
+      const stored = await store.getById(created.id);
+      expect(stored?.status).toBe("pending");
+      expect(stored?.result).toEqual({ type: "approve" });
+      expect(stored?.completedAt).toBeUndefined();
+      // meta 覆盖（多轮中断更新 checkpointId）：需先 complete 再 reopen。
+      await store.complete(created.id);
+      const reopened2 = await store.reopen(created.id, { kind: "ai_interrupt", threadId: "t-1", checkpointId: "cp-2" });
+      expect(reopened2.meta?.["checkpointId"]).toBe("cp-2");
+      // pending 任务不能再次 reopen。
+      await expect(store.reopen(created.id)).rejects.toThrow(InvalidTaskStateError);
+    } finally {
+      await store.close();
+    }
+  });
+
+  test("findRecent 返回最近任务（任意状态；多轮中断复用）", async () => {
+    const store = new SqliteHumanTaskStore(nextDbPath("human"));
+    try {
+      const a = await store.create({ workflowId: "wf-recent", nodeId: "ai", nodeName: "n", title: "a" });
+      const b = await store.create({ workflowId: "wf-recent", nodeId: "ai", nodeName: "n", title: "b" });
+      await store.complete(a.id);
+      // 最近创建的是 b（无论状态）。
+      const recent = await store.findRecent("wf-recent", "ai");
+      expect(recent?.id).toBe(b.id);
+      expect(await store.findRecent("wf-recent", "other")).toBeUndefined();
+    } finally {
+      await store.close();
+    }
+  });
 });
 
 /** 提取 HumanTask 的关键字段（忽略 id/createdAt/completedAt 的运行时差异）。 */
