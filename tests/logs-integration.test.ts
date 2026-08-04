@@ -29,15 +29,15 @@ afterAll(async () => {
   await rmRetry(TEMP_BASE);
 });
 
-/** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。 */
-async function rmRetry(path: string, retries = 10): Promise<void> {
+/** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows sqlite 句柄释放可达数秒。 */
+async function rmRetry(path: string, retries = 40): Promise<void> {
   for (let attempt = 0; ; attempt++) {
     try {
       await rm(path, { recursive: true, force: true });
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
       throw error;
