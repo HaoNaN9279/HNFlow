@@ -8,6 +8,10 @@
     "dev": "tsc --watch --noEmit"
   },
   "dependencies": {
+    "@langchain/core": "1.2.4",
+    "@langchain/langgraph": "1.4.9",
+    "@langchain/openai": "1.5.5",
+    "langchain": "1.5.4",
     "typescript": "^7.0.2",
     "zod": "^4.4.3"
   },
