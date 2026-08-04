@@ -1,6 +1,7 @@
 // 节点注册表：按 type 注册/查询节点定义，模块加载时注册全部内置节点。
 
 import type { INodeDefinition } from "../execution/types.js";
+import { aiNode } from "./ai.js";
 import { commandNode } from "./command.js";
 import { endNode } from "./end.js";
 import { fileNode } from "./file.js";
@@ -68,6 +69,7 @@ export const builtinNodes: INodeDefinition[] = [
   logNode,
   humanTaskNode,
   subworkflowNode,
+  aiNode,
 ];
 
 export const registry = new NodeRegistry();
