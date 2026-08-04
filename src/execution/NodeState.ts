@@ -5,8 +5,9 @@
 //                           --(skip)-----> Skipped
 //                           --(wait)-----> WaitingForHuman --(resume)--> Running
 //                                                          --(skip)-----> Skipped
-//   WaitingForHuman 为人工审批/输入预留；恢复（WaitingForHuman -> Running）与
-//   跳过（WaitingForHuman -> Skipped，skip 人工任务）均为合法转移。
+//                                                          --(failure)--> Failed
+//   WaitingForHuman 为人工审批/输入预留；恢复（WaitingForHuman -> Running）、
+//   跳过（WaitingForHuman -> Skipped，skip 人工任务）、挂起流程失败（WaitingForHuman -> Failed）均为合法转移。
 
 export type NodeStatus =
   | "Idle"
@@ -24,7 +25,7 @@ const LEGAL_TRANSITIONS: Record<NodeStatus, readonly NodeStatus[]> = {
   Success: [],
   Failed: ["Running"],
   Skipped: [],
-  WaitingForHuman: ["Running", "Skipped"],
+  WaitingForHuman: ["Running", "Skipped", "Failed"],
 };
 
 /** 非法状态转移：携带 from/to 便于定位。 */

@@ -1,4 +1,4 @@
-// 串行执行引擎：拓扑排序 → 逐节点调度 → 端口数据流 → 状态流转 → 事件回调 → 断点持久化。
+// 串行执行引擎：拓扑排序 → 逐节点调度 → 端口数据流 → 状态流转 → 事件回调 → 断点持久化；AI 中断（v0.2.1）挂起/恢复逻辑在 ai-interrupt.ts，本文件只留引擎侧调度与事务边界。
 import { randomUUID } from "node:crypto";
 import type { Edge, Node, Workflow } from "../model/types.js";
 import { detectCycle } from "../model/validate.js";
@@ -14,7 +14,12 @@ import { RunStateStore } from "../runstate/RunStateStore.js";
 import type { RunState } from "../runstate/types.js";
 import type { HumanTaskStoreLike, RunStateStoreLike } from "../db/stores/types.js";
 import type { ExecutionLogStore } from "../logs/ExecutionLogStore.js";
-import { buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, rebuildContext, rebuildMachines } from "./runstate-persist.js";
+import { AiInterruptRequiredError, type AIExecutionResult } from "../ai/executor.js";
+import { SqliteHumanTaskStore, SqliteRunStateStore, type SqliteDatabase } from "../db/index.js";
+import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspendAiNode, type AiOps, type AIResumeContext } from "./ai-interrupt.js";
+import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, rebuildContext, rebuildMachines, topoSort } from "./runstate-persist.js";
+export type { AIResumeContext } from "./ai-interrupt.js";
+export { topoSort } from "./runstate-persist.js";
 /** 节点快照：nodeId → 最终状态。 */
 export interface EngineNodeSnapshot { readonly nodeId: string; readonly status: NodeStatus; }
 export interface ExecutionResult {
@@ -43,6 +48,10 @@ export interface ExecutionEngineOptions {
   readonly persist?: boolean;
   /** 执行日志持久化 store：节点 logger 产生的日志在记录内存日志的同时转发入缓冲（flush 由 store 自行管理）。 */
   readonly logStore?: ExecutionLogStore;
+  /** AI 中断 checkpoint 配置：提供 sharedDb 时引擎在 ai 节点执行期间开启事务（AC3 三写同事务）。 */
+  readonly aiCheckpoint?: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase };
+  /** AI 中断恢复回调：注入方闭包持有 model/tools/interrupt 配置，引擎传 thread/checkpoint/decisions。 */
+  readonly aiResumeHandler?: (context: AIResumeContext) => Promise<AIExecutionResult>;
 }
 export interface EngineLogEntry {
   readonly level: "info" | "warn" | "error";
@@ -70,48 +79,6 @@ type RunNodeOutcome =
   | { readonly kind: "ok" }
   | { readonly kind: "failed"; readonly message: string }
   | { readonly kind: "waiting"; readonly task: HumanTask };
-export function topoSort(workflow: Workflow): string[] {
-  const indegree = new Map<string, number>();
-  const adj = new Map<string, string[]>();
-  for (const node of workflow.nodes) {
-    indegree.set(node.id, 0);
-    adj.set(node.id, []);
-  }
-  for (const edge of workflow.edges) {
-    const from = adj.get(edge.sourceNodeId);
-    const to = indegree.get(edge.targetNodeId);
-    if (from === undefined || to === undefined) continue;
-    from.push(edge.targetNodeId);
-    indegree.set(edge.targetNodeId, to + 1);
-  }
-  const queue: string[] = [];
-  for (const node of workflow.nodes) {
-    if (indegree.get(node.id) === 0) queue.push(node.id);
-  }
-  const order: string[] = [];
-  while (queue.length > 0) {
-    const id = queue.shift();
-    if (id === undefined) break;
-    order.push(id);
-    for (const next of adj.get(id) ?? []) {
-      const remaining = indegree.get(next);
-      if (remaining === undefined) continue;
-      const decremented = remaining - 1;
-      indegree.set(next, decremented);
-      if (decremented === 0) queue.push(next);
-    }
-  }
-  return order;
-}
-function buildIncomingEdges(edges: readonly Edge[]): Map<string, Edge[]> {
-  const incoming = new Map<string, Edge[]>();
-  for (const edge of edges) {
-    const list = incoming.get(edge.targetNodeId) ?? [];
-    list.push(edge);
-    incoming.set(edge.targetNodeId, list);
-  }
-  return incoming;
-}
 export class ExecutionEngine {
   readonly #workflow: Workflow;
   readonly #options: ExecutionEngineOptions;
@@ -136,7 +103,6 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
-    this.#pendingNodeId = undefined;
   }
   get logs(): readonly EngineLogEntry[] { return [...this.#logs]; }
   get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
@@ -153,7 +119,6 @@ export class ExecutionEngine {
     }
     return this.runFrom(0);
   }
-  /** 从 startIndex 起执行拓扑序剩余节点（0 等价 run()）。恢复续跑入口，不重置状态。 */
   async runFrom(startIndex: number): Promise<ExecutionResult> {
     this.#runActive = true;
     if (this.#options.persist === true) {
@@ -162,16 +127,11 @@ export class ExecutionEngine {
     return this.runRemaining(topoSort(this.#workflow), startIndex, Date.now());
   }
   /** 从断点快照恢复内部状态（states/outputs/context/machines），之后可 runFrom/resume 继续。 */
-  restoreState(
-    nodeStates: Record<string, NodeStatus>,
-    nodeOutputs: Record<string, Record<string, unknown>>,
-    contextSnapshot: RunState["contextSnapshot"],
-  ): void {
+  restoreState(nodeStates: Record<string, NodeStatus>, nodeOutputs: Record<string, Record<string, unknown>>, contextSnapshot: RunState["contextSnapshot"]): void {
     this.#states = new Map(Object.entries(nodeStates));
     this.#outputs = new Map(Object.entries(nodeOutputs));
     this.#context = rebuildContext(contextSnapshot);
     this.#machines = rebuildMachines(this.#workflow, nodeStates);
-    this.#pendingNodeId = undefined;
     this.#runActive = true;
   }
   /** 从 startIndex 起执行拓扑序剩余节点：跑完 success；失败即停；挂起 waiting。 */
@@ -193,9 +153,7 @@ export class ExecutionEngine {
         }
         case "waiting": {
           this.#pendingNodeId = nodeId;
-          if (persist) {
-            await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: outcome.task.id });
-          }
+          if (persist) await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: outcome.task.id });
           const result = buildResultFromEngine(this.#workflow, this.#states, this.#outputs, "waiting", startTime, undefined, outcome.task);
           this.#options.events?.onComplete?.(result);
           return result;
@@ -230,6 +188,8 @@ export class ExecutionEngine {
       return { kind: "ok" };
     }
     this.transferPortData(node, incoming);
+    // AI 中断事务：ai 节点 + SQLite 共享连接时在 execute 前开启，覆盖 checkpoint+HumanTask+RunState 三写（AC3）；无中断 rollback，中断 → suspendAiNode 事务内三写后 commit。
+    const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node);
     try {
       const def = this.#registry.get(node.type);
       const outputValues = await def.execute(this.createNodeContext(node));
@@ -237,19 +197,26 @@ export class ExecutionEngine {
       machine.transitionTo("Success");
       this.#states.set(nodeId, "Success");
       this.emitStateChange(nodeId, "Running", "Success");
+      aiTx?.rollback();
       return { kind: "ok" };
     } catch (err) {
       if (err instanceof HumanTaskRequiredError) {
+        aiTx?.rollback();
         return await this.suspendNode(node, machine, err);
       }
       if (err instanceof SubworkflowWaitingError) {
         // 子工作流透传：复用子图已创建任务，不重复创建。
+        aiTx?.rollback();
         machine.transitionTo("WaitingForHuman");
         this.#states.set(node.id, "WaitingForHuman");
         this.emitStateChange(node.id, "Running", "WaitingForHuman");
         this.#options.events?.onHumanTaskCreated?.(err.task);
         return { kind: "waiting", task: err.task };
       }
+      if (err instanceof AiInterruptRequiredError) {
+        return await suspendAiNode(this.aiOps(), node, machine, err, aiTx);
+      }
+      aiTx?.rollback();
       machine.transitionTo("Failed");
       this.#states.set(nodeId, "Failed");
       this.emitStateChange(nodeId, "Running", "Failed");
@@ -273,22 +240,22 @@ export class ExecutionEngine {
     this.#options.events?.onHumanTaskCreated?.(task);
     return { kind: "waiting", task };
   }
-  /** 恢复执行：写入人工产物 → 标记任务完成 → 从挂起节点重跑剩余节点。 */
+  /** 恢复执行：AI 中断任务走 resumeAiTask（agent 恢复，不重跑节点）；普通任务写入人工产物 → 标记完成 → 重跑剩余。 */
   async resume(taskId: string, result?: unknown): Promise<ExecutionResult> {
     const task = await this.requirePendingTask(taskId);
+    if (isAiInterruptTask(task)) {
+      return resumeAiTask(this.aiOps(), task, result);
+    }
     this.#context.set("workflow", `task_result:${task.nodeId}`, result);
     await this.humanTaskStore.complete(taskId, result);
-    const order = topoSort(this.#workflow);
-    const startIndex = this.taskStartIndex(task, order);
-    if (startIndex === -1) {
-      throw new Error(`resume failed: task node not in workflow: ${task.nodeId}`);
-    }
-    this.#runActive = true;
-    return this.runRemaining(order, startIndex, Date.now());
+    return this.continueFrom(task, 0, "resume failed");
   }
-  /** 跳过执行：任务节点置 Skipped → 标记任务跳过 → 从其后一节点继续（下游自动跳过传播）。 */
+  /** 跳过执行：AI 中断任务转 reject 决策恢复 agent（继续执行不重跑）；普通任务置 Skipped → 其后继续。 */
   async skip(taskId: string): Promise<ExecutionResult> {
     const task = await this.requirePendingTask(taskId);
+    if (isAiInterruptTask(task)) {
+      return skipAiTask(this.aiOps(), task);
+    }
     const machine = this.#machines.get(task.nodeId);
     if (machine !== undefined) {
       machine.transitionTo("Skipped");
@@ -296,13 +263,47 @@ export class ExecutionEngine {
       this.emitStateChange(task.nodeId, "WaitingForHuman", "Skipped");
     }
     await this.humanTaskStore.skip(taskId);
+    return this.continueFrom(task, 1, "skip failed");
+  }
+  /** 从任务节点（offset：0=重跑任务节点，1=跳过节点）继续执行剩余节点。 */
+  private continueFrom(task: HumanTask, offset: number, failureMessage: string): Promise<ExecutionResult> {
     const order = topoSort(this.#workflow);
     const startIndex = this.taskStartIndex(task, order);
     if (startIndex === -1) {
-      throw new Error(`skip failed: task node not in workflow: ${task.nodeId}`);
+      throw new Error(`${failureMessage}: task node not in workflow: ${task.nodeId}`);
     }
     this.#runActive = true;
-    return this.runRemaining(order, startIndex + 1, Date.now());
+    return this.runRemaining(order, startIndex + offset, Date.now());
+  }
+  private aiOps(): AiOps {
+    return {
+      workflow: this.#workflow,
+      nodeById: this.#nodeById,
+      machines: this.#machines,
+      states: this.#states,
+      outputs: this.#outputs,
+      store: this.humanTaskStore,
+      ai: this.#options.aiCheckpoint,
+      aiResumeHandler: this.#options.aiResumeHandler,
+      events: this.#options.events,
+      topoSort,
+      persistWaiting: async (nodeId, taskId) => {
+        if (this.#options.persist !== true) return;
+        await this.persistRunState("waiting", { pendingNodeId: nodeId, pendingTaskId: taskId });
+      },
+      emit: (nodeId, from, to) => this.emitStateChange(nodeId, from, to),
+      setContext: (key, value) => this.#context.set("workflow", key, value),
+      taskStartIndex: (task, order) => this.taskStartIndex(task, order),
+      startRemaining: async (startIndex) => {
+        this.#runActive = true;
+        return this.runRemaining(topoSort(this.#workflow), startIndex, Date.now());
+      },
+    };
+  }
+  private sqliteAi(): { readonly dbPath: string; readonly sharedDb: SqliteDatabase } | undefined {
+    const ai = this.#options.aiCheckpoint;
+    if (ai !== undefined && ai.sharedDb !== undefined) return { dbPath: ai.dbPath, sharedDb: ai.sharedDb };
+    return undefined;
   }
   private async requirePendingTask(taskId: string): Promise<HumanTask> {
     const task = await this.humanTaskStore.getById(taskId);
@@ -320,13 +321,19 @@ export class ExecutionEngine {
   }
   get humanTaskStore(): HumanTaskStoreLike {
     if (this.#humanTaskStore === undefined) {
-      this.#humanTaskStore = this.#options.humanTaskStore ?? new HumanTaskStore();
+      const ai = this.sqliteAi();
+      this.#humanTaskStore = ai !== undefined && this.#options.humanTaskStore === undefined
+        ? new SqliteHumanTaskStore(ai.dbPath, ai.sharedDb)
+        : (this.#options.humanTaskStore ?? new HumanTaskStore());
     }
     return this.#humanTaskStore;
   }
   get runStateStore(): RunStateStoreLike {
     if (this.#runStateStore === undefined) {
-      this.#runStateStore = this.#options.runStateStore ?? new RunStateStore();
+      const ai = this.sqliteAi();
+      this.#runStateStore = ai !== undefined && this.#options.runStateStore === undefined
+        ? new SqliteRunStateStore(ai.dbPath, ai.sharedDb)
+        : (this.#options.runStateStore ?? new RunStateStore());
     }
     return this.#runStateStore;
   }
@@ -335,7 +342,6 @@ export class ExecutionEngine {
     if (incoming.length === 0) return true;
     return incoming.some((edge) => this.isActiveIncoming(edge));
   }
-  /** 入边激活：源节点为 Success 且（非 ifElse 或对应源端口输出值 !== false）。 */
   private isActiveIncoming(edge: Edge): boolean {
     if (this.#states.get(edge.sourceNodeId) !== "Success") return false;
     const sourceNode = this.#nodeById.get(edge.sourceNodeId);
@@ -369,14 +375,13 @@ export class ExecutionEngine {
       node,
       workflowId,
       humanTaskStore: this.humanTaskStore,
+      ...(this.#options.aiCheckpoint !== undefined ? { aiCheckpoint: this.#options.aiCheckpoint } : {}), // AI 中断 checkpoint 配置透传（T5.1）
       get: (scope, key) => context.get(scope, key),
       set: (scope, key, value) => context.set(scope, key, value),
       getByPath: (path) => context.getByPath(path),
       setByPath: (path, value) => context.setByPath(path, value),
       getAll: (scope) => context.getAll(scope),
-      suspend: (spec) => {
-        throw new HumanTaskRequiredError(spec);
-      },
+      suspend: (spec) => { throw new HumanTaskRequiredError(spec); },
       logger: {
         info: (msg, data) => this.recordLog(workflowId, node, "info", msg, data),
         warn: (msg, data) => this.recordLog(workflowId, node, "warn", msg, data),
@@ -395,11 +400,9 @@ export class ExecutionEngine {
       message,
       ...(data === undefined ? {} : { data }),
     });
-    switch (level) {
-      case "info": console.info(prefix, message, data); break;
-      case "warn": console.warn(prefix, message, data); break;
-      default: console.error(prefix, message, data); break;
-    }
+    if (level === "info") console.info(prefix, message, data);
+    else if (level === "warn") console.warn(prefix, message, data);
+    else console.error(prefix, message, data);
   }
   private emitStateChange(nodeId: string, from: NodeStatus, to: NodeStatus): void {
     this.#options.events?.onNodeStateChange?.({ nodeId, from, to });
@@ -429,7 +432,6 @@ export class ExecutionEngine {
     this.#machines = new Map();
     this.#logs = [];
     this.#context = this.createContext();
-    this.#pendingNodeId = undefined;
     for (const node of this.#workflow.nodes) {
       this.#machines.set(node.id, new NodeStateMachine());
     }

@@ -2,6 +2,7 @@
 // Node / Port / VariablePath 来自 model 层（T2），此处仅消费，不重复定义。
 // NodeExecutionContext 由 T4 的 WorkflowContext 实现，T5/T7 据此消费。
 
+import type { SqliteDatabase } from "../db/index.js";
 import type { HumanTaskStoreLike } from "../db/stores/types.js";
 import type { HumanTaskSpec } from "../human/types.js";
 import type { Node, Port, VariablePath } from "../model/types.js";
@@ -33,6 +34,8 @@ export interface NodeExecutionContext {
   workflowId: string;
   /** 引擎注入的人工任务存储（subworkflow 节点透传给子引擎复用，保证跨重启任务可查）。 */
   readonly humanTaskStore?: HumanTaskStoreLike;
+  /** AI 中断 checkpoint 持久化配置（ai 节点 interrupt 时注入，T5.1 修复）。 */
+  readonly aiCheckpoint?: { readonly dbPath: string; readonly sharedDb?: SqliteDatabase };
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */
