@@ -1,4 +1,4 @@
-// T8 基础设施集成验收：端到端链路「saveWorkflow → Engine 执行（SQLite runState + executionLogs，persist=true）→ 挂起 → 恢复 → 查询日志」。
+﻿// T8 基础设施集成验收：端到端链路「saveWorkflow → Engine 执行（SQLite runState + executionLogs，persist=true）→ 挂起 → 恢复 → 查询日志」。
 // 与 T6/T7 单点测试不同，这里用一条真实文件链路把存储（JSON 文件工作流 + SQLite runState/humanTask/log）串起来验证可复现、可审计。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
@@ -71,6 +71,7 @@ async function rmRetry(path: string, retries = 40): Promise<void> {
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
@@ -106,7 +107,7 @@ describe("基础设施端到端链路", () => {
     await humanStore?.close();
     await logStore?.close();
     await rmRetry(TEMP_BASE);
-  });
+  }, 30000);
 
   test("saveWorkflow → loadWorkflow 往返一致", async () => {
     const workflow = makeApprovalWorkflow();

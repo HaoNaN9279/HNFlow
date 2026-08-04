@@ -1,4 +1,4 @@
-// SQLite 适配层测试：文件库 WAL/建表/CRUD/changes 归一化、内存库可用性、驱动检测与 node 分支结构保证。
+﻿// SQLite 适配层测试：文件库 WAL/建表/CRUD/changes 归一化、内存库可用性、驱动检测与 node 分支结构保证。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -21,7 +21,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Windows 上 bun:sqlite 释放文件句柄可能有瞬态延迟，重试删除避免 EBUSY
   await rmRetry(TEMP_BASE);
-});
+}, 30000);
 
 /** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows bun:sqlite 句柄释放可达数秒。 */
 async function rmRetry(path: string, retries = 40): Promise<void> {
@@ -31,6 +31,7 @@ async function rmRetry(path: string, retries = 40): Promise<void> {
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }

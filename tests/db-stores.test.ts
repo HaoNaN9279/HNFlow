@@ -1,4 +1,4 @@
-// SQLite store 测试（T6）：RunState/HumanTask 的 SQLite 持久化、与 JSON 版行为等价、Engine 注入集成。
+﻿// SQLite store 测试（T6）：RunState/HumanTask 的 SQLite 持久化、与 JSON 版行为等价、Engine 注入集成。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -28,7 +28,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Windows 上 sqlite 句柄释放有瞬态延迟，重试删除避免 EBUSY。
   await rmRetry(TEMP_BASE);
-});
+}, 30000);
 
 /** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows sqlite 句柄释放可达数秒。 */
 async function rmRetry(path: string, retries = 40): Promise<void> {
@@ -38,6 +38,7 @@ async function rmRetry(path: string, retries = 40): Promise<void> {
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }

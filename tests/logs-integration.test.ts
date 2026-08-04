@@ -1,4 +1,4 @@
-// T7 日志接入集成测试：Engine recordLog → ExecutionLogStore 持久化全链路。
+﻿// T7 日志接入集成测试：Engine recordLog → ExecutionLogStore 持久化全链路。
 // 场景 A：成功流日志转发 + runState persist；场景 B：挂起→恢复后日志落库；
 // 场景 C：失败流 error 日志落库；场景 D：Engine.ts 行数约束（<440）。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -27,7 +27,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Windows 上 sqlite 释放文件句柄有瞬态延迟，重试删除避免 EBUSY。
   await rmRetry(TEMP_BASE);
-});
+}, 30000);
 
 /** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows sqlite 句柄释放可达数秒。 */
 async function rmRetry(path: string, retries = 40): Promise<void> {
@@ -37,6 +37,7 @@ async function rmRetry(path: string, retries = 40): Promise<void> {
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }

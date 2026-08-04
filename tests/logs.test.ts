@@ -1,4 +1,4 @@
-// ExecutionLogStore 存储测试：批量缓冲、显式 flush、条件查询、data 往返、autoFlush、close 行为。
+﻿// ExecutionLogStore 存储测试：批量缓冲、显式 flush、条件查询、data 往返、autoFlush、close 行为。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,7 +20,7 @@ beforeAll(async () => {
 afterAll(async () => {
   // Windows 上 bun:sqlite 释放文件句柄可能有瞬态延迟，重试删除避免 EBUSY
   await rmRetry(TEMP_BASE);
-});
+}, 30000);
 
 /** 带重试的递归删除：瞬态文件锁（EBUSY）短暂等待后重试。Windows bun:sqlite 句柄释放可达数秒。 */
 async function rmRetry(path: string, retries = 40): Promise<void> {
@@ -30,6 +30,7 @@ async function rmRetry(path: string, retries = 40): Promise<void> {
       return;
     } catch (error) {
       if (getErrnoCode(error) === "EBUSY" && attempt < retries) {
+        Bun.gc(true); // Windows bun:sqlite 句柄释放依赖 GC，强制回收以解锁文件
         await new Promise((resolve) => setTimeout(resolve, 200));
         continue;
       }
