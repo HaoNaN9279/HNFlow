@@ -1,7 +1,8 @@
-// RunState 断点 JSON 文件持久化：懒加载 + 原子写入（tmp 读回校验 + rename 替换）。
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+// RunState 断点 JSON 文件持久化：懒加载 + 原子写入（公共 atomicWriteFile）。
+import { readFile } from "node:fs/promises";
 import type { RunState } from "./types.js";
+import type { RunStateStoreLike } from "../db/stores/types.js";
+import { atomicWriteFile } from "../storage/atomic.js";
 
 /** 指定 runId 的断点状态不存在。 */
 export class RunStateNotFoundError extends Error {
@@ -28,7 +29,7 @@ interface RunStatePayload {
   readonly runs: readonly RunState[];
 }
 
-export class RunStateStore {
+export class RunStateStore implements RunStateStoreLike {
   private runs: readonly RunState[] = [];
   private loaded = false;
   private readonly filePath: string;
@@ -66,20 +67,14 @@ export class RunStateStore {
     return this.runs.filter((run) => run.workflowId === workflowId);
   }
 
-  /** 显式落盘：tmp 写入 → 读回 JSON.parse 校验 → rename 原子替换。 */
+  /** 显式落盘：公共 atomicWriteFile 写 tmp → 读回 JSON.parse 校验 → rename 原子替换。 */
   async save(): Promise<void> {
     await this.ensureLoaded(); // 防止用未加载的空状态覆盖已有文件
-    const tmpPath = `${this.filePath}.tmp`;
-    await mkdir(dirname(this.filePath), { recursive: true });
-    try {
-      await writeFile(tmpPath, `${JSON.stringify({ runs: this.runs }, null, 2)}\n`, "utf8");
-      const written = await readFile(tmpPath, "utf8");
-      JSON.parse(written); // 完整性校验：可解析即认为写入完整
-      await rename(tmpPath, this.filePath);
-    } catch (error) {
-      await removeTmpQuietly(tmpPath);
-      throw error;
-    }
+    await atomicWriteFile(
+      this.filePath,
+      `${JSON.stringify({ runs: this.runs }, null, 2)}\n`,
+      (text) => JSON.parse(text),
+    );
   }
 
   /** 显式重载：文件不存在返回空列表；JSON 损坏抛 RunStateCorruptedError。 */
@@ -131,16 +126,6 @@ function getErrnoCode(error: unknown): string | undefined {
     return typeof code === "string" ? code : undefined;
   }
   return undefined;
-}
-
-/** 尽力清理残留 tmp；不存在则忽略，其他清理失败也不掩盖原始错误。 */
-async function removeTmpQuietly(tmpPath: string): Promise<void> {
-  try {
-    await unlink(tmpPath);
-  } catch (error) {
-    if (getErrnoCode(error) === "ENOENT") return; // 从未创建或已清理
-    // no-excuse-ok: catch — 清理失败不影响原始错误的抛出
-  }
 }
 
 /** 提取错误的可读消息。 */

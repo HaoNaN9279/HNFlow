@@ -12,6 +12,8 @@ import { HumanTaskStore, InvalidTaskStateError } from "../human/HumanTaskStore.j
 import type { HumanTask, HumanTaskSpec } from "../human/types.js";
 import { RunStateStore } from "../runstate/RunStateStore.js";
 import type { RunState } from "../runstate/types.js";
+import type { HumanTaskStoreLike, RunStateStoreLike } from "../db/stores/types.js";
+import type { ExecutionLogStore } from "../logs/ExecutionLogStore.js";
 import { buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, rebuildContext, rebuildMachines } from "./runstate-persist.js";
 /** 节点快照：nodeId → 最终状态。 */
 export interface EngineNodeSnapshot { readonly nodeId: string; readonly status: NodeStatus; }
@@ -34,11 +36,13 @@ export interface ExecutionEvents {
 export interface ExecutionEngineOptions {
   readonly registry?: NodeRegistry;
   readonly events?: ExecutionEvents;
-  readonly humanTaskStore?: HumanTaskStore;
+  readonly humanTaskStore?: HumanTaskStoreLike;
   readonly workflowVariables?: Record<string, unknown>;
-  readonly runStateStore?: RunStateStore;
+  readonly runStateStore?: RunStateStoreLike;
   readonly runId?: string;
   readonly persist?: boolean;
+  /** 执行日志持久化 store：节点 logger 产生的日志在记录内存日志的同时转发入缓冲（flush 由 store 自行管理）。 */
+  readonly logStore?: ExecutionLogStore;
 }
 export interface EngineLogEntry {
   readonly level: "info" | "warn" | "error";
@@ -121,8 +125,8 @@ export class ExecutionEngine {
   #machines = new Map<string, NodeStateMachine>();
   #logs: EngineLogEntry[] = [];
   #pendingNodeId: string | undefined;
-  #humanTaskStore: HumanTaskStore | undefined;
-  #runStateStore: RunStateStore | undefined;
+  #humanTaskStore: HumanTaskStoreLike | undefined;
+  #runStateStore: RunStateStoreLike | undefined;
   #runActive = false;
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
@@ -314,13 +318,13 @@ export class ExecutionEngine {
     const subNodeId = segments[segments.length - 1];
     return subNodeId === undefined ? -1 : order.indexOf(subNodeId);
   }
-  get humanTaskStore(): HumanTaskStore {
+  get humanTaskStore(): HumanTaskStoreLike {
     if (this.#humanTaskStore === undefined) {
       this.#humanTaskStore = this.#options.humanTaskStore ?? new HumanTaskStore();
     }
     return this.#humanTaskStore;
   }
-  get runStateStore(): RunStateStore {
+  get runStateStore(): RunStateStoreLike {
     if (this.#runStateStore === undefined) {
       this.#runStateStore = this.#options.runStateStore ?? new RunStateStore();
     }
@@ -383,6 +387,14 @@ export class ExecutionEngine {
   private recordLog(workflowId: string, node: Node, level: "info" | "warn" | "error", message: string, data?: unknown): void {
     const prefix = `[workflow:${workflowId}] [node:${node.id}]`;
     this.#logs.push({ level, message, data });
+    this.#options.logStore?.append({
+      runId: this.#runId,
+      workflowId,
+      nodeId: node.id,
+      level,
+      message,
+      ...(data === undefined ? {} : { data }),
+    });
     switch (level) {
       case "info": console.info(prefix, message, data); break;
       case "warn": console.warn(prefix, message, data); break;
