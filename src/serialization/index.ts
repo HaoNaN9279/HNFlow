@@ -42,6 +42,8 @@ export function fromJSON(json: unknown): Workflow {
     edges: data.edges.map(edgeFromJSON),
     ...(data.globalVariables === undefined ? {} : { globalVariables: data.globalVariables }),
     ...(data.draftOf === undefined ? {} : { draftOf: data.draftOf }),
+    ...(data.resolvedGroups === undefined ? {} : { resolvedGroups: data.resolvedGroups }),
+    ...(data.resolvedAt === undefined ? {} : { resolvedAt: data.resolvedAt }),
   };
 }
 

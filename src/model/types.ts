@@ -39,6 +39,8 @@ export interface Workflow {
   readonly edges: readonly Edge[];
   readonly globalVariables?: Readonly<Record<string, unknown>>;
   readonly draftOf?: string; // 草稿溯源：指向原工作流 id（Draft 扩展用）
+  readonly resolvedGroups?: readonly string[]; // 依赖快照 "guid@version"（v0.3.0 T5：保存时由 resolver 写入）
+  readonly resolvedAt?: string; // ISO 快照生成时间（v0.3.0 T5：保存时由 resolver 写入）
 }
 
 export type ScopeName = "global" | "workflow" | `node:${string}`;

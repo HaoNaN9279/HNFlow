@@ -44,6 +44,8 @@ export const workflowSchema: z.ZodType<Workflow> = z.object({
   edges: z.array(edgeSchema),
   globalVariables: z.record(z.string(), z.unknown()).exactOptional(),
   draftOf: z.string().exactOptional(),
+  resolvedGroups: z.array(z.string()).exactOptional(),
+  resolvedAt: z.string().exactOptional(),
 });
 
 export type WorkflowJSON = z.infer<typeof workflowSchema>;
