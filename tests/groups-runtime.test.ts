@@ -209,17 +209,106 @@ describe("GroupRuntime 批量加载与缓存淘汰", () => {
     expect(runtime.diskReadCount).toBe(before + 1);
   });
 
-  test("缓存淘汰：cacheMaxSize=2 塞 3 个不同组，第一个被淘汰后重新读盘", async () => {
+  test("缓存淘汰：cacheMaxSize=2 塞 3 个不同组，首个被淘汰后重新读盘（水位自动清理）", async () => {
     await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
     await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
     await writeGroup(TEMP_BASE, "g-c", "c", ["1.0.0"]);
-    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 2 });
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 2 }); // 默认 watermark 0.8 → 阈值 1.6
     await runtime.load("g-a", "1.0.0");
     await runtime.load("g-b", "1.0.0");
     await runtime.load("g-c", "1.0.0");
-    expect(runtime.cacheSize).toBe(2);
+    // 水位自动清理：cacheSize=2 即达水位（2 >= 2*0.8），load 淘汰 ceil(2/2)=1，cache 恒 1 项
+    expect(runtime.cacheSize).toBe(1);
+    expect(runtime.memoryStats.evictions).toBe(2);
     const before = runtime.diskReadCount; // 3 次读盘
-    await runtime.load("g-a", "1.0.0"); // 最久未用，已被淘汰，重新读盘
+    await runtime.load("g-a", "1.0.0"); // g-a 已被自动清理淘汰，重新读盘
+    expect(runtime.diskReadCount).toBe(before + 1);
+  });
+});
+
+describe("GroupRuntime 水位线（watermark）与内存压力", () => {
+  test("cacheMaxSize=4 watermark=0.5 加载 3 个组：cacheSize<4 且 evictions>0", async () => {
+    await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-c", "c", ["1.0.0"]);
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: 0.5 });
+    await runtime.load("g-a", "1.0.0");
+    await runtime.load("g-b", "1.0.0");
+    await runtime.load("g-c", "1.0.0");
+    // 阈值 = 4*0.5 = 2：第二个组达到水位触发 load 自动清理（淘汰 ceil(2/2)=1），此后 cache 恒 1 项
+    expect(runtime.cacheSize).toBeLessThan(4);
+    expect(runtime.memoryStats.evictions).toBeGreaterThan(0);
+  });
+
+  test("未超水位：evictions=0", async () => {
+    await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: 1.0 });
+    await runtime.load("g-a", "1.0.0");
+    await runtime.load("g-b", "1.0.0");
+    expect(runtime.memoryStats.evictions).toBe(0);
+    expect(runtime.cacheSize).toBe(2);
+  });
+
+  test("memoryStats 字段完整 + 低水位压力为 low", async () => {
+    await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: 0.5 });
+    await runtime.load("g-a", "1.0.0");
+    expect(runtime.memoryStats).toEqual({
+      cacheSize: 1,
+      capacity: 4,
+      watermark: 0.5,
+      pressure: "low",
+      diskReadCount: 1,
+      evictions: 0,
+    });
+    // 第二组使 cacheSize=2 达到水位（2 >= 4*0.5），load 自动清理淘汰一半 → 1 项
+    await runtime.load("g-b", "1.0.0");
+    expect(runtime.memoryStats).toEqual({
+      cacheSize: 1,
+      capacity: 4,
+      watermark: 0.5,
+      pressure: "low",
+      diskReadCount: 2,
+      evictions: 1,
+    });
+  });
+
+  test("非法 watermark（0 / 负数 / >1 / NaN / Infinity）→ RangeError", () => {
+    for (const w of [0, -1, 1.5, NaN, Infinity]) {
+      expect(() => new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: w })).toThrow(RangeError);
+    }
+  });
+
+  test("evictIdleCache：未超水位返回 0 且 evictions 不增", async () => {
+    // 注：load 内自动清理（cacheSize >= 水位时淘汰 ceil(size/2)）使缓存恒低于水位，
+    // 因此经公开 API 观测不到超水位状态，evictIdleCache 恒返回 0（load 自动清理已覆盖淘汰路径）。
+    await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: 0.5 });
+    await runtime.load("g-a", "1.0.0");
+    expect(runtime.evictIdleCache()).toBe(0);
+    expect(runtime.memoryStats.evictions).toBe(0);
+    await runtime.load("g-b", "1.0.0"); // 触发 load 自动清理
+    expect(runtime.memoryStats.evictions).toBe(1);
+    expect(runtime.evictIdleCache()).toBe(0);
+    expect(runtime.memoryStats.evictions).toBe(1);
+  });
+
+  test("清理后重新 load 正确：被淘汰的组重新读盘且内容正确", async () => {
+    await writeGroup(TEMP_BASE, "g-a", "a", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-b", "b", ["1.0.0"]);
+    await writeGroup(TEMP_BASE, "g-c", "c", ["1.0.0"]);
+    const runtime = new GroupRuntime({ rootDir: TEMP_BASE, cacheMaxSize: 4, watermark: 0.5 });
+    await runtime.load("g-a", "1.0.0");
+    await runtime.load("g-b", "1.0.0");
+    await runtime.load("g-c", "1.0.0");
+    expect(runtime.memoryStats.evictions).toBeGreaterThan(0);
+    const before = runtime.diskReadCount;
+    const content = await runtime.load("g-a", "1.0.0"); // g-a 已被 load 自动清理淘汰
+    expect(content.guid).toBe("g-a");
+    expect(content.agent?.text).toContain("g-a agent 1.0.0");
     expect(runtime.diskReadCount).toBe(before + 1);
   });
 });

@@ -106,9 +106,9 @@ describe("releaseGroup", () => {
     await writeVersionFile("demo/core", "0.1.0", "tools/navigate.ts", "export default {};");
 
     const released = await releaseGroup(TEMP_BASE, "demo/core", "1.0.0");
-    expect(released.currentVersion).toBe("1.0.0");
-    expect(released.versions).toHaveLength(2);
-    expect(released.versions[1]?.version).toBe("1.0.0");
+    expect(released.group.currentVersion).toBe("1.0.0");
+    expect(released.group.versions).toHaveLength(2);
+    expect(released.group.versions[1]?.version).toBe("1.0.0");
 
     const copied = await readFile(
       join(TEMP_BASE, "demo", "core", "v1.0.0", "rules", "01-navigation.md"),

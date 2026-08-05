@@ -133,4 +133,53 @@ describe("LRUCache", () => {
     expect(cache.peek("g-other@1.0.0")?.content).toBe("tools");
     expect(cache.peek("g-playwright@1.0.0")).toBeUndefined();
   });
+
+  test("evict：非正整数（0/负数/小数）返回 0 且不删", () => {
+    const cache = new LRUCache<string, number>(3);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    expect(cache.evict(0)).toBe(0);
+    expect(cache.evict(-2)).toBe(0);
+    expect(cache.evict(1.5)).toBe(0);
+    expect(cache.size).toBe(2);
+    expect(cache.has("a")).toBe(true);
+    expect(cache.has("b")).toBe(true);
+  });
+
+  test("evict：塞 3 个 evict(2) 返回 2 剩 1（从最旧开始删）", () => {
+    const cache = new LRUCache<string, number>(3);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("c", 3);
+    expect(cache.evict(2)).toBe(2);
+    expect(cache.size).toBe(1);
+    expect(cache.has("a")).toBe(false);
+    expect(cache.has("b")).toBe(false);
+    expect(cache.peek("c")).toBe(3);
+  });
+
+  test("evict：超量清空并返回原 size；空缓存返回 0", () => {
+    const cache = new LRUCache<string, number>(3);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("c", 3);
+    expect(cache.evict(10)).toBe(3); // 不足 count，全部删除
+    expect(cache.size).toBe(0);
+    expect(cache.has("a")).toBe(false);
+    expect(cache.has("b")).toBe(false);
+    expect(cache.has("c")).toBe(false);
+    expect(cache.evict(1)).toBe(0); // 空缓存：无可淘汰
+  });
+
+  test("evict 访问序：get(A) 后 evict(1) 淘汰最旧而非 A", () => {
+    const cache = new LRUCache<string, number>(3);
+    cache.set("a", 1);
+    cache.set("b", 2);
+    cache.set("c", 3);
+    cache.get("a"); // a 刷新到最新访问序，b 变为最旧
+    expect(cache.evict(1)).toBe(1);
+    expect(cache.has("b")).toBe(false); // 淘汰最久未用的 b
+    expect(cache.has("a")).toBe(true); // 刚访问的 a 保留
+    expect(cache.has("c")).toBe(true);
+  });
 });
