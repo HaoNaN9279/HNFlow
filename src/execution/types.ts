@@ -62,6 +62,8 @@ export interface NodeExecutionContext {
   readonly groupsRootDir?: string;
   /** 功能组缓存容量（v0.3.1 T5 子图透传）：子图容器转发给子引擎 options，缺省子引擎默认 32。 */
   readonly groupCacheMaxSize?: number;
+  /** 功能组核心版本兼容（v0.3.2 T8 子图透传）：子图容器转发给子引擎 options；默认不兼容抛错，true 仅 warn。 */
+  readonly allowIncompatibleGroups?: boolean;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

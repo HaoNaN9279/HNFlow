@@ -38,6 +38,7 @@ export interface LoadedGroupContent {
   readonly tools: readonly LoadedTool[];
   readonly rules: readonly LoadedRule[];
   readonly mcps: readonly LoadedMcp[];
+  readonly requiresCoreVersion?: string; // 功能组声明支持的核心引擎版本范围（透传 GroupContent，如 ">=1.0.0 <2.0.0"）
 }
 
 /** 功能组内容加载失败：文件缺失 / JSON 非法 / 字段缺失。 */
@@ -218,6 +219,7 @@ export async function loadGroupContent(
     namespace: group.namespace,
     version,
     ...(agent !== undefined ? { agent } : {}),
+    ...(content.requiresCoreVersion !== undefined ? { requiresCoreVersion: content.requiresCoreVersion } : {}),
     tools,
     rules,
     mcps,

@@ -6,18 +6,22 @@ import type { Node } from "../model/types.js";
 import { mergeGroups, type MergedGroups } from "../groups/merge.js";
 import { GroupRuntime } from "../groups/runtime.js";
 import { parseCapabilityGroups } from "../groups/resolve.js";
+import { assertCoreCompatible } from "./core-version.js";
 
 /** 功能组解析器选项（ExecutionEngineOptions 子集：仅运行时加载相关字段）。 */
 export interface GroupsResolverOptions {
   readonly groupsRootDir?: string;
   readonly groupCacheMaxSize?: number;
+  readonly allowIncompatibleGroups?: boolean; // 核心版本不兼容时仅 warn（默认抛错，v0.3.2 T8）
 }
 
 /** 节点 capabilityGroups 声明 → 运行时加载并合并 → activeGroups；未配置 rootDir / 节点无声明 → undefined。 */
 export class GroupsResolver {
   private readonly runtime: GroupRuntime | undefined;
+  private readonly allowIncompatibleGroups: boolean | undefined;
 
   constructor(options: GroupsResolverOptions) {
+    this.allowIncompatibleGroups = options.allowIncompatibleGroups;
     this.runtime =
       options.groupsRootDir === undefined
         ? undefined
@@ -38,6 +42,14 @@ export class GroupsResolver {
     const declarations = parseCapabilityGroups(raw, `${node.id} (${node.name})`);
     if (declarations.length === 0) return undefined;
     const contents = await this.runtime.loadMany(declarations);
+    // 核心版本兼容校验（v0.3.2 T8）：requiresCoreVersion 不满足时抛错（含 guid@version+要求+当前引擎）或 warn（宽松模式）。
+    for (const content of contents) {
+      assertCoreCompatible(content.requiresCoreVersion, {
+        ...(this.allowIncompatibleGroups === undefined ? {} : { allowIncompatible: this.allowIncompatibleGroups }),
+        guid: content.guid,
+        version: content.version,
+      });
+    }
     return mergeGroups(contents);
   }
 

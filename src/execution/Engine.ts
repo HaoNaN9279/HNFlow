@@ -66,6 +66,8 @@ export interface ExecutionEngineOptions {
   readonly groupsRootDir?: string;
   /** 功能组缓存容量（默认 32）。 */
   readonly groupCacheMaxSize?: number;
+  /** 功能组核心版本兼容（v0.3.2 T8）：默认不兼容抛错；true 仅 warn 继续。 */
+  readonly allowIncompatibleGroups?: boolean;
 }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 export class ExecutionEngine {
@@ -96,6 +98,7 @@ export class ExecutionEngine {
     this.#groupsResolver = options.groupsRootDir === undefined ? undefined : new GroupsResolver({
       groupsRootDir: options.groupsRootDir,
       ...(options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: options.groupCacheMaxSize }),
+      ...(options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: options.allowIncompatibleGroups }),
     });
     if (options.isContainer !== undefined && options.debugController !== undefined && !options.debugController.hasContainerJudge()) {
       options.debugController.setIsContainer(options.isContainer);
@@ -104,7 +107,6 @@ export class ExecutionEngine {
   get logs(): readonly EngineLogEntry[] { return [...this.#logs]; }
   get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
   get runId(): string { return this.#runId; }
-  /** 只读态：run 进行中、挂起中或恢复执行中为 true；尚未 run 或已结束为 false。 */
   get isReadOnly(): boolean { return this.#runActive; }
   /** 当前工作流的不可变深拷贝（含嵌套 subworkflow，调用方修改不影响引擎内部）。 */
   get workflowSnapshot(): Workflow { return deepCopyWorkflow(this.#workflow); }
@@ -362,7 +364,6 @@ export class ExecutionEngine {
   get humanTaskStore(): HumanTaskStoreLike { return this.#stores.humanTaskStore; }
   get runStateStore(): RunStateStoreLike { return this.#stores.runStateStore; }
   getWorkflowVariable(key: string): unknown { return this.#context.get("workflow", key); }
-  /** workflow 作用域全量变量拷贝（内部 getAll 为独立拷贝，供并行分支 diff 合并用，不共享引用）。 */
   getWorkflowVariables(): Record<string, unknown> { return this.#context.getAll("workflow"); }
   private createNodeContext(node: Node, activeGroups?: MergedGroups): NodeExecutionContext {
     const workflowId = this.#workflow.id;
@@ -377,7 +378,8 @@ export class ExecutionEngine {
       ...(activeGroups === undefined ? {} : { activeGroups }),
       ...(this.#options.groupsRootDir === undefined ? {} : { groupsRootDir: this.#options.groupsRootDir }),
       ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
-      // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定。
+      ...(this.#options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: this.#options.allowIncompatibleGroups }),
+      // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定；progress 供子图容器迭代断点持久化。
       runId: this.#runId,
       ...(this.#options.idempotencyKey === undefined ? {} : { idempotencyKey: this.#options.idempotencyKey }),
       get: (scope, key) => context.get(scope, key),
@@ -386,8 +388,7 @@ export class ExecutionEngine {
       setByPath: (path, value) => context.setByPath(path, value),
       getAll: (scope) => context.getAll(scope),
       suspend: (spec) => { throw new HumanTaskRequiredError(spec); },
-      // 节点执行进度钩子：子图容器（loop）每迭代完成后调用，触发断点持久化（快照内容由容器写入 node 级上下文，引擎不理解快照含义）。
-      progress: async () => {
+      progress: async () => { // 子图容器（loop）每迭代完成触发断点持久化（快照由容器写入 node 级上下文）
         if (this.#options.persist === true) await persistRunState(this.persistOps, "running");
       },
       logger: {
@@ -418,7 +419,6 @@ export class ExecutionEngine {
   private createContext(): WorkflowContext {
     return createWorkflowContext(this.#workflow, this.#options);
   }
-  /** 断点快照落盘所需引擎状态（persistRunState 拆至 runstate-persist.ts 参数化函数，控制 Engine 行数）。 */
   private get persistOps(): PersistRunStateOps {
     return {
       runId: this.#runId, workflow: this.#workflow, states: this.#states, outputs: this.#outputs,
