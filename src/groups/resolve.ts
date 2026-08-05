@@ -131,7 +131,7 @@ export async function detectCircularDependencies(rootDir: string): Promise<strin
 }
 
 /** 校验并解析 capabilityGroups 声明数组；非法形状抛含节点路径的 GroupResolveError。 */
-function parseCapabilityGroups(raw: unknown, path: string): CapabilityGroupDeclaration[] {
+export function parseCapabilityGroups(raw: unknown, path: string): CapabilityGroupDeclaration[] {
   if (!Array.isArray(raw)) {
     throw new GroupResolveError(
       `节点 ${path} 的 capabilityGroups 声明非法：期望数组，每项为 { guid: string; version: string }`,
