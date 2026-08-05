@@ -66,6 +66,17 @@ export class LRUCache<K, V> {
     return this.store.delete(key);
   }
 
+  /** 淘汰最久未使用的 count 个 key（Map 迭代序即访问序，从最旧开始删）；返回实际淘汰数（不足 count 时全部删除）。 */
+  evict(count: number): number {
+    if (!Number.isInteger(count) || count <= 0) return 0;
+    const toRemove = Math.min(count, this.store.size);
+    for (let i = 0; i < toRemove; i++) {
+      const oldest = this.store.keys().next().value;
+      if (oldest !== undefined) this.store.delete(oldest);
+    }
+    return toRemove;
+  }
+
   /** 清空。 */
   clear(): void {
     this.store.clear();

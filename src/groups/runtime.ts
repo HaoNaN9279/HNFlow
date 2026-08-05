@@ -8,6 +8,20 @@ import { LRUCache } from "./lru-cache.js";
 export interface GroupRuntimeOptions {
   readonly rootDir: string;
   readonly cacheMaxSize?: number; // LRU 容量，默认 32
+  readonly watermark?: number; // 内存压力水位线（0,1]，默认 0.8
+}
+
+/** 内存压力档位：low=低于水位，high=达到水位未满，critical=缓存已满。 */
+export type MemoryPressure = "low" | "high" | "critical";
+
+/** 内存压力统计快照。 */
+export interface MemoryStats {
+  readonly cacheSize: number;
+  readonly capacity: number;
+  readonly watermark: number;
+  readonly pressure: MemoryPressure;
+  readonly diskReadCount: number;
+  readonly evictions: number;
 }
 
 /** 加载失败：guid@version 加载/校验失败。 */
@@ -26,11 +40,17 @@ export class GroupLoadError extends Error {
 export class GroupRuntime {
   private readonly rootDir: string;
   private readonly cache: LRUCache<string, LoadedGroupContent>;
+  private readonly watermark: number;
   private diskReadCountValue = 0;
+  private evictionsValue = 0;
 
   constructor(options: GroupRuntimeOptions) {
     this.rootDir = options.rootDir;
     this.cache = new LRUCache(options.cacheMaxSize ?? 32);
+    this.watermark = options.watermark ?? 0.8;
+    if (!Number.isFinite(this.watermark) || this.watermark <= 0 || this.watermark > 1) {
+      throw new RangeError(`watermark 必须是 (0, 1] 区间的数字，收到：${options.watermark}`);
+    }
   }
 
   /** 加载单个功能组版本；命中缓存直接返回；失败抛 GroupLoadError（含 guid@version 与原因）。 */
@@ -57,6 +77,9 @@ export class GroupRuntime {
       throw error; // 非内容加载错误（如 rootDir 不可访问）原样抛
     }
     this.cache.set(cacheKey, content);
+    if (this.cacheSize >= this.cache.capacity * this.watermark) {
+      this.evictionsValue += this.cache.evict(Math.ceil(this.cacheSize / 2));
+    }
     this.diskReadCountValue += 1;
     return content;
   }
@@ -98,5 +121,22 @@ export class GroupRuntime {
   /** 实际读盘次数计数（测试断言懒加载/缓存命中：同组第二次 load 不增加计数）。 */
   get diskReadCount(): number {
     return this.diskReadCountValue;
+  }
+
+  /** 内存压力统计快照（水位线策略断言用）。 */
+  get memoryStats(): MemoryStats {
+    const capacity = this.cache.capacity;
+    const cacheSize = this.cacheSize;
+    const threshold = capacity * this.watermark;
+    const pressure: MemoryPressure = cacheSize < threshold ? "low" : cacheSize === capacity ? "critical" : "high";
+    return { cacheSize, capacity, watermark: this.watermark, pressure, diskReadCount: this.diskReadCountValue, evictions: this.evictionsValue };
+  }
+
+  /** 缓存达到水位线时淘汰最久未用的一半，返回实际淘汰数；未达水位线返回 0。 */
+  evictIdleCache(): number {
+    if (this.cacheSize < this.cache.capacity * this.watermark) return 0;
+    const n = this.cache.evict(Math.ceil(this.cacheSize / 2));
+    this.evictionsValue += n;
+    return n;
   }
 }
