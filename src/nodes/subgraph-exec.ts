@@ -89,6 +89,8 @@ async function executeSubEngine(
       // 功能组（v0.3.1 T5）：父引擎配置 groupsRootDir 时子引擎按同样配置运行时加载注入 activeGroups（跨嵌套一致）。
       ...(ctx.groupsRootDir === undefined ? {} : { groupsRootDir: ctx.groupsRootDir }),
       ...(ctx.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: ctx.groupCacheMaxSize }),
+      // 子工作流模板（v0.3.3 T2）：父引擎配置 templatesRootDir 时子引擎按同样配置加载模板工作流（嵌套子图 template 引用一致）。
+      ...(ctx.templatesRootDir === undefined ? {} : { templatesRootDir: ctx.templatesRootDir }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {

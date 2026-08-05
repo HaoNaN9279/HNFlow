@@ -64,6 +64,8 @@ export interface NodeExecutionContext {
   readonly groupCacheMaxSize?: number;
   /** 功能组核心版本兼容（v0.3.2 T8 子图透传）：子图容器转发给子引擎 options；默认不兼容抛错，true 仅 warn。 */
   readonly allowIncompatibleGroups?: boolean;
+  /** 子工作流模板根目录（v0.3.3 T2 子图透传）：subworkflow 节点 params.template 引用加载模板库用；子图容器转发给子引擎 options。 */
+  readonly templatesRootDir?: string;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

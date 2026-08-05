@@ -68,6 +68,7 @@ export interface ExecutionEngineOptions {
   readonly groupCacheMaxSize?: number;
   /** 功能组核心版本兼容（v0.3.2 T8）：默认不兼容抛错；true 仅 warn 继续。 */
   readonly allowIncompatibleGroups?: boolean;
+  readonly templatesRootDir?: string; // 子工作流模板根目录（v0.3.3 T2）：缺省 "./templates"；仅 template 引用时读目录（无引用零 IO）。
 }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 export class ExecutionEngine {
@@ -85,7 +86,7 @@ export class ExecutionEngine {
   #pendingNodeId: string | undefined;
   readonly #stores: EngineStores;
   #runActive = false;
-  #groupsResolver: GroupsResolver | undefined;
+  #groupsResolver: GroupsResolver | undefined; #templatesRootDir: string;
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
     this.#options = options;
@@ -94,7 +95,7 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
-    this.#stores = new EngineStores(options);
+    this.#stores = new EngineStores(options); this.#templatesRootDir = options.templatesRootDir ?? "./templates";
     this.#groupsResolver = options.groupsRootDir === undefined ? undefined : new GroupsResolver({
       groupsRootDir: options.groupsRootDir,
       ...(options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: options.groupCacheMaxSize }),
@@ -379,6 +380,7 @@ export class ExecutionEngine {
       ...(this.#options.groupsRootDir === undefined ? {} : { groupsRootDir: this.#options.groupsRootDir }),
       ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
       ...(this.#options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: this.#options.allowIncompatibleGroups }),
+      ...(this.#templatesRootDir === undefined ? {} : { templatesRootDir: this.#templatesRootDir }), // 模板根目录透传（v0.3.3 T2）：template 引用加载
       // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定；progress 供子图容器迭代断点持久化。
       runId: this.#runId,
       ...(this.#options.idempotencyKey === undefined ? {} : { idempotencyKey: this.#options.idempotencyKey }),
@@ -413,9 +415,7 @@ export class ExecutionEngine {
     else if (level === "warn") console.warn(prefix, message, data);
     else console.error(prefix, message, data);
   }
-  private emitStateChange(nodeId: string, from: NodeStatus, to: NodeStatus): void {
-    this.#options.events?.onNodeStateChange?.({ nodeId, from, to });
-  }
+  private emitStateChange(nodeId: string, from: NodeStatus, to: NodeStatus): void { this.#options.events?.onNodeStateChange?.({ nodeId, from, to }); }
   private createContext(): WorkflowContext {
     return createWorkflowContext(this.#workflow, this.#options);
   }
@@ -432,8 +432,6 @@ export class ExecutionEngine {
     this.#machines = new Map();
     this.#logs = [];
     this.#context = this.createContext();
-    for (const node of this.#workflow.nodes) {
-      this.#machines.set(node.id, new NodeStateMachine());
-    }
+    for (const node of this.#workflow.nodes) this.#machines.set(node.id, new NodeStateMachine());
   }
 }
