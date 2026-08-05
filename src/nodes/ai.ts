@@ -11,6 +11,7 @@ import { resolveModel, type InputMessage, type ModelConfig } from "../ai/model.j
 import { availableTools } from "../ai/toolRegistry.js";
 import { resolveToolReferences } from "../ai/tool.js";
 import type { INodeDefinition, NodeLogger } from "../execution/types.js";
+import { buildSystemPrompt, mergeGroupTools, warnGroupConflicts } from "./ai-groups.js";
 import { allToolsInterrupt, parseInterrupt, type InterruptParam } from "./ai-interrupt.js";
 
 /** ai 节点 params 非法：字段缺失/类型错误（携带原始值片段与原因）。 */
@@ -204,10 +205,16 @@ export const aiNode: INodeDefinition = {
   outputs: [{ id: "output", name: "output", type: "any", direction: "out" }],
   async execute(ctx) {
     const params = parseParams(ctx.node.params);
+    // 功能组规则互斥：引擎只检测不阻断（T2），此处 warn 暴露给用户（T6）。
+    warnGroupConflicts(ctx.activeGroups, ctx.logger.warn);
     // 默认 provider openai：无 key 时构造不抛，仅运行时模型调用失败。
     const model = resolveModel(params.model ?? { provider: "openai" });
-    const tools = resolveToolReferences(params.tools ?? [], availableTools());
+    const baseTools = resolveToolReferences(params.tools ?? [], availableTools());
+    // 功能组工具追加到解析结果之后：已注册用代码 handler，未注册跳过（D1）。
+    const tools = mergeGroupTools(baseTools, ctx.activeGroups);
     const inputMessages = params.inputMessages ?? [];
+    // 功能组 agent 身份拼接：节点 prompt 在前、agent 文本在后，\n\n 分隔（T6）。
+    const systemPrompt = buildSystemPrompt(params.systemPrompt, ctx.activeGroups?.agent);
     // interrupt:true 展开为覆盖全部已解析工具的默认审批配置；对象配置原样透传。
     const interrupt = params.interrupt === undefined
       ? undefined
@@ -222,7 +229,7 @@ export const aiNode: INodeDefinition = {
       model,
       tools,
       inputMessages,
-      ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
       ...(params.stream === true ? { stream: true } : {}),
       // 无条件挂进度转发：invoke 模式由执行器回放补发事件（v0.2.4 轨迹补全），stream 模式增量上报。
       onProgress: forwardProgress(ctx.logger),
