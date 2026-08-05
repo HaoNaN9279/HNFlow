@@ -1,7 +1,7 @@
 // SQLite 表结构定义：幂等建表，供 openDatabase 初始化调用。
 import type { SqliteAdapter } from "./adapter.js";
 
-/** 五张业务表的 DDL（CREATE TABLE IF NOT EXISTS，可重复执行）。 */
+/** 业务表 DDL（CREATE TABLE IF NOT EXISTS，可重复执行）。 */
 const TABLE_DDL = [
   `CREATE TABLE IF NOT EXISTS execution_logs (
     id TEXT PRIMARY KEY,
@@ -56,6 +56,25 @@ const TABLE_DDL = [
     type TEXT NOT NULL DEFAULT '',
     blob BLOB NOT NULL,
     PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+  )`,
+  // v0.3.0 T3 新增：功能组全局索引库（src/groups/index-store.ts）。
+  // group_index：功能组索引行，aliases 存 JSON 数组字符串，updated_at 用 Date.now() 毫秒（与 run_state 惯例一致）。
+  `CREATE TABLE IF NOT EXISTS group_index (
+    guid TEXT PRIMARY KEY,
+    namespace TEXT,
+    current_version TEXT,
+    aliases TEXT,
+    description TEXT,
+    updated_at INTEGER
+  )`,
+  // v0.3.0 T3 新增：资源登记表，唯一键 (guid, version, type, name)，重复登记 INSERT OR IGNORE 幂等。
+  `CREATE TABLE IF NOT EXISTS resource_registry (
+    guid TEXT,
+    version TEXT,
+    type TEXT,
+    name TEXT,
+    path TEXT,
+    PRIMARY KEY (guid, version, type, name)
   )`,
 ];
 
