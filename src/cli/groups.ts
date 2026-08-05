@@ -1,12 +1,14 @@
 // groups/group 子命令（v0.3.0 T7）：功能组 CLI 入口。
-// groups list 列出现有功能组；group init 创建（GUID + v0.1.0）；group release 发布新版本并同步索引库。
+// groups list 列出现有功能组；group init 创建（GUID + v0.1.0）；group release 发布新版本并同步索引库；group history 列出版本历史。
 // 索引库（<dir>/.hnflow-groups.db）仅作加速查询，解析始终以 group.json 为准——同步失败只警告，不阻断 release 成功。
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
+import { GroupFileError } from "../groups/errors.js";
 import { openGroupIndex } from "../groups/index-store.js";
 import { initGroup, validateNamespace } from "../groups/init.js";
-import { scanGroups } from "../groups/load.js";
+import { loadGroup, scanGroups } from "../groups/load.js";
 import { collectResources, releaseGroup } from "../groups/release.js";
-import { parseSemVer } from "../groups/semver.js";
+import { compareSemVer, parseSemVer } from "../groups/semver.js";
 import type { CapabilityGroup } from "../groups/types.js";
 import { describeError, fail, printTable } from "./util.js";
 
@@ -34,10 +36,12 @@ export async function cmdGroup(args: readonly string[]): Promise<number> {
       return cmdGroupInit(args.slice(1));
     case "release":
       return cmdGroupRelease(args.slice(1));
+    case "history":
+      return cmdGroupHistory(args.slice(1));
     case undefined:
-      return fail("缺少子命令", "group init|release");
+      return fail("缺少子命令", "group init|release|history");
     default:
-      return fail(`未知子命令: ${sub}`, "group init|release");
+      return fail(`未知子命令: ${sub}`, "group init|release|history");
   }
 }
 
@@ -78,6 +82,40 @@ async function cmdGroupInit(args: readonly string[]): Promise<number> {
     console.log(`GUID: ${group.guid}`);
     console.log(`namespace: ${group.namespace}`);
     console.log(`初始版本: v${group.currentVersion}`);
+    return 0;
+  } catch (error) {
+    return fail(describeError(error), usage);
+  }
+}
+
+/** 目录存在性判断：stat 失败（不存在/不可访问）返回 false。 */
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** group history <namespace> [dir]：列出版本历史表格（语义版本降序，当前版本在最上）。 */
+async function cmdGroupHistory(args: readonly string[]): Promise<number> {
+  const usage = "group history <namespace> [dir]";
+  const namespace = args[0];
+  if (namespace === undefined) return fail("缺少 namespace", usage);
+  const dir = args[1] ?? DEFAULT_DIR;
+  try {
+    const normalized = validateNamespace(namespace);
+    const groupDir = join(dir, ...normalized.split("/"));
+    if (!(await isDirectory(groupDir))) {
+      throw new GroupFileError(`功能组不存在：${normalized}（${groupDir}）`);
+    }
+    const group = await loadGroup(groupDir);
+    // 语义版本降序：字符串排序会把 "1.10.0" 排在 "1.9.0" 前（错误），必须 parseSemVer + compareSemVer。
+    const sorted = [...group.versions].sort((a, b) => -compareSemVer(parseSemVer(a.version), parseSemVer(b.version)));
+    printTable(
+      ["版本", "创建时间", "changelog"],
+      sorted.map((version) => [version.version, version.createdAt, version.changelog]),
+    );
     return 0;
   } catch (error) {
     return fail(describeError(error), usage);
@@ -136,10 +174,13 @@ async function cmdGroupRelease(args: readonly string[]): Promise<number> {
   const dir = parsed.dir ?? DEFAULT_DIR;
   try {
     const released = await releaseGroup(dir, namespace, version, parsed.changelog);
-    console.log(`namespace: ${released.namespace}`);
-    console.log(`新版本: v${released.currentVersion}`);
+    console.log(`namespace: ${released.group.namespace}`);
+    console.log(`新版本: v${released.group.currentVersion}`);
     console.log(`changelog: ${parsed.changelog ?? "更新"}`);
-    await syncIndex(dir, released);
+    if (released.compat !== undefined) {
+      console.log(`兼容性: ${released.compat.level}（${released.compat.changes.length} 项变更）`);
+    }
+    await syncIndex(dir, released.group);
     return 0;
   } catch (error) {
     return fail(describeError(error), usage);
