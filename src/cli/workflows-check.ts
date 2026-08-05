@@ -1,32 +1,37 @@
-// workflows check 子命令（v0.3.2 T7）：对比工作流依赖快照 resolvedGroups 与各组 currentVersion，输出可升级表格。
+// workflows check 子命令（v0.3.2 T7）：对比工作流依赖快照 resolvedGroups 与各组 currentVersion，输出可升级表格；
+// 同时对比模板引用与模板 currentVersion，输出模板可升级表格（--templates 指定模板根目录，缺省 ./templates）。
 // 忽略文件默认 <file 所在目录>/.hnflow-updates.json（格式 { "ignored": string[] }），缺失视为空、损坏视为空。
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { checkGroupUpdates } from "../groups/updates.js";
+import { checkTemplateUpdates } from "../templates/updates.js";
 import { loadWorkflow } from "../storage/index.js";
 import { describeError, fail, printTable } from "./util.js";
 
 const DEFAULT_GROUPS_DIR = "./groups";
+const DEFAULT_TEMPLATES_DIR = "./templates";
 const DEFAULT_IGNORE_FILE = ".hnflow-updates.json";
 
 interface CheckArgs {
   file?: string;
   groupsDir?: string;
+  templatesDir?: string;
   ignoreFile?: string;
   error?: string;
 }
 
-/** 手工解析参数：--groups/--ignore-file 带值选项 + 1 个位置参数 file；未知选项/多余参数报错。 */
+/** 手工解析参数：带值选项 --groups/--templates/--ignore-file + 1 个位置参数 file；未知选项/多余参数报错。 */
 function parseCheckArgs(args: readonly string[]): CheckArgs {
   const result: CheckArgs = {};
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue; // noUncheckedIndexedAccess 越界防御
-    if (arg === "--groups" || arg === "--ignore-file") {
+    if (arg === "--groups" || arg === "--templates" || arg === "--ignore-file") {
       const value = args[i + 1];
       if (value === undefined) return { error: `选项 ${arg} 缺少值` };
       if (arg === "--groups") result.groupsDir = value;
+      else if (arg === "--templates") result.templatesDir = value;
       else result.ignoreFile = value;
       i++;
       continue;
@@ -68,32 +73,57 @@ function getErrnoCode(error: unknown): string | undefined {
   return undefined;
 }
 
-/** bun run src/cli/index.ts workflows check <file> [--groups <dir>] [--ignore-file <path>] */
+/** bun run src/cli/index.ts workflows check <file> [--groups <dir>] [--templates <dir>] [--ignore-file <path>] */
 export async function cmdWorkflowsCheck(args: readonly string[]): Promise<number> {
-  const usage = "workflows check <file> [--groups <dir>] [--ignore-file <path>]";
+  const usage = "workflows check <file> [--groups <dir>] [--templates <dir>] [--ignore-file <path>]";
   const parsed = parseCheckArgs(args);
   if (parsed.error !== undefined) return fail(parsed.error, usage);
   const file = parsed.file;
   if (file === undefined) return fail("缺少工作流文件", usage);
   const groupsDir = parsed.groupsDir ?? DEFAULT_GROUPS_DIR;
+  const templatesDir = parsed.templatesDir ?? DEFAULT_TEMPLATES_DIR;
   const ignoreFile = parsed.ignoreFile ?? join(dirname(file), DEFAULT_IGNORE_FILE);
   try {
     const workflow = await loadWorkflow(file);
+    const ignores = await readIgnoreFile(ignoreFile);
+
+    // 功能组部分：无依赖快照时仅提示，不参与升级判断。
+    let groupEntryCount = 0;
+    let groupIgnoredCount = 0;
     if (workflow.resolvedGroups === undefined || workflow.resolvedGroups.length === 0) {
       console.log("工作流无功能组依赖快照");
-      return 0;
-    }
-    const ignores = await readIgnoreFile(ignoreFile);
-    const report = await checkGroupUpdates(groupsDir, workflow, { ignores });
-    if (report.entries.length === 0) {
-      console.log("没有可升级的功能组");
     } else {
+      const report = await checkGroupUpdates(groupsDir, workflow, { ignores });
+      groupEntryCount = report.entries.length;
+      groupIgnoredCount = report.ignoredCount;
+      if (report.entries.length > 0) {
+        printTable(
+          ["功能组", "锁定版本", "最新版本", "升级类型"],
+          report.entries.map((entry) => [entry.namespace, entry.lockedVersion, entry.latestVersion, entry.diff]),
+        );
+      }
+    }
+
+    // 模板部分：对比模板引用与模板当前版本。
+    const templateReport = await checkTemplateUpdates(templatesDir, workflow, { ignores });
+    if (templateReport.entries.length > 0) {
       printTable(
-        ["功能组", "锁定版本", "最新版本", "升级类型"],
-        report.entries.map((entry) => [entry.namespace, entry.lockedVersion, entry.latestVersion, entry.diff]),
+        ["模板", "节点", "锁定版本", "最新版本", "升级类型"],
+        templateReport.entries.map((entry) => [
+          entry.name,
+          entry.nodePath,
+          entry.lockedVersion,
+          entry.latestVersion,
+          entry.diff,
+        ]),
       );
     }
-    if (report.ignoredCount > 0) console.log(`已忽略 ${report.ignoredCount} 个版本更新`);
+
+    if (groupEntryCount === 0 && templateReport.entries.length === 0) {
+      console.log("没有可升级的功能组/模板");
+    }
+    const ignoredTotal = groupIgnoredCount + templateReport.ignoredCount;
+    if (ignoredTotal > 0) console.log(`已忽略 ${ignoredTotal} 个版本更新`);
     return 0;
   } catch (error) {
     return fail(describeError(error), usage);

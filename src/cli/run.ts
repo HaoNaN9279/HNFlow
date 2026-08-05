@@ -2,6 +2,7 @@
 // v0.2.5 T5：--idempotency-key <key> 开启持久化（SQLite store，--store 指定 dbPath，缺省 ./hnflow.db 项目惯例），
 // 重复键抛 IdempotencyKeyConflictError → stderr 报错 + 非零退出；无键保持现状（不 persist）。
 // v0.3.1 T7：--groups <dir> 指定功能组根目录，透传 ExecutionEngineOptions.groupsRootDir（运行时节点按需加载）。
+// v0.3.3 T6：--templates <dir> 指定子工作流模板根目录（缺省 ./templates），透传 ExecutionEngineOptions.templatesRootDir。
 import { stat } from "node:fs/promises";
 import { ExecutionEngine, IdempotencyKeyConflictError, type ExecutionEngineOptions } from "../execution/Engine.js";
 import { loadWorkflow } from "../storage/index.js";
@@ -10,27 +11,30 @@ import type { RunStateStoreLike } from "../db/stores/types.js";
 import { describeError, fail, jsonSummary, printTable } from "./util.js";
 
 const DEFAULT_DB = "./hnflow.db";
+const DEFAULT_TEMPLATES_DIR = "./templates";
 
 interface RunArgs {
   workflowPath?: string;
   idempotencyKey?: string;
   dbPath?: string;
   groupsDir?: string;
+  templatesDir?: string;
   error?: string;
 }
 
-/** 手工解析 run 参数：首个位置参数为工作流路径；--idempotency-key/--store/--groups 各取下一值；未知选项或缺值报错。 */
+/** 手工解析 run 参数：首个位置参数为工作流路径；--idempotency-key/--store/--groups/--templates 各取下一值；未知选项或缺值报错。 */
 function parseRunArgs(args: readonly string[]): RunArgs {
   const result: RunArgs = {};
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === undefined) continue;
-    if (arg === "--idempotency-key" || arg === "--store" || arg === "--groups") {
+    if (arg === "--idempotency-key" || arg === "--store" || arg === "--groups" || arg === "--templates") {
       const value = args[i + 1];
       if (value === undefined || value.startsWith("--")) return { error: `选项 ${arg} 缺少值` };
       if (arg === "--idempotency-key") result.idempotencyKey = value;
       else if (arg === "--store") result.dbPath = value;
-      else result.groupsDir = value;
+      else if (arg === "--groups") result.groupsDir = value;
+      else result.templatesDir = value;
       i++;
       continue;
     }
@@ -51,10 +55,10 @@ async function findExistingRunId(
   return runs.find((run) => run.workflowId === workflowId && run.idempotencyKey === idempotencyKey)?.runId;
 }
 
-/** bun run src/cli/index.ts run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>] */
+/** bun run src/cli/index.ts run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>] [--templates <dir>] */
 export async function cmdRun(args: readonly string[]): Promise<number> {
   const parsed = parseRunArgs(args);
-  const usage = "run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>]";
+  const usage = "run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>] [--templates <dir>]";
   if (parsed.error !== undefined) return fail(parsed.error, usage);
   const workflowPath = parsed.workflowPath;
   if (workflowPath === undefined) return fail("缺少工作流路径", usage);
@@ -77,6 +81,8 @@ export async function cmdRun(args: readonly string[]): Promise<number> {
     if (parsed.groupsDir !== undefined) {
       engineOptions = { ...engineOptions, groupsRootDir: parsed.groupsDir };
     }
+    // 模板根目录（缺省 ./templates）：透传 ExecutionEngineOptions.templatesRootDir（引擎缺省一致，仅 template 引用时读目录）。
+    engineOptions = { ...engineOptions, templatesRootDir: parsed.templatesDir ?? DEFAULT_TEMPLATES_DIR };
     const engine = new ExecutionEngine(workflow, engineOptions);
     const result = await engine.run();
 

@@ -5,6 +5,7 @@ import { cmdGroup, cmdGroups } from "./groups.js";
 import { cmdLogs } from "./logs.js";
 import { cmdRun } from "./run.js";
 import { cmdRuns } from "./runs.js";
+import { cmdTemplate } from "./template.js";
 import { cmdWorkflows } from "./workflows.js";
 import { fail } from "./util.js";
 
@@ -14,11 +15,15 @@ function printUsage(): void {
   console.error("  workflows [dir]           列出工作流文件（默认 ./workflows）");
   console.error("  runs [storePath]          列出运行记录（默认 ./run_states.json）");
   console.error("  logs <runId> [storePath]  查看运行详情与节点状态（--workflow 附结构）");
-  console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>]  执行工作流（带幂等键开启持久化；--groups 指定功能组根目录）");
+  console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>] [--templates <dir>]  执行工作流（带幂等键开启持久化；--groups 指定功能组根目录，--templates 指定模板根目录）");
   console.error("  debug <子命令>            调试视图（runs/context/trace/logs）");
   console.error("  groups list [dir]         列出功能组（默认 ./groups）");
   console.error("  group init <namespace> [dir]  创建功能组（初始版本 v0.1.0）");
   console.error("  group release <namespace> -v <version> [dir] [-c <changelog>]  发布新版本");
+  console.error("  template list [dir]      列出子工作流模板（默认 ./templates）");
+  console.error("  template create <name> <workflow-file> <nodes> [--dir <dir>]  从工作流节点打包创建模板 v0.1.0");
+  console.error("  template release <name> -v <version> [--dir <dir>] [-c <changelog>]  发布新版本");
+  console.error("  template history <name> [dir]  查看模板版本历史");
 }
 
 /**
@@ -43,11 +48,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdGroups(args);
     case "group":
       return cmdGroup(args);
+    case "template":
+      return cmdTemplate(args);
     case undefined:
       printUsage();
       return 1;
     default:
-      return fail(`未知命令: ${command}`, "workflows|runs|logs|run|debug|groups|group");
+      return fail(`未知命令: ${command}`, "workflows|runs|logs|run|debug|groups|group|template");
   }
 }
 
