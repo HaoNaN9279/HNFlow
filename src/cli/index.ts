@@ -14,7 +14,7 @@ function printUsage(): void {
   console.error("  workflows [dir]           列出工作流文件（默认 ./workflows）");
   console.error("  runs [storePath]          列出运行记录（默认 ./run_states.json）");
   console.error("  logs <runId> [storePath]  查看运行详情与节点状态（--workflow 附结构）");
-  console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>]  执行工作流（带幂等键开启持久化）");
+  console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>] [--groups <dir>]  执行工作流（带幂等键开启持久化；--groups 指定功能组根目录）");
   console.error("  debug <子命令>            调试视图（runs/context/trace/logs）");
   console.error("  groups list [dir]         列出功能组（默认 ./groups）");
   console.error("  group init <namespace> [dir]  创建功能组（初始版本 v0.1.0）");
