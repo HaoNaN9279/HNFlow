@@ -4,6 +4,8 @@
 import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWriteFile } from "../storage/atomic.js";
+import { checkCompatibility, type CompatibilityReport } from "./compat.js";
+import { loadGroupContent } from "./content-loader.js";
 import { GroupFileError } from "./errors.js";
 import { agentPlaceholder, validateNamespace } from "./init.js";
 import { loadGroup, loadVersion } from "./load.js";
@@ -115,6 +117,14 @@ function assertNoDuplicateResources(resources: ResourceEntry[]): void {
 }
 
 /**
+ * 发布结果：发布的组 + 可选兼容性报告（内容加载失败时不阻断发布，compat 为 undefined）。
+ */
+export interface ReleaseResult {
+  readonly group: CapabilityGroup;
+  readonly compat?: CompatibilityReport;
+}
+
+/**
  * 发布新版本：
  * 1. 加载现有组（不存在抛 GroupFileError）；
  * 2. 校验 newVersion 合法且递增（compareSemVer > currentVersion，否则抛错含当前版本）；
@@ -122,14 +132,15 @@ function assertNoDuplicateResources(resources: ResourceEntry[]): void {
  * 4. 上一版本目录整体拷贝到新版本目录（空则建目录 + agent.md 模板）；
  * 5. 扫描新版本目录资源并查重，重复 → 清理半成品并拒绝；
  * 6. 生成新 GroupVersion（content 扫描生成，requiresCoreVersion/dependencies 继承上一版本）；
- * 7. 原子更新 group.json（versions 追加 + currentVersion）。
+ * 7. 原子更新 group.json（versions 追加 + currentVersion）；
+ * 8. 比对上一版本与当前版本内容生成兼容性报告（内容加载失败不阻断发布）。
  */
 export async function releaseGroup(
   rootDir: string,
   namespace: string,
   newVersion: string,
   changelog?: string,
-): Promise<CapabilityGroup> {
+): Promise<ReleaseResult> {
   const normalized = validateNamespace(namespace);
   const parsedNew = parseSemVer(newVersion); // 非法版本号抛 SemanticVersionError
 
@@ -202,5 +213,20 @@ export async function releaseGroup(
   await atomicWriteFile(join(groupDir, "group.json"), `${JSON.stringify(updatedGroup, null, 2)}\n`, (text: string) => {
     JSON.parse(text); // 完整性校验：可解析即认为写入完整
   });
-  return updatedGroup;
+
+  let compat: CompatibilityReport | undefined;
+  const prevSnapshot = loadVersion(group, currentVersion);
+  if (prevSnapshot !== undefined) {
+    try {
+      const prevContent = await loadGroupContent(rootDir, group, currentVersion);
+      const nextContent = await loadGroupContent(rootDir, updatedGroup, newVersion);
+      compat = checkCompatibility(prevContent, nextContent);
+      if (compat.level === "breaking") {
+        console.warn(`警告: 新版本 ${newVersion} 相对 ${currentVersion} 存在不兼容变更（${compat.changes.length} 项），发布后引用旧版本的工作流不受影响`);
+      }
+    } catch {
+      compat = undefined; // 内容加载失败不阻断发布
+    }
+  }
+  return { group: updatedGroup, ...(compat !== undefined ? { compat } : {}) };
 }
