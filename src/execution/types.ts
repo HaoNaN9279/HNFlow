@@ -9,6 +9,9 @@ import type { Node, Port, VariablePath } from "../model/types.js";
 // type-only import：仅编译期使用，避免与 nodes/registry.ts（import execution/types）形成运行时循环依赖。
 import type { NodeRegistry } from "../nodes/registry.js";
 import type { DebugController } from "./DebugController.js";
+import type { MergedGroups } from "../groups/merge.js";
+// re-export（v0.3.1 T5）：Engine 消费 MergedGroups 时经本文件取（type-only，无运行时循环）。
+export type { MergedGroups };
 
 /**
  * 节点定义：引擎按 type 查注册表获得执行逻辑。
@@ -53,6 +56,12 @@ export interface NodeExecutionContext {
   readonly registry?: NodeRegistry;
   /** 引擎调试控制器：子图容器（subworkflow/loop/tryCatch/finally/parallel）透传给子引擎（单步透传用）。 */
   readonly debugController?: DebugController;
+  /** 已加载并合并的功能组（v0.3.1 T5）：节点声明 capabilityGroups 时注入；无声明/未配置则不注入。 */
+  readonly activeGroups?: MergedGroups;
+  /** 功能组根目录（v0.3.1 T5 子图透传）：子图容器转发给子引擎 options，嵌套子图按同样配置运行时加载。 */
+  readonly groupsRootDir?: string;
+  /** 功能组缓存容量（v0.3.1 T5 子图透传）：子图容器转发给子引擎 options，缺省子引擎默认 32。 */
+  readonly groupCacheMaxSize?: number;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

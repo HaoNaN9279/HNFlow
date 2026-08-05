@@ -6,18 +6,18 @@ import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
 import { DebugController } from "./DebugController.js";
-import { shouldExecute, transferPortData, type EngineReadState } from "./engine-util.js";
-import type { NodeExecutionContext } from "./types.js";
-import type { NodeRegistry } from "../nodes/registry.js";
-import { registry } from "../nodes/registry.js";
-import { HumanTaskStore, InvalidTaskStateError } from "../human/HumanTaskStore.js";
+import { createWorkflowContext, shouldExecute, transferPortData, type EngineLogEntry, type EngineReadState, type RunNodeOutcome } from "./engine-util.js";
+import { EngineStores } from "./engine-stores.js";
+import type { NodeExecutionContext, MergedGroups } from "./types.js";
+import { GroupsResolver } from "./groups-resolver.js";
+import { registry, type NodeRegistry } from "../nodes/registry.js";
+import { InvalidTaskStateError } from "../human/HumanTaskStore.js";
 import type { HumanTask } from "../human/types.js";
-import { RunStateStore } from "../runstate/RunStateStore.js";
 import type { RunState } from "../runstate/types.js";
 import type { HumanTaskStoreLike, RunStateStoreLike } from "../db/stores/types.js";
 import type { ExecutionLogStore } from "../logs/ExecutionLogStore.js";
 import { AiInterruptRequiredError, type AIExecutionResult } from "../ai/executor.js";
-import { SqliteHumanTaskStore, SqliteRunStateStore, type SqliteDatabase } from "../db/index.js";
+import type { SqliteDatabase } from "../db/index.js";
 import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspendAiNode, type AiOps, type AIResumeContext } from "./ai-interrupt.js";
 import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, persistRunState, rebuildContext, rebuildMachines, topoSort, type PersistRunStateOps } from "./runstate-persist.js";
 import { crashConfirmToWaiting, makeSuspendOps, shouldCrashConfirm, suspendToWaiting } from "./human-suspend.js";
@@ -62,10 +62,12 @@ export interface ExecutionEngineOptions {
   readonly debugController?: DebugController;
   /** 容器节点判定回调（step-into 放行容器进入子图）：缺省由 DebugController 构造时注入。 */
   readonly isContainer?: (nodeId: string) => boolean;
+  /** 功能组根目录（v0.3.1 T5）：提供后节点声明 capabilityGroups 时运行时加载并合并注入 ctx.activeGroups。 */
+  readonly groupsRootDir?: string;
+  /** 功能组缓存容量（默认 32）。 */
+  readonly groupCacheMaxSize?: number;
 }
-export interface EngineLogEntry { readonly level: "info" | "warn" | "error"; readonly message: string; readonly data: unknown | undefined; }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
-type RunNodeOutcome = { readonly kind: "ok" } | { readonly kind: "failed"; readonly message: string } | { readonly kind: "waiting"; readonly task: HumanTask } | { readonly kind: "paused"; readonly pendingNodeId?: string; readonly workflowId?: string };
 export class ExecutionEngine {
   readonly #workflow: Workflow;
   readonly #options: ExecutionEngineOptions;
@@ -79,9 +81,9 @@ export class ExecutionEngine {
   #machines = new Map<string, NodeStateMachine>();
   #logs: EngineLogEntry[] = [];
   #pendingNodeId: string | undefined;
-  #humanTaskStore: HumanTaskStoreLike | undefined;
-  #runStateStore: RunStateStoreLike | undefined;
+  readonly #stores: EngineStores;
   #runActive = false;
+  #groupsResolver: GroupsResolver | undefined;
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
     this.#options = options;
@@ -90,6 +92,11 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
+    this.#stores = new EngineStores(options);
+    this.#groupsResolver = options.groupsRootDir === undefined ? undefined : new GroupsResolver({
+      groupsRootDir: options.groupsRootDir,
+      ...(options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: options.groupCacheMaxSize }),
+    });
     if (options.isContainer !== undefined && options.debugController !== undefined && !options.debugController.hasContainerJudge()) {
       options.debugController.setIsContainer(options.isContainer);
     }
@@ -201,9 +208,22 @@ export class ExecutionEngine {
       this.recordLog(this.#workflow.id, node, "info", `node:waiting ${nodeId}`, { status: "Paused" });
       return { kind: "paused" };
     }
+    // 功能组运行时加载（v0.3.1 T5）：execute 之前加载并合并注入 ctx.activeGroups；失败直接 Failed（错误含 guid@version+原因），不触发 crashConfirm/HumanTask。
+    let activeGroups: MergedGroups | undefined;
+    try {
+      activeGroups = await this.#groupsResolver?.resolve(node);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      machine.transitionTo("Failed");
+      this.#states.set(nodeId, "Failed");
+      this.emitStateChange(nodeId, "Running", "Failed");
+      this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed" });
+      this.#options.events?.onError?.(err instanceof Error ? err : new Error(errMsg));
+      return { kind: "failed", message: `${node.name}(${node.id}) failed: ${errMsg}` };
+    }
     const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node); // AI 中断事务：覆盖 checkpoint+HumanTask+RunState 三写（AC3）
     try {
-      const outputValues = await this.#registry.get(node.type).execute(this.createNodeContext(node));
+      const outputValues = await this.#registry.get(node.type).execute(this.createNodeContext(node, activeGroups));
       this.#outputs.set(node.id, outputValues);
       machine.transitionTo("Success");
       this.#states.set(nodeId, "Success");
@@ -322,11 +342,6 @@ export class ExecutionEngine {
       },
     };
   }
-  private sqliteAi(): { readonly dbPath: string; readonly sharedDb: SqliteDatabase } | undefined {
-    const ai = this.#options.aiCheckpoint;
-    if (ai !== undefined && ai.sharedDb !== undefined) return { dbPath: ai.dbPath, sharedDb: ai.sharedDb };
-    return undefined;
-  }
   private async requirePendingTask(taskId: string): Promise<HumanTask> {
     const task = await this.humanTaskStore.getById(taskId);
     if (task === undefined || task.status !== "pending") throw new InvalidTaskStateError(taskId, task?.status ?? "not found");
@@ -343,28 +358,13 @@ export class ExecutionEngine {
     }
     return -1;
   }
-  get humanTaskStore(): HumanTaskStoreLike {
-    if (this.#humanTaskStore === undefined) {
-      const ai = this.sqliteAi();
-      this.#humanTaskStore = ai !== undefined && this.#options.humanTaskStore === undefined
-        ? new SqliteHumanTaskStore(ai.dbPath, ai.sharedDb)
-        : (this.#options.humanTaskStore ?? new HumanTaskStore());
-    }
-    return this.#humanTaskStore;
-  }
-  get runStateStore(): RunStateStoreLike {
-    if (this.#runStateStore === undefined) {
-      const ai = this.sqliteAi();
-      this.#runStateStore = ai !== undefined && this.#options.runStateStore === undefined
-        ? new SqliteRunStateStore(ai.dbPath, ai.sharedDb)
-        : (this.#options.runStateStore ?? new RunStateStore());
-    }
-    return this.#runStateStore;
-  }
+  /** 引擎存储（惰性创建，sqlite 共享 db 时同事务；EngineStores 持有）。 */
+  get humanTaskStore(): HumanTaskStoreLike { return this.#stores.humanTaskStore; }
+  get runStateStore(): RunStateStoreLike { return this.#stores.runStateStore; }
   getWorkflowVariable(key: string): unknown { return this.#context.get("workflow", key); }
   /** workflow 作用域全量变量拷贝（内部 getAll 为独立拷贝，供并行分支 diff 合并用，不共享引用）。 */
   getWorkflowVariables(): Record<string, unknown> { return this.#context.getAll("workflow"); }
-  private createNodeContext(node: Node): NodeExecutionContext {
+  private createNodeContext(node: Node, activeGroups?: MergedGroups): NodeExecutionContext {
     const workflowId = this.#workflow.id;
     const context = this.#context;
     return {
@@ -374,6 +374,9 @@ export class ExecutionEngine {
       registry: this.#registry,
       ...(this.#options.debugController === undefined ? {} : { debugController: this.#options.debugController }),
       ...(this.#options.aiCheckpoint !== undefined ? { aiCheckpoint: this.#options.aiCheckpoint } : {}), // AI 中断 checkpoint 配置透传（T5.1）
+      ...(activeGroups === undefined ? {} : { activeGroups }),
+      ...(this.#options.groupsRootDir === undefined ? {} : { groupsRootDir: this.#options.groupsRootDir }),
+      ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
       // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定。
       runId: this.#runId,
       ...(this.#options.idempotencyKey === undefined ? {} : { idempotencyKey: this.#options.idempotencyKey }),
@@ -413,10 +416,7 @@ export class ExecutionEngine {
     this.#options.events?.onNodeStateChange?.({ nodeId, from, to });
   }
   private createContext(): WorkflowContext {
-    return new WorkflowContext({
-      ...(this.#workflow.globalVariables === undefined ? {} : { globalVariables: this.#workflow.globalVariables }),
-      ...(this.#options.workflowVariables === undefined ? {} : { workflowVariables: this.#options.workflowVariables }),
-    });
+    return createWorkflowContext(this.#workflow, this.#options);
   }
   /** 断点快照落盘所需引擎状态（persistRunState 拆至 runstate-persist.ts 参数化函数，控制 Engine 行数）。 */
   private get persistOps(): PersistRunStateOps {

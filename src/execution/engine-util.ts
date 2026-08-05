@@ -1,7 +1,23 @@
-// 引擎共享调度工具：入边激活判定 + 端口数据流（从 Engine 抽取，保持 Engine ≤440 行）。
-// 只依赖 model 类型与 NodeStatus，无循环依赖；纯函数，不持有引擎实例。
-import type { Edge, Node } from "../model/types.js";
+// 引擎共享工具：入边激活判定 + 端口数据流 + 共享类型 + 上下文构造（从 Engine 抽取，保持 Engine ≤440 行）。
+// 只依赖 model/context/human 类型与 NodeStatus，无循环依赖；纯函数，不持有引擎实例。
+import type { Edge, Node, Workflow } from "../model/types.js";
+import { WorkflowContext } from "../context/WorkflowContext.js";
+import type { HumanTask } from "../human/types.js";
 import type { NodeStatus } from "./NodeState.js";
+
+/** 引擎日志条目（从 Engine.ts 移出控制行数；无外部 import 引用，re-export 需经 Engine 时改从本文件取）。 */
+export interface EngineLogEntry { readonly level: "info" | "warn" | "error"; readonly message: string; readonly data: unknown | undefined; }
+
+/** 引擎 runNode 结果（从 Engine.ts 移出控制行数）。 */
+export type RunNodeOutcome = { readonly kind: "ok" } | { readonly kind: "failed"; readonly message: string } | { readonly kind: "waiting"; readonly task: HumanTask } | { readonly kind: "paused"; readonly pendingNodeId?: string; readonly workflowId?: string };
+
+/** 构造引擎工作流上下文（globalVariables + workflowVariables 合并；从 Engine.createContext 移出控制行数）。 */
+export function createWorkflowContext(workflow: Workflow, options: { readonly workflowVariables?: Record<string, unknown> }): WorkflowContext {
+  return new WorkflowContext({
+    ...(workflow.globalVariables === undefined ? {} : { globalVariables: workflow.globalVariables }),
+    ...(options.workflowVariables === undefined ? {} : { workflowVariables: options.workflowVariables }),
+  });
+}
 
 /** 引擎调度期只读快照：入边激活判定所需的最小内部状态。 */
 export interface EngineReadState {

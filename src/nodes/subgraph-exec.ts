@@ -86,6 +86,9 @@ async function executeSubEngine(
       // 崩溃转人工（v0.2.5 T4）：子引擎继承父 runId（任务查重一致）+ 幂等键（子图内非幂等节点判定）。
       ...(ctx.runId === undefined ? {} : { runId: ctx.runId }),
       ...(ctx.idempotencyKey === undefined ? {} : { idempotencyKey: ctx.idempotencyKey }),
+      // 功能组（v0.3.1 T5）：父引擎配置 groupsRootDir 时子引擎按同样配置运行时加载注入 activeGroups（跨嵌套一致）。
+      ...(ctx.groupsRootDir === undefined ? {} : { groupsRootDir: ctx.groupsRootDir }),
+      ...(ctx.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: ctx.groupCacheMaxSize }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {
