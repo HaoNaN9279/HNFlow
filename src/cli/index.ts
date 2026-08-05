@@ -1,6 +1,7 @@
 // HNFlow CLI 主入口：解析子命令并分发。main 为纯函数（便于测试），
 // 直接执行时按返回码 process.exit；被 import 时不退出。
 import { cmdDebug } from "./debug.js";
+import { cmdGroup, cmdGroups } from "./groups.js";
 import { cmdLogs } from "./logs.js";
 import { cmdRun } from "./run.js";
 import { cmdRuns } from "./runs.js";
@@ -15,6 +16,9 @@ function printUsage(): void {
   console.error("  logs <runId> [storePath]  查看运行详情与节点状态（--workflow 附结构）");
   console.error("  run <workflowPath> [--idempotency-key <key>] [--store <dbPath>]  执行工作流（带幂等键开启持久化）");
   console.error("  debug <子命令>            调试视图（runs/context/trace/logs）");
+  console.error("  groups list [dir]         列出功能组（默认 ./groups）");
+  console.error("  group init <namespace> [dir]  创建功能组（初始版本 v0.1.0）");
+  console.error("  group release <namespace> -v <version> [dir] [-c <changelog>]  发布新版本");
 }
 
 /**
@@ -35,11 +39,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       return cmdRun(args);
     case "debug":
       return cmdDebug(args);
+    case "groups":
+      return cmdGroups(args);
+    case "group":
+      return cmdGroup(args);
     case undefined:
       printUsage();
       return 1;
     default:
-      return fail(`未知命令: ${command}`, "workflows|runs|logs|run|debug");
+      return fail(`未知命令: ${command}`, "workflows|runs|logs|run|debug|groups|group");
   }
 }
 
