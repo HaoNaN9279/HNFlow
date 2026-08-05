@@ -154,7 +154,7 @@ export function parseCapabilityGroups(raw: unknown, path: string): CapabilityGro
 }
 
 /** 遍历工作流所有节点（含 node.subworkflow 递归嵌套）收集 capabilityGroups 声明；同 guid 版本冲突抛 GroupResolveError。 */
-function collectDeclarations(workflow: Workflow): Map<string, DeclaredGroup> {
+export function collectDeclarations(workflow: Workflow): Map<string, DeclaredGroup> {
   const declarations = new Map<string, DeclaredGroup>();
   const stack: Array<{ wf: Workflow; parent: string | undefined }> = [{ wf: workflow, parent: undefined }];
   while (stack.length > 0) {
