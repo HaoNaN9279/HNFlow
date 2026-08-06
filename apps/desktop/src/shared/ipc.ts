@@ -25,6 +25,9 @@ export const IPC = {
   workflowOpen: "workflow:open",
   workflowSaveAs: "workflow:saveAs",
   workflowSave: "workflow:save",
+  templateList: "template:list",
+  templateLoadVersion: "template:loadVersion",
+  templateRelease: "template:release",
 } as const;
 
 /** 端口元数据（可序列化子集） */
@@ -81,6 +84,46 @@ export interface SaveWorkflowPayload {
   readonly workflow: unknown;
 }
 
+/** 模板摘要（template:list 返回项） */
+export interface TemplateSummary {
+  readonly name: string;
+  readonly description: string;
+  readonly currentVersion: string;
+  /** 版本历史（降序或升序均可，含 changelog） */
+  readonly versions: readonly { readonly version: string; readonly createdAt: string; readonly changelog: string }[];
+  readonly interface: { readonly inputs: readonly string[]; readonly outputs: readonly string[] };
+}
+
+/** template:loadVersion 载荷：模板名 + 版本号（缺省 currentVersion） */
+export interface LoadTemplateVersionPayload {
+  readonly name: string;
+  readonly version?: string;
+}
+
+/** template:loadVersion 返回：该版本 workflow 的可序列化形状（nodes/edges 全量） */
+export interface LoadTemplateVersionResponse {
+  readonly name: string;
+  readonly version: string;
+  readonly workflow: {
+    readonly id: string;
+    readonly name: string;
+    readonly version: string;
+    readonly nodes: readonly unknown[];
+    readonly edges: readonly unknown[];
+  };
+}
+
+/** template:release 载荷：发布新版本（name + newVersion + changelog + workflow 内容） */
+export interface ReleaseTemplatePayload {
+  readonly name: string;
+  readonly newVersion: string;
+  readonly changelog?: string;
+  readonly workflow: unknown; // Workflow 可序列化形状，main 侧经核心校验
+}
+
+/** template:release 返回：发布后模板摘要 */
+export type ReleaseTemplateResponse = TemplateSummary;
+
 /** preload 通过 contextBridge 暴露给渲染进程的 API 形状 */
 export interface HnflowApi {
   readonly version: string;
@@ -90,4 +133,7 @@ export interface HnflowApi {
   openWorkflow(): Promise<OpenWorkflowResponse>;
   saveAsWorkflow(workflow: unknown, suggestedName?: string): Promise<SaveAsWorkflowResponse>;
   saveWorkflow(filePath: string, workflow: unknown): Promise<SaveWorkflowResult>;
+  listTemplates(): Promise<readonly TemplateSummary[]>;
+  loadTemplateVersion(payload: LoadTemplateVersionPayload): Promise<LoadTemplateVersionResponse>;
+  releaseTemplate(payload: ReleaseTemplatePayload): Promise<ReleaseTemplateResponse>;
 }

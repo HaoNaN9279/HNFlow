@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Menu, shell } from "electron";
 import * as path from "node:path";
 import { registerIpcHandlers } from "./ipc/handlers.js";
+import { ensureTemplateLibrary } from "./ipc/templates.js";
 
 /** 开发服务器地址：vite dev 默认端口 5173；可通过环境变量覆盖。 */
 const DEV_SERVER_URL = "http://localhost:5173";
@@ -83,8 +84,12 @@ function buildMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
   registerIpcHandlers();
+  // 首启初始化模板库（userData/templates 写入种子模板）；失败不阻塞启动，仅告警。
+  await ensureTemplateLibrary(app.getPath("userData")).catch((error) => {
+    console.error("模板库初始化失败（可手动创建 templates 目录）", error);
+  });
   buildMenu();
   createWindow();
 

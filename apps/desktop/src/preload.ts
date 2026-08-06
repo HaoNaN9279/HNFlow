@@ -2,10 +2,15 @@
 // 全部 IPC 走 ipcRenderer.invoke（主进程 ipcMain.handle 注册于 src/ipc/handlers.ts）。
 
 import { contextBridge, ipcRenderer } from "electron";
-import { IPC, type HnflowApi } from "./shared/ipc.js";
+import {
+  IPC,
+  type HnflowApi,
+  type LoadTemplateVersionPayload,
+  type ReleaseTemplatePayload,
+} from "./shared/ipc.js";
 
 const api: HnflowApi = {
-  version: "0.4.0",
+  version: "0.4.1",
   platform: process.platform,
   listNodeTypes: () => ipcRenderer.invoke(IPC.listNodeTypes),
   newWorkflow: () => ipcRenderer.invoke(IPC.workflowNew),
@@ -13,6 +18,9 @@ const api: HnflowApi = {
   saveAsWorkflow: (workflow: unknown, suggestedName?: string) =>
     ipcRenderer.invoke(IPC.workflowSaveAs, suggestedName === undefined ? { workflow } : { workflow, suggestedName }),
   saveWorkflow: (filePath: string, workflow: unknown) => ipcRenderer.invoke(IPC.workflowSave, { filePath, workflow }),
+  listTemplates: () => ipcRenderer.invoke(IPC.templateList),
+  loadTemplateVersion: (payload: LoadTemplateVersionPayload) => ipcRenderer.invoke(IPC.templateLoadVersion, payload),
+  releaseTemplate: (payload: ReleaseTemplatePayload) => ipcRenderer.invoke(IPC.templateRelease, payload),
 };
 
 contextBridge.exposeInMainWorld("hnflow", api);
