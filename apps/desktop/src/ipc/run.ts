@@ -8,7 +8,7 @@ import { formatNodePath } from "../../../../src/execution/node-path.js";
 import type { EngineLogEntry } from "../../../../src/execution/engine-util.js";
 import { McpServerPool } from "../../../../src/mcp/pool.js";
 import { fromJSON } from "../../../../src/serialization/index.js";
-import type { RunWorkflowPayload, RunWorkflowResult } from "../shared/ipc.js";
+import type { RunDebugInfo, RunWorkflowPayload, RunWorkflowResult } from "../shared/ipc.js";
 
 /** 运行选项：templatesRootDir 供 template 引用节点读目录（缺省引擎默认 ./templates）。 */
 export interface RunWorkflowOptions {
@@ -56,7 +56,7 @@ export async function runWorkflowOnce(
     try {
       const result = await engine.run(); // 节点失败不抛：result.status === "failed" + result.error
       if (result.status === "success") {
-        return { ok: true, runId: engine.runId };
+        return { ok: true, runId: engine.runId, debug: buildDebugInfo(engine, result) };
       }
       return failureResult(engine, result);
     } catch (error) {
@@ -115,7 +115,21 @@ function nodePathOf(log: EngineLogEntry): string | undefined {
   return typeof raw === "string" ? raw : undefined;
 }
 
-/** 非 success 结果 → 失败 RunWorkflowResult：解析失败节点 id + 中文消息 + 节点路径。 */
+/** 组装单次运行调试信息（成功/失败共用，T2b）：运行元数据 + 节点状态/输出 + 上下文快照 + 引擎日志。 */
+function buildDebugInfo(engine: ExecutionEngine, result: ExecutionResult): RunDebugInfo {
+  return {
+    runId: engine.runId,
+    nodeStates: result.nodeStates,
+    nodeOutputs: result.nodeOutputs,
+    contextSnapshot: engine.contextSnapshot,
+    // EngineLogEntry 与 IpcLogEntry 形状一致，直接透传（查错依据：失败节点路径/错误消息在日志 data 内）。
+    logs: engine.logs,
+    startTime: result.startTime,
+    endTime: result.endTime,
+  };
+}
+
+/** 非 success 结果 → 失败 RunWorkflowResult：解析失败节点 id + 中文消息 + 节点路径 + 调试信息。 */
 function failureResult(engine: ExecutionEngine, result: ExecutionResult): RunWorkflowResult {
   const raw = result.status === "failed" ? (result.error ?? "工作流执行失败") : statusMessage(result.status);
   const match = raw.match(NODE_FAIL_RE);
@@ -125,6 +139,7 @@ function failureResult(engine: ExecutionEngine, result: ExecutionResult): RunWor
   return {
     ok: false,
     message,
+    debug: buildDebugInfo(engine, result),
     ...(nodeId === undefined ? {} : { nodeId }),
     ...(nodePath === undefined ? {} : { nodePath }),
   };

@@ -97,6 +97,48 @@ describe("runWorkflowOnce", () => {
   });
 });
 
+describe("runWorkflowOnce 调试信息（T2b）", () => {
+  it("成功路径：debug 携带节点状态/日志/上下文快照/时间（含全部节点）", async () => {
+    const result = await runWorkflowOnce({
+      workflow: { id: "run-debug-ok-wf", name: "调试成功", version: "0.1.0", nodes: [startNode, logNode, endNode], edges: [] },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.debug).toBeDefined();
+      if (result.debug === undefined) return; // 窄化：本路径 debug 必存在
+      expect(result.debug.runId).toBe(result.runId);
+      // nodeStates 覆盖全部节点且终态 Success
+      expect(result.debug.nodeStates).toEqual({ start: "Success", log: "Success", end: "Success" });
+      // logs 非空：log 节点经 logger.info 写入
+      expect(result.debug.logs.length).toBeGreaterThan(0);
+      // contextSnapshot 三层形状正确（global/workflow 为空对象，node 无节点级上下文写入）
+      expect(result.debug.contextSnapshot.global).toEqual({});
+      expect(result.debug.contextSnapshot.workflow).toEqual({});
+      expect(result.debug.contextSnapshot.node).toEqual({});
+      // 时间单调
+      expect(result.debug.startTime).toBeLessThanOrEqual(result.debug.endTime);
+    }
+  });
+
+  it("失败路径：debug 仍存在，nodeStates 含 Failed 节点、logs 非空（查错依据）", async () => {
+    const result = await runWorkflowOnce({
+      workflow: { id: "run-debug-fail-wf", name: "调试失败", version: "0.1.0", nodes: [startNode, commandNode], edges: [] },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.debug).toBeDefined();
+      if (result.debug === undefined) return; // 窄化：失败路径也组装 debug
+      // 失败节点标记 Failed，其余成功
+      expect(result.debug.nodeStates).toEqual({ start: "Success", cmd: "Failed" });
+      // 失败日志非空：错误消息/节点路径存于日志 data（extractNodePath 依赖）
+      expect(result.debug.logs.length).toBeGreaterThan(0);
+      expect(result.debug.contextSnapshot.global).toEqual({});
+      expect(result.debug.contextSnapshot.workflow).toEqual({});
+      expect(result.debug.startTime).toBeLessThanOrEqual(result.debug.endTime);
+    }
+  });
+});
+
 describe("runWorkflowOnce 审核桥接（v0.4.2 验收 2）", () => {
   const reviewWorkflow: RunWorkflowPayload = {
     workflow: {

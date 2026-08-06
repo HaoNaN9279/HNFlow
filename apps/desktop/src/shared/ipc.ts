@@ -94,10 +94,44 @@ export interface RunWorkflowPayload {
   readonly workflow: unknown;
 }
 
-/** workflow:run 返回：内存单次运行结果（成功带 runId；失败带中文消息与失败节点信息） */
+/** 引擎运行日志条目（镜像核心库 src/execution/engine-util.ts 的 EngineLogEntry，IPC 边界不直接引用核心库） */
+export interface IpcLogEntry {
+  readonly level: "info" | "warn" | "error";
+  readonly message: string;
+  readonly data: unknown | undefined;
+}
+
+/** 运行期变量快照：global 为全局上下文；workflow 为工作流上下文；node 为各节点执行上下文（key 为 `node:<id>`） */
+export interface DebugContextSnapshot {
+  readonly global: Record<string, unknown>;
+  readonly workflow: Record<string, unknown>;
+  readonly node: Record<string, Record<string, unknown>>;
+}
+
+/** 节点运行状态（镜像核心库 src/execution/NodeState.ts 的 NodeStatus，IPC 边界不直接引用核心库） */
+export type DebugNodeStatus = "Idle" | "Running" | "Success" | "Failed" | "Skipped" | "WaitingForHuman" | "Paused";
+
+/** 单次运行调试信息（成功运行时附带；main 侧在 run.ts 组装，IPC 边界仅承载可序列化形状） */
+export interface RunDebugInfo {
+  readonly runId: string;
+  readonly nodeStates: Record<string, DebugNodeStatus>;
+  readonly nodeOutputs: Record<string, Record<string, unknown>>;
+  readonly contextSnapshot: DebugContextSnapshot;
+  readonly logs: readonly IpcLogEntry[];
+  readonly startTime: number;
+  readonly endTime: number;
+}
+
+/** workflow:run 返回：内存单次运行结果（成功带 runId；失败带中文消息与失败节点信息）。成功/失败分支均可附带 debug 调试信息（向后兼容，旧调用方只读 ok/runId/message 不受影响）。 */
 export type RunWorkflowResult =
-  | { readonly ok: true; readonly runId: string }
-  | { readonly ok: false; readonly message: string; readonly nodeId?: string; readonly nodePath?: string };
+  | { readonly ok: true; readonly runId: string; readonly debug?: RunDebugInfo }
+  | {
+      readonly ok: false;
+      readonly message: string;
+      readonly nodeId?: string;
+      readonly nodePath?: string;
+      readonly debug?: RunDebugInfo;
+    };
 
 /** 审核请求信息（main → renderer 事件 workflow:review-request 载荷；运行到待审核 command 节点时触发）。 */
 export interface ReviewRequestInfo {
