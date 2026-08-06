@@ -1,4 +1,4 @@
-// 参数 schema 元数据测试（v0.4.0 T1）：16 内置节点 paramsSchema 覆盖与结构合法性。
+// 参数 schema 元数据测试（v0.4.0 T1）：17 内置节点 paramsSchema 覆盖与结构合法性。
 import { describe, expect, test } from "bun:test";
 import type { INodeDefinition, ParamField } from "../src/execution/types.js";
 import { aiNode } from "../src/nodes/ai.js";
@@ -19,8 +19,8 @@ function schemaOf(def: INodeDefinition): readonly ParamField[] {
 }
 
 describe("内置节点 paramsSchema 覆盖", () => {
-  test("内置节点共 16 个，缺省清单外节点均有非空 paramsSchema", () => {
-    expect(builtinNodes).toHaveLength(16);
+  test("内置节点共 17 个，缺省清单外节点均有非空 paramsSchema", () => {
+    expect(builtinNodes).toHaveLength(17);
     for (const def of builtinNodes) {
       if (SCHEMA_OPTIONAL_TYPES.has(def.type)) continue;
       const schema = schemaOf(def);

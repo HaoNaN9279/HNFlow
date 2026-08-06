@@ -317,8 +317,8 @@ describe("subworkflow 深度限制", () => {
 });
 
 describe("subworkflow registry", () => {
-  test("registry 已注册且内置节点总数 16", () => {
+  test("registry 已注册且内置节点总数 17", () => {
     expect(registry.has("subworkflow")).toBe(true);
-    expect(registry.list()).toHaveLength(16);
+    expect(registry.list()).toHaveLength(17);
   });
 });

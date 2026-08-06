@@ -1,6 +1,6 @@
 // parallel 节点测试：基础并发（AC3）、上下文隔离（AC2）、合并规则（replace/mergeArrays/errorOnConflict，AC1）、
 // params 排除、失败聚合（ParallelBranchFailedError）、挂起透传与恢复（SubworkflowWaitingError + doneBranches）、
-// 断点恢复跳过已完成分支、registry 计数（16）、参数校验。
+// 断点恢复跳过已完成分支、registry 计数（17）、参数校验。
 // 恢复用例照 loop-recovery.test.ts 模式（SQLite 临时库 + buildEngineFromRunState/continueRun）；
 // 其余用例照 loop-node.test.ts 模式（Engine + HumanTaskStore 临时文件）。
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -481,11 +481,11 @@ describe("parallel 参数校验", () => {
 });
 
 describe("parallel registry", () => {
-  test("parallel 已注册且内置节点总数 16（独立 registry 实例）", () => {
+  test("parallel 已注册且内置节点总数 17（独立 registry 实例）", () => {
     const reg = new NodeRegistry();
     for (const def of builtinNodes) reg.register(def);
     expect(reg.has("parallel")).toBe(true);
-    expect(reg.list()).toHaveLength(16);
+    expect(reg.list()).toHaveLength(17);
   });
 });
 
