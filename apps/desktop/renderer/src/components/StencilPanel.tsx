@@ -6,7 +6,7 @@
 // - 点击：在画布可视区中心添加节点（最小可用兜底，拖拽不可用时也可用）；
 // - v0.4.1：只读模式（模板引用子图）禁止添加节点——禁用拖拽/点击入口 + 灰显 + 提示文案。
 
-import { useMemo, useRef } from "react";
+import { type CSSProperties, useMemo, useRef } from "react";
 import { Graph } from "@antv/x6";
 import { Dnd } from "@antv/x6-plugin-dnd";
 import { Empty, Spin, Typography } from "antd";
@@ -17,6 +17,7 @@ import type { GraphPosition } from "../editor/ports.js";
 import { editorActions, useEditor } from "../editor/state.js";
 import { useWorkflowGraphContext } from "../editor/useWorkflowGraph.js";
 import { useNodeUi } from "../editor/ui-context.js";
+import { buildMcpToolNode, useGroupTools, type GroupToolItem } from "../hooks/useGroupTools.js";
 import { createDefaultNode, useNodeTypeMetadata } from "../hooks/useNodeCreation.js";
 
 /** 物料分组常量映射：type 白名单 → 分组标题。 */
@@ -30,6 +31,18 @@ const NODE_GROUPS: readonly { readonly key: string; readonly label: string; read
   { key: "io", label: "IO", types: ["command", "http", "file", "humanTask"] },
   { key: "ai", label: "AI", types: ["llm", "ai"] },
 ];
+
+/** 未绑定标签样式：灰显声明工具，与内置节点 type 徽标区分（不占 global.css 分区）。 */
+const unboundBadgeStyle: CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1,
+  padding: "2px 5px",
+  borderRadius: 4,
+  border: "1px solid #d9d9d9",
+  background: "#fafafa",
+  color: "#999",
+  whiteSpace: "nowrap",
+};
 
 /** 按分组索引元数据；仅保留有节点的分组。 */
 function groupMetadata(list: readonly NodeTypeMetadata[]): readonly {
@@ -49,6 +62,7 @@ export default function StencilPanel() {
   const graphRef = useWorkflowGraphContext();
   const { readOnly } = useNodeUi();
   const { metadata, failed } = useNodeTypeMetadata();
+  const { groups: groupTools, failed: groupFailed } = useGroupTools();
   const panelRef = useRef<HTMLDivElement>(null);
   const dndRef = useRef<Dnd | null>(null);
 
@@ -103,6 +117,31 @@ export default function StencilPanel() {
     dispatch(editorActions.addNode(createDefaultNode(meta.type, meta, position)));
   }
 
+  /** 功能组 MCP 物料拖拽起点：建 mcpTool 临时节点交给 Dnd（复用内置节点拖拽机制）。 */
+  function handleItemMouseDown(item: GroupToolItem, evt: React.MouseEvent): void {
+    if (item.kind !== "mcp" || item.mcpConfig === undefined) {
+      return; // 未绑定声明工具不响应拖拽
+    }
+    const graph = graphRef.current;
+    if (graph === null) {
+      return;
+    }
+    evt.preventDefault();
+    const editorNode = buildMcpToolNode(item, { x: 0, y: 0 });
+    const node = graph.createNode(toX6Node(editorNode));
+    getDnd(graph).start(node, evt.nativeEvent);
+  }
+
+  /** 功能组 MCP 物料点击添加：画布可视区中心创建 mcpTool 节点（同内置节点兜底）。 */
+  function handleItemClick(item: GroupToolItem): void {
+    if (item.kind !== "mcp" || item.mcpConfig === undefined) {
+      return;
+    }
+    const graph = graphRef.current;
+    const position = graph === null ? { x: 40, y: 40 } : canvasCenter(graph);
+    dispatch(editorActions.addNode(buildMcpToolNode(item, position)));
+  }
+
   return (
     <div ref={panelRef} className="stencil-panel">
       <Typography.Text strong>节点库</Typography.Text>
@@ -136,6 +175,43 @@ export default function StencilPanel() {
             ))}
           </div>
         ))
+      )}
+      {groupTools !== undefined && !groupFailed && (
+        <>
+          <Typography.Text strong>功能组</Typography.Text>
+          {groupTools.length === 0 ? (
+            <Empty description="无功能组工具" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          ) : (
+            groupTools.map((group) => (
+              <div key={group.key} className="stencil-group">
+                <div className="stencil-group-title">{group.label}</div>
+                {group.items.map((item) => (
+                  <div
+                    key={`${item.kind}:${item.name}`}
+                    className="stencil-item"
+                    style={readOnly || !item.bound ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                    onMouseDown={readOnly || !item.bound ? undefined : (evt) => handleItemMouseDown(item, evt)}
+                    onClick={readOnly || !item.bound ? undefined : () => handleItemClick(item)}
+                    title={
+                      readOnly
+                        ? "只读模式禁止添加节点"
+                        : item.bound
+                          ? `拖拽到画布或点击添加（MCP Server: ${item.name}，工具名在参数面板填写）`
+                          : `未绑定（${item.description}）`
+                    }
+                  >
+                    <span className="stencil-item-name">{item.name}</span>
+                    {item.bound ? (
+                      <span className="hnflow-node-badge">mcp</span>
+                    ) : (
+                      <span style={unboundBadgeStyle}>未绑定</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </>
       )}
     </div>
   );

@@ -6,12 +6,15 @@ import { randomUUID } from "node:crypto";
 import { ExecutionEngine, type ExecutionResult } from "../../../../src/execution/Engine.js";
 import { formatNodePath } from "../../../../src/execution/node-path.js";
 import type { EngineLogEntry } from "../../../../src/execution/engine-util.js";
+import { McpServerPool } from "../../../../src/mcp/pool.js";
 import { fromJSON } from "../../../../src/serialization/index.js";
 import type { RunWorkflowPayload, RunWorkflowResult } from "../shared/ipc.js";
 
 /** 运行选项：templatesRootDir 供 template 引用节点读目录（缺省引擎默认 ./templates）。 */
 export interface RunWorkflowOptions {
   readonly templatesRootDir?: string;
+  /** 功能组库根目录（v0.4.3 验收 3）：提供后引擎运行时加载节点声明的功能组，AI 节点经 MCP 池消费组内 MCP 工具。 */
+  readonly groupsRootDir?: string;
   /** 审核请求回调（v0.4.2 验收 2）：运行到待审核 command 节点时调用，返回批准/拒绝；缺省拒绝。 */
   readonly onReviewRequest?: (request: {
     readonly requestId: string;
@@ -23,37 +26,45 @@ export interface RunWorkflowOptions {
 /**
  * 内存单次运行：fromJSON（workflowSchema 校验）→ 新引擎（无持久化）→ await run()。
  * 失败不抛错：一律收敛为 { ok: false, message 中文 }，成功 { ok: true, runId }。
+ * MCP 池（v0.4.3 验收 3）：每次运行新建进程池供 AI/mcpTool 节点消费，无论成败 finally 释放，无残留子进程。
  */
 export async function runWorkflowOnce(
   payload: RunWorkflowPayload,
   options: RunWorkflowOptions = {},
 ): Promise<RunWorkflowResult> {
-  let engine: ExecutionEngine;
+  const pool = new McpServerPool(); // 单次运行专属进程池：运行结束统一释放（同 name 复用由池内引用计数管理）。
   try {
-    const workflow = fromJSON(payload.workflow); // 非法数据在此抛 "Invalid workflow JSON: ..."
-    const onReviewRequest = options.onReviewRequest;
-    engine = new ExecutionEngine(workflow, {
-      workflowVariables: {},
-      ...(options.templatesRootDir === undefined ? {} : { templatesRootDir: options.templatesRootDir }),
-      // 审核桥接（v0.4.2 验收 2）：引擎询问 → 外层回调（requestId 由本层生成，每次触发唯一）。
-      ...(onReviewRequest === undefined
-        ? {}
-        : {
-            onReviewRequired: async (info) => onReviewRequest({ requestId: randomUUID(), ...info }),
-          }),
-    });
-  } catch (error) {
-    return { ok: false, message: friendlyRunError(error) };
-  }
-  try {
-    const result = await engine.run(); // 节点失败不抛：result.status === "failed" + result.error
-    if (result.status === "success") {
-      return { ok: true, runId: engine.runId };
+    let engine: ExecutionEngine;
+    try {
+      const workflow = fromJSON(payload.workflow); // 非法数据在此抛 "Invalid workflow JSON: ..."
+      const onReviewRequest = options.onReviewRequest;
+      engine = new ExecutionEngine(workflow, {
+        workflowVariables: {},
+        ...(options.templatesRootDir === undefined ? {} : { templatesRootDir: options.templatesRootDir }),
+        ...(options.groupsRootDir === undefined ? {} : { groupsRootDir: options.groupsRootDir }),
+        mcpPool: pool, // 引擎注入 MCP 池：AI 节点 activeGroups.mcps / mcpTool 节点消费
+        // 审核桥接（v0.4.2 验收 2）：引擎询问 → 外层回调（requestId 由本层生成，每次触发唯一）。
+        ...(onReviewRequest === undefined
+          ? {}
+          : {
+              onReviewRequired: async (info) => onReviewRequest({ requestId: randomUUID(), ...info }),
+            }),
+      });
+    } catch (error) {
+      return { ok: false, message: friendlyRunError(error) };
     }
-    return failureResult(engine, result);
-  } catch (error) {
-    // run() 抛错：工作流成环等引擎级错误。
-    return { ok: false, message: friendlyRunError(error) };
+    try {
+      const result = await engine.run(); // 节点失败不抛：result.status === "failed" + result.error
+      if (result.status === "success") {
+        return { ok: true, runId: engine.runId };
+      }
+      return failureResult(engine, result);
+    } catch (error) {
+      // run() 抛错：工作流成环等引擎级错误。
+      return { ok: false, message: friendlyRunError(error) };
+    }
+  } finally {
+    await pool.dispose(); // 成功与失败路径都释放：MCP 子进程立即退出，严禁长驻。
   }
 }
 
