@@ -1,0 +1,131 @@
+/* 全局布局：编辑器四区（工具栏/物料/画布/配置）占位样式 */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+.app-layout {
+  height: 100%;
+}
+
+.app-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+}
+
+.app-toolbar-spacer {
+  flex: 1;
+}
+
+.app-logo {
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.app-subtitle {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.app-panel {
+  overflow: auto;
+  padding: 12px;
+}
+
+.app-canvas {
+  position: relative;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+/* 画布容器：占满 Content，X6 Graph 挂载点 */
+.canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-host {
+  width: 100%;
+  height: 100%;
+}
+
+/* 空状态提示（无节点时显示） */
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: #bfbfbf;
+  font-size: 14px;
+}
+
+/* X6 通用节点卡片（x6-react-shape） */
+.hnflow-node-card {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1.5px solid #d9d9d9;
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: grab;
+}
+
+.hnflow-node-card-subworkflow {
+  border-color: #91caff;
+}
+
+.hnflow-node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(0, 0, 0, 0.88);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hnflow-node-badge {
+  align-self: flex-start;
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #e6f4ff;
+  color: #1677ff;
+}
+
+.hnflow-node-tip {
+  font-size: 11px;
+  color: #8c8c8c;
+}
+
+/* 选中高亮：X6 自动给选中节点容器加 x6-node-selected 类，纯 CSS 呈现 */
+.x6-node-selected .hnflow-node-card {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.2);
+}
+
+.zone-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+}
+
+.zone-hint {
+  font-size: 12px;
+}
