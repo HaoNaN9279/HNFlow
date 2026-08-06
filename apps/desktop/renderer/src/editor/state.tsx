@@ -16,6 +16,7 @@
 import { createContext, useContext, useMemo, useReducer, type Dispatch, type ReactNode } from "react";
 import type { EditorGraph, EditorGraphNode } from "@core/editing/editor-graph";
 import type { Edge } from "@core/model/types";
+import type { RunDebugInfo } from "../../../src/shared/ipc.js";
 import { exampleEditorGraph } from "./example-workflow.js";
 
 /** 层级面包屑条目：进入某子图时记录其节点 id 与显示名（T9 useEditStack 维护）。 */
@@ -55,6 +56,8 @@ export interface EditorState {
   readonly runStatus: "idle" | "running" | "success" | "error";
   /** 运行失败信息（runStatus === "error" 时有效；成功/空闲为 null）。 */
   readonly runError: RunErrorInfo | null;
+  /** 最近一次运行的调试信息（成功运行时附带；开始新运行/失败时为 null，T3 调试面板消费）。 */
+  readonly runResult: RunDebugInfo | null;
 }
 
 /** 编辑器动作：受控、不可变、可判别联合（各 action 语义见注释）。 */
@@ -86,7 +89,9 @@ export type EditorAction =
   /** 更新运行状态（v0.4.2 内存单次运行：工具栏运行按钮消费）。 */
   | { readonly type: "setRunStatus"; readonly runStatus: EditorState["runStatus"] }
   /** 写入运行失败信息（runStatus === "error" 时使用）。 */
-  | { readonly type: "setRunError"; readonly runError: RunErrorInfo | null };
+  | { readonly type: "setRunError"; readonly runError: RunErrorInfo | null }
+  /** 写入最近一次运行的调试信息（T3 调试面板；运行开始/失败时写 null）。 */
+  | { readonly type: "setRunResult"; readonly runResult: RunDebugInfo | null };
 
 /** reducer 内部状态：在公共契约基础上追加层级父图快照栈（popLevel 恢复并回写子图编辑结果）。 */
 interface EditorReducerState extends EditorState {
@@ -100,6 +105,7 @@ const INITIAL_STATE: EditorReducerState = {
   levelGraphs: [],
   runStatus: "idle",
   runError: null,
+  runResult: null,
 };
 
 /** 不可变更新某层 graph 的指定节点（顶层专用；层级图的当前层即 state.graph）。 */
@@ -199,10 +205,16 @@ function reducer(state: EditorReducerState, action: EditorAction): EditorReducer
       return { ...state, graph: updateNode(state.graph, action.nodeId, () => action.node) };
     }
     case "setRunStatus": {
-      return { ...state, runStatus: action.runStatus };
+      // 开始运行（running）时清空上一轮调试信息：避免旧 runResult 与新运行串台。
+      return action.runStatus === "running"
+        ? { ...state, runStatus: action.runStatus, runResult: null }
+        : { ...state, runStatus: action.runStatus };
     }
     case "setRunError": {
       return { ...state, runError: action.runError };
+    }
+    case "setRunResult": {
+      return { ...state, runResult: action.runResult };
     }
   }
 }
@@ -254,4 +266,5 @@ export const editorActions = {
   updateNode: (nodeId: string, node: EditorGraphNode): EditorAction => ({ type: "updateNode", nodeId, node }),
   setRunStatus: (runStatus: EditorState["runStatus"]): EditorAction => ({ type: "setRunStatus", runStatus }),
   setRunError: (runError: RunErrorInfo | null): EditorAction => ({ type: "setRunError", runError }),
+  setRunResult: (runResult: RunDebugInfo | null): EditorAction => ({ type: "setRunResult", runResult }),
 } as const;

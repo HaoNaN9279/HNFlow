@@ -137,20 +137,24 @@ export function useWorkflowFile(): WorkflowFileApi {
     }
     dispatch(editorActions.setRunStatus("running"));
     dispatch(editorActions.setRunError(null));
+    dispatch(editorActions.setRunResult(null)); // T3：新运行开始清空上一轮调试信息
     try {
       const result = await window.hnflow.runWorkflow({ workflow });
       if (result.ok) {
         dispatch(editorActions.setRunStatus("success"));
+        dispatch(editorActions.setRunResult(result.debug ?? null)); // debug 成功分支可缺省（T2b 前无 debug）
         message.success(`运行成功（runId: ${result.runId}）`);
       } else {
         dispatch(editorActions.setRunStatus("error"));
         dispatch(editorActions.setRunError(toRunError(result)));
+        dispatch(editorActions.setRunResult(result.debug ?? null)); // 失败分支带 debug（T2b）：存供调试面板查 nodeStates/logs；无 debug 存 null
         message.error(result.message);
       }
     } catch (error) {
       console.error("运行工作流失败", error);
       dispatch(editorActions.setRunStatus("error"));
       dispatch(editorActions.setRunError({ message: errorText(error, "运行失败") }));
+      dispatch(editorActions.setRunResult(null));
       message.error(errorText(error, "运行失败"));
     }
   }, [state.graph, state.editStack, currentMeta, dispatch]);

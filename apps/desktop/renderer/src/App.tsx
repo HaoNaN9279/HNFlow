@@ -20,6 +20,7 @@ import AgentChatPanel from "./components/AgentChatPanel.js";
 import { ReviewDialog } from "./components/ReviewDialog.js";
 import { NodeContextMenu } from "./components/NodeContextMenu.js";
 import { ErrorPanel } from "./components/ErrorPanel.js";
+import { DebugPanel } from "./components/DebugPanel.js";
 
 const { Header, Sider, Content } = Layout;
 
@@ -71,6 +72,7 @@ export default function App() {
             />
             <NodeContextMenu />
             <ErrorPanel />
+            <DebugPanel />
           </NodeUiProvider>
         </WorkflowGraphProvider>
       </EditorProvider>
