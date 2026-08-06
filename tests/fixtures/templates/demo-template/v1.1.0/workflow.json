@@ -1,0 +1,157 @@
+{
+  "id": "demo-template-workflow",
+  "name": "演示模板",
+  "version": "1.1.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "name": "开始",
+      "params": {},
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "data",
+          "name": "data",
+          "type": "any",
+          "direction": "out",
+          "binding": "workflow:start"
+        }
+      ],
+      "position": {
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": "text-build",
+      "type": "setVariable",
+      "name": "文本构建",
+      "params": {
+        "target": "workflow:result",
+        "value": "${workflow:params:title}：${workflow:params:content}（作者：${workflow:params:author}）"
+      },
+      "inputs": [
+        {
+          "id": "in_title",
+          "name": "title",
+          "type": "any",
+          "direction": "in",
+          "binding": "workflow:params:title"
+        },
+        {
+          "id": "in_content",
+          "name": "content",
+          "type": "any",
+          "direction": "in",
+          "binding": "workflow:params:content"
+        },
+        {
+          "id": "in_author",
+          "name": "author",
+          "type": "any",
+          "direction": "in",
+          "binding": "workflow:params:author"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out_result",
+          "name": "result",
+          "type": "any",
+          "direction": "out"
+        }
+      ],
+      "position": {
+        "x": 200,
+        "y": 0
+      }
+    },
+    {
+      "id": "report-build",
+      "type": "setVariable",
+      "name": "报告构建",
+      "params": {
+        "target": "workflow:report",
+        "value": "报告：${workflow:params:title}（${workflow:params:author}）"
+      },
+      "inputs": [
+        {
+          "id": "in_text",
+          "name": "text",
+          "type": "any",
+          "direction": "in"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "out_report",
+          "name": "report",
+          "type": "any",
+          "direction": "out"
+        }
+      ],
+      "position": {
+        "x": 400,
+        "y": 0
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "name": "结束",
+      "params": {},
+      "inputs": [
+        {
+          "id": "in",
+          "name": "data",
+          "type": "any",
+          "direction": "in",
+          "binding": "workflow:endInput"
+        }
+      ],
+      "outputs": [],
+      "position": {
+        "x": 600,
+        "y": 0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "sourceNodeId": "start",
+      "sourcePortId": "data",
+      "targetNodeId": "text-build",
+      "targetPortId": "in_title"
+    },
+    {
+      "id": "e2",
+      "sourceNodeId": "start",
+      "sourcePortId": "data",
+      "targetNodeId": "text-build",
+      "targetPortId": "in_content"
+    },
+    {
+      "id": "e3",
+      "sourceNodeId": "start",
+      "sourcePortId": "data",
+      "targetNodeId": "text-build",
+      "targetPortId": "in_author"
+    },
+    {
+      "id": "e4",
+      "sourceNodeId": "text-build",
+      "sourcePortId": "out_result",
+      "targetNodeId": "report-build",
+      "targetPortId": "in_text"
+    },
+    {
+      "id": "e5",
+      "sourceNodeId": "report-build",
+      "sourcePortId": "out_report",
+      "targetNodeId": "end",
+      "targetPortId": "in"
+    }
+  ]
+}
