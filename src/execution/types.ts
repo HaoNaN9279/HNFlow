@@ -101,8 +101,12 @@ export interface NodeExecutionContext {
   /** 子工作流模板根目录（v0.3.3 T2 子图透传）：subworkflow 节点 params.template 引用加载模板库用；子图容器转发给子引擎 options。 */
   readonly templatesRootDir?: string;
   /** 本次运行已批准人工审核的节点 id 集合（v0.4.2 验收 2）：command 节点 reviewRequired 放行依据；
-   *  缺省 undefined（未注入即未批准）；子图容器暂不透传。 */
+   *  缺省 undefined（未注入即未批准）；v0.4.3 起子图容器经 sharedReviewApprovals 共享同一集合。 */
   readonly reviewApprovals?: ReadonlySet<string>;
+  /** 人工审核回调（v0.4.3 子图透传）：subworkflow 节点转发给子引擎 options；子图内 command reviewRequired 节点按此询问，缺省 reject。 */
+  readonly onReviewRequired?: (info: { readonly nodeId: string; readonly description: string }) => Promise<"approve" | "reject">;
+  /** 已批准审核节点共享集合（v0.4.3 子图透传）：父引擎注入可变引用，子引擎 approve 写回同一集合（父级重跑不再询问）。 */
+  readonly sharedReviewApprovals?: Set<string>;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

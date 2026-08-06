@@ -73,6 +73,7 @@ export interface ExecutionEngineOptions {
   readonly templatesRootDir?: string; // 子工作流模板根目录（v0.3.3 T2）：缺省 "./templates"；仅 template 引用时读目录（无引用零 IO）。
   readonly mcpPool?: McpServerPool; // MCP 进程池（v0.4.2 D2）：AI 节点 activeGroups.mcps 声明时注入 MCP 工具；可选，未配置则 AI 节点不加载。
   readonly onReviewRequired?: (info: { readonly nodeId: string; readonly description: string }) => Promise<"approve" | "reject">; // 人工审核回调（v0.4.2 验收 2）：command reviewRequired 未批准时询问；approve 重跑节点，reject 落失败路径；缺省 reject。
+  readonly sharedReviewApprovals?: Set<string>; // 共享已批准审核集合（v0.4.3 子图透传）：父引擎注入后子引擎 approve 写回同一集合，父级重跑不再询问。
 }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 export class ExecutionEngine {
@@ -91,7 +92,7 @@ export class ExecutionEngine {
   readonly #stores: EngineStores;
   #runActive = false;
   #groupsResolver: GroupsResolver | undefined; #templatesRootDir: string;
-  readonly #approvedReviews = new Set<string>(); // 本次运行已批准审核节点（v0.4.2 验收 2）：approve 后 command 重跑放行。
+  readonly #approvedReviews: Set<string>; // 本次运行已批准审核节点（v0.4.2 验收 2）：approve 后 command 重跑放行；v0.4.3 子图透传共享集合。
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
     this.#options = options;
@@ -100,7 +101,7 @@ export class ExecutionEngine {
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
     this.#context = this.createContext();
-    this.#stores = new EngineStores(options); this.#templatesRootDir = options.templatesRootDir ?? "./templates";
+    this.#stores = new EngineStores(options); this.#templatesRootDir = options.templatesRootDir ?? "./templates"; this.#approvedReviews = options.sharedReviewApprovals ?? new Set(); // 子引擎经父注入共享已批准集合（v0.4.3）：approve 写回父集合。
     this.#groupsResolver = options.groupsRootDir === undefined ? undefined : new GroupsResolver({
       groupsRootDir: options.groupsRootDir,
       ...(options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: options.groupCacheMaxSize }),
@@ -383,7 +384,8 @@ export class ExecutionEngine {
       ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
       ...(this.#options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: this.#options.allowIncompatibleGroups }),
       ...(this.#templatesRootDir === undefined ? {} : { templatesRootDir: this.#templatesRootDir }), // 模板根目录透传（v0.3.3 T2）：template 引用加载
-      reviewApprovals: this.#approvedReviews, // 已批准审核节点集合（v0.4.2 验收 2）：command 节点 reviewRequired 放行依据
+      reviewApprovals: this.#approvedReviews, sharedReviewApprovals: this.#approvedReviews, // 已批准审核集合（v0.4.2 验收 2）+ 共享可变引用（v0.4.3 子图透传）：子引擎 approve 写回同一集合。
+      ...(this.#options.onReviewRequired === undefined ? {} : { onReviewRequired: this.#options.onReviewRequired }), // 人工审核回调透传（v0.4.3 子图透传）：子图容器转发给子引擎询问。
       ...(this.#options.mcpPool === undefined ? {} : { mcpPool: this.#options.mcpPool }), // MCP 进程池透传（v0.4.2 D2）：activeGroups.mcps → MCP 工具注入
       // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定；progress 供子图容器迭代断点持久化。
       runId: this.#runId,

@@ -93,6 +93,9 @@ async function executeSubEngine(
       ...(ctx.templatesRootDir === undefined ? {} : { templatesRootDir: ctx.templatesRootDir }),
       // MCP 进程池（v0.4.2 D2）：父引擎配置 mcpPool 时子引擎按同样配置注入（嵌套子图 AI 节点 MCP 工具一致）。
       ...(ctx.mcpPool === undefined ? {} : { mcpPool: ctx.mcpPool }),
+      // 人工审核（v0.4.3 子图透传）：父回调 + 共享已批准集合（子图内 approve 写回父集合，父级重跑不再询问）。
+      ...(ctx.onReviewRequired === undefined ? {} : { onReviewRequired: ctx.onReviewRequired }),
+      ...(ctx.sharedReviewApprovals === undefined ? {} : { sharedReviewApprovals: ctx.sharedReviewApprovals }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {
