@@ -10,6 +10,7 @@ import {
   IPC,
   type AgentChatPayload,
   type AgentChatResult,
+  type GroupSummary,
   type LoadTemplateVersionPayload,
   type LoadTemplateVersionResponse,
   type OpenWorkflowResponse,
@@ -28,6 +29,7 @@ import {
 import { listNodeTypeMetadata } from "./node-types.js";
 import { chatWithAgent } from "./agent.js";
 import { listTemplates, loadTemplateVersionPayload, releaseTemplateFromPayload, TEMPLATE_LIB_DIR } from "./templates.js";
+import { GROUP_LIB_DIR, scanGroupsSummary } from "./groups.js";
 import { friendlyWorkflowError, saveWorkflowToFile, validatedWorkflowTemplate } from "./workflow-io.js";
 import { friendlyRunError, runWorkflowOnce } from "./run.js";
 
@@ -37,6 +39,11 @@ const WORKFLOW_FILTERS: Electron.FileFilter[] = [{ name: "工作流文件", exte
 /** 模板库根目录：userData/templates（首次启动由 ensureTemplateLibrary 写入种子模板）。 */
 function templatesRootDir(): string {
   return join(app.getPath("userData"), TEMPLATE_LIB_DIR);
+}
+
+/** 功能组库根目录：userData/groups（首次启动由 ensureGroupLibrary 写入种子功能组）。 */
+function groupsRootDir(): string {
+  return join(app.getPath("userData"), GROUP_LIB_DIR);
 }
 
 /** 审核决策超时（毫秒）：renderer 30s 无响应自动 reject，防止工作流挂死。 */
@@ -132,6 +139,7 @@ export function registerIpcHandlers(): void {
     try {
       return await runWorkflowOnce(payload, {
         templatesRootDir: templatesRootDir(),
+        groupsRootDir: groupsRootDir(), // 功能组库（v0.4.3 验收 3）：AI 节点带功能组 mcp.json 时桌面端可消费 MCP 工具
         onReviewRequest: (request) => requestReviewDecision(event.sender, request),
       });
     } catch (error) {
@@ -181,4 +189,13 @@ export function registerIpcHandlers(): void {
     (_event, payload: ReleaseTemplatePayload): Promise<ReleaseTemplateResponse> =>
       releaseTemplateFromPayload(templatesRootDir(), payload),
   );
+
+  // 功能组列表：扫描 userData/groups 下全部功能组汇总（namespace + 当前版本内容摘要）；错误中文翻译。
+  ipcMain.handle(IPC.groupList, async (): Promise<readonly GroupSummary[]> => {
+    try {
+      return await scanGroupsSummary(groupsRootDir());
+    } catch (error) {
+      throw friendlyWorkflowError(error);
+    }
+  });
 }

@@ -1,0 +1,19 @@
+{
+  "guid": "9d3f7b2e-5c8a-4f1e-9d2b-7c4e8a1f6b3d",
+  "namespace": "demo",
+  "aliases": [],
+  "description": "演示功能组：展示功能组命名空间分组与工具声明扫描汇总",
+  "currentVersion": "1.0.0",
+  "versions": [
+    {
+      "version": "1.0.0",
+      "createdAt": "2026-08-01T08:00:00.000Z",
+      "changelog": "初始版本",
+      "content": {
+        "tools": ["tools/echo_tool.json"],
+        "mcps": [],
+        "rules": []
+      }
+    }
+  ]
+}

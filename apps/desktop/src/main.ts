@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, shell } from "electron";
 import * as path from "node:path";
 import { registerIpcHandlers } from "./ipc/handlers.js";
 import { ensureTemplateLibrary } from "./ipc/templates.js";
+import { ensureGroupLibrary } from "./ipc/groups.js";
 
 /** 开发服务器地址：vite dev 默认端口 5173；可通过环境变量覆盖。 */
 const DEV_SERVER_URL = "http://localhost:5173";
@@ -89,6 +90,10 @@ void app.whenReady().then(async () => {
   // 首启初始化模板库（userData/templates 写入种子模板）；失败不阻塞启动，仅告警。
   await ensureTemplateLibrary(app.getPath("userData")).catch((error) => {
     console.error("模板库初始化失败（可手动创建 templates 目录）", error);
+  });
+  // 首启初始化功能组库（userData/groups 写入种子功能组）；失败不阻塞启动，仅告警。
+  await ensureGroupLibrary(app.getPath("userData")).catch((error) => {
+    console.error("功能组库初始化失败（可手动创建 groups 目录）", error);
   });
   buildMenu();
   createWindow();

@@ -1,0 +1,11 @@
+{
+  "name": "echo_tool",
+  "description": "演示工具：回显文本",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "text": { "type": "string" }
+    },
+    "required": ["text"]
+  }
+}

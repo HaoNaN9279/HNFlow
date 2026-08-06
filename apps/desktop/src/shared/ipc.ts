@@ -32,6 +32,7 @@ export const IPC = {
   templateList: "template:list",
   templateLoadVersion: "template:loadVersion",
   templateRelease: "template:release",
+  groupList: "group:list",
 } as const;
 
 /** 端口元数据（可序列化子集） */
@@ -156,6 +157,26 @@ export interface ReleaseTemplatePayload {
 /** template:release 返回：发布后模板摘要 */
 export type ReleaseTemplateResponse = TemplateSummary;
 
+/** 功能组工具摘要（group:list 返回项：工具声明名称与描述） */
+export interface GroupToolSummary {
+  readonly name: string;
+  readonly description: string;
+}
+
+/** 功能组 MCP 摘要（group:list 返回项：MCP 名称 + 配置原样透传） */
+export interface GroupMcpSummary {
+  readonly name: string;
+  readonly config: Readonly<Record<string, unknown>>;
+}
+
+/** 功能组摘要（group:list 返回项：命名空间 + 当前版本 + 当前版本内容汇总） */
+export interface GroupSummary {
+  readonly namespace: string;
+  readonly currentVersion: string;
+  readonly tools: readonly GroupToolSummary[];
+  readonly mcps: readonly GroupMcpSummary[];
+}
+
 /** AI 对话消息（agent:chat 载荷：镜像核心 InputMessage 形状）。 */
 export interface AgentChatMessage {
   readonly role: "user" | "assistant" | "system";
@@ -199,4 +220,5 @@ export interface HnflowApi {
   listTemplates(): Promise<readonly TemplateSummary[]>;
   loadTemplateVersion(payload: LoadTemplateVersionPayload): Promise<LoadTemplateVersionResponse>;
   releaseTemplate(payload: ReleaseTemplatePayload): Promise<ReleaseTemplateResponse>;
+  listGroups(): Promise<readonly GroupSummary[]>;
 }

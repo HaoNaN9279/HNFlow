@@ -37,6 +37,7 @@ const api: HnflowApi = {
   listTemplates: () => ipcRenderer.invoke(IPC.templateList),
   loadTemplateVersion: (payload: LoadTemplateVersionPayload) => ipcRenderer.invoke(IPC.templateLoadVersion, payload),
   releaseTemplate: (payload: ReleaseTemplatePayload) => ipcRenderer.invoke(IPC.templateRelease, payload),
+  listGroups: () => ipcRenderer.invoke(IPC.groupList),
 };
 
 contextBridge.exposeInMainWorld("hnflow", api);
