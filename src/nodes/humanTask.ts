@@ -44,6 +44,16 @@ function parseParams(params: Readonly<Record<string, unknown>>): HumanTaskParams
 export const humanTaskNode: INodeDefinition = {
   type: "humanTask",
   name: "人工节点",
+  paramsSchema: [
+    { key: "title", label: "任务标题", type: "string", required: true, placeholder: "如 请确认执行结果" },
+    { key: "description", label: "任务描述", type: "textarea", description: "展示给人工操作者的说明" },
+    { key: "fallback", label: "兜底策略", type: "select", options: [
+      { label: "手动（默认）", value: "manual" },
+      { label: "跳过", value: "skip" },
+      { label: "AI 代做（未实现）", value: "ai" },
+      { label: "延后", value: "defer" },
+    ] },
+  ],
   inputs: [],
   outputs: [{ id: "output", name: "output", type: "any", direction: "out" }],
   async execute(ctx) {

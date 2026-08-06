@@ -104,6 +104,12 @@ function parseParams(params: Readonly<Record<string, unknown>>): LLMParams {
 export const llmNode: INodeDefinition = {
   type: "llm",
   name: "LLM 节点",
+  paramsSchema: [
+    { key: "inputMessages", label: "输入提示词", type: "textarea", description: "字符串=单条 user 消息；数组=[{ role, content }]" },
+    { key: "systemPrompt", label: "系统提示词", type: "textarea" },
+    { key: "model", label: "模型配置", type: "json", default: { provider: "openai" }, description: '{ provider: "openai" | "fake", model?, apiKey?, baseURL?, fakeScript? }' },
+    { key: "stream", label: "流式输出", type: "boolean", default: false },
+  ],
   inputs: [],
   outputs: [{ id: "output", name: "output", type: "any", direction: "out" }],
   async execute(ctx) {

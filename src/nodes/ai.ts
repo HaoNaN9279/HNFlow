@@ -13,6 +13,7 @@ import { resolveToolReferences } from "../ai/tool.js";
 import type { INodeDefinition, NodeLogger } from "../execution/types.js";
 import { buildSystemPrompt, mergeGroupTools, warnGroupConflicts } from "./ai-groups.js";
 import { allToolsInterrupt, parseInterrupt, type InterruptParam } from "./ai-interrupt.js";
+import { aiParamsSchema } from "./param-fields.js";
 
 /** ai 节点 params 非法：字段缺失/类型错误（携带原始值片段与原因）。 */
 export class InvalidAIParamsError extends Error {
@@ -201,6 +202,7 @@ export function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) =>
 export const aiNode: INodeDefinition = {
   type: "ai",
   name: "AI 节点",
+  paramsSchema: aiParamsSchema,
   inputs: [],
   outputs: [{ id: "output", name: "output", type: "any", direction: "out" }],
   async execute(ctx) {

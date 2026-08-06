@@ -182,6 +182,14 @@ async function runCommand(params: CommandParams): Promise<CommandResult> {
 export const commandNode: INodeDefinition = {
   type: "command",
   name: "命令行执行",
+  paramsSchema: [
+    { key: "command", label: "命令", type: "textarea", required: true, placeholder: "如 echo hello" },
+    { key: "args", label: "参数数组", type: "json", default: [], description: "追加到命令后的参数列表" },
+    { key: "cwd", label: "工作目录", type: "string", placeholder: "缺省使用引擎当前工作目录" },
+    { key: "timeoutMs", label: "超时（毫秒）", type: "number", default: 30000 },
+    { key: "failOnNonZero", label: "非零退出码视为失败", type: "boolean", default: false },
+    { key: "retry", label: "重试配置", type: "json", description: "{ attempts?: number, delayMs?: number }；缺省不重试" },
+  ],
   inputs: [],
   outputs: [
     { id: "stdout", name: "stdout", type: "string", direction: "out" },

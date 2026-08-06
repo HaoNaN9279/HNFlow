@@ -167,6 +167,9 @@ function isSuccessOutcome(outcome: BranchOutcome): outcome is SuccessOutcome {
 export const parallelNode: INodeDefinition = {
   type: "parallel",
   name: "并行分支",
+  paramsSchema: [
+    { key: "branches", label: "分支定义", type: "json", required: true, description: "[{ id, workflow, merge? }]；画布内嵌子图，参数面板仅展示结构" },
+  ],
   inputs: [],
   outputs: [{ id: "results", name: "结果", type: "any", direction: "out" }],
   async execute(ctx) {

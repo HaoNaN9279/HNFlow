@@ -91,6 +91,9 @@ function compareValues(actual: unknown, op: ConditionOp, expected: unknown): boo
 export const ifElseNode: INodeDefinition = {
   type: "ifElse",
   name: "条件分支",
+  paramsSchema: [
+    { key: "condition", label: "条件", type: "json", required: true, description: '{ variable: "scope:key", op: "eq|ne|gt|gte|lt|lte", value: 期望值 }' },
+  ],
   inputs: [
     {
       id: "in",

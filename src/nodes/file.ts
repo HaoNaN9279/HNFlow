@@ -108,6 +108,21 @@ function parseFileParams(params: Readonly<Record<string, unknown>>): FileParams 
 export const fileNode: INodeDefinition = {
   type: "file",
   name: "文件读写",
+  paramsSchema: [
+    { key: "operation", label: "操作", type: "select", required: true, options: [
+      { label: "读", value: "read" },
+      { label: "写", value: "write" },
+    ] },
+    { key: "path", label: "文件路径", type: "string", required: true, placeholder: "相对当前工作目录" },
+    { key: "content", label: "写入内容", type: "textarea", description: "operation=write 时必填" },
+    { key: "encoding", label: "编码", type: "string", default: "utf8" },
+    { key: "append", label: "追加写入", type: "boolean", default: false },
+    { key: "ifExists", label: "已存在策略", type: "select", default: "overwrite", options: [
+      { label: "覆盖", value: "overwrite" },
+      { label: "跳过", value: "skip" },
+      { label: "报错", value: "error" },
+    ] },
+  ],
   inputs: [],
   outputs: [
     {

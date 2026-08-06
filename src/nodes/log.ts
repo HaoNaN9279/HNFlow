@@ -45,6 +45,14 @@ function parseLogParams(params: Readonly<Record<string, unknown>>): LogParams | 
 export const logNode: INodeDefinition = {
   type: "log",
   name: "日志输出",
+  paramsSchema: [
+    { key: "message", label: "日志内容", type: "textarea", required: true },
+    { key: "level", label: "日志级别", type: "select", default: "info", options: [
+      { label: "info", value: "info" },
+      { label: "warn", value: "warn" },
+      { label: "error", value: "error" },
+    ] },
+  ],
   inputs: [],
   outputs: [],
   async execute(ctx) {

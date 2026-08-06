@@ -88,6 +88,10 @@ function buildWorkflowVariables(
 export const loopNode: INodeDefinition = {
   type: "loop",
   name: "循环",
+  paramsSchema: [
+    { key: "items", label: "迭代集合", type: "json", required: true, description: "变量路径字符串（须指向数组）/ 数组 / 数字（生成 0..n-1）" },
+    { key: "maxIterations", label: "迭代上限", type: "number", default: 10000, description: "防死循环上限" },
+  ],
   inputs: [],
   outputs: [{ id: "results", name: "结果", type: "any", direction: "out" }],
   async execute(ctx) {

@@ -27,6 +27,10 @@ function parseTarget(value: unknown): string | undefined {
 export const setVariableNode: INodeDefinition = {
   type: "setVariable",
   name: "变量赋值",
+  paramsSchema: [
+    { key: "target", label: "变量路径", type: "string", required: true, placeholder: "如 workflow:count（scope:key）" },
+    { key: "value", label: "变量值", type: "json", description: "字符串支持 ${scope:key} 插值，运行时替换为变量值" },
+  ],
   inputs: [],
   outputs: [],
   async execute(ctx) {

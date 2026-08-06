@@ -19,6 +19,9 @@ export {
 export const subworkflowNode: INodeDefinition = {
   type: "subworkflow",
   name: "子工作流",
+  paramsSchema: [
+    { key: "template", label: "模板引用", type: "string", placeholder: "如 my-template@1.0.0", description: "存在时加载模板库工作流；缺省使用画布内嵌子图" },
+  ],
   inputs: [],
   outputs: [{ id: "out", name: "结果", type: "any", direction: "out" }],
   async execute(ctx) {

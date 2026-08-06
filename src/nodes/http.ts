@@ -185,6 +185,22 @@ async function doRequest(params: HttpParams): Promise<Record<string, unknown>> {
 export const httpNode: INodeDefinition = {
   type: "http",
   name: "HTTP 请求",
+  paramsSchema: [
+    { key: "url", label: "URL", type: "string", required: true, placeholder: "如 https://example.com/api" },
+    { key: "method", label: "请求方法", type: "select", default: "GET", options: [
+      { label: "GET", value: "GET" },
+      { label: "POST", value: "POST" },
+      { label: "PUT", value: "PUT" },
+      { label: "PATCH", value: "PATCH" },
+      { label: "DELETE", value: "DELETE" },
+      { label: "HEAD", value: "HEAD" },
+      { label: "OPTIONS", value: "OPTIONS" },
+    ] },
+    { key: "headers", label: "请求头", type: "json", description: "对象 { \"Content-Type\": \"application/json\" }" },
+    { key: "body", label: "请求体", type: "textarea", description: "字符串原样发送；对象可传 JSON 文本" },
+    { key: "timeoutMs", label: "超时（毫秒）", type: "number", default: 30000 },
+    { key: "retry", label: "重试配置", type: "json", description: "{ attempts?: number, delayMs?: number }；GET/HEAD/OPTIONS 缺省 attempts 默认重试 1 次" },
+  ],
   inputs: [],
   outputs: [
     { id: "status", name: "status", type: "number", direction: "out" },
