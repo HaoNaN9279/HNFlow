@@ -10,10 +10,12 @@ import { Keyboard } from "@antv/x6-plugin-keyboard";
 import { Selection } from "@antv/x6-plugin-selection";
 import { Snapline } from "@antv/x6-plugin-snapline";
 import type { EditorGraph, EditorGraphNode } from "@core/editing/editor-graph";
-import type { Edge } from "@core/model/types";
 import { editorActions, type EditorAction } from "./state.js";
 import { NODE_WIDTH, buildPorts, nodeHeight, toX6Edge, toX6Node } from "./graph-elements.js";
 import { toPortCellId, type GraphPosition } from "./ports.js";
+import { exportGraphState, graphRedo, graphUndo, registerUndoRedo, unregisterUndoRedo } from "./undo-redo.js";
+import { registerMiniMap } from "./minimap.js";
+export { graphRedo, graphUndo } from "./undo-redo.js";
 
 /** 可写图实例 ref：RefObject.current 只读，自声明可变窄口（T6/T7 读取用）。 */
 export interface MutableGraphRef {
@@ -31,41 +33,13 @@ export interface WorkflowGraphCallbacks {
 export interface WorkflowGraphOptions {
   readonly containerRef: RefObject<HTMLDivElement | null>;
   readonly graphRef: MutableGraphRef;
+  /** 可选 MiniMap 挂载容器（WorkflowCanvas 右下角常驻 div）；缺省时不启用 MiniMap。 */
+  readonly miniMapContainerRef?: RefObject<HTMLDivElement | null>;
 }
 
 // ── 撤销/重做（History 插件 + undo/redo 后状态回写）───────────────────────────────────
-let historyPlugin: History | null = null;
-let graphInstance: Graph | null = null;
-let undoRedoSync: ((instance: Graph) => void) | null = null;
+// graphUndo/graphRedo/exportGraphState 与模块级状态已拆至 undo-redo.ts；
 const initializedGraphs = new WeakSet<Graph>();
-
-/** 撤销一次 X6 模型变更；无可撤销时返回 false。 */
-export function graphUndo(): boolean {
-  if (historyPlugin === null || !historyPlugin.canUndo()) {
-    return false;
-  }
-  historyPlugin.undo();
-  graphInstance !== null && undoRedoSync?.(graphInstance);
-  return true;
-}
-
-/** 重做一次 X6 模型变更；无可重做时返回 false。 */
-export function graphRedo(): boolean {
-  if (historyPlugin === null || !historyPlugin.canRedo()) {
-    return false;
-  }
-  historyPlugin.redo();
-  graphInstance !== null && undoRedoSync?.(graphInstance);
-  return true;
-}
-
-/** 从 X6 全量导出当前图（undo/redo 后回写 EditorState；data 为 T5 reconcile 存入的节点/边引用）。 */
-export function exportGraphState(instance: Graph): EditorGraph {
-  const nodes = instance.getNodes().map((n) => ({ ...(n.getData() as EditorGraphNode), position: n.getPosition() }));
-  const edges = instance.getEdges().map((e) => e.getData() as Edge);
-  const entry = nodes.find((n) => n.type === "start");
-  return { nodes, edges, ...(entry === undefined ? {} : { entryNodeId: entry.id }) };
-}
 // ── 共享图实例上下文（T6/T7/T9 经 useWorkflowGraphContext 拿图后自行挂事件）────────────────
 interface WorkflowGraphContextValue {
   readonly graphRef: MutableGraphRef;
@@ -150,7 +124,7 @@ export function useWorkflowGraph(
   options: WorkflowGraphOptions,
   dispatch: Dispatch<EditorAction>,
 ): { readonly graphRef: MutableGraphRef } {
-  const { containerRef, graphRef } = options;
+  const { containerRef, graphRef, miniMapContainerRef } = options;
   const callbacksRef = useRef(callbacks);
   callbacksRef.current = callbacks;
   const currentGraphRef = useRef(graph);
@@ -163,6 +137,9 @@ export function useWorkflowGraph(
     const instance = new Graph({
       container,
       autoResize: true,
+      // v0.4.1 大图优化：异步渲染（不阻塞 UI）+ 离屏延迟渲染（只渲染可视区域元素）
+      async: true,
+      virtual: true,
       background: { color: "#fafafa" },
       grid: { size: 20, visible: true, type: "mesh", args: { color: "#e5e5e5", thickness: 1 } },
       panning: { enabled: true, eventTypes: ["rightMouseDown", "leftMouseDown"] },
@@ -195,7 +172,6 @@ export function useWorkflowGraph(
       },
     });
     graphRef.current = instance;
-    graphInstance = instance;
     instance.use(new Snapline({ enabled: true, sharp: true }));
     instance.use(new Clipboard({ enabled: true }));
     instance.use(new Keyboard({ enabled: true, global: true }));
@@ -209,8 +185,12 @@ export function useWorkflowGraph(
         (args as { readonly options?: { readonly history?: unknown } }).options?.history !== false,
     });
     instance.use(history);
-    historyPlugin = history;
     instance.use(new Selection({ enabled: true, multiple: true, rubberband: true, modifiers: "shift", showNodeSelectionBox: false }));
+    // MiniMap：React 节点用 SimpleNodeView 纯矩形渲染避免全量 React 渲染卡顿（注册逻辑见 minimap.ts）
+    const miniMapContainer = miniMapContainerRef?.current;
+    if (miniMapContainer !== null && miniMapContainer !== undefined) {
+      registerMiniMap(instance, miniMapContainer);
+    }
     instance.on("node:click", ({ node }) => {
       callbacksRef.current.onNodeSelected?.(node.id);
     });
@@ -225,11 +205,9 @@ export function useWorkflowGraph(
       // 保留原 graph meta 与层级栈：replaceGraph 只换 graph，不跳子层
       dispatch(editorActions.replaceGraph({ ...currentGraphRef.current, ...exportGraphState(target) }));
     };
-    undoRedoSync = syncUndoRedo;
+    registerUndoRedo(history, instance, syncUndoRedo);
     return () => {
-      historyPlugin = null;
-      graphInstance = null;
-      undoRedoSync = null;
+      unregisterUndoRedo();
       instance.dispose();
       if (graphRef.current === instance) {
         graphRef.current = null;

@@ -11,6 +11,7 @@
         "@antv/x6-plugin-dnd": "2.1.1",
         "@antv/x6-plugin-history": "2.2.4",
         "@antv/x6-plugin-keyboard": "2.2.3",
+        "@antv/x6-plugin-minimap": "2",
         "@antv/x6-plugin-selection": "2.2.2",
         "@antv/x6-plugin-snapline": "2.1.7",
         "@antv/x6-react-shape": "2",
@@ -58,6 +59,8 @@
     "@antv/x6-plugin-history": ["@antv/x6-plugin-history@2.2.4", "", { "peerDependencies": { "@antv/x6": "^2.x" } }, "sha512-9gHHvEW4Fla+1hxUV49zNgJyIMoV9CjVM52MrFgAJcvyRn1Kvxz4MfxiKlG+DEZUs+/zvfjl9pS6gJOd8laRkg=="],
 
     "@antv/x6-plugin-keyboard": ["@antv/x6-plugin-keyboard@2.2.3", "", { "dependencies": { "mousetrap": "^1.6.5" }, "peerDependencies": { "@antv/x6": "^2.x" } }, "sha512-pnCIC+mDyKKfkcDyLePfGxKVIqXBcldTgannITkHC1kc0IafRS1GMvzpvuDGrM5haRYd6Nwz8kjkJyHkJE4GPA=="],
+
+    "@antv/x6-plugin-minimap": ["@antv/x6-plugin-minimap@2.0.7", "", { "peerDependencies": { "@antv/x6": "^2.x" } }, "sha512-8zzESCx0jguFPCOKCA0gPFb6JmRgq81CXXtgJYe34XhySdZ6PB23I5Po062lNsEuTjTjnzli4lju8vvU+jzlGw=="],
 
     "@antv/x6-plugin-selection": ["@antv/x6-plugin-selection@2.2.2", "", { "peerDependencies": { "@antv/x6": "^2.x" } }, "sha512-s2gtR9Onlhr7HOHqyqg0d+4sG76JCcQEbvrZZ64XmSChlvieIPlC3YtH4dg1KMNhYIuBmBmpSum6S0eVTEiPQw=="],
 
