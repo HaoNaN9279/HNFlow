@@ -503,6 +503,23 @@ HNFlow 是一套完全独立、不依赖任何特定领域的本地桌面端工�
 
 ---
 
+#### v0.4.4 — 调试面板（执行日志 / 变量 / 节点状态）
+
+**目标**：运行后查看最近一次运行结果——执行日志、上下文变量、节点状态，桌面补齐 CLI 已具备的调试信息透传。
+
+**实现内容**：
+- Engine contextSnapshot getter：全量三层变量快照（global/workflow/node）公开访问（拆 helper 保持 ≤439 行）
+- RunDebugInfo 契约：workflow:run 成功/失败都返回 nodeStates/nodeOutputs/contextSnapshot/logs/耗时
+- 调试面板：画布底部浮层三 tab——执行日志（级别过滤 + 节点直达）、变量（三层 JSON 折叠）、节点状态（状态徽标 + 输出摘要 + 失败高亮 + 点击直达）
+
+**验收标准**：
+- [x] 运行成功后调试面板显示引擎执行日志（级别过滤 + nodeId 点击直达失败/关键节点）
+- [x] 调试面板显示上下文变量快照（global/workflow/node 三层，值与画布变量一致）
+- [x] 调试面板显示每节点状态与输出摘要（Failed/WaitingForHuman 高亮 + 点击直达）
+- [x] 运行失败时调试面板仍可查看（nodeStates/执行日志保留，配合 ErrorPanel 定位）
+
+---
+
 ### v0.9.x — 桌面端体验与生态
 
 首个beta版本，完善桌面端生命周期和功能组生态，按依赖关系拆分为 2 个小版本。
