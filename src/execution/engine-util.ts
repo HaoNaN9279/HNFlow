@@ -8,6 +8,21 @@ import type { NodeStatus } from "./NodeState.js";
 /** 引擎日志条目（从 Engine.ts 移出控制行数；无外部 import 引用，re-export 需经 Engine 时改从本文件取）。 */
 export interface EngineLogEntry { readonly level: "info" | "warn" | "error"; readonly message: string; readonly data: unknown | undefined; }
 
+/** 工作流上下文全量快照（WorkflowContext.getSnapshot 返回形状；Engine.contextSnapshot getter 对外暴露）。 */
+export interface WorkflowContextSnapshot {
+  readonly global: Record<string, unknown>;
+  readonly workflow: Record<string, unknown>;
+  readonly node: Record<string, Record<string, unknown>>;
+}
+
+/** 节点状态变更事件回调（Engine options.events.onNodeStateChange 形状；经本文件消费避免 Engine 自引用）。 */
+export type NodeStateChangeListener = (info: { readonly nodeId: string; readonly from: NodeStatus; readonly to: NodeStatus }) => void;
+
+/** 节点状态变更事件转发（从 Engine.ts 移出控制行数；listener 未注入时为空操作）。 */
+export function emitStateChange(listener: NodeStateChangeListener | undefined, nodeId: string, from: NodeStatus, to: NodeStatus): void {
+  listener?.({ nodeId, from, to });
+}
+
 /** 引擎 runNode 结果（从 Engine.ts 移出控制行数）。 */
 export type RunNodeOutcome = { readonly kind: "ok" } | { readonly kind: "failed"; readonly message: string } | { readonly kind: "waiting"; readonly task: HumanTask } | { readonly kind: "paused"; readonly pendingNodeId?: string; readonly workflowId?: string };
 

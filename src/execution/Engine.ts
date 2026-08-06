@@ -6,7 +6,7 @@ import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
 import { DebugController } from "./DebugController.js";
-import { createWorkflowContext, shouldExecute, transferPortData, askReviewDecision, type EngineLogEntry, type EngineReadState, type RunNodeOutcome } from "./engine-util.js";
+import { createWorkflowContext, emitStateChange, shouldExecute, transferPortData, askReviewDecision, type EngineLogEntry, type EngineReadState, type RunNodeOutcome, type WorkflowContextSnapshot } from "./engine-util.js";
 import { EngineStores } from "./engine-stores.js";
 import type { NodeExecutionContext, MergedGroups, McpServerPool } from "./types.js";
 import { GroupsResolver } from "./groups-resolver.js";
@@ -28,6 +28,7 @@ import { formatNodePath } from "./node-path.js";
 export type { AIResumeContext } from "./ai-interrupt.js";
 export { topoSort } from "./runstate-persist.js";
 export { HumanTaskRequiredError, IdempotencyKeyConflictError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
+export type { WorkflowContextSnapshot } from "./engine-util.js";
 export interface ExecutionResult {
   readonly workflowId: string;
   readonly status: "success" | "failed" | "waiting" | "paused";
@@ -100,7 +101,7 @@ export class ExecutionEngine {
     this.#runId = options.runId ?? randomUUID();
     this.#nodeById = new Map(workflow.nodes.map((node) => [node.id, node]));
     this.#incoming = buildIncomingEdges(workflow.edges);
-    this.#context = this.createContext();
+    this.#context = createWorkflowContext(this.#workflow, this.#options);
     this.#stores = new EngineStores(options); this.#templatesRootDir = options.templatesRootDir ?? "./templates"; this.#approvedReviews = options.sharedReviewApprovals ?? new Set(); // 子引擎经父注入共享已批准集合（v0.4.3）：approve 写回父集合。
     this.#groupsResolver = options.groupsRootDir === undefined ? undefined : new GroupsResolver({
       groupsRootDir: options.groupsRootDir,
@@ -117,6 +118,8 @@ export class ExecutionEngine {
   get isReadOnly(): boolean { return this.#runActive; }
   /** 当前工作流的不可变深拷贝（含嵌套 subworkflow，调用方修改不影响引擎内部）。 */
   get workflowSnapshot(): Workflow { return deepCopyWorkflow(this.#workflow); }
+  /** 当前工作流上下文的完整快照（global/workflow/node 三层；值为独立副本，调用方修改不影响引擎内部）。 */
+  get contextSnapshot(): WorkflowContextSnapshot { return this.#context.getSnapshot(); }
   async run(): Promise<ExecutionResult> {
     this.resetState();
     const cycle = detectCycle(this.#workflow);
@@ -190,14 +193,14 @@ export class ExecutionEngine {
     const previous = this.#states.get(nodeId) ?? "Idle";
     machine.transitionTo("Running");
     this.#states.set(nodeId, "Running");
-    this.emitStateChange(nodeId, previous, "Running");
+    emitStateChange(this.#options.events?.onNodeStateChange, nodeId, previous, "Running");
     this.recordLog(this.#workflow.id, node, "info", `node:start ${nodeId}`);
     const incoming = this.#incoming.get(nodeId) ?? [];
     const state: EngineReadState = { states: this.#states, outputs: this.#outputs, nodeById: this.#nodeById };
     if (!shouldExecute(incoming, state)) {
       machine.transitionTo("Skipped");
       this.#states.set(nodeId, "Skipped");
-      this.emitStateChange(nodeId, "Running", "Skipped");
+      emitStateChange(this.#options.events?.onNodeStateChange, nodeId, "Running", "Skipped");
       this.recordLog(this.#workflow.id, node, "info", `node:skip ${nodeId}`);
       return { kind: "ok" };
     }
@@ -205,7 +208,7 @@ export class ExecutionEngine {
     if (this.#options.debugController?.shouldPause(nodeId) === true) {
       machine.transitionTo("Paused");
       this.#states.set(nodeId, "Paused");
-      this.emitStateChange(nodeId, "Running", "Paused");
+      emitStateChange(this.#options.events?.onNodeStateChange, nodeId, "Running", "Paused");
       this.recordLog(this.#workflow.id, node, "info", `node:waiting ${nodeId}`, { status: "Paused" });
       return { kind: "paused" };
     }
@@ -222,7 +225,7 @@ export class ExecutionEngine {
       this.#outputs.set(node.id, outputValues);
       machine.transitionTo("Success");
       this.#states.set(nodeId, "Success");
-      this.emitStateChange(nodeId, "Running", "Success");
+      emitStateChange(this.#options.events?.onNodeStateChange, nodeId, "Running", "Success");
       this.recordLog(this.#workflow.id, node, "info", `node:end ${nodeId}`);
       aiTx?.rollback();
       return { kind: "ok" };
@@ -244,7 +247,7 @@ export class ExecutionEngine {
         aiTx?.rollback();
         machine.transitionTo("Paused");
         this.#states.set(node.id, "Paused");
-        this.emitStateChange(node.id, "Running", "Paused");
+        emitStateChange(this.#options.events?.onNodeStateChange, node.id, "Running", "Paused");
         this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "Paused" });
         return { kind: "paused", pendingNodeId: err.pendingNodeId, workflowId: err.workflowId };
       }
@@ -278,14 +281,14 @@ export class ExecutionEngine {
   private markWaiting(node: Node, machine: NodeStateMachine): void {
     machine.transitionTo("WaitingForHuman");
     this.#states.set(node.id, "WaitingForHuman");
-    this.emitStateChange(node.id, "Running", "WaitingForHuman");
+    emitStateChange(this.#options.events?.onNodeStateChange, node.id, "Running", "WaitingForHuman");
     this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
   }
   /** 节点失败落地：状态机转 Failed + 错误日志（data.nodePath 人类可读路径，v0.4.2 验收 5）+ onError 回调；子引擎 #workflow.id 已是父链（根:容器节点...）。 */
   private markNodeFailed(node: Node, nodeId: string, machine: NodeStateMachine, err: unknown): { kind: "failed"; message: string } {
     machine.transitionTo("Failed");
     this.#states.set(nodeId, "Failed");
-    this.emitStateChange(nodeId, "Running", "Failed");
+    emitStateChange(this.#options.events?.onNodeStateChange, nodeId, "Running", "Failed");
     const errMsg = err instanceof Error ? err.message : String(err);
     const nodePath = formatNodePath(this.#workflow.id, nodeId, (id) => this.#nodeById.get(id)?.name);
     this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed", nodePath });
@@ -312,7 +315,7 @@ export class ExecutionEngine {
     if (machine !== undefined) {
       machine.transitionTo("Skipped");
       this.#states.set(task.nodeId, "Skipped");
-      this.emitStateChange(task.nodeId, "WaitingForHuman", "Skipped");
+      emitStateChange(this.#options.events?.onNodeStateChange, task.nodeId, "WaitingForHuman", "Skipped");
     }
     await this.humanTaskStore.skip(taskId);
     return this.continueFrom(task, 1, "skip failed");
@@ -339,7 +342,7 @@ export class ExecutionEngine {
       events: this.#options.events,
       topoSort,
       persistWaiting: async (nodeId, taskId) => { if (this.#options.persist === true) await persistRunState(this.persistOps, "waiting", { pendingNodeId: nodeId, pendingTaskId: taskId }); },
-      emit: (nodeId, from, to) => this.emitStateChange(nodeId, from, to),
+      emit: (nodeId, from, to) => emitStateChange(this.#options.events?.onNodeStateChange, nodeId, from, to),
       setContext: (key, value) => this.#context.set("workflow", key, value),
       taskStartIndex: (task, order) => this.taskStartIndex(task, order),
       startRemaining: async (startIndex) => {
@@ -421,10 +424,6 @@ export class ExecutionEngine {
     else if (level === "warn") console.warn(prefix, message, data);
     else console.error(prefix, message, data);
   }
-  private emitStateChange(nodeId: string, from: NodeStatus, to: NodeStatus): void { this.#options.events?.onNodeStateChange?.({ nodeId, from, to }); }
-  private createContext(): WorkflowContext {
-    return createWorkflowContext(this.#workflow, this.#options);
-  }
   private get persistOps(): PersistRunStateOps {
     return { runId: this.#runId, workflow: this.#workflow, states: this.#states, outputs: this.#outputs, contextSnapshot: this.#context.getSnapshot(), idempotencyKey: this.#options.idempotencyKey, debugController: this.#options.debugController, store: this.runStateStore };
   }
@@ -433,7 +432,7 @@ export class ExecutionEngine {
     this.#outputs = new Map();
     this.#machines = new Map();
     this.#logs = [];
-    this.#context = this.createContext();
+    this.#context = createWorkflowContext(this.#workflow, this.#options);
     for (const node of this.#workflow.nodes) this.#machines.set(node.id, new NodeStateMachine());
   }
 }
