@@ -5,13 +5,16 @@
 // - 无 paramsSchema：KV 动态表单回退（Form.List 键值行，支持增删）。
 // - 切换节点用 key={node.id} 重挂载内部表单（组件内 useForm 新建实例），
 //   保证初始值与字段集合干净跟随节点刷新（避开 rc-field-form 复用实例时的残留值问题）。
+// - v0.4.1：只读模式（模板引用子图）→ 顶部提示条 + 全部表单项禁用（Form disabled），
+//   删除按钮/KV 增删同样禁用，杜绝表单触达 dispatch。
 
 import { useMemo } from "react";
-import { Button, Empty, Form, Input, InputNumber, Select, Space, Spin, Switch, Typography } from "antd";
+import { Alert, Button, Empty, Form, Input, InputNumber, Select, Space, Spin, Switch, Typography } from "antd";
 import type { ReactNode } from "react";
 import type { EditorGraphNode } from "@core/editing/editor-graph";
 import type { ParamFieldMetadata } from "../../../src/shared/ipc.js";
 import { editorActions, useEditor } from "../editor/state.js";
+import { useNodeUi } from "../editor/ui-context.js";
 import { useNodeTypeMetadata } from "../hooks/useNodeCreation.js";
 
 /** KV 动态表单行结构。 */
@@ -81,6 +84,7 @@ function renderField(field: ParamFieldMetadata): ReactNode {
 function SchemaForm(props: {
   readonly node: EditorGraphNode;
   readonly schema: readonly ParamFieldMetadata[];
+  readonly disabled: boolean;
   readonly onParamsChange: (params: Record<string, unknown>) => void;
 }) {
   const [form] = Form.useForm();
@@ -93,6 +97,7 @@ function SchemaForm(props: {
       form={form}
       layout="vertical"
       initialValues={initialValues}
+      disabled={props.disabled}
       onValuesChange={(_changed, all) => props.onParamsChange(all)}
     >
       {props.schema.map((field) => (
@@ -114,6 +119,7 @@ function SchemaForm(props: {
 /** 无 schema：KV 动态表单回退（键/值两列，可增删行）。 */
 function KvForm(props: {
   readonly node: EditorGraphNode;
+  readonly disabled: boolean;
   readonly onParamsChange: (params: Record<string, unknown>) => void;
 }) {
   const [form] = Form.useForm();
@@ -123,6 +129,7 @@ function KvForm(props: {
       form={form}
       layout="vertical"
       initialValues={initialValues}
+      disabled={props.disabled}
       onValuesChange={(_changed, all: { readonly kvRows?: readonly { readonly key?: string; readonly value?: string }[] }) =>
         props.onParamsChange(rowsToParams(all.kvRows ?? []))
       }
@@ -138,12 +145,12 @@ function KvForm(props: {
                 <Form.Item name={[field.name, "value"]} style={{ flex: 1 }}>
                   <Input placeholder="参数值" />
                 </Form.Item>
-                <Button type="text" danger onClick={() => remove(field.name)}>
+                <Button type="text" danger disabled={props.disabled} onClick={() => remove(field.name)}>
                   删
                 </Button>
               </Space>
             ))}
-            <Button block onClick={() => add({ key: "", value: "" })}>
+            <Button block disabled={props.disabled} onClick={() => add({ key: "", value: "" })}>
               添加参数
             </Button>
           </>
@@ -155,6 +162,7 @@ function KvForm(props: {
 
 export default function ConfigPanel() {
   const { state, dispatch } = useEditor();
+  const { readOnly } = useNodeUi();
   const { metadata, failed } = useNodeTypeMetadata();
 
   const node = useMemo(
@@ -178,6 +186,7 @@ export default function ConfigPanel() {
 
   return (
     <div className="config-panel">
+      {readOnly && <Alert type="info" showIcon message="模板引用（只读）" style={{ marginBottom: 12 }} />}
       <Typography.Text strong>{node.name}</Typography.Text>
       {metadata === undefined && !failed ? (
         <div style={{ padding: 24, textAlign: "center" }}>
@@ -190,12 +199,14 @@ export default function ConfigPanel() {
           key={node.id}
           node={node}
           schema={schema}
+          disabled={readOnly}
           onParamsChange={(params) => dispatch(editorActions.updateNodeParams(node.id, params))}
         />
       ) : (
         <KvForm
           key={node.id}
           node={node}
+          disabled={readOnly}
           onParamsChange={(params) => dispatch(editorActions.updateNodeParams(node.id, params))}
         />
       )}

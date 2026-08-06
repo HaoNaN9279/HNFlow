@@ -3,10 +3,8 @@
 // - 拖拽：X6 Dnd 插件（@antv/x6-plugin-dnd）——mousedown 时建临时节点并 dnd.start，
 //   落点在 validateNode 回调里换算成画布坐标后走 editorActions.addNode；插件返回 false 不入图，
 //   EditorState 保持唯一数据源（X6 侧由 useWorkflowGraph 的 reconcile 增量同步渲染）；
-// - 点击：在画布可视区中心添加节点（最小可用兜底，拖拽不可用时也可用）。
-//
-// 时序说明：X6 图实例由 WorkflowCanvas（兄弟节点）在挂载 effect 中创建，物料面板的 effect
-// 先于它执行，故 Dnd 实例懒初始化——首次拖拽时图实例必然已就绪，规避 StrictMode 双挂载竞态。
+// - 点击：在画布可视区中心添加节点（最小可用兜底，拖拽不可用时也可用）；
+// - v0.4.1：只读模式（模板引用子图）禁止添加节点——禁用拖拽/点击入口 + 灰显 + 提示文案。
 
 import { useMemo, useRef } from "react";
 import { Graph } from "@antv/x6";
@@ -18,6 +16,7 @@ import { NODE_MIN_HEIGHT, NODE_WIDTH, toX6Node } from "../editor/graph-elements.
 import type { GraphPosition } from "../editor/ports.js";
 import { editorActions, useEditor } from "../editor/state.js";
 import { useWorkflowGraphContext } from "../editor/useWorkflowGraph.js";
+import { useNodeUi } from "../editor/ui-context.js";
 import { createDefaultNode, useNodeTypeMetadata } from "../hooks/useNodeCreation.js";
 
 /** 物料分组常量映射：type 白名单 → 分组标题。 */
@@ -48,6 +47,7 @@ function groupMetadata(list: readonly NodeTypeMetadata[]): readonly {
 export default function StencilPanel() {
   const { dispatch } = useEditor();
   const graphRef = useWorkflowGraphContext();
+  const { readOnly } = useNodeUi();
   const { metadata, failed } = useNodeTypeMetadata();
   const panelRef = useRef<HTMLDivElement>(null);
   const dndRef = useRef<Dnd | null>(null);
@@ -106,6 +106,9 @@ export default function StencilPanel() {
   return (
     <div ref={panelRef} className="stencil-panel">
       <Typography.Text strong>节点库</Typography.Text>
+      {readOnly && (
+        <div style={{ marginTop: 8, fontSize: 12, color: "#999", userSelect: "none" }}>只读模式禁止添加节点</div>
+      )}
       {metadata === undefined && !failed ? (
         <div style={{ padding: 24, textAlign: "center" }}>
           <Spin size="small" />
@@ -122,9 +125,10 @@ export default function StencilPanel() {
               <div
                 key={meta.type}
                 className="stencil-item"
-                onMouseDown={(evt) => handleMouseDown(meta, evt)}
-                onClick={() => handleClick(meta)}
-                title={`拖拽到画布或点击添加（${meta.name}）`}
+                style={readOnly ? { opacity: 0.45, cursor: "not-allowed" } : undefined}
+                onMouseDown={readOnly ? undefined : (evt) => handleMouseDown(meta, evt)}
+                onClick={readOnly ? undefined : () => handleClick(meta)}
+                title={readOnly ? "只读模式禁止添加节点" : `拖拽到画布或点击添加（${meta.name}）`}
               >
                 <span className="stencil-item-name">{meta.name}</span>
                 <span className="hnflow-node-badge">{meta.type}</span>

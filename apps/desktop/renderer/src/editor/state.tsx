@@ -69,7 +69,9 @@ export type EditorAction =
   /** 新增边（T7 useEdgeConnect；重复 id 幂等忽略）。 */
   | { readonly type: "addEdge"; readonly edge: Edge }
   /** 删除边（T7 useEdgeConnect；边不存在则幂等忽略）。 */
-  | { readonly type: "removeEdge"; readonly edgeId: string };
+  | { readonly type: "removeEdge"; readonly edgeId: string }
+  /** 原子替换某节点（升级应用/批量端口变更用；nodeId 不存在幂等忽略）。 */
+  | { readonly type: "updateNode"; readonly nodeId: string; readonly node: EditorGraphNode };
 
 /** reducer 内部状态：在公共契约基础上追加层级父图快照栈（popLevel 恢复并回写子图编辑结果）。 */
 interface EditorReducerState extends EditorState {
@@ -173,6 +175,12 @@ function reducer(state: EditorReducerState, action: EditorAction): EditorReducer
       }
       return { ...state, graph: { ...state.graph, edges } };
     }
+    case "updateNode": {
+      if (!state.graph.nodes.some((n) => n.id === action.nodeId)) {
+        return state; // 幂等：节点不存在
+      }
+      return { ...state, graph: updateNode(state.graph, action.nodeId, () => action.node) };
+    }
   }
 }
 
@@ -220,4 +228,5 @@ export const editorActions = {
   removeNode: (nodeId: string): EditorAction => ({ type: "removeNode", nodeId }),
   addEdge: (edge: Edge): EditorAction => ({ type: "addEdge", edge }),
   removeEdge: (edgeId: string): EditorAction => ({ type: "removeEdge", edgeId }),
+  updateNode: (nodeId: string, node: EditorGraphNode): EditorAction => ({ type: "updateNode", nodeId, node }),
 } as const;
