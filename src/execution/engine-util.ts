@@ -72,3 +72,18 @@ export function transferPortData(
     setByPath(port.binding, value);
   }
 }
+
+/** 人工审核决策（v0.4.2 验收 2）：command 节点 reviewRequired 未批准时引擎询问；approve 重跑，reject 失败。 */
+export type ReviewDecision = "approve" | "reject";
+
+/** 人工审核回调签名（Engine options.onReviewRequired 类型；经本文件消费，Engine 不直接引用 security 层）。 */
+export type OnReviewRequired = (info: { readonly nodeId: string; readonly description: string }) => Promise<ReviewDecision>;
+
+/** 询问人工审核：缺省/未注入回调 → reject（安全默认，防命令未经确认执行）。 */
+export async function askReviewDecision(
+  onReviewRequired: OnReviewRequired | undefined,
+  nodeId: string,
+  description: string,
+): Promise<ReviewDecision> {
+  return (await onReviewRequired?.({ nodeId, description })) ?? "reject";
+}

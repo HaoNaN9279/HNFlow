@@ -1,6 +1,7 @@
 // 命令行执行节点：Bun.spawn 运行外部命令，捕获 stdout/stderr 与退出码。
 
 import type { INodeDefinition } from "../execution/types.js";
+import { checkCommandSafety, ReviewRequiredError } from "../security/command-guard.js";
 
 /** command 节点参数格式非法 */
 export class InvalidCommandParamsError extends Error {
@@ -55,6 +56,10 @@ interface CommandParams {
   readonly timeoutMs: number;
   readonly failOnNonZero: boolean;
   readonly retry: RetryOptions | undefined;
+  /** v0.4.2：true 时执行前抛 ReviewRequiredError 待人工审核（AI 生成命令默认开启） */
+  readonly reviewRequired: boolean;
+  /** v0.4.2：命令生成来源（"ai"=AI 生成；缺省/undefined=无标记） */
+  readonly generatedBy: "ai" | "manual" | undefined;
 }
 
 /** 命令执行结果 */
@@ -134,6 +139,14 @@ function parseParams(params: Readonly<Record<string, unknown>>): CommandParams |
   if (retry === undefined && params["retry"] !== undefined) {
     return undefined;
   }
+  const reviewRequired = params["reviewRequired"];
+  if (reviewRequired !== undefined && typeof reviewRequired !== "boolean") {
+    return undefined;
+  }
+  const generatedBy = params["generatedBy"];
+  if (generatedBy !== undefined && generatedBy !== "ai" && generatedBy !== "manual") {
+    return undefined;
+  }
   return {
     command,
     args: args === undefined ? [] : args,
@@ -141,6 +154,8 @@ function parseParams(params: Readonly<Record<string, unknown>>): CommandParams |
     timeoutMs: timeoutMs === undefined ? 30000 : timeoutMs,
     failOnNonZero: failOnNonZero === undefined ? false : failOnNonZero,
     retry,
+    reviewRequired: reviewRequired === undefined ? false : reviewRequired,
+    generatedBy: generatedBy === undefined ? undefined : generatedBy,
   };
 }
 
@@ -189,6 +204,8 @@ export const commandNode: INodeDefinition = {
     { key: "timeoutMs", label: "超时（毫秒）", type: "number", default: 30000 },
     { key: "failOnNonZero", label: "非零退出码视为失败", type: "boolean", default: false },
     { key: "retry", label: "重试配置", type: "json", description: "{ attempts?: number, delayMs?: number }；缺省不重试" },
+    { key: "reviewRequired", label: "需要人工审核", type: "boolean", default: false, description: "执行前暂停等待人工批准（AI 生成命令默认开启）" },
+    { key: "generatedBy", label: "生成来源", type: "select", default: "manual", options: [{ label: "人工", value: "manual" }, { label: "AI", value: "ai" }] },
   ],
   inputs: [],
   outputs: [
@@ -200,6 +217,17 @@ export const commandNode: INodeDefinition = {
     const params = parseParams(ctx.node.params);
     if (params === undefined) {
       throw new InvalidCommandParamsError(ctx.node.params);
+    }
+    // 安全护栏（v0.4.2）：黑名单命中立即抛；reviewRequired 未批准抛 ReviewRequiredError（重写 nodeId 供引擎桥接挂起）。
+    // 已批准放行（v0.4.2 验收 2）：reviewApprovals 含本节点 → 以 reviewRequired=false 调用，黑名单检查始终生效。
+    const approved = params.reviewRequired === true && ctx.reviewApprovals?.has(ctx.node.id) === true;
+    try {
+      checkCommandSafety(params.command, approved ? false : params.reviewRequired);
+    } catch (error) {
+      if (error instanceof ReviewRequiredError) {
+        throw new ReviewRequiredError(ctx.node.id, error.description);
+      }
+      throw error;
     }
     const attempts = resolveRetryAttempts(params.retry);
     for (let attempt = 0; ; attempt++) {

@@ -6,9 +6,9 @@ import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
 import { DebugController } from "./DebugController.js";
-import { createWorkflowContext, shouldExecute, transferPortData, type EngineLogEntry, type EngineReadState, type RunNodeOutcome } from "./engine-util.js";
+import { createWorkflowContext, shouldExecute, transferPortData, askReviewDecision, type EngineLogEntry, type EngineReadState, type RunNodeOutcome } from "./engine-util.js";
 import { EngineStores } from "./engine-stores.js";
-import type { NodeExecutionContext, MergedGroups } from "./types.js";
+import type { NodeExecutionContext, MergedGroups, McpServerPool } from "./types.js";
 import { GroupsResolver } from "./groups-resolver.js";
 import { registry, type NodeRegistry } from "../nodes/registry.js";
 import { InvalidTaskStateError } from "../human/HumanTaskStore.js";
@@ -22,7 +22,9 @@ import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspen
 import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, persistRunState, rebuildContext, rebuildMachines, topoSort, type PersistRunStateOps } from "./runstate-persist.js";
 import { crashConfirmToWaiting, makeSuspendOps, shouldCrashConfirm, suspendToWaiting } from "./human-suspend.js";
 import { HumanTaskRequiredError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
+import { ReviewRequiredError } from "../security/command-guard.js";
 import { registerIdempotencyKey } from "./idempotency.js";
+import { formatNodePath } from "./node-path.js";
 export type { AIResumeContext } from "./ai-interrupt.js";
 export { topoSort } from "./runstate-persist.js";
 export { HumanTaskRequiredError, IdempotencyKeyConflictError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
@@ -69,6 +71,8 @@ export interface ExecutionEngineOptions {
   /** 功能组核心版本兼容（v0.3.2 T8）：默认不兼容抛错；true 仅 warn 继续。 */
   readonly allowIncompatibleGroups?: boolean;
   readonly templatesRootDir?: string; // 子工作流模板根目录（v0.3.3 T2）：缺省 "./templates"；仅 template 引用时读目录（无引用零 IO）。
+  readonly mcpPool?: McpServerPool; // MCP 进程池（v0.4.2 D2）：AI 节点 activeGroups.mcps 声明时注入 MCP 工具；可选，未配置则 AI 节点不加载。
+  readonly onReviewRequired?: (info: { readonly nodeId: string; readonly description: string }) => Promise<"approve" | "reject">; // 人工审核回调（v0.4.2 验收 2）：command reviewRequired 未批准时询问；approve 重跑节点，reject 落失败路径；缺省 reject。
 }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 export class ExecutionEngine {
@@ -87,6 +91,7 @@ export class ExecutionEngine {
   readonly #stores: EngineStores;
   #runActive = false;
   #groupsResolver: GroupsResolver | undefined; #templatesRootDir: string;
+  readonly #approvedReviews = new Set<string>(); // 本次运行已批准审核节点（v0.4.2 验收 2）：approve 后 command 重跑放行。
   constructor(workflow: Workflow, options: ExecutionEngineOptions = {}) {
     this.#workflow = workflow;
     this.#options = options;
@@ -122,11 +127,7 @@ export class ExecutionEngine {
     if (this.#options.persist === true) {
       // 幂等注册（v0.2.5 T2）：persist("running") 之前按 workflowId+idempotencyKey 原子注册，重复提交抛冲突不执行。
       if (this.#options.idempotencyKey !== undefined) {
-        await registerIdempotencyKey(this.runStateStore, buildRunStateFromEngine({
-          runId: this.#runId, workflow: this.#workflow, nodeStates: this.#states,
-          nodeOutputs: this.#outputs, contextSnapshot: this.#context.getSnapshot(),
-          status: "running", idempotencyKey: this.#options.idempotencyKey,
-        }));
+        await registerIdempotencyKey(this.runStateStore, buildRunStateFromEngine({ runId: this.#runId, workflow: this.#workflow, nodeStates: this.#states, nodeOutputs: this.#outputs, contextSnapshot: this.#context.getSnapshot(), status: "running", idempotencyKey: this.#options.idempotencyKey }));
       }
       await persistRunState(this.persistOps, "running");
     }
@@ -144,11 +145,7 @@ export class ExecutionEngine {
     this.#options.events?.onComplete?.(result);
     return result;
   }
-  private async runRemaining(
-    order: readonly string[],
-    startIndex: number,
-    startTime: number,
-  ): Promise<ExecutionResult> {
+  private async runRemaining(order: readonly string[], startIndex: number, startTime: number): Promise<ExecutionResult> {
     const persist = this.#options.persist === true;
     let savedError: string | undefined;
     for (const nodeId of order.slice(startIndex)) {
@@ -216,13 +213,7 @@ export class ExecutionEngine {
     try {
       activeGroups = await this.#groupsResolver?.resolve(node);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      machine.transitionTo("Failed");
-      this.#states.set(nodeId, "Failed");
-      this.emitStateChange(nodeId, "Running", "Failed");
-      this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed" });
-      this.#options.events?.onError?.(err instanceof Error ? err : new Error(errMsg));
-      return { kind: "failed", message: `${node.name}(${node.id}) failed: ${errMsg}` };
+      return this.markNodeFailed(node, nodeId, machine, err);
     }
     const aiTx = beginAiTransaction(this.#options.aiCheckpoint, node); // AI 中断事务：覆盖 checkpoint+HumanTask+RunState 三写（AC3）
     try {
@@ -243,12 +234,8 @@ export class ExecutionEngine {
         return { kind: "waiting", task };
       }
       if (err instanceof SubworkflowWaitingError) {
-        // 子工作流透传：复用子图已创建任务，不重复创建。
         aiTx?.rollback();
-        machine.transitionTo("WaitingForHuman");
-        this.#states.set(node.id, "WaitingForHuman");
-        this.emitStateChange(node.id, "Running", "WaitingForHuman");
-        this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
+        this.markWaiting(node, machine); // 子工作流透传：复用子图已创建任务，不重复创建。
         this.#options.events?.onHumanTaskCreated?.(err.task);
         return { kind: "waiting", task: err.task };
       }
@@ -263,6 +250,16 @@ export class ExecutionEngine {
       if (err instanceof AiInterruptRequiredError) {
         return await suspendAiNode(this.aiOps(), node, machine, err, aiTx);
       }
+      if (err instanceof ReviewRequiredError) {
+        // 人工审核（v0.4.2 验收 2）：approve → 记入已批准并重跑节点；reject → 落失败路径。
+        if ((await askReviewDecision(this.#options.onReviewRequired, err.nodeId === "" ? node.id : err.nodeId, err.description)) === "approve") {
+          aiTx?.rollback(); // 事务收尾（command 通常无 AI 事务；防御性）
+          this.#approvedReviews.add(node.id);
+          machine.restore("Idle"); // 状态机禁止 Running → Running：重跑前回退 Idle（节点未执行副作用，等价从头执行）。
+          this.#states.set(node.id, "Idle");
+          return this.runNode(node.id);
+        }
+      }
       aiTx?.rollback();
       const errMsg = err instanceof Error ? err.message : String(err);
       if (shouldCrashConfirm(this.#options.idempotencyKey, this.#registry.get(node.type).idempotent)) {
@@ -273,13 +270,7 @@ export class ExecutionEngine {
           return crash;
         }
       }
-      machine.transitionTo("Failed");
-      this.#states.set(nodeId, "Failed");
-      this.emitStateChange(nodeId, "Running", "Failed");
-      this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed" });
-      const message = `${node.name}(${node.id}) failed: ${errMsg}`;
-      this.#options.events?.onError?.(err instanceof Error ? err : new Error(message));
-      return { kind: "failed", message };
+      return this.markNodeFailed(node, nodeId, machine, err);
     }
   }
   /** 转 WaitingForHuman：状态机 + 状态 + 事件 + 日志（挂起与崩溃确认共用，Running → WaitingForHuman 合法）。 */
@@ -288,6 +279,17 @@ export class ExecutionEngine {
     this.#states.set(node.id, "WaitingForHuman");
     this.emitStateChange(node.id, "Running", "WaitingForHuman");
     this.recordLog(this.#workflow.id, node, "info", `node:waiting ${node.id}`, { status: "WaitingForHuman" });
+  }
+  /** 节点失败落地：状态机转 Failed + 错误日志（data.nodePath 人类可读路径，v0.4.2 验收 5）+ onError 回调；子引擎 #workflow.id 已是父链（根:容器节点...）。 */
+  private markNodeFailed(node: Node, nodeId: string, machine: NodeStateMachine, err: unknown): { kind: "failed"; message: string } {
+    machine.transitionTo("Failed");
+    this.#states.set(nodeId, "Failed");
+    this.emitStateChange(nodeId, "Running", "Failed");
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const nodePath = formatNodePath(this.#workflow.id, nodeId, (id) => this.#nodeById.get(id)?.name);
+    this.recordLog(this.#workflow.id, node, "error", `node:error ${nodeId}: ${errMsg}`, { status: "Failed", nodePath });
+    this.#options.events?.onError?.(err instanceof Error ? err : new Error(`${node.name}(${node.id}) failed: ${errMsg}`));
+    return { kind: "failed", message: `${node.name}(${node.id}) failed: ${errMsg}` };
   }
   /** 恢复执行：AI 中断任务走 resumeAiTask（agent 恢复，不重跑节点）；普通任务写入人工产物 → 标记完成 → 重跑剩余。 */
   async resume(taskId: string, result?: unknown): Promise<ExecutionResult> {
@@ -381,6 +383,8 @@ export class ExecutionEngine {
       ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
       ...(this.#options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: this.#options.allowIncompatibleGroups }),
       ...(this.#templatesRootDir === undefined ? {} : { templatesRootDir: this.#templatesRootDir }), // 模板根目录透传（v0.3.3 T2）：template 引用加载
+      reviewApprovals: this.#approvedReviews, // 已批准审核节点集合（v0.4.2 验收 2）：command 节点 reviewRequired 放行依据
+      ...(this.#options.mcpPool === undefined ? {} : { mcpPool: this.#options.mcpPool }), // MCP 进程池透传（v0.4.2 D2）：activeGroups.mcps → MCP 工具注入
       // 子图透传（v0.2.5 T4）：runId 任务查重一致、幂等键子图内崩溃判定；progress 供子图容器迭代断点持久化。
       runId: this.#runId,
       ...(this.#options.idempotencyKey === undefined ? {} : { idempotencyKey: this.#options.idempotencyKey }),
@@ -420,11 +424,7 @@ export class ExecutionEngine {
     return createWorkflowContext(this.#workflow, this.#options);
   }
   private get persistOps(): PersistRunStateOps {
-    return {
-      runId: this.#runId, workflow: this.#workflow, states: this.#states, outputs: this.#outputs,
-      contextSnapshot: this.#context.getSnapshot(), idempotencyKey: this.#options.idempotencyKey,
-      debugController: this.#options.debugController, store: this.runStateStore,
-    };
+    return { runId: this.#runId, workflow: this.#workflow, states: this.#states, outputs: this.#outputs, contextSnapshot: this.#context.getSnapshot(), idempotencyKey: this.#options.idempotencyKey, debugController: this.#options.debugController, store: this.runStateStore };
   }
   private resetState(): void {
     this.#states = new Map();

@@ -10,8 +10,12 @@ import type { Node, Port, VariablePath } from "../model/types.js";
 import type { NodeRegistry } from "../nodes/registry.js";
 import type { DebugController } from "./DebugController.js";
 import type { MergedGroups } from "../groups/merge.js";
+// type-only import：MCP 进程池仅供 AI 节点消费（v0.4.2 D2），避免与 mcp/pool 运行时耦合。
+import type { McpServerPool } from "../mcp/pool.js";
 // re-export（v0.3.1 T5）：Engine 消费 MergedGroups 时经本文件取（type-only，无运行时循环）。
 export type { MergedGroups };
+// re-export（v0.4.2 D2）：Engine 消费 MCP 进程池类型时经本文件取（type-only，无运行时循环）。
+export type { McpServerPool } from "../mcp/pool.js";
 
 /** 参数面板字段类型（v0.4.0 T1）：编辑器可视化配置面板据此渲染控件。 */
 export type ParamFieldType = "string" | "number" | "boolean" | "select" | "textarea" | "json";
@@ -86,6 +90,8 @@ export interface NodeExecutionContext {
   readonly debugController?: DebugController;
   /** 已加载并合并的功能组（v0.3.1 T5）：节点声明 capabilityGroups 时注入；无声明/未配置则不注入。 */
   readonly activeGroups?: MergedGroups;
+  /** MCP 进程池（v0.4.2 D2）：AI 节点经 activeGroups.mcps 发现并注入 MCP 工具；子图容器透传给子引擎。 */
+  readonly mcpPool?: McpServerPool;
   /** 功能组根目录（v0.3.1 T5 子图透传）：子图容器转发给子引擎 options，嵌套子图按同样配置运行时加载。 */
   readonly groupsRootDir?: string;
   /** 功能组缓存容量（v0.3.1 T5 子图透传）：子图容器转发给子引擎 options，缺省子引擎默认 32。 */
@@ -94,6 +100,9 @@ export interface NodeExecutionContext {
   readonly allowIncompatibleGroups?: boolean;
   /** 子工作流模板根目录（v0.3.3 T2 子图透传）：subworkflow 节点 params.template 引用加载模板库用；子图容器转发给子引擎 options。 */
   readonly templatesRootDir?: string;
+  /** 本次运行已批准人工审核的节点 id 集合（v0.4.2 验收 2）：command 节点 reviewRequired 放行依据；
+   *  缺省 undefined（未注入即未批准）；子图容器暂不透传。 */
+  readonly reviewApprovals?: ReadonlySet<string>;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */
