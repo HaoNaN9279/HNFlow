@@ -8,11 +8,16 @@ import { loadWorkflow } from "../../../../src/storage/index.js";
 import { toJSON } from "../../../../src/serialization/index.js";
 import {
   IPC,
+  type AgentChatPayload,
+  type AgentChatResult,
   type LoadTemplateVersionPayload,
   type LoadTemplateVersionResponse,
   type OpenWorkflowResponse,
   type ReleaseTemplatePayload,
   type ReleaseTemplateResponse,
+  type ReviewDecisionPayload,
+  type RunWorkflowPayload,
+  type RunWorkflowResult,
   type SaveAsWorkflowPayload,
   type SaveAsWorkflowResponse,
   type SaveWorkflowPayload,
@@ -21,8 +26,10 @@ import {
   type WorkflowTemplate,
 } from "../shared/ipc.js";
 import { listNodeTypeMetadata } from "./node-types.js";
+import { chatWithAgent } from "./agent.js";
 import { listTemplates, loadTemplateVersionPayload, releaseTemplateFromPayload, TEMPLATE_LIB_DIR } from "./templates.js";
 import { friendlyWorkflowError, saveWorkflowToFile, validatedWorkflowTemplate } from "./workflow-io.js";
+import { friendlyRunError, runWorkflowOnce } from "./run.js";
 
 /** 打开/保存对话框共用过滤条件：JSON 工作流文件。 */
 const WORKFLOW_FILTERS: Electron.FileFilter[] = [{ name: "工作流文件", extensions: ["json"] }];
@@ -30,6 +37,38 @@ const WORKFLOW_FILTERS: Electron.FileFilter[] = [{ name: "工作流文件", exte
 /** 模板库根目录：userData/templates（首次启动由 ensureTemplateLibrary 写入种子模板）。 */
 function templatesRootDir(): string {
   return join(app.getPath("userData"), TEMPLATE_LIB_DIR);
+}
+
+/** 审核决策超时（毫秒）：renderer 30s 无响应自动 reject，防止工作流挂死。 */
+const REVIEW_TIMEOUT_MS = 30_000;
+
+/** pending 审核请求：决策回调 + 超时定时器（resolve 时清理定时器与表项）。 */
+interface PendingReview {
+  readonly resolve: (decision: "approve" | "reject") => void;
+  readonly timer: ReturnType<typeof setTimeout>;
+}
+
+/** pending 决策表：requestId → 决策回调（renderer 经 workflow:review-decision 提交）。 */
+const reviewDecisions = new Map<string, PendingReview>();
+
+/** 向 renderer 发审核请求并等待决策：30s 无决策自动 reject（兜底防挂死）。 */
+function requestReviewDecision(
+  sender: Electron.WebContents,
+  request: { readonly requestId: string; readonly nodeId: string; readonly description: string },
+): Promise<"approve" | "reject"> {
+  return new Promise<"approve" | "reject">((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (decision: "approve" | "reject"): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+      reviewDecisions.delete(request.requestId);
+      resolve(decision);
+    };
+    timer = setTimeout(() => settle("reject"), REVIEW_TIMEOUT_MS);
+    reviewDecisions.set(request.requestId, { resolve: settle, timer });
+    sender.send(IPC.workflowReviewRequest, request);
+  });
 }
 
 /** 注册全部 IPC 处理器；应在 app ready 前调用。 */
@@ -86,6 +125,34 @@ export function registerIpcHandlers(): void {
     }
     return { ok: true };
   });
+
+  // 内存单次运行：主进程侧执行（无持久化/断点/多任务）；错误已收敛为中文消息，不抛。
+  // 审核桥接（v0.4.2 验收 2）：运行到待审核 command 节点 → event.sender 发请求 → 等 renderer 决策。
+  ipcMain.handle(IPC.workflowRun, async (event, payload: RunWorkflowPayload): Promise<RunWorkflowResult> => {
+    try {
+      return await runWorkflowOnce(payload, {
+        templatesRootDir: templatesRootDir(),
+        onReviewRequest: (request) => requestReviewDecision(event.sender, request),
+      });
+    } catch (error) {
+      return { ok: false, message: friendlyRunError(error) };
+    }
+  });
+
+  // 审核决策（renderer → main）：resolve 对应 pending 请求；requestId 已超时清理时幂等返回 ok。
+  ipcMain.handle(
+    IPC.workflowReviewDecision,
+    (_event, payload: ReviewDecisionPayload): { readonly ok: true } => {
+      const pending = reviewDecisions.get(payload.requestId);
+      if (pending !== undefined) {
+        pending.resolve(payload.decision);
+      }
+      return { ok: true };
+    },
+  );
+
+  // AI 对话：自然语言 → AIExecutor + generate_workflow → Workflow JSON；错误收敛为中文 ok:false，不抛。
+  ipcMain.handle(IPC.agentChat, (_event, payload: AgentChatPayload): Promise<AgentChatResult> => chatWithAgent(payload));
 
   // 模板列表：扫描 userData/templates 下全部 template.json 汇总。
   ipcMain.handle(IPC.templateList, async (): Promise<readonly TemplateSummary[]> => {

@@ -25,6 +25,10 @@ export const IPC = {
   workflowOpen: "workflow:open",
   workflowSaveAs: "workflow:saveAs",
   workflowSave: "workflow:save",
+  workflowRun: "workflow:run",
+  workflowReviewRequest: "workflow:review-request",
+  workflowReviewDecision: "workflow:review-decision",
+  agentChat: "agent:chat",
   templateList: "template:list",
   templateLoadVersion: "template:loadVersion",
   templateRelease: "template:release",
@@ -84,6 +88,34 @@ export interface SaveWorkflowPayload {
   readonly workflow: unknown;
 }
 
+/** workflow:run 载荷：workflow 为当前画布的可序列化形状（main 侧经核心 workflowSchema 校验） */
+export interface RunWorkflowPayload {
+  readonly workflow: unknown;
+}
+
+/** workflow:run 返回：内存单次运行结果（成功带 runId；失败带中文消息与失败节点信息） */
+export type RunWorkflowResult =
+  | { readonly ok: true; readonly runId: string }
+  | { readonly ok: false; readonly message: string; readonly nodeId?: string; readonly nodePath?: string };
+
+/** 审核请求信息（main → renderer 事件 workflow:review-request 载荷；运行到待审核 command 节点时触发）。 */
+export interface ReviewRequestInfo {
+  readonly requestId: string;
+  readonly nodeId: string;
+  readonly description: string;
+}
+
+/** workflow:review-decision 载荷：renderer 提交审核决策（批准执行 / 拒绝跳过）。 */
+export interface ReviewDecisionPayload {
+  readonly requestId: string;
+  readonly decision: "approve" | "reject";
+}
+
+/** workflow:review-decision 返回：决策已提交（requestId 已超时清理时幂等返回）。 */
+export interface ReviewDecisionResult {
+  readonly ok: true;
+}
+
 /** 模板摘要（template:list 返回项） */
 export interface TemplateSummary {
   readonly name: string;
@@ -124,6 +156,31 @@ export interface ReleaseTemplatePayload {
 /** template:release 返回：发布后模板摘要 */
 export type ReleaseTemplateResponse = TemplateSummary;
 
+/** AI 对话消息（agent:chat 载荷：镜像核心 InputMessage 形状）。 */
+export interface AgentChatMessage {
+  readonly role: "user" | "assistant" | "system";
+  readonly content: string;
+}
+
+/** agent:chat 模型配置（核心 ModelConfig 可序列化子集；fakeScript 不跨 IPC，fake 由 main 侧注入固定脚本）。 */
+export interface AgentChatModelConfig {
+  readonly provider: string;
+  readonly model?: string;
+  readonly apiKey?: string;
+  readonly baseURL?: string;
+}
+
+/** agent:chat 载荷：消息序列 + 模型配置。 */
+export interface AgentChatPayload {
+  readonly messages: readonly AgentChatMessage[];
+  readonly model: AgentChatModelConfig;
+}
+
+/** agent:chat 返回：ok 时带回复文本；生成成功时附 workflow（main 已校验）与摘要。 */
+export type AgentChatResult =
+  | { readonly ok: true; readonly reply: string; readonly workflow?: unknown; readonly summary?: string }
+  | { readonly ok: false; readonly message: string };
+
 /** preload 通过 contextBridge 暴露给渲染进程的 API 形状 */
 export interface HnflowApi {
   readonly version: string;
@@ -133,6 +190,12 @@ export interface HnflowApi {
   openWorkflow(): Promise<OpenWorkflowResponse>;
   saveAsWorkflow(workflow: unknown, suggestedName?: string): Promise<SaveAsWorkflowResponse>;
   saveWorkflow(filePath: string, workflow: unknown): Promise<SaveWorkflowResult>;
+  runWorkflow(payload: RunWorkflowPayload): Promise<RunWorkflowResult>;
+  /** 提交审核决策（批准执行 / 拒绝跳过）；requestId 对应 workflow:review-request 事件载荷。 */
+  sendReviewDecision(payload: ReviewDecisionPayload): Promise<ReviewDecisionResult>;
+  /** 订阅审核请求事件（运行到待审核 command 节点时触发）；返回取消订阅函数。 */
+  onReviewRequest(cb: (request: ReviewRequestInfo) => void): () => void;
+  chatWithAgent(payload: AgentChatPayload): Promise<AgentChatResult>;
   listTemplates(): Promise<readonly TemplateSummary[]>;
   loadTemplateVersion(payload: LoadTemplateVersionPayload): Promise<LoadTemplateVersionResponse>;
   releaseTemplate(payload: ReleaseTemplatePayload): Promise<ReleaseTemplateResponse>;

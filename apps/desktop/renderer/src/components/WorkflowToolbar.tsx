@@ -12,19 +12,29 @@ import { Button } from "antd";
 import {
   FileAddOutlined,
   FolderOpenOutlined,
+  PlayCircleOutlined,
   RedoOutlined,
+  RobotOutlined,
   SaveOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import { workflowRedo, workflowUndo } from "./WorkflowCanvas.js";
 import { useWorkflowFile } from "../hooks/useWorkflowFile.js";
+import { useEditor } from "../editor/state.js";
 import { useNodeUi } from "../editor/ui-context.js";
 import { SaveAsVersionModal } from "./SaveAsVersionModal.js";
 
-export default function WorkflowToolbar() {
-  const { handleNew, handleOpen, handleSave } = useWorkflowFile();
+/** 工具栏 props：onToggleAgent 控制 AI 对话面板开关（v0.4.2）。 */
+interface WorkflowToolbarProps {
+  readonly onToggleAgent: () => void;
+}
+
+export default function WorkflowToolbar({ onToggleAgent }: WorkflowToolbarProps): JSX.Element {
+  const { handleNew, handleOpen, handleSave, handleRun } = useWorkflowFile();
   const { readOnly, setReadOnly } = useNodeUi();
+  const { state } = useEditor();
   const [saveAsVersionOpen, setSaveAsVersionOpen] = useState(false);
+  const running = state.runStatus === "running";
 
   return (
     <>
@@ -65,6 +75,20 @@ export default function WorkflowToolbar() {
         }}
       >
         打开
+      </Button>
+       <Button
+        icon={<PlayCircleOutlined />}
+        loading={running}
+        disabled={readOnly || running}
+        onClick={() => {
+          if (readOnly) return;
+          void handleRun();
+        }}
+      >
+        运行
+      </Button>
+      <Button icon={<RobotOutlined />} onClick={onToggleAgent}>
+        AI 助手
       </Button>
       {readOnly ? (
         <Button type="primary" icon={<SaveOutlined />} onClick={() => setSaveAsVersionOpen(true)}>

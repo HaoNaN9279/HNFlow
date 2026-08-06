@@ -30,6 +30,13 @@ export interface ClipboardPayload {
   readonly edges: readonly Edge[];
 }
 
+/** 运行错误信息（workflow:run 失败回传；nodePath 为人类可读节点路径）。 */
+export interface RunErrorInfo {
+  readonly message: string;
+  readonly nodeId?: string;
+  readonly nodePath?: string;
+}
+
 /**
  * 编辑器全局不可变状态（useEditor() 对外暴露的契约）。
  * selectedNodeId 用显式联合而非可选属性：本项目开启 exactOptionalPropertyTypes，
@@ -44,6 +51,10 @@ export interface EditorState {
   readonly editStack: readonly EditStackItem[];
   /** 剪贴板（T5 仅声明类型，T10 撤销用）。 */
   readonly clipboard?: ClipboardPayload;
+  /** 运行状态（v0.4.2 内存单次运行）：按钮 loading 与结果展示消费。 */
+  readonly runStatus: "idle" | "running" | "success" | "error";
+  /** 运行失败信息（runStatus === "error" 时有效；成功/空闲为 null）。 */
+  readonly runError: RunErrorInfo | null;
 }
 
 /** 编辑器动作：受控、不可变、可判别联合（各 action 语义见注释）。 */
@@ -71,7 +82,11 @@ export type EditorAction =
   /** 删除边（T7 useEdgeConnect；边不存在则幂等忽略）。 */
   | { readonly type: "removeEdge"; readonly edgeId: string }
   /** 原子替换某节点（升级应用/批量端口变更用；nodeId 不存在幂等忽略）。 */
-  | { readonly type: "updateNode"; readonly nodeId: string; readonly node: EditorGraphNode };
+  | { readonly type: "updateNode"; readonly nodeId: string; readonly node: EditorGraphNode }
+  /** 更新运行状态（v0.4.2 内存单次运行：工具栏运行按钮消费）。 */
+  | { readonly type: "setRunStatus"; readonly runStatus: EditorState["runStatus"] }
+  /** 写入运行失败信息（runStatus === "error" 时使用）。 */
+  | { readonly type: "setRunError"; readonly runError: RunErrorInfo | null };
 
 /** reducer 内部状态：在公共契约基础上追加层级父图快照栈（popLevel 恢复并回写子图编辑结果）。 */
 interface EditorReducerState extends EditorState {
@@ -83,6 +98,8 @@ const INITIAL_STATE: EditorReducerState = {
   selectedNodeId: undefined,
   editStack: [],
   levelGraphs: [],
+  runStatus: "idle",
+  runError: null,
 };
 
 /** 不可变更新某层 graph 的指定节点（顶层专用；层级图的当前层即 state.graph）。 */
@@ -181,6 +198,12 @@ function reducer(state: EditorReducerState, action: EditorAction): EditorReducer
       }
       return { ...state, graph: updateNode(state.graph, action.nodeId, () => action.node) };
     }
+    case "setRunStatus": {
+      return { ...state, runStatus: action.runStatus };
+    }
+    case "setRunError": {
+      return { ...state, runError: action.runError };
+    }
   }
 }
 
@@ -229,4 +252,6 @@ export const editorActions = {
   addEdge: (edge: Edge): EditorAction => ({ type: "addEdge", edge }),
   removeEdge: (edgeId: string): EditorAction => ({ type: "removeEdge", edgeId }),
   updateNode: (nodeId: string, node: EditorGraphNode): EditorAction => ({ type: "updateNode", nodeId, node }),
+  setRunStatus: (runStatus: EditorState["runStatus"]): EditorAction => ({ type: "setRunStatus", runStatus }),
+  setRunError: (runError: RunErrorInfo | null): EditorAction => ({ type: "setRunError", runError }),
 } as const;

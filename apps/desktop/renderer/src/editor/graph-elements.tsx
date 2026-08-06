@@ -8,6 +8,7 @@ import { register } from "@antv/x6-react-shape";
 import type { EditorGraphNode } from "@core/editing/editor-graph";
 import type { Edge as CoreEdge } from "@core/model/types";
 import { SubworkflowNode } from "../components/SubworkflowNode.js";
+import { ReviewBadge } from "../components/ReviewBadge.js";
 import { toPortCellId } from "./ports.js";
 
 export const NODE_SHAPE = "hnflow-node";
@@ -102,7 +103,11 @@ function WorkflowNodeView(props: { readonly node: Node; readonly graph: Graph })
   }
   const hasSubworkflow = data.subworkflow !== undefined;
   return (
-    <div className={`hnflow-node-card${hasSubworkflow ? " hnflow-node-card-subworkflow" : ""}`}>
+    <div
+      className={`hnflow-node-card${hasSubworkflow ? " hnflow-node-card-subworkflow" : ""}`}
+      style={{ position: "relative" }}
+    >
+      <ReviewBadge node={data} />
       <div className="hnflow-node-title" title={data.name}>
         {data.name}
       </div>
