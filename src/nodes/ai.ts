@@ -11,7 +11,7 @@ import { resolveModel, type InputMessage, type ModelConfig } from "../ai/model.j
 import { availableTools } from "../ai/toolRegistry.js";
 import { resolveToolReferences } from "../ai/tool.js";
 import type { INodeDefinition, NodeLogger } from "../execution/types.js";
-import { buildSystemPrompt, mergeGroupTools, warnGroupConflicts } from "./ai-groups.js";
+import { buildSystemPrompt, mergeGroupToolsAsync, warnGroupConflicts } from "./ai-groups.js";
 import { allToolsInterrupt, parseInterrupt, type InterruptParam } from "./ai-interrupt.js";
 import { aiParamsSchema } from "./param-fields.js";
 
@@ -212,8 +212,8 @@ export const aiNode: INodeDefinition = {
     // 默认 provider openai：无 key 时构造不抛，仅运行时模型调用失败。
     const model = resolveModel(params.model ?? { provider: "openai" });
     const baseTools = resolveToolReferences(params.tools ?? [], availableTools());
-    // 功能组工具追加到解析结果之后：已注册用代码 handler，未注册跳过（D1）。
-    const tools = mergeGroupTools(baseTools, ctx.activeGroups);
+    // 功能组工具追加：代码工具已注册用 handler 未注册跳过（D1）；MCP 经进程池发现注入（D2），单点故障 warn 跳过不炸节点。
+    const tools = await mergeGroupToolsAsync(baseTools, ctx.activeGroups, ctx.mcpPool, ctx.logger.warn);
     const inputMessages = params.inputMessages ?? [];
     // 功能组 agent 身份拼接：节点 prompt 在前、agent 文本在后，\n\n 分隔（T6）。
     const systemPrompt = buildSystemPrompt(params.systemPrompt, ctx.activeGroups?.agent);

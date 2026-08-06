@@ -91,6 +91,8 @@ async function executeSubEngine(
       ...(ctx.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: ctx.groupCacheMaxSize }),
       // 子工作流模板（v0.3.3 T2）：父引擎配置 templatesRootDir 时子引擎按同样配置加载模板工作流（嵌套子图 template 引用一致）。
       ...(ctx.templatesRootDir === undefined ? {} : { templatesRootDir: ctx.templatesRootDir }),
+      // MCP 进程池（v0.4.2 D2）：父引擎配置 mcpPool 时子引擎按同样配置注入（嵌套子图 AI 节点 MCP 工具一致）。
+      ...(ctx.mcpPool === undefined ? {} : { mcpPool: ctx.mcpPool }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {
