@@ -16,6 +16,7 @@ import {
   RedoOutlined,
   RobotOutlined,
   SaveOutlined,
+  ScheduleOutlined,
   UndoOutlined,
 } from "@ant-design/icons";
 import { workflowRedo, workflowUndo } from "./WorkflowCanvas.js";
@@ -24,12 +25,13 @@ import { useEditor } from "../editor/state.js";
 import { useNodeUi } from "../editor/ui-context.js";
 import { SaveAsVersionModal } from "./SaveAsVersionModal.js";
 
-/** 工具栏 props：onToggleAgent 控制 AI 对话面板开关（v0.4.2）。 */
+/** 工具栏 props：onToggleAgent 控制 AI 对话面板开关（v0.4.2）；onToggleTask 控制人工任务面板开关（v0.9.3）。 */
 interface WorkflowToolbarProps {
   readonly onToggleAgent: () => void;
+  readonly onToggleTask: () => void;
 }
 
-export default function WorkflowToolbar({ onToggleAgent }: WorkflowToolbarProps): JSX.Element {
+export default function WorkflowToolbar({ onToggleAgent, onToggleTask }: WorkflowToolbarProps): JSX.Element {
   const { handleNew, handleOpen, handleSave, handleRun } = useWorkflowFile();
   const { readOnly, setReadOnly } = useNodeUi();
   const { state } = useEditor();
@@ -89,6 +91,9 @@ export default function WorkflowToolbar({ onToggleAgent }: WorkflowToolbarProps)
       </Button>
       <Button icon={<RobotOutlined />} onClick={onToggleAgent}>
         AI 助手
+      </Button>
+      <Button icon={<ScheduleOutlined />} onClick={onToggleTask}>
+        人工任务
       </Button>
       {readOnly ? (
         <Button type="primary" icon={<SaveOutlined />} onClick={() => setSaveAsVersionOpen(true)}>

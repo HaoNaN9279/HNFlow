@@ -21,11 +21,13 @@ import { ReviewDialog } from "./components/ReviewDialog.js";
 import { NodeContextMenu } from "./components/NodeContextMenu.js";
 import { ErrorPanel } from "./components/ErrorPanel.js";
 import { DebugPanel } from "./components/DebugPanel.js";
+import { TaskPanel } from "./components/TaskPanel.js";
 
 const { Header, Sider, Content } = Layout;
 
 export default function App() {
   const [agentOpen, setAgentOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   const [reviewRequest, setReviewRequest] = useState<ReviewRequestInfo | null>(null);
   // 订阅审核请求：main 运行到待审核 command 节点时弹对话框（onReviewRequest 返回取消函数，随卸载清理）。
   useEffect(() => window.hnflow.onReviewRequest(setReviewRequest), []);
@@ -50,7 +52,10 @@ export default function App() {
                 <span className="app-logo">HNFlow</span>
                 <span className="app-subtitle">工作流编辑器 v0.4.0</span>
                 <span className="app-toolbar-spacer" />
-                <WorkflowToolbar onToggleAgent={() => setAgentOpen((v) => !v)} />
+                <WorkflowToolbar
+                  onToggleAgent={() => setAgentOpen((v) => !v)}
+                  onToggleTask={() => setTaskOpen((v) => !v)}
+                />
               </Header>
               <Layout>
                 <Sider id="stencil-panel" width={240} className="app-panel">
@@ -73,6 +78,7 @@ export default function App() {
             <NodeContextMenu />
             <ErrorPanel />
             <DebugPanel />
+            {taskOpen && <TaskPanel onClose={() => setTaskOpen(false)} />}
           </NodeUiProvider>
         </WorkflowGraphProvider>
       </EditorProvider>
