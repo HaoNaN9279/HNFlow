@@ -12,6 +12,7 @@ import { availableTools } from "../ai/toolRegistry.js";
 import { resolveToolReferences } from "../ai/tool.js";
 import type { INodeDefinition, NodeLogger } from "../execution/types.js";
 import { buildSystemPrompt, mergeGroupToolsAsync, warnGroupConflicts } from "./ai-groups.js";
+import { applyToolContextPruning, parseToolBudget, parseToolFilter, parseToolMode, type ToolFilterMode } from "./ai-groups.js";
 import { allToolsInterrupt, parseInterrupt, type InterruptParam } from "./ai-interrupt.js";
 import { aiParamsSchema } from "./param-fields.js";
 
@@ -32,6 +33,9 @@ interface AIParams {
   readonly tools?: readonly string[];
   readonly stream?: boolean;
   readonly interrupt?: InterruptParam;
+  readonly toolMode?: ToolFilterMode;
+  readonly toolFilter?: readonly string[];
+  readonly toolBudget?: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -172,6 +176,9 @@ function parseParams(params: Readonly<Record<string, unknown>>): AIParams {
   const tools = params["tools"] === undefined ? undefined : parseTools(params["tools"]);
   const stream = params["stream"] === undefined ? undefined : parseStream(params["stream"]);
   const interrupt = params["interrupt"] === undefined ? undefined : parseInterrupt(params["interrupt"], InvalidAIParamsError);
+  const toolMode = params["toolMode"] === undefined ? undefined : parseToolMode(params["toolMode"], InvalidAIParamsError);
+  const toolFilter = params["toolFilter"] === undefined ? undefined : parseToolFilter(params["toolFilter"], InvalidAIParamsError);
+  const toolBudget = params["toolBudget"] === undefined ? undefined : parseToolBudget(params["toolBudget"], InvalidAIParamsError);
   return {
     ...(model !== undefined ? { model } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
@@ -179,6 +186,9 @@ function parseParams(params: Readonly<Record<string, unknown>>): AIParams {
     ...(tools !== undefined ? { tools } : {}),
     ...(stream !== undefined ? { stream } : {}),
     ...(interrupt !== undefined ? { interrupt } : {}),
+    ...(toolMode !== undefined ? { toolMode } : {}),
+    ...(toolFilter !== undefined ? { toolFilter } : {}),
+    ...(toolBudget !== undefined ? { toolBudget } : {}),
   };
 }
 
@@ -217,10 +227,17 @@ export const aiNode: INodeDefinition = {
     const model = resolveModel(params.model ?? { provider: "openai" });
     const baseTools = resolveToolReferences(params.tools ?? [], availableTools());
     // 功能组工具追加：代码工具已注册用 handler 未注册跳过（D1）；MCP 经进程池发现注入（D2），单点故障 warn 跳过不炸节点。
-    const tools = await mergeGroupToolsAsync(baseTools, ctx.activeGroups, ctx.mcpPool, ctx.logger.warn);
+    let tools = await mergeGroupToolsAsync(baseTools, ctx.activeGroups, ctx.mcpPool, ctx.logger.warn);
     const inputMessages = params.inputMessages ?? [];
     // 功能组 agent 身份拼接：节点 prompt 在前、agent 文本在后，\n\n 分隔（T6）。
     const systemPrompt = buildSystemPrompt(params.systemPrompt, ctx.activeGroups?.agent);
+    // 上下文裁剪（v0.9.6）：subset 白名单切分；auto 相关度排序；toolBudget 超限按相关度裁剪。
+    const query = `${systemPrompt ?? ""} ${inputMessages.map((m) => m.content).join(" ")}`.trim();
+    const pruned = applyToolContextPruning(tools, params.toolMode, params.toolFilter, params.toolBudget, query);
+    tools = pruned.tools;
+    if (pruned.trimmed > 0) {
+      ctx.logger.warn(`工具上下文超预算，已裁剪至 ${tools.length} 个（裁掉 ${pruned.trimmed} 个）`, { kind: "tool_budget_trimmed", trimmed: pruned.trimmed });
+    }
     // interrupt:true 展开为覆盖全部已解析工具的默认审批配置；对象配置原样透传。
     const interrupt = params.interrupt === undefined
       ? undefined

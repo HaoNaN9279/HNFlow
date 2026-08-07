@@ -31,4 +31,28 @@ export const aiParamsSchema: readonly ParamField[] = [
     type: "json",
     description: 'true 或 { interruptOn: { 工具名: { description?, allowedDecisions? } } }',
   },
+  {
+    key: "toolMode",
+    label: "工具裁剪模式",
+    type: "select",
+    default: "all",
+    options: [
+      { label: "全量（all）", value: "all" },
+      { label: "白名单（subset）", value: "subset" },
+      { label: "自动（auto）", value: "auto" },
+    ],
+    description: "all=全部工具；subset=仅 toolFilter 白名单；auto=按相关度排序 + 预算裁剪",
+  },
+  {
+    key: "toolFilter",
+    label: "工具白名单",
+    type: "json",
+    description: 'subset 模式保留的工具名数组，如 ["demo.getWeather"]',
+  },
+  {
+    key: "toolBudget",
+    label: "工具预算（token）",
+    type: "number",
+    description: "可选正数：超限时按相关度裁剪工具描述上下文",
+  },
 ];
