@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, shell, Tray } from "electron";
 import * as path from "node:path";
+import { HumanTaskStore } from "../../../src/human/HumanTaskStore.js";
 import { RunStateStore } from "../../../src/runstate/RunStateStore.js";
 import { registerIpcHandlers } from "./ipc/handlers.js";
 import { ensureTemplateLibrary, TEMPLATE_LIB_DIR } from "./ipc/templates.js";
@@ -8,6 +9,7 @@ import { RUN_STATE_FILE } from "./ipc/run.js";
 import { getActiveRuns } from "./ipc/run-tracker.js";
 import { ensureTrayIcon } from "./tray-icon.js";
 import { recoverInterruptedRuns } from "./recovery.js";
+import { scanAndNotify } from "./task-timeout-scan.js";
 import {
   CLOSE_BUTTON_ORDER,
   CLOSE_CHOICES,
@@ -19,6 +21,9 @@ import {
 
 /** 开发服务器地址：vite dev 默认端口 5173；可通过环境变量覆盖。 */
 const DEV_SERVER_URL = "http://localhost:5173";
+
+/** 人工任务持久化文件名（位于 userData 下）；超时扫描 HumanTaskStore 用。 */
+const HUMAN_TASK_FILE = "human_tasks.json";
 
 /** 当前是否为开发模式：VITE_DEV_SERVER_URL 显式指定 或 NODE_ENV=development。
  *  括号访问 env 避免 bun build 把 process.env.NODE_ENV 编译期常量折叠（NODE_ENV 是 bun 的已知折叠键）。 */
@@ -34,6 +39,9 @@ let tray: Tray | undefined;
 
 /** 完整退出标志：托盘菜单退出 / 关闭确认「退出应用」/ before-quit 置位，close 拦截据此放行。 */
 let isQuitting = false;
+
+/** 人工任务超时扫描定时器句柄：undefined 表示未启动；完整退出时 clearInterval。 */
+let timeoutTimer: ReturnType<typeof setInterval> | undefined;
 
 /** 创建主窗口，按模式加载渲染进程页面（dev=开发服务器 / prod=构建产物）。
  *  产物路径基于 app.getAppPath()（bun build 会把 __dirname 内联成源码目录，不可用于定位 dist 产物）。 */
@@ -202,6 +210,15 @@ void app.whenReady().then(async () => {
   await ensureGroupLibrary(app.getPath("userData")).catch((error) => {
     console.error("功能组库初始化失败（可手动创建 groups 目录）", error);
   });
+  // 人工任务超时提醒：启动扫描一次 + 每小时定时扫描；读取/通知异常仅告警不崩主进程。
+  const humanStore = new HumanTaskStore({ filePath: path.join(app.getPath("userData"), HUMAN_TASK_FILE) });
+  const scan = (): void => {
+    void scanAndNotify(humanStore).catch((error) => {
+      console.warn("人工任务超时扫描失败", error);
+    });
+  };
+  scan();
+  timeoutTimer = setInterval(scan, 60 * 60 * 1000);
   buildMenu();
   // 托盘初始化（base64 内嵌图标写出 userData/icons/tray.png）；失败不阻塞启动——无托盘时关窗即退出（见 window-all-closed 兜底）。
   try {
@@ -228,9 +245,13 @@ app.on("window-all-closed", () => {
   }
 });
 
-// 完整退出清理：销毁托盘；运行计数为纯内存，随进程退出清零，无需额外清理。
+// 完整退出清理：销毁托盘；停止超时扫描定时器；运行计数为纯内存，随进程退出清零，无需额外清理。
 app.on("before-quit", () => {
   isQuitting = true;
+  if (timeoutTimer !== undefined) {
+    clearInterval(timeoutTimer);
+    timeoutTimer = undefined;
+  }
   if (tray !== undefined) {
     tray.destroy();
     tray = undefined;
