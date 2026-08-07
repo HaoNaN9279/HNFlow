@@ -5,6 +5,8 @@
 import type { HumanTaskStoreLike } from "../db/stores/types.js";
 import type { HumanTask, HumanTaskSpec } from "../human/types.js";
 import type { Node } from "../model/types.js";
+import { isEmptyTaskResult } from "./engine-util.js";
+import { InvalidTaskResultError } from "./errors.js";
 
 /** 崩溃确认任务 meta.kind（与 ai_interrupt 区分，isAiInterruptTask 不误伤）。 */
 export const CRASH_CONFIRM_KIND = "crash_confirm";
@@ -63,4 +65,14 @@ export function shouldCrashConfirm(idempotencyKey: string | undefined, idempoten
 /** 构造 SuspendOps（Engine.suspendOps getter 复用：挂起与崩溃确认共用注入面）。 */
 export function makeSuspendOps(workflowId: string, node: Node, runId: string, store: HumanTaskStoreLike): SuspendOps {
   return { workflowId, nodeId: node.id, nodeName: node.name, runId, store };
+}
+
+/** 人工任务提交结果强制校验（v0.9.3）：节点 params.requireResult=true 且结果为空 → 抛 InvalidTaskResultError；
+ *  子图防御：任务节点不在本引擎图内（子图任务）→ 跳过校验（父引擎不校验子图节点）。 */
+export function assertValidTaskResult(nodeById: ReadonlyMap<string, Node>, task: HumanTask, result: unknown): void {
+  const node = nodeById.get(task.nodeId);
+  if (node === undefined) return; // 子图任务：nodeId 属于子引擎图，本引擎无节点信息，跳过校验。
+  if (node.params["requireResult"] === true && isEmptyTaskResult(result)) {
+    throw new InvalidTaskResultError(task.nodeId);
+  }
 }

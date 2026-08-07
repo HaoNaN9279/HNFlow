@@ -27,3 +27,11 @@ export class IdempotencyKeyConflictError extends Error {
     super(`idempotency key conflict: workflow "${workflowId}" already ran with key "${idempotencyKey}"`);
   }
 }
+
+/** 人工任务提交结果校验失败（v0.9.3）：节点 requireResult=true 时提交结果不得为空。 */
+export class InvalidTaskResultError extends Error {
+  readonly name = "InvalidTaskResultError";
+  constructor(readonly nodeId: string) {
+    super(`任务节点「${nodeId}」要求提交结果不为空，请填写有效内容后再提交`);
+  }
+}

@@ -20,14 +20,14 @@ import { AiInterruptRequiredError, type AIExecutionResult } from "../ai/executor
 import type { SqliteDatabase } from "../db/index.js";
 import { beginAiTransaction, isAiInterruptTask, resumeAiTask, skipAiTask, suspendAiNode, type AiOps, type AIResumeContext } from "./ai-interrupt.js";
 import { buildIncomingEdges, buildResultFromEngine, buildRunStateFromEngine, deepCopyWorkflow, persistRunState, rebuildContext, rebuildMachines, topoSort, type PersistRunStateOps } from "./runstate-persist.js";
-import { crashConfirmToWaiting, makeSuspendOps, shouldCrashConfirm, suspendToWaiting } from "./human-suspend.js";
+import { crashConfirmToWaiting, makeSuspendOps, shouldCrashConfirm, suspendToWaiting, assertValidTaskResult } from "./human-suspend.js";
 import { HumanTaskRequiredError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
 import { ReviewRequiredError } from "../security/command-guard.js";
 import { registerIdempotencyKey } from "./idempotency.js";
 import { formatNodePath } from "./node-path.js";
 export type { AIResumeContext } from "./ai-interrupt.js";
 export { topoSort } from "./runstate-persist.js";
-export { HumanTaskRequiredError, IdempotencyKeyConflictError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
+export { HumanTaskRequiredError, IdempotencyKeyConflictError, InvalidTaskResultError, SubworkflowPausedError, SubworkflowWaitingError } from "./errors.js";
 export type { WorkflowContextSnapshot } from "./engine-util.js";
 export interface ExecutionResult {
   readonly workflowId: string;
@@ -114,8 +114,7 @@ export class ExecutionEngine {
   }
   get logs(): readonly EngineLogEntry[] { return [...this.#logs]; }
   get nodeDurations(): Readonly<Record<string, number>> { return Object.fromEntries(this.#nodeDurations); } get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
-  get runId(): string { return this.#runId; }
-  get isReadOnly(): boolean { return this.#runActive; }
+  get runId(): string { return this.#runId; } get isReadOnly(): boolean { return this.#runActive; }
   /** 当前工作流的不可变深拷贝（含嵌套 subworkflow，调用方修改不影响引擎内部）。 */
   get workflowSnapshot(): Workflow { return deepCopyWorkflow(this.#workflow); }
   /** 当前工作流上下文的完整快照（global/workflow/node 三层；值为独立副本，调用方修改不影响引擎内部）。 */
@@ -302,6 +301,7 @@ export class ExecutionEngine {
     if (isAiInterruptTask(task)) {
       return resumeAiTask(this.aiOps(), task, result);
     }
+    assertValidTaskResult(this.#nodeById, task, result); // v0.9.3：requireResult 节点空结果拒绝（子图任务跳过）
     this.#context.set("workflow", `task_result:${task.nodeId}`, result);
     await this.humanTaskStore.complete(taskId, result);
     return this.continueFrom(task, 0, "resume failed");

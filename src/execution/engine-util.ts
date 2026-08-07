@@ -102,3 +102,11 @@ export async function askReviewDecision(
 ): Promise<ReviewDecision> {
   return (await onReviewRequired?.({ nodeId, description })) ?? "reject";
 }
+
+/** 人工任务提交结果是否为空（v0.9.3 requireResult 校验用）：undefined / 空字符串 / 空对象 {}。 */
+export function isEmptyTaskResult(result: unknown): boolean {
+  if (result === undefined) return true;
+  if (typeof result === "string" && result === "") return true;
+  if (typeof result === "object" && result !== null && Object.keys(result).length === 0) return true;
+  return false;
+}

@@ -18,13 +18,14 @@ interface HumanTaskParams {
   readonly title: string;
   readonly description: string | undefined;
   readonly fallback: HumanTaskFallback | undefined;
+  readonly requireResult: boolean;
 }
 
 function isFallback(value: unknown): value is HumanTaskFallback {
   return value === "manual" || value === "skip" || value === "ai" || value === "defer";
 }
 
-/** 边界解析：title 必填字符串，description/fallback 可选；存在但类型非法则整体失败 */
+/** 边界解析：title 必填字符串，description/fallback/requireResult 可选；存在但类型非法则整体失败 */
 function parseParams(params: Readonly<Record<string, unknown>>): HumanTaskParams | undefined {
   const title = params["title"];
   if (typeof title !== "string") {
@@ -38,7 +39,11 @@ function parseParams(params: Readonly<Record<string, unknown>>): HumanTaskParams
   if (fallback !== undefined && !isFallback(fallback)) {
     return undefined;
   }
-  return { title, description, fallback };
+  const requireResult = params["requireResult"];
+  if (requireResult !== undefined && typeof requireResult !== "boolean") {
+    return undefined;
+  }
+  return { title, description, fallback, requireResult: requireResult === true };
 }
 
 export const humanTaskNode: INodeDefinition = {
@@ -53,6 +58,7 @@ export const humanTaskNode: INodeDefinition = {
       { label: "AI 代做（未实现）", value: "ai" },
       { label: "延后", value: "defer" },
     ] },
+    { key: "requireResult", label: "强制产物校验", type: "boolean", default: false, description: "提交结果不得为空" },
   ],
   inputs: [],
   outputs: [{ id: "output", name: "output", type: "any", direction: "out" }],
