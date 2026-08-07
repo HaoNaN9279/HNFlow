@@ -87,10 +87,10 @@ async function writeSourceGroup(root: string): Promise<{ group: CapabilityGroup;
   const group = makeGroup();
   const files: Array<[string, string]> = [
     ["v1.0.0/agent.md", "# 旧版 agent\n"],
-    ["v1.0.0/tools/old.json", `${JSON.stringify({ name: "old-tool" }, null, 2)}\n`],
+    ["v1.0.0/tools/old.json", `${JSON.stringify({ name: "old-tool", description: "旧工具", parameters: {} }, null, 2)}\n`],
     ["v1.0.0/rules/01-usage.md", "规则一（旧）\n"],
     ["v2.0.0/agent.md", "# 新版 agent\n"],
-    ["v2.0.0/tools/new.json", `${JSON.stringify({ name: "new-tool" }, null, 2)}\n`],
+    ["v2.0.0/tools/new.json", `${JSON.stringify({ name: "new-tool", description: "新工具", parameters: {} }, null, 2)}\n`],
     ["v2.0.0/mcps/server.json", `${JSON.stringify({ name: "mcp-server" }, null, 2)}\n`],
     ["v2.0.0/rules/01-usage.md", "规则一（新）\n"],
     ["v2.0.0/rules/02-extra.md", "多余文件（content 未声明，应宽容还原）\n"],
@@ -125,10 +125,10 @@ function makeFullPackage(extraFiles: Record<string, string> = {}): GroupPackage 
   const group = makeGroup();
   return makePackage(group, {
     "v1.0.0/agent.md": base64("# 旧版 agent\n"),
-    "v1.0.0/tools/old.json": base64("{\"name\":\"old-tool\"}\n"),
+    "v1.0.0/tools/old.json": base64("{\"name\":\"old-tool\",\"description\":\"旧工具\",\"parameters\":{}}\n"),
     "v1.0.0/rules/01-usage.md": base64("规则一（旧）\n"),
     "v2.0.0/agent.md": base64("# 新版 agent\n"),
-    "v2.0.0/tools/new.json": base64("{\"name\":\"new-tool\"}\n"),
+    "v2.0.0/tools/new.json": base64("{\"name\":\"new-tool\",\"description\":\"新工具\",\"parameters\":{}}\n"),
     "v2.0.0/mcps/server.json": base64("{\"name\":\"mcp-server\"}\n"),
     "v2.0.0/rules/01-usage.md": base64("规则一（新）\n"),
     ...extraFiles,
@@ -280,19 +280,22 @@ describe("端到端：导出 → 导入 → scanGroups 还原", () => {
     // 读回包文件再解析（验证 T3 原子写产物可被 parseGroupPackage 接受）
     const raw = await readFile(join(TEMP_BASE, "pkg.hnflow-group"), "utf8");
     const parsed = parseGroupPackage(raw);
-    // T4 导入到临时根 B
+    // T4 导入到临时根 B：返回 { group, findings }
     const restored = await unpackGroupPackage(rootB, parsed);
 
     // 元数据还原：guid / namespace / currentVersion / versions 数 / deprecated 标记
-    expect(restored.guid).toBe(source.guid);
-    expect(restored.namespace).toBe(source.namespace);
-    expect(restored.currentVersion).toBe(source.currentVersion);
-    expect(restored.versions).toHaveLength(source.versions.length);
-    expect(restored.versions[0]?.deprecated).toBe(true);
-    expect(restored.versions[1]?.deprecated).toBeUndefined();
-    expect(restored.versions[1]?.content.tools).toEqual(source.versions[1]?.content.tools);
-    expect(restored.versions[1]?.content.mcps).toEqual(source.versions[1]?.content.mcps);
-    expect(restored.versions[1]?.content.rules).toEqual(source.versions[1]?.content.rules);
+    expect(restored.group.guid).toBe(source.guid);
+    expect(restored.group.namespace).toBe(source.namespace);
+    expect(restored.group.currentVersion).toBe(source.currentVersion);
+    expect(restored.group.versions).toHaveLength(source.versions.length);
+    expect(restored.group.versions[0]?.deprecated).toBe(true);
+    expect(restored.group.versions[1]?.deprecated).toBeUndefined();
+    expect(restored.group.versions[1]?.content.tools).toEqual(source.versions[1]?.content.tools);
+    expect(restored.group.versions[1]?.content.mcps).toEqual(source.versions[1]?.content.mcps);
+    expect(restored.group.versions[1]?.content.rules).toEqual(source.versions[1]?.content.rules);
+
+    // 安全扫描接线：干净包 findings 空数组（非阻塞）
+    expect(restored.findings).toEqual([]);
 
     // scanGroups 还原一致（验收 2 闭环终点）
     const scanned = await scanGroups(rootB);
@@ -318,6 +321,6 @@ describe("端到端：导出 → 导入 → scanGroups 还原", () => {
     const { group: source } = await writeSourceGroup(rootA);
     const pkg = await exportGroupPackage(rootA, source.namespace, join(TEMP_BASE, "pkg2.hnflow-group"));
     const restored = await unpackGroupPackage(rootB, pkg);
-    expect(restored.guid).toBe(source.guid);
+    expect(restored.group.guid).toBe(source.guid);
   });
 });

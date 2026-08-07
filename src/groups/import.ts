@@ -5,9 +5,12 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { atomicWriteFile } from "../storage/atomic.js";
+import { loadGroupContent } from "./content-loader.js";
 import { GroupFileError } from "./errors.js";
 import { validateNamespace } from "./init.js";
 import { groupJsonSchema, scanGroups } from "./load.js";
+import { scanGroupContent } from "./scan.js";
+import type { SecurityFinding } from "./scan.js";
 import { parseSemVer } from "./semver.js";
 import type { CapabilityGroup } from "./types.js";
 
@@ -23,6 +26,12 @@ export interface GroupPackage {
 
 /** 版本目录前缀形状：v<数字>.<数字>.<数字>/；semver 段再用 parseSemVer 严格校验。 */
 const VERSION_DIR_PATTERN = /^v\d+\.\d+\.\d+\//;
+
+/** 导入结果：还原后的功能组 + 内容安全扫描 findings（非阻塞，空数组 = 干净）。 */
+export interface UnpackResult {
+  readonly group: CapabilityGroup;
+  readonly findings: readonly SecurityFinding[];
+}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -194,10 +203,11 @@ async function writeContentFiles(
 
 /**
  * 导入 .hnflow-group 包：元数据校验 → namespace 校验（防 ".." 段逃逸）→ 冲突检测 →
- * 写盘还原（版本目录 + 内容文件 + 原子 group.json）。返回还原后的 CapabilityGroup。
+ * 写盘还原（版本目录 + 内容文件 + 原子 group.json）→ 安全扫描当前版本。
+ * 返回 { group, findings }：findings 为内容安全扫描结果（非阻塞，不因 findings 拒绝导入）。
  * 任一校验失败抛 GroupFileError（明确中文消息）。
  */
-export async function unpackGroupPackage(rootDir: string, pkg: GroupPackage): Promise<CapabilityGroup> {
+export async function unpackGroupPackage(rootDir: string, pkg: GroupPackage): Promise<UnpackResult> {
   const group = validateGroupMetadata(pkg.group);
   const namespace = validateNamespace(group.namespace); // schema 仅校验非空，此处补路径安全
   const groupDir = join(rootDir, ...namespace.split("/"));
@@ -211,5 +221,22 @@ export async function unpackGroupPackage(rootDir: string, pkg: GroupPackage): Pr
   await atomicWriteFile(join(groupDir, "group.json"), `${JSON.stringify(group, null, 2)}\n`, (text: string) => {
     JSON.parse(text); // 完整性校验：可解析即认为写入完整
   });
-  return group;
+  return { group, findings: await scanImportedGroup(rootDir, group) };
+}
+
+/** 导入后扫描当前版本内容：findings 非空时 console.warn 摘要；内容无法加载时跳过扫描（非阻塞）。 */
+async function scanImportedGroup(rootDir: string, group: CapabilityGroup): Promise<readonly SecurityFinding[]> {
+  try {
+    const loaded = await loadGroupContent(rootDir, group, group.currentVersion);
+    const report = scanGroupContent(loaded);
+    if (report.findings.length > 0) {
+      const summary = report.findings
+        .map((finding) => `[${finding.severity}/${finding.category}] ${finding.detail}`)
+        .join("；");
+      console.warn(`功能组导入安全扫描：发现 ${report.findings.length} 项告警（${summary}）`);
+    }
+    return report.findings;
+  } catch {
+    return []; // 内容加载失败（如工具 JSON 不完整）时跳过扫描，不阻断导入
+  }
 }
