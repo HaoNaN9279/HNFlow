@@ -121,6 +121,12 @@ describe("runWorkflowOnce 调试信息（T2b）", () => {
       expect(result.debug.contextSnapshot.node).toEqual({});
       // 时间单调
       expect(result.debug.startTime).toBeLessThanOrEqual(result.debug.endTime);
+      // 节点耗时（v0.9.2 执行数据分析）：全部成功节点均有记录（数值 ≥ 0）
+      expect(result.debug.nodeDurations).toBeDefined();
+      if (result.debug.nodeDurations === undefined) return;
+      for (const nodeId of ["start", "log", "end"]) {
+        expect(result.debug.nodeDurations[nodeId]).toBeGreaterThanOrEqual(0);
+      }
     }
   });
 

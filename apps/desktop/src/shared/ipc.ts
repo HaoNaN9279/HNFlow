@@ -115,6 +115,8 @@ export type DebugNodeStatus = "Idle" | "Running" | "Success" | "Failed" | "Skipp
 export interface RunDebugInfo {
   readonly runId: string;
   readonly nodeStates: Record<string, DebugNodeStatus>;
+  /** 节点耗时 ms（v0.9.2 执行数据分析）：运行成功/失败均可附带。 */
+  readonly nodeDurations?: Record<string, number>;
   readonly nodeOutputs: Record<string, Record<string, unknown>>;
   readonly contextSnapshot: DebugContextSnapshot;
   readonly logs: readonly IpcLogEntry[];

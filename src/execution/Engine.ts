@@ -88,8 +88,8 @@ export class ExecutionEngine {
   #states = new Map<string, NodeStatus>();
   #outputs = new Map<string, Record<string, unknown>>();
   #machines = new Map<string, NodeStateMachine>();
-  #logs: EngineLogEntry[] = [];
-  #pendingNodeId: string | undefined;
+  #logs: EngineLogEntry[] = []; #pendingNodeId: string | undefined;
+  #nodeDurations = new Map<string, number>();
   readonly #stores: EngineStores;
   #runActive = false;
   #groupsResolver: GroupsResolver | undefined; #templatesRootDir: string;
@@ -113,7 +113,7 @@ export class ExecutionEngine {
     }
   }
   get logs(): readonly EngineLogEntry[] { return [...this.#logs]; }
-  get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
+  get nodeDurations(): Readonly<Record<string, number>> { return Object.fromEntries(this.#nodeDurations); } get pendingNodeId(): string | undefined { return this.#pendingNodeId; }
   get runId(): string { return this.#runId; }
   get isReadOnly(): boolean { return this.#runActive; }
   /** 当前工作流的不可变深拷贝（含嵌套 subworkflow，调用方修改不影响引擎内部）。 */
@@ -153,7 +153,8 @@ export class ExecutionEngine {
     const persist = this.#options.persist === true;
     let savedError: string | undefined;
     for (const nodeId of order.slice(startIndex)) {
-      const outcome = await this.runNode(nodeId);
+      const nodeStart = Date.now(); const outcome = await this.runNode(nodeId);
+      this.#nodeDurations.set(nodeId, Date.now() - nodeStart); // runNode 任何返回都记录（ok/skipped/waiting/paused/failed）
       switch (outcome.kind) {
         case "failed": {
           savedError ??= outcome.message; // finally 链：保留首个主错误并立即持久化（后续 finally 仍可执行）
@@ -431,7 +432,7 @@ export class ExecutionEngine {
     this.#states = new Map();
     this.#outputs = new Map();
     this.#machines = new Map();
-    this.#logs = [];
+    this.#logs = []; this.#nodeDurations = new Map(); // 本次运行重新计时（v0.9.2 执行数据分析）
     this.#context = createWorkflowContext(this.#workflow, this.#options);
     for (const node of this.#workflow.nodes) this.#machines.set(node.id, new NodeStateMachine());
   }

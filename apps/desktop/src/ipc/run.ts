@@ -153,6 +153,8 @@ function buildDebugInfo(engine: ExecutionEngine, result: ExecutionResult): RunDe
   return {
     runId: engine.runId,
     nodeStates: result.nodeStates,
+    // 节点耗时（v0.9.2 执行数据分析）：engine.nodeDurations 有值则带，空对象省略（对齐 exactOptionalPropertyTypes）。
+    ...(Object.keys(engine.nodeDurations).length === 0 ? {} : { nodeDurations: engine.nodeDurations }),
     nodeOutputs: result.nodeOutputs,
     contextSnapshot: engine.contextSnapshot,
     // EngineLogEntry 与 IpcLogEntry 形状一致，直接透传（查错依据：失败节点路径/错误消息在日志 data 内）。
