@@ -44,6 +44,19 @@ const unboundBadgeStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+/** 废弃标签样式：橙色警示，与 unboundBadgeStyle 同构（不占 global.css 分区）。 */
+const deprecatedBadgeStyle: CSSProperties = {
+  fontSize: 10,
+  lineHeight: 1,
+  padding: "2px 5px",
+  borderRadius: 4,
+  border: "1px solid #ffd591",
+  background: "#fff7e6",
+  color: "#fa8c16",
+  whiteSpace: "nowrap",
+  marginLeft: 6,
+};
+
 /** 按分组索引元数据；仅保留有节点的分组。 */
 function groupMetadata(list: readonly NodeTypeMetadata[]): readonly {
   readonly key: string;
@@ -184,7 +197,10 @@ export default function StencilPanel() {
           ) : (
             groupTools.map((group) => (
               <div key={group.key} className="stencil-group">
-                <div className="stencil-group-title">{group.label}</div>
+                <div className="stencil-group-title">
+                  {group.label}
+                  {group.deprecated === true && <span style={deprecatedBadgeStyle}>已废弃</span>}
+                </div>
                 {group.items.map((item) => (
                   <div
                     key={`${item.kind}:${item.name}`}

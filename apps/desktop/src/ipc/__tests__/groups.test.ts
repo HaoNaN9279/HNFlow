@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GROUP_LIB_DIR, ensureGroupLibrary, scanGroupsSummary } from "../groups.js";
+import { SEED_GROUPS } from "../seed-groups.js";
 
 /** 临时 userData 根目录（每个测试独立创建，测试后清理）。 */
 let tempBase: string;
@@ -18,11 +19,12 @@ afterEach(async () => {
 });
 
 describe("ensureGroupLibrary + scanGroupsSummary", () => {
-  it("首启写种子 → 返回 demo 组（namespace=demo、含 echo_tool 声明、mcps 空）", async () => {
+  it("首启写种子 → 返回 4 组（demo + 三个领域组，按 namespace 字典序）", async () => {
     await ensureGroupLibrary(tempBase);
     const summaries = await scanGroupsSummary(join(tempBase, GROUP_LIB_DIR));
-    expect(summaries).toHaveLength(1);
-    const demo = summaries[0];
+    expect(summaries).toHaveLength(4);
+    // demo 不再位于 summaries[0]（按 namespace 字典序排序），改用 find 按 namespace 查找。
+    const demo = summaries.find((summary) => summary.namespace === "demo");
     if (demo === undefined) return;
     expect(demo.namespace).toBe("demo");
     expect(demo.currentVersion).toBe("1.0.0");
@@ -30,6 +32,29 @@ describe("ensureGroupLibrary + scanGroupsSummary", () => {
     expect(demo.tools[0]?.name).toBe("echo_tool");
     expect(demo.tools[0]?.description).toBe("演示工具：回显文本");
     expect(demo.mcps).toHaveLength(0);
+  });
+
+  it("三个领域种子组写盘 → 汇总含各工具摘要，种子定义含规则", async () => {
+    const seedNamespaces = ["web/scraping", "data/processing", "code/review"];
+    for (const seed of SEED_GROUPS) {
+      if (!seedNamespaces.includes(seed.namespace)) continue;
+      const versionContent = seed.versionContent[seed.currentVersion];
+      expect(versionContent?.tools.length ?? 0, `${seed.namespace} 工具数`).toBeGreaterThanOrEqual(2);
+      expect(versionContent?.rules?.length ?? 0, `${seed.namespace} 规则数`).toBeGreaterThanOrEqual(1);
+    }
+    await ensureGroupLibrary(tempBase);
+    const summaries = await scanGroupsSummary(join(tempBase, GROUP_LIB_DIR));
+    for (const namespace of seedNamespaces) {
+      const group = summaries.find((summary) => summary.namespace === namespace);
+      if (group === undefined) return;
+      expect(group.currentVersion).toBe("1.0.0");
+      expect(group.tools.length, `${namespace} tools 摘要数`).toBeGreaterThanOrEqual(2);
+      for (const tool of group.tools) {
+        expect(tool.name).toBeTruthy();
+        expect(tool.description).toBeTruthy();
+      }
+      expect(group.mcps).toHaveLength(0);
+    }
   });
 
   it("空 groups 目录 → 返回 []", async () => {

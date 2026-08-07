@@ -29,6 +29,8 @@ export interface GroupToolItem {
 export interface GroupToolGroup {
   readonly key: string;
   readonly label: string;
+  /** 当前版本是否废弃（true=版本已废弃，面板标题旁显示徽标引导升级）。 */
+  readonly deprecated?: boolean;
   readonly items: readonly GroupToolItem[];
 }
 
@@ -39,32 +41,37 @@ function hasExecutableCommand(config: Readonly<Record<string, unknown>>): boolea
 
 /** 功能组摘要列表 → 物料分组数组（纯函数，单测覆盖）。 */
 export function buildGroupItems(groups: readonly GroupSummary[]): readonly GroupToolGroup[] {
-  return groups.map((group) => ({
-    key: `group:${group.namespace}`,
-    label: group.namespace,
-    items: [
-      ...group.mcps
-        .filter((mcp) => hasExecutableCommand(mcp.config))
-        .map((mcp) => ({
-          kind: "mcp" as const,
-          name: mcp.name,
-          description: "MCP Server（工具动态发现）",
-          serverName: mcp.name,
-          toolName: "",
-          mcpConfig: { ...mcp.config },
-          bound: true,
+  return groups.map((group) => {
+    // 取 currentVersion 对应版本快照，透传其废弃标记（未声明时分组不带 deprecated 键）。
+    const current = group.versions.find((version) => version.version === group.currentVersion);
+    return {
+      key: `group:${group.namespace}`,
+      label: group.namespace,
+      ...(current?.deprecated !== undefined ? { deprecated: current.deprecated } : {}),
+      items: [
+        ...group.mcps
+          .filter((mcp) => hasExecutableCommand(mcp.config))
+          .map((mcp) => ({
+            kind: "mcp" as const,
+            name: mcp.name,
+            description: "MCP Server（工具动态发现）",
+            serverName: mcp.name,
+            toolName: "",
+            mcpConfig: { ...mcp.config },
+            bound: true,
+          })),
+        ...group.tools.map((tool) => ({
+          kind: "declared" as const,
+          name: tool.name,
+          description: tool.description,
+          serverName: undefined,
+          toolName: undefined,
+          mcpConfig: undefined,
+          bound: false,
         })),
-      ...group.tools.map((tool) => ({
-        kind: "declared" as const,
-        name: tool.name,
-        description: tool.description,
-        serverName: undefined,
-        toolName: undefined,
-        mcpConfig: undefined,
-        bound: false,
-      })),
-    ],
-  }));
+      ],
+    };
+  });
 }
 
 /** MCP 物料 → mcpTool 节点（toolName 留空由参数面板填写；非 MCP 物料抛错防御）。 */

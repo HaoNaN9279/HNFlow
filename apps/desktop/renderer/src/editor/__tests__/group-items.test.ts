@@ -18,6 +18,7 @@ function group(
     currentVersion: "1.0.0",
     tools: [],
     mcps: [],
+    versions: [],
     ...overrides,
   };
 }
