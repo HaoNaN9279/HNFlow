@@ -193,7 +193,11 @@ export function forwardProgress(logger: NodeLogger): (event: AIProgressEvent) =>
         logger.info(`工具结果: ${event.toolName ?? ""}`, { kind: "tool_result", toolName: event.toolName, result: event.toolResult });
         break;
       case "llm_message":
-        logger.info(event.message ?? "", { kind: "llm_message", message: event.message });
+        logger.info(event.message ?? "", {
+          kind: "llm_message",
+          message: event.message,
+          ...(event.tokenUsage === undefined ? {} : { tokenUsage: event.tokenUsage }),
+        });
         break;
     }
   };

@@ -14,6 +14,7 @@ import type { LogLevelFilter } from "../debug/format.js";
 import { editorActions, useEditor } from "../editor/state.js";
 import { useWorkflowGraphContext } from "../editor/useWorkflowGraph.js";
 import { LogsTab, NodesTab, VarsTab } from "./DebugPanelTabs.js";
+import { AnalysisPanel } from "./AnalysisPanel.js";
 
 const panelStyle: CSSProperties = {
   position: "absolute",
@@ -121,6 +122,7 @@ export function DebugPanel(): JSX.Element | null {
               },
               { key: "vars", label: "变量", children: <VarsTab snapshot={runResult.contextSnapshot} /> },
               { key: "nodes", label: "节点状态", children: <NodesTab runResult={runResult} onLocate={locateNode} /> },
+              { key: "analysis", label: "分析", children: <AnalysisPanel debug={runResult} /> },
             ]}
           />
         </div>
