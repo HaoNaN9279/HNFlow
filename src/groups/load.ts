@@ -43,6 +43,7 @@ const groupVersionSchema: z.ZodType<GroupVersion> = z.object({
   createdAt: z.string(),
   changelog: z.string(),
   deprecated: z.boolean().exactOptional(), // 废弃标记：可选，旧 group.json 无此字段加载不受影响
+  securityAdvisory: z.string().exactOptional(), // 安全漏洞描述：可选，存在则该版本被强制阻止使用
   content: groupContentSchema,
 });
 

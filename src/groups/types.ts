@@ -41,6 +41,9 @@ export interface GroupVersion {
   /** 废弃标记：true=该版本已废弃，引导用户升级到新版本。可选，旧数据无此字段不受影响。 */
   // 显式联合含 undefined：兼容 zod v4 .optional() 的 output（exactOptionalPropertyTypes 下 `?: boolean` 拒绝显式 undefined）。
   readonly deprecated?: boolean | undefined;
+  /** 安全漏洞描述：存在则该版本被强制阻止使用，引导升级到新版本。可选，旧数据无此字段不受影响。 */
+  // 显式联合含 undefined：照 deprecated 先例，兼容 zod v4 .optional() 的 output。
+  readonly securityAdvisory?: string | undefined;
   readonly content: GroupContent;
 }
 

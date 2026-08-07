@@ -53,9 +53,14 @@ export async function scanGroupsSummary(groupsRootDir: string): Promise<readonly
   for (const group of groups) {
     try {
       const content = await loadGroupContent(groupsRootDir, group, group.currentVersion);
+      const currentVersionSnapshot = group.versions.find((version) => version.version === group.currentVersion);
       summaries.push({
         namespace: group.namespace,
         currentVersion: group.currentVersion,
+        // 透出当前版本安全漏洞描述（undefined 不写键，exactOptionalPropertyTypes）；存在时前端可提示强制升级。
+        ...(currentVersionSnapshot?.securityAdvisory === undefined
+          ? {}
+          : { securityAdvisory: currentVersionSnapshot.securityAdvisory }),
         tools: content.tools.map((tool): GroupToolSummary => ({ name: tool.name, description: tool.description })),
         mcps: content.mcps.map((mcp): GroupMcpSummary => ({ name: mcp.name, config: mcp.config })),
         // 透出版本历史摘要（含废弃标记）；deprecated 为 undefined 时不写该键（exactOptionalPropertyTypes）。

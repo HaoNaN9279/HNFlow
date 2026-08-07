@@ -64,8 +64,13 @@ export class GroupRuntime {
     if (group === undefined) {
       throw new GroupLoadError(guid, version, "功能组不存在");
     }
-    if (loadVersion(group, version) === undefined) {
+    const versionSnapshot = loadVersion(group, version);
+    if (versionSnapshot === undefined) {
       throw new GroupLoadError(guid, version, "版本不存在");
+    }
+    // 安全漏洞版本强制阻止：securityAdvisory 存在即抛 GroupLoadError 引导升级（统一惯例——runtime 失败全走 GroupLoadError）。
+    if (versionSnapshot.securityAdvisory !== undefined) {
+      throw new GroupLoadError(guid, version, `版本存在安全漏洞，请升级：${versionSnapshot.securityAdvisory}`);
     }
     let content: LoadedGroupContent;
     try {

@@ -214,6 +214,8 @@ export interface GroupMcpSummary {
 export interface GroupSummary {
   readonly namespace: string;
   readonly currentVersion: string;
+  /** 当前版本安全漏洞描述：存在则该版本被强制阻止使用（透出核心 GroupVersion.securityAdvisory，undefined 不写键）。 */
+  readonly securityAdvisory?: string;
   readonly tools: readonly GroupToolSummary[];
   readonly mcps: readonly GroupMcpSummary[];
   /** 版本历史摘要（镜像核心 GroupVersion 的可序列化子集，含废弃标记） */
