@@ -1,7 +1,9 @@
 // 命令行执行节点：Bun.spawn 运行外部命令，捕获 stdout/stderr 与退出码。
+// 沙箱（v0.9.4）：配置 ctx.sandboxRootDir 时 cwd 缺省强制沙箱根；显式 cwd 必须解析在沙箱内（逃逸拒绝）。
 
 import type { INodeDefinition } from "../execution/types.js";
 import { checkCommandSafety, ReviewRequiredError } from "../security/command-guard.js";
+import { resolveSandboxPath, SandboxPathError } from "../security/path-sandbox.js";
 
 /** command 节点参数格式非法 */
 export class InvalidCommandParamsError extends Error {
@@ -159,10 +161,10 @@ function parseParams(params: Readonly<Record<string, unknown>>): CommandParams |
   };
 }
 
-/** 运行命令：超时 kill 并抛 TimeoutError */
-async function runCommand(params: CommandParams): Promise<CommandResult> {
+/** 运行命令：超时 kill 并抛 TimeoutError；cwd 为沙箱解析后工作目录（undefined=引擎当前目录）。 */
+async function runCommand(params: CommandParams, cwd: string | undefined): Promise<CommandResult> {
   const proc = Bun.spawn([params.command, ...params.args], {
-    ...(params.cwd === undefined ? {} : { cwd: params.cwd }),
+    ...(cwd === undefined ? {} : { cwd }),
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -229,10 +231,24 @@ export const commandNode: INodeDefinition = {
       }
       throw error;
     }
+    // 沙箱（v0.9.4）：配置 sandboxRootDir 时 cwd 缺省强制沙箱根；显式 cwd 必须解析在沙箱内（逃逸拒绝）。
+    const sandboxRoot = ctx.sandboxRootDir;
+    let effectiveCwd: string | undefined;
+    if (sandboxRoot === undefined) {
+      effectiveCwd = params.cwd;
+    } else if (params.cwd === undefined) {
+      effectiveCwd = sandboxRoot;
+    } else {
+      const resolved = resolveSandboxPath(sandboxRoot, params.cwd);
+      if (resolved === undefined) {
+        throw new SandboxPathError(sandboxRoot, params.cwd);
+      }
+      effectiveCwd = resolved;
+    }
     const attempts = resolveRetryAttempts(params.retry);
     for (let attempt = 0; ; attempt++) {
       try {
-        const result = await runCommand(params);
+        const result = await runCommand(params, effectiveCwd);
         return {
           stdout: result.stdout,
           stderr: result.stderr,

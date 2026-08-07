@@ -103,6 +103,11 @@ export async function askReviewDecision(
   return (await onReviewRequired?.({ nodeId, description })) ?? "reject";
 }
 
+/** 沙箱根目录透传（Engine createNodeContext 用；保持 Engine ≤440 行）：undefined 跳过，否则注入。 */
+export function sandboxRootDirOption(rootDir: string | undefined): { readonly sandboxRootDir?: string } {
+  return rootDir === undefined ? {} : { sandboxRootDir: rootDir };
+}
+
 /** 人工任务提交结果是否为空（v0.9.3 requireResult 校验用）：undefined / 空字符串 / 空对象 {}。 */
 export function isEmptyTaskResult(result: unknown): boolean {
   if (result === undefined) return true;

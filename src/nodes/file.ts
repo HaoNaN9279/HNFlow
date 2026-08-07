@@ -1,9 +1,10 @@
 // 文件读写节点：按 params.operation 读文件或写文件。
-// 路径相对当前工作目录解析；写操作自动创建父目录；不做路径安全限制（本地引擎工具）。
+// 路径相对当前工作目录解析；写操作自动创建父目录；沙箱配置（ctx.sandboxRootDir）时路径必须解析在沙箱内（../ 与绝对路径逃逸拒绝）。
 
 import { access, appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { INodeDefinition } from "../execution/types.js";
+import { resolveSandboxPath, SandboxPathError } from "../security/path-sandbox.js";
 
 /** 文件操作类型 */
 type FileOperation = "read" | "write";
@@ -145,10 +146,22 @@ export const fileNode: INodeDefinition = {
     if (params === undefined) {
       throw new InvalidFileParamsError(ctx.node.params);
     }
+    // 沙箱（v0.9.4）：配置 sandboxRootDir 时 path 必须解析在沙箱内，逃逸抛 SandboxPathError；后续 fs 操作一律用解析后绝对路径（避免只校验不替换写落错位置）。
+    const sandboxRoot = ctx.sandboxRootDir;
+    let effectivePath: string;
+    if (sandboxRoot === undefined) {
+      effectivePath = params.path;
+    } else {
+      const resolved = resolveSandboxPath(sandboxRoot, params.path);
+      if (resolved === undefined) {
+        throw new SandboxPathError(sandboxRoot, params.path);
+      }
+      effectivePath = resolved;
+    }
     if (params.operation === "read") {
       let content: string;
       try {
-        content = await readFile(params.path, { encoding: params.encoding });
+        content = await readFile(effectivePath, { encoding: params.encoding });
       } catch (error) {
         if (isEnoent(error)) {
           throw new FileNotFoundError(params.path);
@@ -161,12 +174,12 @@ export const fileNode: INodeDefinition = {
     if (content === undefined) {
       throw new InvalidFileParamsError(ctx.node.params);
     }
-    await mkdir(dirname(params.path), { recursive: true });
+    await mkdir(dirname(effectivePath), { recursive: true });
     if (params.append) {
       // append 天然非幂等（重复执行内容累积），ifExists 的 skip/error 语义不适用，直接追加。
-      await appendFile(params.path, content, { encoding: params.encoding });
+      await appendFile(effectivePath, content, { encoding: params.encoding });
     } else {
-      const exists = await fileExists(params.path);
+      const exists = await fileExists(effectivePath);
       if (params.ifExists === "skip" && exists) {
         // 已存在 → 不写，返回成功值 skipped:true（不抛错，避免触发 failed + finally 链）。
         return { content: undefined, bytesWritten: 0, skipped: true, path: params.path };
@@ -174,7 +187,7 @@ export const fileNode: INodeDefinition = {
       if (params.ifExists === "error" && exists) {
         throw new FileExistsError(params.path);
       }
-      await writeFile(params.path, content, { encoding: params.encoding });
+      await writeFile(effectivePath, content, { encoding: params.encoding });
     }
     const bytesWritten = Buffer.byteLength(content, params.encoding);
     return { content: undefined, bytesWritten };

@@ -96,6 +96,8 @@ async function executeSubEngine(
       // 人工审核（v0.4.3 子图透传）：父回调 + 共享已批准集合（子图内 approve 写回父集合，父级重跑不再询问）。
       ...(ctx.onReviewRequired === undefined ? {} : { onReviewRequired: ctx.onReviewRequired }),
       ...(ctx.sharedReviewApprovals === undefined ? {} : { sharedReviewApprovals: ctx.sharedReviewApprovals }),
+      // 沙箱根目录（v0.9.4 子图透传）：父引擎配置 sandboxRootDir 时子引擎按同样配置约束 file/command（嵌套子图不绕过沙箱）。
+      ...(ctx.sandboxRootDir === undefined ? {} : { sandboxRootDir: ctx.sandboxRootDir }),
     });
     const subResult = await subEngine.run();
     if (subResult.status === "failed") {

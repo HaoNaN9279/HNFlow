@@ -107,6 +107,8 @@ export interface NodeExecutionContext {
   readonly onReviewRequired?: (info: { readonly nodeId: string; readonly description: string }) => Promise<"approve" | "reject">;
   /** 已批准审核节点共享集合（v0.4.3 子图透传）：父引擎注入可变引用，子引擎 approve 写回同一集合（父级重跑不再询问）。 */
   readonly sharedReviewApprovals?: Set<string>;
+  /** 沙箱根目录（v0.9.4）：file/command 节点路径约束——file path 必须解析在沙箱内，command cwd 缺省强制沙箱根/显式路径校验；子图容器转发给子引擎。 */
+  readonly sandboxRootDir?: string;
   /** 读取指定作用域下的变量 */
   get(scope: string, key: string): unknown;
   /** 写入指定作用域下的变量 */

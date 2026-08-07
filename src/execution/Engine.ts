@@ -6,7 +6,7 @@ import { WorkflowContext } from "../context/WorkflowContext.js";
 import type { NodeStatus } from "./NodeState.js";
 import { NodeStateMachine } from "./NodeState.js";
 import { DebugController } from "./DebugController.js";
-import { createWorkflowContext, emitStateChange, shouldExecute, transferPortData, askReviewDecision, type EngineLogEntry, type EngineReadState, type RunNodeOutcome, type WorkflowContextSnapshot } from "./engine-util.js";
+import { createWorkflowContext, emitStateChange, shouldExecute, transferPortData, askReviewDecision, sandboxRootDirOption, type EngineLogEntry, type EngineReadState, type RunNodeOutcome, type WorkflowContextSnapshot } from "./engine-util.js";
 import { EngineStores } from "./engine-stores.js";
 import type { NodeExecutionContext, MergedGroups, McpServerPool } from "./types.js";
 import { GroupsResolver } from "./groups-resolver.js";
@@ -74,7 +74,7 @@ export interface ExecutionEngineOptions {
   readonly templatesRootDir?: string; // 子工作流模板根目录（v0.3.3 T2）：缺省 "./templates"；仅 template 引用时读目录（无引用零 IO）。
   readonly mcpPool?: McpServerPool; // MCP 进程池（v0.4.2 D2）：AI 节点 activeGroups.mcps 声明时注入 MCP 工具；可选，未配置则 AI 节点不加载。
   readonly onReviewRequired?: (info: { readonly nodeId: string; readonly description: string }) => Promise<"approve" | "reject">; // 人工审核回调（v0.4.2 验收 2）：command reviewRequired 未批准时询问；approve 重跑节点，reject 落失败路径；缺省 reject。
-  readonly sharedReviewApprovals?: Set<string>; // 共享已批准审核集合（v0.4.3 子图透传）：父引擎注入后子引擎 approve 写回同一集合，父级重跑不再询问。
+  readonly sharedReviewApprovals?: Set<string>; readonly sandboxRootDir?: string; // 共享已批准审核集合（v0.4.3 子图透传）+ 沙箱根目录（v0.9.4）：file/command 路径约束，子图容器透传。
 }
 function assertNever(value: never): never { throw new Error(`unreachable value: ${String(value)}`); }
 export class ExecutionEngine {
@@ -387,7 +387,7 @@ export class ExecutionEngine {
       ...(this.#options.groupsRootDir === undefined ? {} : { groupsRootDir: this.#options.groupsRootDir }),
       ...(this.#options.groupCacheMaxSize === undefined ? {} : { groupCacheMaxSize: this.#options.groupCacheMaxSize }),
       ...(this.#options.allowIncompatibleGroups === undefined ? {} : { allowIncompatibleGroups: this.#options.allowIncompatibleGroups }),
-      ...(this.#templatesRootDir === undefined ? {} : { templatesRootDir: this.#templatesRootDir }), // 模板根目录透传（v0.3.3 T2）：template 引用加载
+      ...(this.#templatesRootDir === undefined ? {} : { templatesRootDir: this.#templatesRootDir }), ...(sandboxRootDirOption(this.#options.sandboxRootDir)), // 模板根目录透传（v0.3.3 T2）+ 沙箱根目录透传（v0.9.4）：template 引用加载 / file·command 路径约束
       reviewApprovals: this.#approvedReviews, sharedReviewApprovals: this.#approvedReviews, // 已批准审核集合（v0.4.2 验收 2）+ 共享可变引用（v0.4.3 子图透传）：子引擎 approve 写回同一集合。
       ...(this.#options.onReviewRequired === undefined ? {} : { onReviewRequired: this.#options.onReviewRequired }), // 人工审核回调透传（v0.4.3 子图透传）：子图容器转发给子引擎询问。
       ...(this.#options.mcpPool === undefined ? {} : { mcpPool: this.#options.mcpPool }), // MCP 进程池透传（v0.4.2 D2）：activeGroups.mcps → MCP 工具注入
