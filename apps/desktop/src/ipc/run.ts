@@ -5,10 +5,13 @@
 // 运行是一次性 await，结束即返回，无长驻进程；MCP 子进程 finally 统一释放。
 
 import { randomUUID } from "node:crypto";
-import type { RunStateStoreLike } from "../../../../src/db/stores/types.js";
+import type { HumanTaskStoreLike, RunStateStoreLike } from "../../../../src/db/stores/types.js";
 import { ExecutionEngine, type ExecutionResult } from "../../../../src/execution/Engine.js";
 import { formatNodePath } from "../../../../src/execution/node-path.js";
+import { InvalidTaskResultError } from "../../../../src/execution/errors.js";
 import type { EngineLogEntry } from "../../../../src/execution/engine-util.js";
+import { InvalidTaskStateError } from "../../../../src/human/HumanTaskStore.js";
+import type { HumanTask } from "../../../../src/human/types.js";
 import { McpServerPool } from "../../../../src/mcp/pool.js";
 import { fromJSON } from "../../../../src/serialization/index.js";
 import { decrement, increment } from "./run-tracker.js";
@@ -41,6 +44,10 @@ export interface RunWorkflowOptions {
   readonly runId?: string;
   /** 运行完成回调（v0.5.0 T1）：engine.run() 完成后成功/失败/异常路径各调一次；T3 通知服务在 handlers 层接线。 */
   readonly onDone?: (info: RunDoneInfo) => void;
+  /** 人工任务存储（v0.9.3）：提供后引擎挂起写任务到该 store（handlers 注入 userData/human_tasks.json），与 IPC 读取一致。 */
+  readonly humanTaskStore?: HumanTaskStoreLike;
+  /** 人工任务创建回调（v0.9.3）：引擎创建任务时触发（handlers 转 event.sender.send 通知 renderer）。 */
+  readonly onHumanTaskCreated?: (task: HumanTask) => void;
 }
 
 /**
@@ -76,6 +83,9 @@ export async function runWorkflowOnce(
           : {
               onReviewRequired: async (info) => onReviewRequest({ requestId: randomUUID(), ...info }),
             }),
+        // 人工任务（v0.9.3）：透传 store + 创建事件，保证挂起任务落 userData/human_tasks.json 与 IPC 读取一致。
+        ...(options.humanTaskStore === undefined ? {} : { humanTaskStore: options.humanTaskStore }),
+        ...(options.onHumanTaskCreated === undefined ? {} : { events: { onHumanTaskCreated: options.onHumanTaskCreated } }),
       });
     } catch (error) {
       return { ok: false, message: friendlyRunError(error) }; // workflow 校验失败：engine 未建，无 runId，不触发 onDone
@@ -113,6 +123,36 @@ export function friendlyRunError(error: unknown): string {
     return `工作流存在循环依赖，无法运行：${error.message.replace(/^workflow cycle detected: /, "")}`;
   }
   return error.message;
+}
+
+/** 人工任务操作错误 → 中文友好消息：任务状态非法/结果校验失败/断点缺失转中文，其余复用 friendlyRunError。 */
+export function friendlyTaskError(error: unknown): string {
+  if (error instanceof InvalidTaskStateError) {
+    return `任务状态不允许该操作（当前状态：${taskStatusLabel(error.currentStatus)}）`;
+  }
+  if (error instanceof InvalidTaskResultError) {
+    return error.message; // 已是中文（v0.9.3 requireResult 校验失败）。
+  }
+  if (error instanceof Error && error.message.startsWith("no run state found for pending task")) {
+    return "找不到该任务对应的运行记录，运行数据可能已清理";
+  }
+  return friendlyRunError(error);
+}
+
+/** 任务状态英文 → 中文标签（错误消息展示用；未知状态原样保留）。 */
+function taskStatusLabel(status: string): string {
+  switch (status) {
+    case "pending":
+      return "待处理";
+    case "completed":
+      return "已完成";
+    case "skipped":
+      return "已跳过";
+    case "deferred":
+      return "已延后";
+    default:
+      return status;
+  }
 }
 
 /** markNodeFailed 写入的错误格式：`节点名(节点id) failed: 错误消息`（Engine.ts）。 */

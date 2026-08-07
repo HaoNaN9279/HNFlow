@@ -5,6 +5,9 @@
 import { app, dialog, ipcMain } from "electron";
 import { join } from "node:path";
 import { RunStateStore } from "../../../../src/runstate/RunStateStore.js";
+import { HumanTaskStore } from "../../../../src/human/HumanTaskStore.js";
+import type { HumanTask } from "../../../../src/human/types.js";
+import { resumeTask, skipTask } from "../../../../src/execution/resume.js";
 import { loadWorkflow } from "../../../../src/storage/index.js";
 import { toJSON } from "../../../../src/serialization/index.js";
 import {
@@ -24,6 +27,9 @@ import {
   type SaveAsWorkflowResponse,
   type SaveWorkflowPayload,
   type SaveWorkflowResult,
+  type TaskActionResult,
+  type TaskSubmitPayload,
+  type TaskSummary,
   type TemplateSummary,
   type WorkflowTemplate,
 } from "../shared/ipc.js";
@@ -32,7 +38,7 @@ import { chatWithAgent } from "./agent.js";
 import { listTemplates, loadTemplateVersionPayload, releaseTemplateFromPayload, TEMPLATE_LIB_DIR } from "./templates.js";
 import { GROUP_LIB_DIR, scanGroupsSummary } from "./groups.js";
 import { friendlyWorkflowError, saveWorkflowToFile, validatedWorkflowTemplate } from "./workflow-io.js";
-import { friendlyRunError, RUN_STATE_FILE, runWorkflowOnce } from "./run.js";
+import { friendlyRunError, friendlyTaskError, RUN_STATE_FILE, runWorkflowOnce } from "./run.js";
 import { buildRunNotification, sendNotification } from "../notify.js";
 
 /** 打开/保存对话框共用过滤条件：JSON 工作流文件。 */
@@ -51,6 +57,27 @@ function groupsRootDir(): string {
 /** 运行状态持久化单例（v0.5.0 T1 异常恢复地基）：userData/run_states.json。
  *  懒加载 + 原子写；每次运行引擎逐节点断点落盘，异常退出后据此恢复。构造无 IO，模块级实例化安全。 */
 const runStateStore = new RunStateStore({ filePath: join(app.getPath("userData"), RUN_STATE_FILE) });
+
+/** 人工任务持久化单例（v0.9.3）：userData/human_tasks.json。
+ *  引擎挂起写任务/任务列表/提交/跳过/回退共用同一实例（与 run.ts 透传的 humanTaskStore 一致）。 */
+const humanTaskStore = new HumanTaskStore({ filePath: join(app.getPath("userData"), "human_tasks.json") });
+
+/** 核心 HumanTask → IPC TaskSummary：IPC 边界不直接引用核心库形状，仅主进程侧转换。 */
+function toTaskSummary(task: HumanTask): TaskSummary {
+  return {
+    id: task.id,
+    workflowId: task.workflowId,
+    nodeId: task.nodeId,
+    nodeName: task.nodeName,
+    title: task.title,
+    ...(task.description === undefined ? {} : { description: task.description }),
+    status: task.status,
+    fallback: task.fallback,
+    createdAt: task.createdAt,
+    ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+    ...(task.result === undefined ? {} : { result: task.result }),
+  };
+}
 
 /** 审核决策超时（毫秒）：renderer 30s 无响应自动 reject，防止工作流挂死。 */
 const REVIEW_TIMEOUT_MS = 30_000;
@@ -148,6 +175,10 @@ export function registerIpcHandlers(): void {
         groupsRootDir: groupsRootDir(), // 功能组库（v0.4.3 验收 3）：AI 节点带功能组 mcp.json 时桌面端可消费 MCP 工具
         onReviewRequest: (request) => requestReviewDecision(event.sender, request),
         runStateStore, // 桌面默认持久化（v0.5.0 T1）：引擎 persist=true，runId 缺省引擎自动生成
+        humanTaskStore, // 人工任务（v0.9.3）：挂起任务落 userData/human_tasks.json，与 task:list 读取一致
+        onHumanTaskCreated: (task) => {
+          event.sender.send(IPC.taskCreated, toTaskSummary(task)); // 任务创建事件：renderer 订阅刷新列表
+        },
         onDone: (info) => {
           // T3 通知接线点：运行完成（成功/失败/异常统一收敛于此）→ 桌面通知；Notification 异常在 sendNotification 内静默，不崩 main。
           const { title, body } = buildRunNotification(info);
@@ -208,6 +239,62 @@ export function registerIpcHandlers(): void {
       return await scanGroupsSummary(groupsRootDir());
     } catch (error) {
       throw friendlyWorkflowError(error);
+    }
+  });
+
+  // 人工任务列表：userData/human_tasks.json 全部任务摘要（含已完成）；错误中文翻译。
+  ipcMain.handle(IPC.taskList, async (): Promise<TaskSummary[]> => {
+    try {
+      return (await humanTaskStore.listAll()).map(toTaskSummary);
+    } catch (error) {
+      throw friendlyTaskError(error);
+    }
+  });
+
+  // 人工任务提交：复用 resume.ts 的 resumeTask（续跑链不手写）→ 成功 ok；异常中文消息。
+  // persist:true 续跑逐节点落盘（终态 success 写回 run_states.json）；templates/groups 根目录供恢复工作流使用。
+  ipcMain.handle(IPC.taskSubmit, async (_event, payload: TaskSubmitPayload): Promise<TaskActionResult> => {
+    try {
+      await resumeTask(
+        payload.taskId,
+        {
+          persist: true,
+          runStateStore,
+          humanTaskStore,
+          templatesRootDir: templatesRootDir(),
+          groupsRootDir: groupsRootDir(),
+        },
+        payload.result,
+      );
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: friendlyTaskError(error) };
+    }
+  });
+
+  // 人工任务跳过：复用 resume.ts 的 skipTask（下游自动跳过传播）。
+  ipcMain.handle(IPC.taskSkip, async (_event, payload: { readonly taskId: string }): Promise<TaskActionResult> => {
+    try {
+      await skipTask(payload.taskId, {
+        persist: true,
+        runStateStore,
+        humanTaskStore,
+        templatesRootDir: templatesRootDir(),
+        groupsRootDir: groupsRootDir(),
+      });
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: friendlyTaskError(error) };
+    }
+  });
+
+  // 人工任务回退：completed → pending（恢复失败重试用）；仅 completed 可回退，否则中文错误。
+  ipcMain.handle(IPC.taskReopen, async (_event, payload: { readonly taskId: string }): Promise<TaskActionResult> => {
+    try {
+      await humanTaskStore.reopen(payload.taskId);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, message: friendlyTaskError(error) };
     }
   });
 }

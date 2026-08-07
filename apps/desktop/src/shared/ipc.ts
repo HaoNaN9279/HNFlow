@@ -33,6 +33,11 @@ export const IPC = {
   templateLoadVersion: "template:loadVersion",
   templateRelease: "template:release",
   groupList: "group:list",
+  taskList: "task:list",
+  taskSubmit: "task:submit",
+  taskSkip: "task:skip",
+  taskReopen: "task:reopen",
+  taskCreated: "task:created",
 } as const;
 
 /** 端口元数据（可序列化子集） */
@@ -220,6 +225,38 @@ export interface GroupSummary {
   }[];
 }
 
+/** 人工任务兜底策略（镜像核心 src/human/types.ts 的 HumanTaskFallback，IPC 边界不直接引用核心库） */
+export type TaskFallback = "manual" | "skip" | "ai" | "defer";
+
+/** 人工任务摘要（镜像核心 HumanTask 的可序列化形状；IPC 边界不直接引用核心库） */
+export interface TaskSummary {
+  readonly id: string;
+  readonly workflowId: string;
+  readonly nodeId: string;
+  readonly nodeName: string;
+  readonly title: string;
+  readonly description?: string;
+  readonly status: "pending" | "completed" | "skipped" | "deferred";
+  readonly fallback: TaskFallback;
+  readonly createdAt: number;
+  readonly completedAt?: number;
+  readonly result?: unknown;
+}
+
+/** task:submit 载荷：任务 id + 人工产物。 */
+export interface TaskSubmitPayload {
+  readonly taskId: string;
+  readonly result: unknown;
+}
+
+/** 人工任务操作结果：成功 ok:true；失败中文消息 ok:false。 */
+export type TaskActionResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly message: string };
+
+/** task:list 返回：全部人工任务摘要（含已完成）。 */
+export type TaskSummaryList = readonly TaskSummary[];
+
 /** AI 对话消息（agent:chat 载荷：镜像核心 InputMessage 形状）。 */
 export interface AgentChatMessage {
   readonly role: "user" | "assistant" | "system";
@@ -264,4 +301,14 @@ export interface HnflowApi {
   loadTemplateVersion(payload: LoadTemplateVersionPayload): Promise<LoadTemplateVersionResponse>;
   releaseTemplate(payload: ReleaseTemplatePayload): Promise<ReleaseTemplateResponse>;
   listGroups(): Promise<readonly GroupSummary[]>;
+  /** 人工任务列表：全部任务摘要（含已完成）。 */
+  listTasks(): Promise<TaskSummary[]>;
+  /** 提交人工任务产物（续跑挂起工作流）；失败返回中文消息。 */
+  submitTask(payload: TaskSubmitPayload): Promise<TaskActionResult>;
+  /** 跳过人工任务（下游自动跳过传播）。 */
+  skipTask(payload: { readonly taskId: string }): Promise<TaskActionResult>;
+  /** 回退已完成任务到 pending（恢复失败重试用）。 */
+  reopenTask(payload: { readonly taskId: string }): Promise<TaskActionResult>;
+  /** 订阅人工任务创建事件（运行挂起时触发）；返回取消订阅函数。 */
+  onTaskCreated(cb: (task: TaskSummary) => void): () => void;
 }

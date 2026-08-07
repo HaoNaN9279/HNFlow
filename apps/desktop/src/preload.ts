@@ -11,6 +11,8 @@ import {
   type ReviewDecisionPayload,
   type ReviewRequestInfo,
   type RunWorkflowPayload,
+  type TaskSubmitPayload,
+  type TaskSummary,
 } from "./shared/ipc.js";
 
 const api: HnflowApi = {
@@ -38,6 +40,18 @@ const api: HnflowApi = {
   loadTemplateVersion: (payload: LoadTemplateVersionPayload) => ipcRenderer.invoke(IPC.templateLoadVersion, payload),
   releaseTemplate: (payload: ReleaseTemplatePayload) => ipcRenderer.invoke(IPC.templateRelease, payload),
   listGroups: () => ipcRenderer.invoke(IPC.groupList),
+  // 人工任务（v0.9.3）：列表/提交/跳过/回退走 invoke；创建事件走 on 订阅。
+  listTasks: () => ipcRenderer.invoke(IPC.taskList),
+  submitTask: (payload: TaskSubmitPayload) => ipcRenderer.invoke(IPC.taskSubmit, payload),
+  skipTask: (payload: { readonly taskId: string }) => ipcRenderer.invoke(IPC.taskSkip, payload),
+  reopenTask: (payload: { readonly taskId: string }) => ipcRenderer.invoke(IPC.taskReopen, payload),
+  onTaskCreated: (cb: (task: TaskSummary) => void) => {
+    const listener = (_event: IpcRendererEvent, task: TaskSummary) => cb(task);
+    ipcRenderer.on(IPC.taskCreated, listener);
+    return () => {
+      ipcRenderer.off(IPC.taskCreated, listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("hnflow", api);
