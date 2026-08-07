@@ -38,6 +38,9 @@ export interface GroupVersion {
   readonly version: string;      // 语义版本号，如 "1.2.0"
   readonly createdAt: string;    // 创建时间
   readonly changelog: string;    // 更新内容描述
+  /** 废弃标记：true=该版本已废弃，引导用户升级到新版本。可选，旧数据无此字段不受影响。 */
+  // 显式联合含 undefined：兼容 zod v4 .optional() 的 output（exactOptionalPropertyTypes 下 `?: boolean` 拒绝显式 undefined）。
+  readonly deprecated?: boolean | undefined;
   readonly content: GroupContent;
 }
 

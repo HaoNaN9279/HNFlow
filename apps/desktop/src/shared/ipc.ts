@@ -209,6 +209,13 @@ export interface GroupSummary {
   readonly currentVersion: string;
   readonly tools: readonly GroupToolSummary[];
   readonly mcps: readonly GroupMcpSummary[];
+  /** 版本历史摘要（镜像核心 GroupVersion 的可序列化子集，含废弃标记） */
+  readonly versions: readonly {
+    readonly version: string;
+    readonly createdAt: string;
+    readonly changelog: string;
+    readonly deprecated?: boolean;
+  }[];
 }
 
 /** AI 对话消息（agent:chat 载荷：镜像核心 InputMessage 形状）。 */

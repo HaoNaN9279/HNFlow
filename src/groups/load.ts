@@ -42,6 +42,7 @@ const groupVersionSchema: z.ZodType<GroupVersion> = z.object({
   version: z.string().refine(isSemverString, { message: "版本号必须为严格语义版本号 x.y.z" }),
   createdAt: z.string(),
   changelog: z.string(),
+  deprecated: z.boolean().exactOptional(), // 废弃标记：可选，旧 group.json 无此字段加载不受影响
   content: groupContentSchema,
 });
 

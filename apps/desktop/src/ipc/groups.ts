@@ -58,6 +58,13 @@ export async function scanGroupsSummary(groupsRootDir: string): Promise<readonly
         currentVersion: group.currentVersion,
         tools: content.tools.map((tool): GroupToolSummary => ({ name: tool.name, description: tool.description })),
         mcps: content.mcps.map((mcp): GroupMcpSummary => ({ name: mcp.name, config: mcp.config })),
+        // 透出版本历史摘要（含废弃标记）；deprecated 为 undefined 时不写该键（exactOptionalPropertyTypes）。
+        versions: group.versions.map((version) => ({
+          version: version.version,
+          createdAt: version.createdAt,
+          changelog: version.changelog,
+          ...(version.deprecated === undefined ? {} : { deprecated: version.deprecated }),
+        })),
       });
     } catch (error) {
       // 单个功能组内容损坏不致命：跳过并警告，保留其他功能组。
