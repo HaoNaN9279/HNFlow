@@ -1,14 +1,28 @@
-// 内存单次运行纯逻辑（v0.4.2 桌面最小运行能力）：workflow 校验 → ExecutionEngine 内存跑 → 结果/错误组装。
+// 单次运行纯逻辑（v0.4.2 桌面最小运行能力）：workflow 校验 → ExecutionEngine 跑 → 结果/错误组装。
 // 与 handlers.ts 分离：不依赖 electron dialog/app，runWorkflowOnce 可独立验证（bun test 直跑）。
-// 不持久化：不传 persist/runStateStore/logStore；运行是一次性 await，结束即返回，无长驻进程。
+// v0.5.0 T1 持久化：传 runStateStore → 引擎 persist=true 逐节点断点落盘 + onDone 完成回调；缺省仍内存模式（既有调用零改动）。
+// T2 运行计数：入口 increment() / finally decrement()（与 pool.dispose 并列，成功失败都走 finally）；run-tracker 无 electron 依赖，直接 import。
+// 运行是一次性 await，结束即返回，无长驻进程；MCP 子进程 finally 统一释放。
 
 import { randomUUID } from "node:crypto";
+import type { RunStateStoreLike } from "../../../../src/db/stores/types.js";
 import { ExecutionEngine, type ExecutionResult } from "../../../../src/execution/Engine.js";
 import { formatNodePath } from "../../../../src/execution/node-path.js";
 import type { EngineLogEntry } from "../../../../src/execution/engine-util.js";
 import { McpServerPool } from "../../../../src/mcp/pool.js";
 import { fromJSON } from "../../../../src/serialization/index.js";
+import { decrement, increment } from "./run-tracker.js";
 import type { RunDebugInfo, RunWorkflowPayload, RunWorkflowResult } from "../shared/ipc.js";
+
+/** 运行状态持久化文件名（位于 userData 下；handlers 层单例 RunStateStore 用，惯例同 TEMPLATE_LIB_DIR/GROUP_LIB_DIR）。 */
+export const RUN_STATE_FILE = "run_states.json";
+
+/** 运行完成回调信息（v0.5.0 T1）：ok=结果、runId=引擎实际 runId（options.runId 缺省时引擎自动生成）、message=失败原因。 */
+export interface RunDoneInfo {
+  readonly ok: boolean;
+  readonly runId: string;
+  readonly message?: string;
+}
 
 /** 运行选项：templatesRootDir 供 template 引用节点读目录（缺省引擎默认 ./templates）。 */
 export interface RunWorkflowOptions {
@@ -21,11 +35,19 @@ export interface RunWorkflowOptions {
     readonly nodeId: string;
     readonly description: string;
   }) => Promise<"approve" | "reject">;
+  /** 运行状态持久化 store（v0.5.0 T1）：提供后引擎 persist=true 逐节点断点落盘；缺省内存模式（向后兼容）。 */
+  readonly runStateStore?: RunStateStoreLike;
+  /** 指定运行 id（v0.5.0 T1）：仅持久化模式生效；缺省引擎随机生成。 */
+  readonly runId?: string;
+  /** 运行完成回调（v0.5.0 T1）：engine.run() 完成后成功/失败/异常路径各调一次；T3 通知服务在 handlers 层接线。 */
+  readonly onDone?: (info: RunDoneInfo) => void;
 }
 
 /**
- * 内存单次运行：fromJSON（workflowSchema 校验）→ 新引擎（无持久化）→ await run()。
+ * 单次运行：fromJSON（workflowSchema 校验）→ 新引擎 → await run()。
  * 失败不抛错：一律收敛为 { ok: false, message 中文 }，成功 { ok: true, runId }。
+ * v0.5.0 T1 持久化：options.runStateStore 提供时引擎 persist=true 逐节点断点落盘（run_states.json），
+ * onDone 在 engine.run() 完成后成功/失败/异常路径各调一次（runId 恒为引擎实际 runId）。
  * MCP 池（v0.4.3 验收 3）：每次运行新建进程池供 AI/mcpTool 节点消费，无论成败 finally 释放，无残留子进程。
  */
 export async function runWorkflowOnce(
@@ -33,6 +55,7 @@ export async function runWorkflowOnce(
   options: RunWorkflowOptions = {},
 ): Promise<RunWorkflowResult> {
   const pool = new McpServerPool(); // 单次运行专属进程池：运行结束统一释放（同 name 复用由池内引用计数管理）。
+  increment(); // 运行计数（T2 关闭确认）：入口 +1；finally 对称 -1（成功/失败/异常都走 finally）
   try {
     let engine: ExecutionEngine;
     try {
@@ -43,6 +66,10 @@ export async function runWorkflowOnce(
         ...(options.templatesRootDir === undefined ? {} : { templatesRootDir: options.templatesRootDir }),
         ...(options.groupsRootDir === undefined ? {} : { groupsRootDir: options.groupsRootDir }),
         mcpPool: pool, // 引擎注入 MCP 池：AI 节点 activeGroups.mcps / mcpTool 节点消费
+        // 持久化（v0.5.0 T1）：有 store → persist=true 逐节点断点落盘 + 可选指定 runId；缺省内存模式。
+        ...(options.runStateStore === undefined
+          ? {}
+          : { persist: true, runStateStore: options.runStateStore, ...(options.runId === undefined ? {} : { runId: options.runId }) }),
         // 审核桥接（v0.4.2 验收 2）：引擎询问 → 外层回调（requestId 由本层生成，每次触发唯一）。
         ...(onReviewRequest === undefined
           ? {}
@@ -51,20 +78,26 @@ export async function runWorkflowOnce(
             }),
       });
     } catch (error) {
-      return { ok: false, message: friendlyRunError(error) };
+      return { ok: false, message: friendlyRunError(error) }; // workflow 校验失败：engine 未建，无 runId，不触发 onDone
     }
     try {
       const result = await engine.run(); // 节点失败不抛：result.status === "failed" + result.error
       if (result.status === "success") {
+        options.onDone?.({ ok: true, runId: engine.runId });
         return { ok: true, runId: engine.runId, debug: buildDebugInfo(engine, result) };
       }
-      return failureResult(engine, result);
+      const failed = failureResult(engine, result);
+      options.onDone?.({ ok: false, runId: engine.runId, message: failed.message });
+      return failed;
     } catch (error) {
       // run() 抛错：工作流成环等引擎级错误。
-      return { ok: false, message: friendlyRunError(error) };
+      const message = friendlyRunError(error);
+      options.onDone?.({ ok: false, runId: engine.runId, message });
+      return { ok: false, message };
     }
   } finally {
     await pool.dispose(); // 成功与失败路径都释放：MCP 子进程立即退出，严禁长驻。
+    decrement(); // 运行计数 -1（T2）：与 pool.dispose 并列，无论成败都递减
   }
 }
 
@@ -130,7 +163,10 @@ function buildDebugInfo(engine: ExecutionEngine, result: ExecutionResult): RunDe
 }
 
 /** 非 success 结果 → 失败 RunWorkflowResult：解析失败节点 id + 中文消息 + 节点路径 + 调试信息。 */
-function failureResult(engine: ExecutionEngine, result: ExecutionResult): RunWorkflowResult {
+function failureResult(
+  engine: ExecutionEngine,
+  result: ExecutionResult,
+): Extract<RunWorkflowResult, { readonly ok: false }> {
   const raw = result.status === "failed" ? (result.error ?? "工作流执行失败") : statusMessage(result.status);
   const match = raw.match(NODE_FAIL_RE);
   const nodeId = match?.[2];

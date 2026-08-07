@@ -4,6 +4,7 @@
 
 import { app, dialog, ipcMain } from "electron";
 import { join } from "node:path";
+import { RunStateStore } from "../../../../src/runstate/RunStateStore.js";
 import { loadWorkflow } from "../../../../src/storage/index.js";
 import { toJSON } from "../../../../src/serialization/index.js";
 import {
@@ -31,7 +32,8 @@ import { chatWithAgent } from "./agent.js";
 import { listTemplates, loadTemplateVersionPayload, releaseTemplateFromPayload, TEMPLATE_LIB_DIR } from "./templates.js";
 import { GROUP_LIB_DIR, scanGroupsSummary } from "./groups.js";
 import { friendlyWorkflowError, saveWorkflowToFile, validatedWorkflowTemplate } from "./workflow-io.js";
-import { friendlyRunError, runWorkflowOnce } from "./run.js";
+import { friendlyRunError, RUN_STATE_FILE, runWorkflowOnce } from "./run.js";
+import { buildRunNotification, sendNotification } from "../notify.js";
 
 /** 打开/保存对话框共用过滤条件：JSON 工作流文件。 */
 const WORKFLOW_FILTERS: Electron.FileFilter[] = [{ name: "工作流文件", extensions: ["json"] }];
@@ -45,6 +47,10 @@ function templatesRootDir(): string {
 function groupsRootDir(): string {
   return join(app.getPath("userData"), GROUP_LIB_DIR);
 }
+
+/** 运行状态持久化单例（v0.5.0 T1 异常恢复地基）：userData/run_states.json。
+ *  懒加载 + 原子写；每次运行引擎逐节点断点落盘，异常退出后据此恢复。构造无 IO，模块级实例化安全。 */
+const runStateStore = new RunStateStore({ filePath: join(app.getPath("userData"), RUN_STATE_FILE) });
 
 /** 审核决策超时（毫秒）：renderer 30s 无响应自动 reject，防止工作流挂死。 */
 const REVIEW_TIMEOUT_MS = 30_000;
@@ -133,7 +139,7 @@ export function registerIpcHandlers(): void {
     return { ok: true };
   });
 
-  // 内存单次运行：主进程侧执行（无持久化/断点/多任务）；错误已收敛为中文消息，不抛。
+  // 单次运行：主进程侧执行（v0.5.0 T1 起默认持久化，run_states.json 逐节点断点落盘；异常退出可恢复）；错误已收敛为中文消息，不抛。
   // 审核桥接（v0.4.2 验收 2）：运行到待审核 command 节点 → event.sender 发请求 → 等 renderer 决策。
   ipcMain.handle(IPC.workflowRun, async (event, payload: RunWorkflowPayload): Promise<RunWorkflowResult> => {
     try {
@@ -141,6 +147,12 @@ export function registerIpcHandlers(): void {
         templatesRootDir: templatesRootDir(),
         groupsRootDir: groupsRootDir(), // 功能组库（v0.4.3 验收 3）：AI 节点带功能组 mcp.json 时桌面端可消费 MCP 工具
         onReviewRequest: (request) => requestReviewDecision(event.sender, request),
+        runStateStore, // 桌面默认持久化（v0.5.0 T1）：引擎 persist=true，runId 缺省引擎自动生成
+        onDone: (info) => {
+          // T3 通知接线点：运行完成（成功/失败/异常统一收敛于此）→ 桌面通知；Notification 异常在 sendNotification 内静默，不崩 main。
+          const { title, body } = buildRunNotification(info);
+          sendNotification(title, body);
+        },
       });
     } catch (error) {
       return { ok: false, message: friendlyRunError(error) };

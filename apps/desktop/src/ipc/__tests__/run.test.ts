@@ -2,11 +2,15 @@
 // v0.4.3 验收 3：runWorkflowOnce 内置 MCP 池 + groupsRootDir → AI 节点（功能组 mcp.json）/ mcpTool 节点桌面端可消费 MCP 工具。
 // 运行方式：仓库根 `bun test apps/desktop/src/ipc/__tests__/run.test.ts`（echo-server 夹具路径相对 cwd 定位）。
 import { afterEach, beforeEach, describe, expect, it, spyOn, type Mock } from "bun:test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildEngineFromRunState, continueRun } from "../../../../../src/execution/resume.js";
 import { McpServerPool } from "../../../../../src/mcp/pool.js";
-import { runWorkflowOnce } from "../run.js";
+import { RunStateStore } from "../../../../../src/runstate/RunStateStore.js";
+import type { RunState } from "../../../../../src/runstate/types.js";
+import { runWorkflowOnce, type RunDoneInfo } from "../run.js";
+import { getActiveRuns } from "../run-tracker.js";
 import type { RunWorkflowPayload } from "../../shared/ipc.js";
 import type { Workflow } from "../../../../../src/model/types.js";
 
@@ -352,4 +356,128 @@ describe("runWorkflowOnce MCP 池（v0.4.3 验收 3）", () => {
     }
     expect(exited).toBe(true);
   }, 20000);
+});
+
+// ---- v0.5.0 T1：桌面运行持久化（异常恢复地基）----
+// 每次用例独立 mkdtemp 临时目录，afterEach 清理，不污染工作区/用户数据。
+describe("runWorkflowOnce 持久化（v0.5.0 T1）", () => {
+  let tempDir: string;
+  let storePath: string;
+  let store: RunStateStore;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "hnflow-run-state-"));
+    storePath = join(tempDir, "run_states.json");
+    store = new RunStateStore({ filePath: storePath });
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const okWorkflow: RunWorkflowPayload = {
+    workflow: { id: "persist-ok-wf", name: "持久化成功", version: "0.1.0", nodes: [startNode, logNode, endNode], edges: [] },
+  };
+
+  it("持久化运行：带 store 成功 → run_states.json 含该 runId 且 status=success + 节点状态完整", async () => {
+    const result = await runWorkflowOnce(okWorkflow, { runStateStore: store });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const runState = await store.getById(result.runId);
+    expect(runState).toBeDefined();
+    if (runState === undefined) return;
+    expect(runState.status).toBe("success");
+    expect(runState.workflowId).toBe("persist-ok-wf");
+    // 节点状态完整：全部节点终态 Success（引擎逐节点断点落盘产物）。
+    expect(runState.nodeStates).toEqual({ start: "Success", log: "Success", end: "Success" });
+    // 断点确已落盘（原子写产物）：文件内容含该 runId。
+    const text = await readFile(storePath, "utf8");
+    expect(text).toContain(result.runId);
+  });
+
+  it("恢复路径：buildEngineFromRunState 重建成功快照 → continueRun 状态一致（不重跑）", async () => {
+    const result = await runWorkflowOnce(okWorkflow, { runStateStore: store });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const runState = await store.getById(result.runId);
+    if (runState === undefined) throw new Error("run state 缺失");
+    const engine = buildEngineFromRunState(runState, { runStateStore: store });
+    expect(engine.runId).toBe(runState.runId); // 恢复引擎固定为快照 runId
+    const resumed = await continueRun(engine, runState);
+    expect(resumed.status).toBe("success");
+    // 全部节点已终止态：continueRun 不重跑，重建后状态一致。
+    expect(resumed.nodeStates).toEqual(runState.nodeStates);
+  });
+
+  it("恢复路径：中间态快照（start 完成、log/end 待跑）→ continueRun 继续到成功", async () => {
+    const midState: RunState = {
+      runId: "resume-mid-run",
+      workflowId: "resume-mid-wf",
+      workflow: { id: "resume-mid-wf", name: "中间态恢复", version: "0.1.0", nodes: [startNode, logNode, endNode], edges: [] },
+      nodeStates: { start: "Success", log: "Idle", end: "Idle" },
+      nodeOutputs: {},
+      contextSnapshot: { global: {}, workflow: {}, node: {} },
+      status: "running",
+      updatedAt: Date.now(),
+    };
+    await store.create(midState);
+    const engine = buildEngineFromRunState(midState, { runStateStore: store });
+    const resumed = await continueRun(engine, midState);
+    expect(resumed.status).toBe("success");
+    expect(resumed.nodeStates).toEqual({ start: "Success", log: "Success", end: "Success" });
+  });
+
+  it("onDone 成功路径：触发一次且 ok=true + runId 与结果一致", async () => {
+    const infos: RunDoneInfo[] = [];
+    const result = await runWorkflowOnce(okWorkflow, { runStateStore: store, onDone: (info) => infos.push(info) });
+    expect(result.ok).toBe(true);
+    expect(infos).toHaveLength(1);
+    expect(infos[0]?.ok).toBe(true);
+    if (result.ok) {
+      expect(infos[0]?.runId).toBe(result.runId);
+    }
+  });
+
+  it("onDone 失败路径：触发一次且 ok=false + message 与结果一致", async () => {
+    const infos: RunDoneInfo[] = [];
+    const result = await runWorkflowOnce(
+      {
+        workflow: { id: "persist-fail-wf", name: "持久化失败", version: "0.1.0", nodes: [startNode, commandNode], edges: [] },
+      },
+      { runStateStore: store, onDone: (info) => infos.push(info) },
+    );
+    expect(result.ok).toBe(false);
+    expect(infos).toHaveLength(1);
+    expect(infos[0]?.ok).toBe(false);
+    if (!result.ok) {
+      expect(infos[0]?.runId.length).toBeGreaterThan(0);
+      expect(infos[0]?.message).toBe(result.message);
+    }
+  });
+});
+
+// ---- T2：运行计数接线（关闭确认依赖 getActiveRuns）----
+// 计数为模块级共享状态：断言用相对 before 值（不依赖绝对 0），保证与其他用例顺序执行时互不干扰。
+describe("runWorkflowOnce 运行计数（T2）", () => {
+  it("成功路径：入口 increment（运行中 +1）、finally decrement（结束归零）", async () => {
+    const before = getActiveRuns();
+    const promise = runWorkflowOnce({
+      workflow: { id: "tracker-ok-wf", name: "计数成功", version: "0.1.0", nodes: [startNode, logNode, endNode], edges: [] },
+    });
+    expect(getActiveRuns()).toBe(before + 1); // 入口已同步 increment：运行期间计数（close 拦截判断依据）
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(getActiveRuns()).toBe(before); // finally decrement：计数对称归零
+  });
+
+  it("失败路径：运行中 +1、结束后同样归零（command 非法）", async () => {
+    const before = getActiveRuns();
+    const promise = runWorkflowOnce({
+      workflow: { id: "tracker-fail-wf", name: "计数失败", version: "0.1.0", nodes: [startNode, commandNode], edges: [] },
+    });
+    expect(getActiveRuns()).toBe(before + 1);
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(getActiveRuns()).toBe(before);
+  });
 });
