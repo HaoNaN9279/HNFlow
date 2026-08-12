@@ -68,7 +68,8 @@
     "middleware": "Middleware state-change audit evidence.",
     "context": "Identity-only evidence about effective hidden context.",
     "subagent": "Subagent lifecycle and persisted step evidence.",
-    "workspace": "Run-scoped workspace and output file-change evidence."
+    "workspace": "Run-scoped workspace and output file-change evidence.",
+    "workflow": "Workflow node-level execution progress evidence."
   },
   "events": [
     {
@@ -387,6 +388,71 @@
             },
             "additionalProperties": true
           }
+        },
+        "additionalProperties": true
+      }
+    },
+    {
+      "event_type": "wf:node:started",
+      "category": "workflow",
+      "producer": "workflow node execution lifecycle",
+      "content_schema": {
+        "type": "object",
+        "required": ["node_id", "step"],
+        "properties": {
+          "node_id": {"type": "string"},
+          "step": {"type": "integer", "minimum": 1}
+        },
+        "additionalProperties": true
+      },
+      "metadata_schema": {
+        "type": "object",
+        "required": ["node_id"],
+        "properties": {"node_id": {"type": "string"}},
+        "additionalProperties": true
+      }
+    },
+    {
+      "event_type": "wf:node:completed",
+      "category": "workflow",
+      "producer": "workflow node execution lifecycle",
+      "content_schema": {
+        "type": "object",
+        "required": ["node_id", "step", "output"],
+        "properties": {
+          "node_id": {"type": "string"},
+          "step": {"type": "integer", "minimum": 1},
+          "output": true
+        },
+        "additionalProperties": true
+      },
+      "metadata_schema": {
+        "type": "object",
+        "required": ["node_id"],
+        "properties": {"node_id": {"type": "string"}},
+        "additionalProperties": true
+      }
+    },
+    {
+      "event_type": "wf:node:failed",
+      "category": "workflow",
+      "producer": "workflow node execution lifecycle",
+      "content_schema": {
+        "type": "object",
+        "required": ["node_id", "step", "error"],
+        "properties": {
+          "node_id": {"type": "string"},
+          "step": {"type": "integer", "minimum": 1},
+          "error": {"type": "string"}
+        },
+        "additionalProperties": true
+      },
+      "metadata_schema": {
+        "type": "object",
+        "required": ["node_id", "error_type"],
+        "properties": {
+          "node_id": {"type": "string"},
+          "error_type": {"type": "string"}
         },
         "additionalProperties": true
       }

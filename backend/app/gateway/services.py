@@ -72,6 +72,8 @@ from deerflow.runtime.stream_modes import normalize_stream_modes
 from deerflow.runtime.user_context import reset_current_user, set_current_user
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
 from deerflow.utils.thread_id import validate_thread_id
+from deerflow.workflow.schema import WorkflowDefinition
+from deerflow.workflow.worker import run_workflow
 
 logger = logging.getLogger(__name__)
 
@@ -1263,6 +1265,100 @@ async def start_run(
         # Title sync is handled by worker.py's finally block which reads the
         # title from the checkpoint and calls thread_store.update_display_name
         # after the run completes.
+
+        return record
+    finally:
+        if owner_context_token is not None:
+            reset_current_user(owner_context_token)
+
+
+async def start_workflow_run(
+    definition_id: str,
+    definition: WorkflowDefinition,
+    params: dict[str, Any],
+    thread_id: str,
+    request: Request,
+    *,
+    on_disconnect: str = "cancel",
+    metadata: dict[str, Any] | None = None,
+) -> RunRecord:
+    """Create a RunRecord and launch the background workflow task.
+
+    Parameters
+    ----------
+    definition_id : str
+        The workflow definition id (used as ``assistant_id`` in the run record).
+    definition : WorkflowDefinition
+        The validated workflow definition to compile and execute.
+    params : dict
+        Port-name → value mapping for the ``flow:start`` node.
+    thread_id : str
+        Target thread.
+    request : Request
+        FastAPI request — used to retrieve singletons from ``app.state``.
+    on_disconnect : str
+        ``"cancel"`` (default) or ``"continue"``.
+    metadata : dict | None
+        Optional run metadata.
+    """
+    try:
+        validate_thread_id(thread_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    bridge = get_stream_bridge(request)
+    run_mgr = get_run_manager(request)
+    run_ctx = get_run_context(request)
+
+    disconnect = DisconnectMode.cancel if on_disconnect == "cancel" else DisconnectMode.continue_
+
+    owner_user_id = get_trusted_internal_owner_user_id(request)
+    user = getattr(request.state, "user", None)
+    if user is not None:
+        allowed = await run_ctx.thread_store.check_access(thread_id, str(user.id))
+        if not allowed and owner_user_id and getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
+            allowed = await run_ctx.thread_store.check_access(thread_id, owner_user_id)
+        if not allowed:
+            raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
+
+    owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
+    try:
+        try:
+            async with goal_thread_lock(thread_id):
+                record = await run_mgr.create_or_reject(
+                    thread_id,
+                    definition_id,
+                    on_disconnect=disconnect,
+                    metadata=metadata or {},
+                    kwargs={"params": params, "definition_id": definition_id},
+                    user_id=owner_user_id,
+                )
+
+                async def worker() -> None:
+                    await run_workflow(
+                        bridge,
+                        run_mgr,
+                        record,
+                        ctx=run_ctx,
+                        definition=definition,
+                        params=params,
+                    )
+
+                try:
+                    # No await is allowed between durable admission and task
+                    # attachment.
+                    record.task = asyncio.create_task(worker())
+                except Exception as exc:
+                    worker().close()
+                    await run_mgr.fail_start_if_pending(
+                        record.run_id,
+                        error=f"Failed to attach workflow worker: {exc}",
+                    )
+                    raise
+        except ConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except UnsupportedStrategyError as exc:
+            raise HTTPException(status_code=501, detail=str(exc)) from exc
 
         return record
     finally:

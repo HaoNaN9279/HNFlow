@@ -88,6 +88,7 @@ class CompileContext:
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
+    checkpointer: Any | None = None
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -119,6 +120,8 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
     if context is not None and context.executors:
         type_fp = "|".join(sorted(t.value for t in context.executors))
         digest.update(f"\0executors:{type_fp}".encode())
+    if context is not None and context.checkpointer is not None:
+        digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     return digest.hexdigest()
 
 
@@ -471,7 +474,7 @@ def compile_definition(
         builder.add_conditional_edges(cond_id, route_fn, path_map)
 
     # ── 6. Compile ────────────────────────────────────────────────────
-    compiled = builder.compile()
+    compiled = builder.compile(checkpointer=ctx.checkpointer)
 
     # ── 7. Cache and return ───────────────────────────────────────────
     with _compile_cache_lock:

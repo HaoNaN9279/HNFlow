@@ -685,6 +685,11 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Workflow definitions API is mounted at /api/workflows
     app.include_router(workflow_routes.router)
 
+    # Workflow runs API is mounted at /api/workflows/{definition_id}/runs
+    from app.gateway.routers import workflow_run_routes
+
+    app.include_router(workflow_run_routes.router)
+
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
 
