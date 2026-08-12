@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from .compiler import (
+    CompileContext,
+    Executor,
+    WorkflowCompileError,
+    WorkflowRouteError,
+    clear_compile_cache,
+    compile_definition,
+)
 from .schema import (
     Edge,
     Node,
@@ -30,4 +38,10 @@ __all__ = [
     "ports_compatible",
     "serialize",
     "validate_definition",
+    "compile_definition",
+    "clear_compile_cache",
+    "CompileContext",
+    "Executor",
+    "WorkflowCompileError",
+    "WorkflowRouteError",
 ]
