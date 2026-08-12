@@ -43,11 +43,17 @@ class SlowSkillStorage(SkillStorage):
     def _iter_skill_files(self):
         return []
 
-    def read_custom_skill(self, name: str) -> str:
+    def read_custom_skill(self, name: str, version: str | None = None) -> str:
         return ""
 
-    def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
-        pass
+    def write_custom_skill(self, name: str, relative_path: str, content: str, *, version: str | None = None) -> str:
+        return version or "0.1.0"
+
+    def list_skill_versions(self, name: str) -> list[str]:
+        return []
+
+    def resolve_current_version(self, name: str) -> str | None:
+        return None
 
     async def ainstall_skill_from_archive(self, archive_path) -> dict:
         return {}
@@ -201,11 +207,17 @@ class SlowUserSkillStorage(SkillStorage):
     def _iter_skill_files(self):
         return []
 
-    def read_custom_skill(self, name: str) -> str:
+    def read_custom_skill(self, name: str, version: str | None = None) -> str:
         return ""
 
-    def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
-        pass
+    def write_custom_skill(self, name: str, relative_path: str, content: str, *, version: str | None = None) -> str:
+        return version or "0.1.0"
+
+    def list_skill_versions(self, name: str) -> list[str]:
+        return []
+
+    def resolve_current_version(self, name: str) -> str | None:
+        return None
 
     async def ainstall_skill_from_archive(self, archive_path) -> dict:
         return {}

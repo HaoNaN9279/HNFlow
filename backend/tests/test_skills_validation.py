@@ -30,7 +30,7 @@ class TestValidateSkillFrontmatter:
     def test_valid_with_all_allowed_fields(self, tmp_path):
         skill_dir = _write_skill(
             tmp_path,
-            "---\nname: my-skill\ndescription: A skill\nlicense: MIT\nversion: '1.0'\nauthor: test\nallowed-tools: [bash, read_file]\n---\n\nBody\n",
+            "---\nname: my-skill\ndescription: A skill\nlicense: MIT\nversion: 1.0.0\nauthor: test\nallowed-tools: [bash, read_file]\n---\n\nBody\n",
         )
         valid, msg, name = _validate_skill_frontmatter(skill_dir)
         assert valid is True
@@ -223,3 +223,101 @@ class TestValidateSkillFrontmatter:
         assert valid is True
         assert msg == "Skill is valid!"
         assert name == "demo-skill"
+
+
+class TestValidateVersion:
+    """Validation-layer version field checks (T7-2)."""
+
+    def test_no_version_is_valid(self, tmp_path):
+        """Legacy skills without a version field pass validation."""
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+        assert msg == "Skill is valid!"
+        assert name == "my-skill"
+
+    def test_valid_semver(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: 1.2.3\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+        assert msg == "Skill is valid!"
+        assert name == "my-skill"
+
+    def test_two_part_version_rejected(self, tmp_path):
+        """YAML parses ``1.2`` as float, so validation rejects it as non-string."""
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: 1.2\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "version" in msg
+        assert "must be a string" in msg
+        assert "float" in msg
+        assert name is None
+
+    def test_two_part_version_string_rejected(self, tmp_path):
+        """``version: "1.2"`` as a string is rejected (not valid semver)."""
+        skill_dir = _write_skill(tmp_path, '---\nname: my-skill\ndescription: test\nversion: "1.2"\n---\n\nBody\n')
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "1.2" in msg
+        assert "Invalid semver" in msg
+        assert name is None
+
+    def test_four_part_version_rejected(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: 1.2.3.4\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "1.2.3.4" in msg
+        assert "Invalid semver" in msg
+        assert name is None
+
+    def test_non_string_version_rejected(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: [1, 2, 3]\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "version" in msg
+        assert "must be a string" in msg
+        assert name is None
+
+    def test_v_prefixed_valid_semver_accepted(self, tmp_path):
+        """``v1.2.3`` is accepted because parse_version strips the ``v`` prefix."""
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: v1.2.3\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+        assert msg == "Skill is valid!"
+
+    def test_v_prefixed_invalid_semver_rejected(self, tmp_path):
+        """``v1.2`` is rejected — strip ``v`` leaves ``1.2`` which is not valid semver."""
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\nversion: v1.2\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "v1.2" in msg
+        assert "Invalid semver" in msg
+        assert name is None
+
+
+class TestValidateCompatibility:
+    """Validation-layer compatibility field checks (T7-2)."""
+
+    def test_no_compatibility_is_valid(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+
+    def test_string_compatibility_is_valid(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\ncompatibility: node>=18\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+
+    def test_dict_compatibility_is_valid(self, tmp_path):
+        """``compatibility: {nodejs: ">=18.0.0"}`` — dict values accepted (T8 parses these)."""
+        skill_dir = _write_skill(tmp_path, '---\nname: my-skill\ndescription: test\ncompatibility: {nodejs: ">=18.0.0"}\n---\n\nBody\n')
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is True
+
+    def test_list_compatibility_rejected(self, tmp_path):
+        skill_dir = _write_skill(tmp_path, "---\nname: my-skill\ndescription: test\ncompatibility: [1, 2]\n---\n\nBody\n")
+        valid, msg, name = _validate_skill_frontmatter(skill_dir)
+        assert valid is False
+        assert "compatibility" in msg
+        assert "must be a string or a mapping" in msg
+        assert name is None

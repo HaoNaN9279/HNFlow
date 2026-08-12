@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.deps import get_config, require_admin_user
@@ -49,6 +49,7 @@ class SkillResponse(BaseModel):
     category: SkillCategory = Field(..., description="Category of the skill (public, custom, or legacy)")
     enabled: bool = Field(default=True, description="Whether this skill is enabled")
     editable: bool = Field(default=False, description="Whether this skill can be edited/deleted (true only for custom)")
+    version: str = Field(default="0.1.0", description="Current version of the skill")
 
 
 class SkillsListResponse(BaseModel):
@@ -111,6 +112,7 @@ def _skill_to_response(skill: Skill) -> SkillResponse:
         category=skill.category,
         enabled=skill.enabled,
         editable=skill.category == SkillCategory.CUSTOM,
+        version=skill.version,
     )
 
 
@@ -240,12 +242,17 @@ async def list_custom_skills(config: AppConfig = Depends(get_config)) -> SkillsL
 
 
 @router.get("/skills/custom/{skill_name}", response_model=CustomSkillContentResponse, summary="Get Custom Skill Content")
-async def get_custom_skill(skill_name: str, request: Request, config: AppConfig = Depends(get_config)) -> CustomSkillContentResponse:
+async def get_custom_skill(
+    skill_name: str,
+    request: Request,
+    config: AppConfig = Depends(get_config),
+    version: str | None = Query(default=None, description="Optional version to read (e.g. 0.1.0). Defaults to current."),
+) -> CustomSkillContentResponse:
     await require_admin_user(request, detail=_ADMIN_REQUIRED_DETAIL)
-    return await _read_custom_skill_response(skill_name, config)
+    return await _read_custom_skill_response(skill_name, config, version=version)
 
 
-async def _read_custom_skill_response(skill_name: str, config: AppConfig) -> CustomSkillContentResponse:
+async def _read_custom_skill_response(skill_name: str, config: AppConfig, *, version: str | None = None) -> CustomSkillContentResponse:
     try:
         skill_name = skill_name.replace("\r\n", "").replace("\n", "")
         storage = _get_user_skill_storage(config)
@@ -253,9 +260,19 @@ async def _read_custom_skill_response(skill_name: str, config: AppConfig) -> Cus
         skill = next((s for s in skills if s.name == skill_name and s.category == SkillCategory.CUSTOM), None)
         if skill is None:
             raise HTTPException(status_code=404, detail=f"Custom skill '{skill_name}' not found")
-        return CustomSkillContentResponse(**_skill_to_response(skill).model_dump(), content=storage.read_custom_skill(skill_name))
+        # Validate version if provided
+        if version is not None:
+            from deerflow.skills.versions import parse_version as _parse_ver
+
+            try:
+                _parse_ver(version)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=f"Invalid version: {e}") from e
+        return CustomSkillContentResponse(**_skill_to_response(skill).model_dump(), content=storage.read_custom_skill(skill_name, version=version))
     except HTTPException:
         raise
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error("Failed to get custom skill %s: %s", skill_name, e, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to get custom skill: {str(e)}")

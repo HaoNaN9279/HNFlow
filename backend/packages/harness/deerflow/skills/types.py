@@ -55,6 +55,13 @@ class Skill:
     # autonomous model load (skill_context), or only on explicit /slash
     # activation. Frontmatter: ``secrets-autonomous`` (default true).
     secrets_autonomous: bool = True
+    # The current (latest) version of this skill entry. Defaults to "0.1.0" for
+    # legacy skills that predate versioned-storage layout.
+    version: str = "0.1.0"
+    # Frontmatter ``compatibility`` declaration (T8 dependency resolution).
+    # Stored as-is; None when absent or when the frontmatter value is not a
+    # plain string.
+    compatibility: str | None = None
 
     @property
     def skill_path(self) -> str:
@@ -91,4 +98,4 @@ class Skill:
         return f"{self.get_container_path(container_base_path)}/SKILL.md"
 
     def __repr__(self) -> str:
-        return f"Skill(name={self.name!r}, description={self.description!r}, category={self.category!r})"
+        return f"Skill(name={self.name!r}, description={self.description!r}, version={self.version!r}, category={self.category!r})"

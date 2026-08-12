@@ -125,7 +125,7 @@ def test_install_skill_archive_runs_security_scan(monkeypatch, tmp_path):
     assert response.json()["skill_name"] == "archive-skill"
     # UserScopedSkillStorage installs to user-level dir
     user_custom = _user_custom_dir(tmp_path, "default")
-    assert (user_custom / "archive-skill" / "SKILL.md").exists()
+    assert (user_custom / "archive-skill" / "v0.1.0" / "SKILL.md").exists()
     assert scan_calls == [
         {
             "content": _skill_content("archive-skill"),
@@ -195,7 +195,7 @@ def test_uploaded_skill_archive_installs_sandbox_readable_tree(monkeypatch, tmp_
 
     assert install_response.status_code == 200
     assert install_response.json()["skill_name"] == "uploaded-skill"
-    installed_dir = _user_custom_dir(tmp_path, "default") / "uploaded-skill"
+    installed_dir = _user_custom_dir(tmp_path, "default") / "uploaded-skill" / "v0.1.0"
     nested_dir = installed_dir / "references"
     assert stat.S_IMODE(installed_dir.stat().st_mode) & 0o055 == 0o055
     assert stat.S_IMODE(nested_dir.stat().st_mode) & 0o055 == 0o055
@@ -491,7 +491,11 @@ def test_custom_skill_delete_preserves_history_and_allows_restore(monkeypatch, t
         rollback_response = client.post("/api/skills/custom/demo-skill/rollback", json={"history_index": -1})
         assert rollback_response.status_code == 200
         assert rollback_response.json()["description"] == "Demo skill"
-        assert (custom_dir / "SKILL.md").read_text(encoding="utf-8") == original_content
+        # write_custom_skill rewrites frontmatter version, so exact string
+        # match is not expected — check that the restored content is present
+        restored = (custom_dir / "v0.1.0" / "SKILL.md").read_text(encoding="utf-8")
+        assert "description: Demo skill" in restored
+        assert "# demo-skill" in restored
         assert refresh_calls == [("refresh", "default"), ("refresh", "default")]
 
 

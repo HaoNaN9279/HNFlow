@@ -3,12 +3,13 @@
 Pure-logic validation of SKILL.md frontmatter — no FastAPI or HTTP dependencies.
 """
 
-import re
+import re as _stdlib_re
 from pathlib import Path
 
 from deerflow.skills.frontmatter import ALLOWED_FRONTMATTER_PROPERTIES, split_skill_markdown
 from deerflow.skills.parser import parse_allowed_tools
 from deerflow.skills.types import SKILL_MD_FILE
+from deerflow.skills.versions import parse_version
 
 
 def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]:
@@ -52,7 +53,7 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
         return False, "Name cannot be empty", None
 
     # Check naming convention (hyphen-case: lowercase with hyphens)
-    if not re.match(r"^[a-z0-9-]+$", name):
+    if not _stdlib_re.match(r"^[a-z0-9-]+$", name):
         return False, f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)", None
     if name.startswith("-") or name.endswith("-") or "--" in name:
         return False, f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens", None
@@ -82,5 +83,20 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     secrets_autonomous = frontmatter.get("secrets-autonomous")
     if secrets_autonomous is not None and not isinstance(secrets_autonomous, bool):
         return False, f"secrets-autonomous in {SKILL_MD_FILE} must be a boolean", None
+
+    # --- version (T7) ---
+    version_raw = frontmatter.get("version")
+    if version_raw is not None:
+        if not isinstance(version_raw, str):
+            return False, f"version in {SKILL_MD_FILE} must be a string, got {type(version_raw).__name__}", None
+        try:
+            parse_version(version_raw)
+        except ValueError as e:
+            return False, str(e), None
+
+    # --- compatibility (T8 dependency resolution) ---
+    compat_raw = frontmatter.get("compatibility")
+    if compat_raw is not None and not isinstance(compat_raw, (str, dict)):
+        return False, f"compatibility in {SKILL_MD_FILE} must be a string or a mapping, got {type(compat_raw).__name__}", None
 
     return True, "Skill is valid!", name

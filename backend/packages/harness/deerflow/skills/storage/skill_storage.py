@@ -142,15 +142,25 @@ class SkillStorage(ABC):
         """
 
     @abstractmethod
-    def read_custom_skill(self, name: str) -> str:
+    def read_custom_skill(self, name: str, version: str | None = None) -> str:
         """Read SKILL.md content for a custom skill.
+
+        When *version* is given, reads from that specific version directory.
+        When *version* is ``None`` (default), reads from the current (highest)
+        version, falling back to legacy-layout SKILL.md when no version
+        directories exist.
 
         Origin: ``deerflow.skills.manager.read_custom_skill_content``.
         """
 
     @abstractmethod
-    def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
-        """Atomically write a text file under ``custom/<name>/<relative_path>``.
+    def write_custom_skill(self, name: str, relative_path: str, content: str, *, version: str | None = None) -> str:
+        """Atomically write a text file under ``custom/<name>/v{version}/<relative_path>``.
+
+        Returns the actual version string the file was written under (which may
+        differ from the requested *version* when the target version directory
+        already exists — the patch is incremented until a free directory is
+        found).
 
         Origin: ``deerflow.skills.manager.atomic_write``.
         """
@@ -189,6 +199,27 @@ class SkillStorage(ABC):
         """Origin: ``deerflow.skills.manager.custom_skill_exists``."""
 
     @abstractmethod
+    def list_skill_versions(self, name: str) -> list[str]:
+        """Return sorted list of all version strings for a custom skill.
+
+        Returns an empty list when no versions exist.  Versions are sorted in
+        ascending semver order.
+
+        Origin: T7-3 versioned storage layer.
+        """
+
+    @abstractmethod
+    def resolve_current_version(self, name: str) -> str | None:
+        """Return the current (highest) version string for a skill, or ``None``.
+
+        When no version directories exist but a legacy-layout ``SKILL.md`` is
+        present, returns ``"0.1.0"`` (the semantic default for unversioned
+        skills).  Returns ``None`` only when the skill has no content at all.
+
+        Origin: T7-3 versioned storage layer.
+        """
+
+    @abstractmethod
     def public_skill_exists(self, name: str) -> bool:
         """Origin: ``deerflow.skills.manager.public_skill_exists``."""
 
@@ -214,21 +245,23 @@ class SkillStorage(ABC):
         """Origin: ``deerflow.config.skills_config.SkillsConfig.container_path`` accessor."""
         return self._container_root
 
-    def get_custom_skill_dir(self, name: str) -> Path:
-        """Path to ``custom/<name>``. Does not create the directory.
+    def get_custom_skill_dir(self, name: str, version: str | None = None) -> Path:
+        """Path to ``custom/<name>/v{version}/`` (or legacy layout for v0.1.0).
+
+        When *version* is ``None``, resolves the current version directory or
+        legacy layout.  Does not create the directory.
 
         Origin: ``deerflow.skills.manager.get_custom_skill_dir``.
         """
         normalized_name = self.validate_skill_name(name)
         return self.get_skills_root_path() / SkillCategory.CUSTOM.value / normalized_name
 
-    def get_custom_skill_file(self, name: str) -> Path:
-        """Path to ``custom/<name>/SKILL.md``.
+    def get_custom_skill_file(self, name: str, version: str | None = None) -> Path:
+        """Path to ``custom/<name>/v{version}/SKILL.md`` (or legacy layout).
 
         Origin: ``deerflow.skills.manager.get_custom_skill_file``.
         """
-        normalized_name = self.validate_skill_name(name)
-        return self.get_custom_skill_dir(normalized_name) / SKILL_MD_FILE
+        return self.get_custom_skill_dir(name, version=version) / SKILL_MD_FILE
 
     def get_skill_history_file(self, name: str) -> Path:
         """Path to ``custom/.history/<name>.jsonl``. Does not create parents.

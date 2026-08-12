@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from deerflow.skills.parser import parse_skill_file
-from deerflow.skills.types import SKILL_MD_FILE, Skill, SkillCategory
+from deerflow.skills.types import Skill, SkillCategory
 
 if TYPE_CHECKING:
     from deerflow.skills.storage.skill_storage import SkillStorage
@@ -307,24 +307,21 @@ def _write_manifest(scope_root: Path, source_signature: str) -> None:
 
 def _load_public_skills(storage: SkillStorage, *, enabled_only: bool) -> list[Skill]:
     from deerflow.config.extensions_config import ExtensionsConfig
+    from deerflow.skills.storage.local_skill_storage import _iter_category_skill_files
 
     public_root = storage.get_skills_root_path() / SkillCategory.PUBLIC.value
     if not public_root.is_dir():
         return []
     extensions = ExtensionsConfig.from_file()
     skills: list[Skill] = []
-    for current_root, dir_names, file_names in os.walk(public_root, followlinks=True):
-        dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))
-        if SKILL_MD_FILE not in file_names:
-            continue
-        # Match the runtime loader: nested SKILL.md files inside a package are
-        # support data, not independently configurable skills.
-        dir_names.clear()
-        skill_file = Path(current_root) / SKILL_MD_FILE
+    for _name_dir, skill_md_path in _iter_category_skill_files(public_root):
+        # _iter_category_skill_files already enforces package-boundary
+        # semantics (nested SKILL.md inside a package is support data) and
+        # resolves version directories to the current version.
         skill = parse_skill_file(
-            skill_file,
+            skill_md_path,
             category=SkillCategory.PUBLIC,
-            relative_path=skill_file.parent.relative_to(public_root),
+            relative_path=skill_md_path.parent.relative_to(public_root),
         )
         if skill is None:
             continue

@@ -6,7 +6,7 @@ from deerflow.skills.review import LocalDirectoryReader, analyze_skill_package
 from deerflow.skills.types import SkillCategory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SKILL_DIR = REPO_ROOT / "skills" / "public" / "skill-reviewer"
+SKILL_DIR = REPO_ROOT / "skills" / "public" / "skill-reviewer" / "v0.1.0"
 
 
 def test_skill_reviewer_public_skill_parses():

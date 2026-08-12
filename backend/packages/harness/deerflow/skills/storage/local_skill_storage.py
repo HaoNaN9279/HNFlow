@@ -1,4 +1,13 @@
-"""Local-filesystem implementation of ``SkillStorage``."""
+"""Local-filesystem implementation of ``SkillStorage``.
+
+T7-3: versioned storage layout.  Each skill version lives in its own
+subdirectory::
+
+    <root>/public/<name>/v0.1.0/SKILL.md        ← versioned
+    <root>/custom/<name>/v0.1.0/SKILL.md        ← versioned
+    <root>/custom/<name>/SKILL.md               ← legacy (v0.1.0)
+    <root>/custom/.history/<name>.jsonl         ← unchanged
+"""
 
 from __future__ import annotations
 
@@ -19,6 +28,15 @@ from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
 from deerflow.skills.permissions import make_skill_written_path_sandbox_readable
 from deerflow.skills.storage.skill_storage import SKILL_MD_FILE, SkillStorage
 from deerflow.skills.types import SkillCategory
+from deerflow.skills.versions import (
+    bump_patch,
+    dir_name_to_version,
+    is_version_dir_name,
+    parse_version,
+    select_current_version,
+    sort_versions,
+    version_to_dir_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +45,115 @@ logger = logging.getLogger(__name__)
 _INSTALL_TMP_CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
+# ---------------------------------------------------------------------------
+# Shared helper — resolve the current version of a skill directory
+# ---------------------------------------------------------------------------
+
+
+def _resolve_skill_dir_current_version(skill_dir: Path) -> str | None:
+    """Return the current version for *skill_dir*, or ``None``.
+
+    Scans for version directories (``v0.1.0``, …) and picks the highest.
+    When no version directories exist but a legacy ``SKILL.md`` is present
+    directly under *skill_dir*, returns ``"0.1.0"`` (the semantic default).
+
+    This is a pure helper — no filesystem writes, no side effects.
+    """
+    if not skill_dir.exists() or not skill_dir.is_dir():
+        return None
+    versions: list[str] = []
+    try:
+        for entry in skill_dir.iterdir():
+            if entry.is_dir() and is_version_dir_name(entry.name):
+                versions.append(dir_name_to_version(entry.name))
+    except OSError:
+        return None
+    if versions:
+        return select_current_version(versions)
+    if (skill_dir / SKILL_MD_FILE).exists():
+        return "0.1.0"
+    return None
+
+
+def _list_skill_dir_versions(skill_dir: Path) -> list[str]:
+    """Return sorted version strings for a skill directory.
+
+    Scans for ``is_version_dir_name`` subdirectories and returns
+    ``sort_versions``-ordered bare semver strings (no ``v`` prefix).
+    """
+    if not skill_dir.exists() or not skill_dir.is_dir():
+        return []
+    versions: list[str] = []
+    try:
+        for entry in skill_dir.iterdir():
+            if entry.is_dir() and is_version_dir_name(entry.name):
+                versions.append(dir_name_to_version(entry.name))
+    except OSError:
+        return []
+    return sort_versions(versions)
+
+
+# ---------------------------------------------------------------------------
+# Category-level iteration helper (shared by LocalSkillStorage and
+# UserScopedSkillStorage)
+# ---------------------------------------------------------------------------
+
+
+def _iter_category_skill_files(category_root: Path) -> Iterable[tuple[Path, Path]]:
+    """Yield ``(name_dir, skill_md_path)`` for every current-version skill under *category_root*.
+
+    Walks *category_root* recursively via :func:`os.walk`, resolving version
+    directories inline.  When a ``SKILL.md`` is found (inside a version
+    directory or via legacy layout), that directory becomes a package
+    boundary: deeper nested ``SKILL.md`` files are NOT yielded.
+
+    Yields:
+        ``(name_dir, skill_md_path)`` where *name_dir* is the skill's base
+        directory (e.g. ``.../custom/demo-skill``) and *skill_md_path* is the
+        ``SKILL.md`` (e.g. ``.../custom/demo-skill/v0.1.0/SKILL.md`` or
+        ``.../custom/demo-skill/SKILL.md`` for legacy).
+    """
+    if not category_root.exists() or not category_root.is_dir():
+        return
+
+    for current_root, dir_names, file_names in os.walk(category_root, followlinks=True):
+        dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))
+
+        # Version resolution: if any dir_names are version dirs, keep only the
+        # highest version and remove the rest.
+        version_dirs = [(d, dir_name_to_version(d)) for d in dir_names if is_version_dir_name(d)]
+        if version_dirs:
+            version_dirs.sort(key=lambda x: x[1])
+            highest_str = version_dirs[-1][0]
+            # Keep only the highest version dir; remove all others
+            dir_names[:] = [d for d in dir_names if not is_version_dir_name(d) or d == highest_str]
+            # Warn about skipped non-current versions
+            for d, _v in version_dirs[:-1]:
+                logger.warning("Skipping non-current version dir: %s/%s", current_root, d)
+
+        if SKILL_MD_FILE not in file_names:
+            continue
+
+        # T7-7: When version directories exist, the legacy SKILL.md at this
+        # level is not the current version — skip it and let os.walk recurse
+        # into the highest version directory to find and yield the versioned
+        # SKILL.md instead.
+        if version_dirs:
+            continue
+
+        # A directory containing SKILL.md is a package boundary.
+        dir_names.clear()
+        yield Path(current_root), Path(current_root) / SKILL_MD_FILE
+
+
 class LocalSkillStorage(SkillStorage):
     """Skill storage backed by the local filesystem.
 
-    Layout::
+    T7-3 versioned layout::
 
-        <root>/public/<name>/SKILL.md
-        <root>/custom/<name>/SKILL.md
+        <root>/public/<name>/v0.1.0/SKILL.md
+        <root>/custom/<name>/v0.1.0/SKILL.md
+        <root>/custom/<name>/SKILL.md              ← legacy (v0.1.0)
         <root>/custom/.history/<name>.jsonl
     """
 
@@ -51,54 +171,151 @@ class LocalSkillStorage(SkillStorage):
             self._app_config = config
             self._host_root: Path = config.skills.get_skills_path()
         else:
-            # Keep app_config as-is (may be None). This host_path constructor is used by
-            # tests and non-user-scoped storage; eagerly calling get_app_config() here would
-            # break config-free environments (e.g. CI). The skill_scan.enabled kill switch is
-            # resolved lazily at scan time by skill_scan_enabled(), which also picks up
-            # hot-reloaded config, so a None here is honored, not ignored.
             self._app_config = app_config
             self._host_root = resolve_path(host_path)
 
     # ------------------------------------------------------------------
-    # Abstract operation implementations
+    # Path helpers — version-aware
     # ------------------------------------------------------------------
 
     def get_skills_root_path(self) -> Path:
         return self._host_root
 
+    def _get_custom_skill_base_dir(self, name: str) -> Path:
+        """Return ``<custom>/<name>/`` without any version subdirectory."""
+        normalized_name = self.validate_skill_name(name)
+        return self._host_root / SkillCategory.CUSTOM.value / normalized_name
+
+    def get_custom_skill_dir(self, name: str, version: str | None = None) -> Path:
+        """Version-aware custom skill directory.
+
+        - *version* given → ``<custom>/<name>/v{version}/``
+        - *version* ``None`` + current version dirs → highest version dir
+        - *version* ``None`` + legacy ``SKILL.md`` → ``<custom>/<name>/``
+        - *version* ``None`` + nothing → ``<custom>/<name>/`` (default for writes)
+        """
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._host_root / SkillCategory.CUSTOM.value / normalized_name
+        if version is not None:
+            parsed = parse_version(version)
+            return base_dir / version_to_dir_name(parsed)
+        current = _resolve_skill_dir_current_version(base_dir)
+        if current is not None:
+            current_version_dir = base_dir / version_to_dir_name(current)
+            if current_version_dir.exists() and current_version_dir.is_dir():
+                return current_version_dir
+            # Legacy layout: SKILL.md lives directly under base_dir
+            return base_dir
+        return base_dir
+
+    def get_custom_skill_file(self, name: str, version: str | None = None) -> Path:
+        """Version-aware custom SKILL.md path."""
+        return self.get_custom_skill_dir(name, version=version) / SKILL_MD_FILE
+
+    def list_skill_versions(self, name: str) -> list[str]:
+        """Return sorted version strings for a custom skill."""
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._host_root / SkillCategory.CUSTOM.value / normalized_name
+        return _list_skill_dir_versions(base_dir)
+
+    def resolve_current_version(self, name: str) -> str | None:
+        """Return the current (highest) version for a custom skill."""
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._host_root / SkillCategory.CUSTOM.value / normalized_name
+        return _resolve_skill_dir_current_version(base_dir)
+
+    # ------------------------------------------------------------------
+    # Existence checks
+    # ------------------------------------------------------------------
+
     def custom_skill_exists(self, name: str) -> bool:
-        return self.get_custom_skill_file(name).exists()
+        return self.resolve_current_version(name) is not None
 
     def public_skill_exists(self, name: str) -> bool:
         normalized_name = self.validate_skill_name(name)
-        return (self._host_root / SkillCategory.PUBLIC.value / normalized_name / SKILL_MD_FILE).exists()
+        skill_dir = self._host_root / SkillCategory.PUBLIC.value / normalized_name
+        return _resolve_skill_dir_current_version(skill_dir) is not None
+
+    # ------------------------------------------------------------------
+    # Skill iteration
+    # ------------------------------------------------------------------
 
     def _iter_skill_files(self) -> Iterable[tuple[SkillCategory, Path, Path]]:
+        """Yield ``(category, category_root, skill_md_path)`` for every current-version skill.
+
+        Uses :func:`_iter_category_skill_files` for version resolution.
+        """
         if not self._host_root.exists():
             return
         for category in SkillCategory:
             category_path = self._host_root / category.value
             if not category_path.exists() or not category_path.is_dir():
                 continue
-            for current_root, dir_names, file_names in os.walk(category_path, followlinks=True):
-                dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))
-                if SKILL_MD_FILE not in file_names:
-                    continue
-                # A directory containing SKILL.md is a package boundary. Any
-                # nested SKILL.md files belong to that package's supporting
-                # resources (for example eval fixtures), not to the runtime
-                # skill registry. Namespace directories without SKILL.md still
-                # recurse, preserving layouts such as public/team/helper.
-                dir_names.clear()
-                yield category, category_path, Path(current_root) / SKILL_MD_FILE
+            for _name_dir, skill_md_path in _iter_category_skill_files(category_path):
+                yield category, category_path, skill_md_path
 
-    def read_custom_skill(self, name: str) -> str:
+    # ------------------------------------------------------------------
+    # Read
+    # ------------------------------------------------------------------
+
+    def read_custom_skill(self, name: str, version: str | None = None) -> str:
+        if version is not None:
+            skill_file = self.get_custom_skill_file(name, version=version)
+            if not skill_file.exists():
+                raise FileNotFoundError(f"Skill '{name}' version {version} not found.")
+            return skill_file.read_text(encoding="utf-8")
+        # Current version (including legacy fallback)
         if not self.custom_skill_exists(name):
             raise FileNotFoundError(f"Custom skill '{name}' not found.")
-        return (self.get_custom_skill_dir(name) / SKILL_MD_FILE).read_text(encoding="utf-8")
+        return self.get_custom_skill_file(name).read_text(encoding="utf-8")
 
-    def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
-        target = self.validate_relative_path(relative_path, self.get_custom_skill_dir(name))
+    # ------------------------------------------------------------------
+    # Write — version-aware with immutable bump + tree copy
+    # ------------------------------------------------------------------
+
+    def write_custom_skill(self, name: str, relative_path: str, content: str, *, version: str | None = None) -> str:
+        """Atomically write a file under the skill's version directory.
+
+        Returns the actual version string the file was written to.
+        """
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._host_root / SkillCategory.CUSTOM.value / normalized_name
+
+        # 1. Determine target version
+        target_version = self._resolve_write_target_version(base_dir, normalized_name, relative_path, content, version)
+
+        is_skill_md = relative_path == SKILL_MD_FILE or relative_path.endswith(f"/{SKILL_MD_FILE}")
+
+        # 2. Bump to an unused version directory — every write creates a new
+        #    version (immutable versioning).  For SKILL.md the target_version
+        #    is already resolved from frontmatter or explicit arg; for support
+        #    files without an explicit version we bump starting from current.
+        if is_skill_md:
+            target_version = self._ensure_version_available(base_dir, target_version)
+        else:
+            if version is not None:
+                # Explicit version requested — respect it
+                target_version = self._ensure_version_available(base_dir, target_version)
+            else:
+                # Auto-bump from current so the write never mutates a published version
+                current_version = _resolve_skill_dir_current_version(base_dir)
+                if current_version is None:
+                    current_version = "0.1.0"
+                target_version = self._ensure_version_available(base_dir, current_version)
+
+        # 3. Rewrite frontmatter version when writing SKILL.md
+        if is_skill_md:
+            content = self._rewrite_frontmatter_version(content, target_version)
+
+        # 4. For support files: copy entire current version tree into the new
+        #    version directory before writing the support file
+        current_version = _resolve_skill_dir_current_version(base_dir)
+        if not is_skill_md and current_version is not None:
+            self._copy_version_tree_if_needed(base_dir, current_version, target_version)
+
+        # 5. Write the file atomically
+        target_version_dir = base_dir / version_to_dir_name(target_version)
+        target = self.validate_relative_path(relative_path, target_version_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
@@ -111,15 +328,153 @@ class LocalSkillStorage(SkillStorage):
         try:
             with self._skill_projection_mutation():
                 tmp_path.replace(target)
-                make_skill_written_path_sandbox_readable(self.get_custom_skill_dir(name), target)
+                make_skill_written_path_sandbox_readable(target_version_dir, target)
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
+
+        return target_version
+
+    # ------------------------------------------------------------------
+    # Write helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_write_target_version(
+        self,
+        base_dir: Path,
+        normalized_name: str,
+        relative_path: str,
+        content: str,
+        version: str | None,
+    ) -> str:
+        """Determine the target version for a write operation."""
+        if version is not None:
+            return parse_version(version)
+
+        # Writing SKILL.md: extract version from frontmatter, fall back to current / "0.1.0"
+        if relative_path == SKILL_MD_FILE or relative_path.endswith(f"/{SKILL_MD_FILE}"):
+            fm_version = self._extract_frontmatter_version(content)
+            if fm_version is not None:
+                return fm_version
+            current = _resolve_skill_dir_current_version(base_dir)
+            return current if current is not None else "0.1.0"
+
+        # Support file: use current version, fall back to "0.1.0"
+        current = _resolve_skill_dir_current_version(base_dir)
+        return current if current is not None else "0.1.0"
+
+    @staticmethod
+    def _extract_frontmatter_version(content: str) -> str | None:
+        """Extract the ``version`` field from SKILL.md frontmatter, if present and valid."""
+        from deerflow.skills.frontmatter import split_skill_markdown
+
+        parts, _err = split_skill_markdown(content)
+        if parts is None:
+            return None
+        raw = parts.metadata.get("version")
+        if raw is None:
+            return None
+        try:
+            return parse_version(str(raw))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _ensure_version_available(base_dir: Path, target_version: str) -> str:
+        """Bump *target_version* until its directory does not exist.
+
+        Returns the first available version."""
+        current = target_version
+        while (base_dir / version_to_dir_name(current)).exists():
+            current = bump_patch(current)
+        return current
+
+    @staticmethod
+    def _rewrite_frontmatter_version(content: str, target_version: str) -> str:
+        """Rewrite the ``version`` field in SKILL.md frontmatter to *target_version*.
+
+        Preserves all other frontmatter fields and formatting.
+        If the frontmatter has no ``version`` line, inserts one after ``name``.
+        """
+        from deerflow.skills.frontmatter import split_skill_markdown
+
+        parts, _err = split_skill_markdown(content)
+        if parts is None:
+            # No valid frontmatter — prepend one with version
+            return f"---\nversion: {target_version}\n---\n\n{content}"
+
+        metadata = parts.metadata
+        metadata["version"] = target_version
+        frontmatter_text = parts.frontmatter_text
+        body = parts.body
+
+        # Rebuild frontmatter: replace or insert version line
+        lines = frontmatter_text.split("\n")
+        new_lines: list[str] = []
+        version_written = False
+
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("version:") or stripped == "version:":
+                new_lines.append(f"version: {target_version}")
+                version_written = True
+            else:
+                new_lines.append(line)
+
+        if not version_written:
+            # Insert version after the line that starts with "name:"
+            inserted = False
+            final_lines: list[str] = []
+            for line in new_lines:
+                final_lines.append(line)
+                if not inserted and (line.strip().startswith("name:") or line.strip() == "name:"):
+                    final_lines.append(f"version: {target_version}")
+                    inserted = True
+            if not inserted:
+                # No name: line found either — prepend version at top
+                final_lines = [f"version: {target_version}"] + new_lines
+            new_lines = final_lines
+
+        new_frontmatter = "\n".join(new_lines)
+        return f"---\n{new_frontmatter}\n---\n{body}"
+
+    def _copy_version_tree_if_needed(self, base_dir: Path, current_version: str, target_version: str) -> None:
+        """Copy the current version directory tree to the target version.
+
+        Only copies when the target version directory does not already exist
+        and the current version directory exists with content.
+        """
+        target_dir = base_dir / version_to_dir_name(target_version)
+        if target_dir.exists():
+            return
+        current_dir = base_dir / version_to_dir_name(current_version)
+        if not current_dir.exists() or not current_dir.is_dir():
+            return
+        # Only copy if the current version dir has content besides SKILL.md
+        try:
+            entries = list(current_dir.iterdir())
+        except OSError:
+            return
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for entry in entries:
+            dest = target_dir / entry.name
+            if entry.is_dir():
+                shutil.copytree(entry, dest)
+            else:
+                shutil.copy2(entry, dest)
+
+    # ------------------------------------------------------------------
+    # remove_custom_skill_file
+    # ------------------------------------------------------------------
 
     def remove_custom_skill_file(self, name: str, relative_path: str) -> str:
         removal = ((SkillCategory.CUSTOM, Path(name)),)
         with self._skill_projection_mutation(remove=removal):
             return super().remove_custom_skill_file(name, relative_path)
+
+    # ------------------------------------------------------------------
+    # install_skill_from_archive
+    # ------------------------------------------------------------------
 
     async def ainstall_skill_from_archive(self, archive_path: str | Path) -> dict:
         from deerflow.skills.installer import _scan_skill_archive_contents_or_raise
@@ -128,8 +483,6 @@ class LocalSkillStorage(SkillStorage):
         path = Path(archive_path)
         custom_dir = self._host_root / "custom"
 
-        # The per-file security scan is an async LLM call and must stay on the
-        # event loop; every filesystem phase around it runs in a worker thread.
         tmp = await asyncio.to_thread(tempfile.mkdtemp)
         try:
             skill_dir, skill_name, target = await asyncio.to_thread(self._prepare_skill_archive, path, Path(tmp), custom_dir, archive_path)
@@ -155,14 +508,12 @@ class LocalSkillStorage(SkillStorage):
 
     @staticmethod
     def _cleanup_install_tmp(tmp: str) -> None:
-        """Best-effort removal that never masks the install outcome, but leaves a trace."""
         try:
             shutil.rmtree(tmp)
         except OSError:
             logger.warning("Failed to clean up skill install temp dir %s", tmp, exc_info=True)
 
     def _prepare_skill_archive(self, path: Path, tmp_path: Path, custom_dir: Path, archive_path: str | Path) -> tuple[Path, str, Path]:
-        """Extract and validate the archive (blocking; runs off the event loop)."""
         import zipfile
 
         from deerflow.skills.installer import (
@@ -201,14 +552,21 @@ class LocalSkillStorage(SkillStorage):
         if not skill_name or "/" in skill_name or "\\" in skill_name or ".." in skill_name:
             raise ValueError(f"Invalid skill name: {skill_name}")
 
-        target = custom_dir / skill_name
+        # T7-7: resolve archive version from SKILL.md frontmatter
+        from deerflow.skills.versions import version_to_dir_name
+
+        skill_md_content = (skill_dir / SKILL_MD_FILE).read_text(encoding="utf-8")
+        fm_version = self._extract_frontmatter_version(skill_md_content)
+        install_version = fm_version if fm_version is not None else "0.1.0"
+        version_dir = version_to_dir_name(install_version)
+
+        target = custom_dir / skill_name / version_dir
         if target.exists():
-            raise SkillAlreadyExistsError(f"Skill '{skill_name}' already exists")
+            raise SkillAlreadyExistsError(f"Skill '{skill_name}' version {install_version} already exists")
 
         return skill_dir, skill_name, target
 
     def _commit_skill_install(self, skill_dir: Path, skill_name: str, custom_dir: Path, target: Path) -> None:
-        """Stage and move the validated skill into place (blocking; runs off the event loop)."""
         from deerflow.skills.installer import _move_staged_skill_into_reserved_target
 
         with self._skill_projection_mutation():
@@ -218,10 +576,16 @@ class LocalSkillStorage(SkillStorage):
                 _move_staged_skill_into_reserved_target(staging_target, target)
             make_skill_written_path_sandbox_readable(custom_dir, target)
 
+    # ------------------------------------------------------------------
+    # delete_custom_skill — removes entire <name>/ tree (all versions)
+    # ------------------------------------------------------------------
+
     def delete_custom_skill(self, name: str, *, history_meta: dict | None = None) -> None:
         self.validate_skill_name(name)
         self.ensure_custom_skill_is_editable(name)
-        target = self.get_custom_skill_dir(name)
+        # Delete the entire skill directory (all versions), not just the
+        # current version subdirectory.
+        target = self._get_custom_skill_base_dir(name)
         if history_meta is not None:
             prev_content = self.read_custom_skill(name)
             try:
@@ -239,6 +603,10 @@ class LocalSkillStorage(SkillStorage):
             if target.exists():
                 shutil.rmtree(target)
 
+    # ------------------------------------------------------------------
+    # Projection mutation context manager
+    # ------------------------------------------------------------------
+
     def _skill_projection_mutation(
         self,
         *,
@@ -250,6 +618,10 @@ class LocalSkillStorage(SkillStorage):
         from deerflow.skills.projection import skill_projection_mutation
 
         return skill_projection_mutation(self, "user", remove=remove, remove_names=remove_names)
+
+    # ------------------------------------------------------------------
+    # History
+    # ------------------------------------------------------------------
 
     def append_history(self, name: str, record: dict) -> None:
         self.validate_skill_name(name)

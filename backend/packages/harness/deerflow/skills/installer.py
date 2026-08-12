@@ -233,7 +233,7 @@ def _move_staged_skill_into_reserved_target(staging_target: Path, target: Path) 
     installed = False
     reserved = False
     try:
-        target.mkdir(mode=0o700)
+        target.mkdir(mode=0o700, parents=True)
         reserved = True
         for child in staging_target.iterdir():
             shutil.move(str(child), target / child.name)

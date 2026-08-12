@@ -2938,7 +2938,7 @@ class TestScenarioSkillInstallAndUse:
             ):
                 result = client.install_skill(archive)
             assert result["success"] is True
-            assert (skills_root / "custom" / "my-analyzer" / "SKILL.md").exists()
+            assert (skills_root / "custom" / "my-analyzer" / "v0.1.0" / "SKILL.md").exists()
 
             # Step 2: List and find it
             installed_skill = MagicMock()
@@ -3411,7 +3411,8 @@ class TestInstallSkillSecurity:
                 result = client.install_skill(archive)
 
             assert result["success"] is True
-            installed = skills_root / "custom" / "sym-skill"
+            # T7-7: versioned layout
+            installed = skills_root / "custom" / "sym-skill" / "v0.1.0"
             assert (installed / "SKILL.md").exists()
             assert not (installed / "sneaky_link").exists()
 
@@ -3454,7 +3455,8 @@ class TestInstallSkillSecurity:
                 zf.write(skill_dir / "SKILL.md", "dupe-skill/SKILL.md")
 
             skills_root = tmp_path / "skills"
-            (skills_root / "custom" / "dupe-skill").mkdir(parents=True)
+            # T7-7: versioned layout — create version dir to trigger "already exists"
+            (skills_root / "custom" / "dupe-skill" / "v0.1.0").mkdir(parents=True)
 
             from deerflow.skills.storage.local_skill_storage import LocalSkillStorage
 

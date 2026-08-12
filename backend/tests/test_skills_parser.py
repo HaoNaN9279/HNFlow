@@ -310,3 +310,81 @@ def test_parse_unquoted_colon_value_escapes_regex_in_hint(tmp_path, caplog):
     assert skill is None
     combined = "\n".join(rec.getMessage() for rec in caplog.records)
     assert r'description: "match: \\d+ digits"' in combined
+
+
+# ---------------------------------------------------------------------------
+# version & compatibility parsing (T7-2)
+# ---------------------------------------------------------------------------
+
+
+class TestVersionParsing:
+    """Parser-level version / compatibility extraction from frontmatter."""
+
+    def test_no_version_defaults_to_0_1_0(self, tmp_path):
+        """Legacy skill without a version field gets version="0.1.0"."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test")
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.version == "0.1.0"
+
+    def test_valid_semver(self, tmp_path):
+        """``version: 1.2.3`` in frontmatter is parsed correctly."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\nversion: 1.2.3")
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.version == "1.2.3"
+
+    def test_version_strips_v_prefix(self, tmp_path):
+        """``version: "v1.2.3"`` normalises to "1.2.3"."""
+        skill_file = _write_skill(tmp_path, 'name: my-skill\ndescription: Test\nversion: "v1.2.3"')
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.version == "1.2.3"
+
+    def test_version_with_prerelease(self, tmp_path):
+        """``version: 1.0.0-alpha.1`` is a valid semver pre-release."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\nversion: 1.0.0-alpha.1")
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.version == "1.0.0-alpha.1"
+
+    def test_invalid_version_two_part_rejected(self, tmp_path, caplog):
+        """``version: 1.2`` fails parsing (returns None)."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\nversion: 1.2")
+        with caplog.at_level(logging.ERROR, logger="deerflow.skills.parser"):
+            skill = parse_skill_file(skill_file, category="custom")
+        assert skill is None
+        assert any("Invalid version" in rec.getMessage() for rec in caplog.records)
+
+    def test_invalid_version_four_part_rejected(self, tmp_path, caplog):
+        """``version: 1.2.3.4`` fails parsing (returns None)."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\nversion: 1.2.3.4")
+        with caplog.at_level(logging.ERROR, logger="deerflow.skills.parser"):
+            skill = parse_skill_file(skill_file, category="custom")
+        assert skill is None
+        assert any("Invalid version" in rec.getMessage() for rec in caplog.records)
+
+
+class TestCompatibilityParsing:
+    """Parser-level compatibility field extraction."""
+
+    def test_no_compatibility_defaults_to_none(self, tmp_path):
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test")
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.compatibility is None
+
+    def test_string_compatibility_stored(self, tmp_path):
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\ncompatibility: node>=18")
+        skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.compatibility == "node>=18"
+
+    def test_non_string_compatibility_ignored_not_fatal(self, tmp_path, caplog):
+        """Non-string compatibility (list) stores None, does not fail parse."""
+        skill_file = _write_skill(tmp_path, "name: my-skill\ndescription: Test\ncompatibility: [1, 2]")
+        with caplog.at_level(logging.WARNING, logger="deerflow.skills.parser"):
+            skill = parse_skill_file(skill_file, category="custom")
+        assert skill is not None
+        assert skill.compatibility is None
+        assert any("Non-string compatibility" in rec.getMessage() for rec in caplog.records)

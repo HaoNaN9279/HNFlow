@@ -346,7 +346,7 @@ class TestEntryCountCapAppliesRegardlessOfSkillScan:
         result = storage.install_skill_from_archive(zip_path)
 
         assert result["success"] is True
-        assert (skills_root / "custom" / "small-skill" / "SKILL.md").exists()
+        assert (skills_root / "custom" / "small-skill" / "v0.1.0" / "SKILL.md").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -379,7 +379,7 @@ class TestInstallSkillFromArchive:
         result = get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
         assert result["success"] is True
         assert result["skill_name"] == "test-skill"
-        assert (skills_root / "custom" / "test-skill" / "SKILL.md").exists()
+        assert (skills_root / "custom" / "test-skill" / "v0.1.0" / "SKILL.md").exists()
 
     def test_install_with_warning_findings_succeeds_and_writes_only_the_skill(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DEER_FLOW_HOME", str(tmp_path / "runtime-home"))
@@ -395,9 +395,9 @@ class TestInstallSkillFromArchive:
         result = get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
 
         assert result["skill_name"] == "warning-skill"
-        assert (skills_root / "custom" / "warning-skill" / "SKILL.md").exists()
+        assert (skills_root / "custom" / "warning-skill" / "v0.1.0" / "SKILL.md").exists()
         assert not (tmp_path / "runtime-home" / "skillscan").exists()
-        assert not (skills_root / "custom" / "warning-skill" / ".skillscan.json").exists()
+        assert not (skills_root / "custom" / "warning-skill" / "v0.1.0" / ".skillscan.json").exists()
 
     def test_installed_skill_tree_is_readable_by_sandbox_mount(self, tmp_path):
         zip_path = tmp_path / "test-skill.skill"
@@ -409,7 +409,7 @@ class TestInstallSkillFromArchive:
 
         get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
 
-        installed_dir = skills_root / "custom" / "test-skill"
+        installed_dir = skills_root / "custom" / "test-skill" / "v0.1.0"
         nested_dir = installed_dir / "references"
         skill_file = installed_dir / "SKILL.md"
         guide_file = nested_dir / "guide.md"
@@ -755,14 +755,14 @@ class TestInstallSkillFromArchive:
             get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
 
         custom_dir = skills_root / "custom"
-        assert not (custom_dir / "test-skill").exists()
+        assert not (custom_dir / "test-skill" / "v0.1.0").exists()
         assert not [path for path in custom_dir.iterdir() if path.name.startswith(".installing-test-skill-")]
 
     def test_concurrent_target_creation_does_not_get_clobbered(self, tmp_path, monkeypatch):
         zip_path = self._make_skill_zip(tmp_path)
         skills_root = tmp_path / "skills"
         skills_root.mkdir()
-        target = skills_root / "custom" / "test-skill"
+        target = skills_root / "custom" / "test-skill" / "v0.1.0"
         original_copytree = shutil.copytree
         monkeypatch.setattr("deerflow.skills.installer.enforce_static_scan", lambda skill_dir, *, skill_name=None, app_config=None: [])
 
@@ -793,12 +793,12 @@ class TestInstallSkillFromArchive:
         with pytest.raises(OSError, match="move failed"):
             get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
 
-        assert not (skills_root / "custom" / "test-skill").exists()
+        assert not (skills_root / "custom" / "test-skill" / "v0.1.0").exists()
 
     def test_duplicate_raises(self, tmp_path):
         zip_path = self._make_skill_zip(tmp_path)
         skills_root = tmp_path / "skills"
-        (skills_root / "custom" / "test-skill").mkdir(parents=True)
+        (skills_root / "custom" / "test-skill" / "v0.1.0").mkdir(parents=True)
         with pytest.raises(ValueError, match="already exists"):
             get_or_new_skill_storage(skills_path=skills_root).install_skill_from_archive(zip_path)
 

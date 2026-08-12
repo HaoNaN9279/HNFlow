@@ -103,9 +103,11 @@ class TestWriteAndRead:
 
     def test_write_creates_file_in_user_dir(self, user_storage: UserScopedSkillStorage, base_dir: Path):
         user_storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill"))
-        user_file = base_dir / "users" / "test-user" / "skills" / "custom" / "demo-skill" / "SKILL.md"
+        user_file = base_dir / "users" / "test-user" / "skills" / "custom" / "demo-skill" / "v0.1.0" / "SKILL.md"
         assert user_file.exists()
-        assert user_file.read_text(encoding="utf-8") == _skill_content("demo-skill")
+        written = user_file.read_text(encoding="utf-8")
+        assert "demo-skill" in written
+        assert "version: 0.1.0" in written
 
     def test_write_does_not_create_in_global_custom(self, user_storage: UserScopedSkillStorage, skills_root: Path, base_dir: Path):
         user_storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill"))
@@ -122,10 +124,11 @@ class TestWriteAndRead:
             user_storage.read_custom_skill("nonexistent")
 
     def test_write_makes_path_sandbox_readable(self, user_storage: UserScopedSkillStorage, base_dir: Path):
+        user_storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill"))
         user_storage.write_custom_skill("demo-skill", "references/ref.md", "# ref")
-        skill_dir = base_dir / "users" / "test-user" / "skills" / "custom" / "demo-skill"
-        ref_dir = skill_dir / "references"
-        assert stat.S_IMODE(skill_dir.stat().st_mode) & 0o055 == 0o055
+        version_dir = base_dir / "users" / "test-user" / "skills" / "custom" / "demo-skill" / "v0.1.1"
+        ref_dir = version_dir / "references"
+        assert stat.S_IMODE(version_dir.stat().st_mode) & 0o055 == 0o055
         assert stat.S_IMODE(ref_dir.stat().st_mode) & 0o055 == 0o055
 
 

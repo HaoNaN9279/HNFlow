@@ -4,11 +4,12 @@ Custom skills are stored under ``{base_dir}/users/{user_id}/skills/custom/``
 instead of the global ``{base_dir}/skills/custom/``. Public skills are still
 read from the global ``{base_dir}/skills/public/`` (read-only).
 
-Layout::
+T7-3 versioned layout::
 
-    <host_root>/public/<name>/SKILL.md                   ← global, read-only
-    <user_custom_root>/<name>/SKILL.md                   ← per-user, read-write
-    <integrations_root>/<provider>/<name>/SKILL.md       ← global, read-only
+    <host_root>/public/<name>/v<semver>/SKILL.md        ← global, read-only
+    <user_custom_root>/<name>/v<semver>/SKILL.md        ← per-user, read-write
+    <user_custom_root>/<name>/SKILL.md                  ← legacy fallback
+    <integrations_root>/<provider>/<name>/v<semver>/SKILL.md  ← global, read-only
     <user_custom_root>/.history/<name>.jsonl             ← per-user history
     <user_skills_root>/_skill_states.json                ← per-user enabled state
     <global_custom_root>/<name>/SKILL.md                 ← legacy fallback, read-only
@@ -31,16 +32,23 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import json
 import logging
 import os
+import shutil
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
 from deerflow.skills.permissions import make_skill_written_path_sandbox_readable
-from deerflow.skills.storage.local_skill_storage import LocalSkillStorage
+from deerflow.skills.storage.local_skill_storage import (
+    LocalSkillStorage,
+    _iter_category_skill_files,
+    _list_skill_dir_versions,
+    _resolve_skill_dir_current_version,
+)
 from deerflow.skills.storage.skill_storage import SKILL_MD_FILE
 from deerflow.skills.types import SkillCategory
 
@@ -164,14 +172,48 @@ class UserScopedSkillStorage(LocalSkillStorage):
     # Path helpers — redirect custom skill paths to user directory
     # ------------------------------------------------------------------
 
-    def get_custom_skill_dir(self, name: str) -> Path:
-        """Per-user custom skill directory: ``<user_custom_root>/<name>/``."""
+    def _get_custom_skill_base_dir(self, name: str) -> Path:
+        """Return ``<user_custom_root>/<name>/`` without version subdir."""
         normalized_name = self.validate_skill_name(name)
         return self._user_custom_root / normalized_name
 
-    def get_custom_skill_file(self, name: str) -> Path:
-        """Per-user custom SKILL.md path."""
-        return self.get_custom_skill_dir(name) / SKILL_MD_FILE
+    def get_custom_skill_dir(self, name: str, version: str | None = None) -> Path:
+        """Per-user version-aware custom skill directory.
+
+        Redirects to ``_user_custom_root`` instead of the global custom root.
+        """
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._user_custom_root / normalized_name
+        if version is not None:
+            from deerflow.skills.versions import parse_version, version_to_dir_name
+
+            parsed = parse_version(version)
+            return base_dir / version_to_dir_name(parsed)
+        current = _resolve_skill_dir_current_version(base_dir)
+        if current is not None:
+            from deerflow.skills.versions import version_to_dir_name
+
+            current_version_dir = base_dir / version_to_dir_name(current)
+            if current_version_dir.exists() and current_version_dir.is_dir():
+                return current_version_dir
+            return base_dir
+        return base_dir
+
+    def get_custom_skill_file(self, name: str, version: str | None = None) -> Path:
+        """Per-user version-aware custom SKILL.md path."""
+        return self.get_custom_skill_dir(name, version=version) / SKILL_MD_FILE
+
+    def list_skill_versions(self, name: str) -> list[str]:
+        """Return sorted version strings for a per-user custom skill."""
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._user_custom_root / normalized_name
+        return _list_skill_dir_versions(base_dir)
+
+    def resolve_current_version(self, name: str) -> str | None:
+        """Return the current version for a per-user custom skill."""
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._user_custom_root / normalized_name
+        return _resolve_skill_dir_current_version(base_dir)
 
     def get_skill_history_file(self, name: str) -> Path:
         """Per-user custom skill history: ``<user_custom_root>/.history/<name>.jsonl``."""
@@ -239,11 +281,13 @@ class UserScopedSkillStorage(LocalSkillStorage):
         can give a helpful error message instead of ``FileNotFoundError``.
         """
         normalized_name = self.validate_skill_name(name)
-        # Standard public check
-        if (self._host_root / SkillCategory.PUBLIC.value / normalized_name / SKILL_MD_FILE).exists():
+        # Standard public check (version-aware)
+        public_dir = self._host_root / SkillCategory.PUBLIC.value / normalized_name
+        if _resolve_skill_dir_current_version(public_dir) is not None:
             return True
         # Global custom fallback check (legacy skills visible to all users)
-        if (self._global_custom_root / normalized_name / SKILL_MD_FILE).exists():
+        legacy_dir = self._global_custom_root / normalized_name
+        if _resolve_skill_dir_current_version(legacy_dir) is not None:
             return True
         return False
 
@@ -259,8 +303,8 @@ class UserScopedSkillStorage(LocalSkillStorage):
             return
         # Check both public and global-custom fallback
         normalized_name = self.validate_skill_name(name)
-        is_global_public = (self._host_root / SkillCategory.PUBLIC.value / normalized_name / SKILL_MD_FILE).exists()
-        is_global_custom_fallback = (self._global_custom_root / normalized_name / SKILL_MD_FILE).exists()
+        is_global_public = _resolve_skill_dir_current_version(self._host_root / SkillCategory.PUBLIC.value / normalized_name) is not None
+        is_global_custom_fallback = _resolve_skill_dir_current_version(self._global_custom_root / normalized_name) is not None
         if is_global_public:
             raise ValueError(f"'{name}' is a built-in skill. Use the skill_manage tool to create your own version — it will shadow the built-in one.")
         is_integration = any((candidate / SKILL_MD_FILE).exists() for candidate in self._integrations_root.glob(f"*/{normalized_name}") if candidate.is_dir())
@@ -271,15 +315,10 @@ class UserScopedSkillStorage(LocalSkillStorage):
         raise FileNotFoundError(f"Custom skill '{name}' not found.")
 
     def _iter_skill_files(self) -> Iterable[tuple[SkillCategory, Path, Path]]:
-        # 1. Public skills: always from global root
+        # 1. Public skills: always from global root (version-aware)
         public_path = self._host_root / SkillCategory.PUBLIC.value
-        if public_path.exists() and public_path.is_dir():
-            for current_root, dir_names, file_names in os.walk(public_path, followlinks=True):
-                dir_names[:] = sorted(name for name in dir_names if not name.startswith("."))
-                if SKILL_MD_FILE not in file_names:
-                    continue
-                dir_names.clear()
-                yield SkillCategory.PUBLIC, public_path, Path(current_root) / SKILL_MD_FILE
+        for _name_dir, skill_md_path in _iter_category_skill_files(public_path):
+            yield SkillCategory.PUBLIC, public_path, skill_md_path
 
         # 2. Managed integration skills: globally installed, read-only. Their
         # enabled state is still merged from this user's _skill_states.json.
@@ -291,17 +330,13 @@ class UserScopedSkillStorage(LocalSkillStorage):
                     continue
                 yield SkillCategory.INTEGRATION, integration_path, Path(current_root) / SKILL_MD_FILE
 
-        # 3. Custom skills: prefer user-level directory
+        # 3. Custom skills: prefer user-level directory (version-aware)
         user_custom_exists = False
         user_custom_path = self._user_custom_root
         if user_custom_path.exists() and user_custom_path.is_dir():
-            for current_root, dir_names, file_names in os.walk(user_custom_path, followlinks=True):
-                dir_names[:] = sorted(name for name in dir_names if not name.startswith(".") and name != ".history")
-                if SKILL_MD_FILE not in file_names:
-                    continue
-                dir_names.clear()
+            for _name_dir, skill_md_path in _iter_category_skill_files(user_custom_path):
                 user_custom_exists = True
-                yield SkillCategory.CUSTOM, user_custom_path, Path(current_root) / SKILL_MD_FILE
+                yield SkillCategory.CUSTOM, user_custom_path, skill_md_path
 
         # 4. Fallback: if user has no custom skills, load from global custom
         #    as LEGACY (read-only) so legacy skills are visible but not
@@ -310,13 +345,8 @@ class UserScopedSkillStorage(LocalSkillStorage):
         #    files (references, templates, scripts, assets) are accessible.
         if not user_custom_exists:
             global_custom_path = self._global_custom_root
-            if global_custom_path.exists() and global_custom_path.is_dir():
-                for current_root, dir_names, file_names in os.walk(global_custom_path, followlinks=True):
-                    dir_names[:] = sorted(name for name in dir_names if not name.startswith(".") and name != ".history")
-                    if SKILL_MD_FILE not in file_names:
-                        continue
-                    dir_names.clear()
-                    yield SkillCategory.LEGACY, global_custom_path, Path(current_root) / SKILL_MD_FILE
+            for _name_dir, skill_md_path in _iter_category_skill_files(global_custom_path):
+                yield SkillCategory.LEGACY, global_custom_path, skill_md_path
 
     # ------------------------------------------------------------------
     # Install — redirect custom_dir to user directory
@@ -361,10 +391,46 @@ class UserScopedSkillStorage(LocalSkillStorage):
     # Write — ensure user custom dir exists before writing
     # ------------------------------------------------------------------
 
-    def write_custom_skill(self, name: str, relative_path: str, content: str) -> None:
+    def write_custom_skill(self, name: str, relative_path: str, content: str, *, version: str | None = None) -> str:
         # Ensure user custom skills directory exists
         self._user_custom_root.mkdir(parents=True, exist_ok=True)
-        target = self.validate_relative_path(relative_path, self.get_custom_skill_dir(name))
+        normalized_name = self.validate_skill_name(name)
+        base_dir = self._user_custom_root / normalized_name
+
+        # Reuse the version resolution and bump logic from parent
+        from deerflow.skills.versions import version_to_dir_name
+
+        # 1. Determine target version
+        target_version = self._resolve_write_target_version(base_dir, normalized_name, relative_path, content, version)
+
+        is_skill_md = relative_path == SKILL_MD_FILE or relative_path.endswith(f"/{SKILL_MD_FILE}")
+
+        # 2. Bump to an unused version directory — every write creates a new
+        #    version (immutable versioning).
+        if is_skill_md:
+            target_version = self._ensure_version_available(base_dir, target_version)
+        else:
+            if version is not None:
+                target_version = self._ensure_version_available(base_dir, target_version)
+            else:
+                current_version = _resolve_skill_dir_current_version(base_dir)
+                if current_version is None:
+                    current_version = "0.1.0"
+                target_version = self._ensure_version_available(base_dir, current_version)
+
+        # 3. Rewrite frontmatter version when writing SKILL.md
+        if is_skill_md:
+            content = self._rewrite_frontmatter_version(content, target_version)
+
+        # 4. For support files: copy entire current version tree into the new
+        #    version directory before writing the support file
+        current_version = _resolve_skill_dir_current_version(base_dir)
+        if not is_skill_md and current_version is not None:
+            self._copy_version_tree_if_needed(base_dir, current_version, target_version)
+
+        # 5. Write the file atomically
+        target_version_dir = base_dir / version_to_dir_name(target_version)
+        target = self.validate_relative_path(relative_path, target_version_dir)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             "w",
@@ -377,10 +443,37 @@ class UserScopedSkillStorage(LocalSkillStorage):
         try:
             with self._skill_projection_mutation():
                 tmp_path.replace(target)
-                make_skill_written_path_sandbox_readable(self.get_custom_skill_dir(name), target)
+                make_skill_written_path_sandbox_readable(target_version_dir, target)
         except Exception:
             tmp_path.unlink(missing_ok=True)
             raise
+
+        return target_version
+
+    # ------------------------------------------------------------------
+    # delete — removes entire <name>/ tree
+    # ------------------------------------------------------------------
+
+    def delete_custom_skill(self, name: str, *, history_meta: dict | None = None) -> None:
+        self.validate_skill_name(name)
+        self.ensure_custom_skill_is_editable(name)
+        target = self._get_custom_skill_base_dir(name)
+        if history_meta is not None:
+            prev_content = self.read_custom_skill(name)
+            try:
+                self.append_history(name, {**history_meta, "prev_content": prev_content})
+            except OSError as e:
+                if not isinstance(e, PermissionError) and e.errno not in {errno.EACCES, errno.EPERM, errno.EROFS}:
+                    raise
+                logger.warning(
+                    "Skipping delete history write for custom skill %s due to readonly/permission failure; continuing with skill directory removal: %s",
+                    name,
+                    e,
+                )
+        removal = ((SkillCategory.CUSTOM, Path(name)),)
+        with self._skill_projection_mutation(remove=removal):
+            if target.exists():
+                shutil.rmtree(target)
 
     # ------------------------------------------------------------------
     # Public helpers

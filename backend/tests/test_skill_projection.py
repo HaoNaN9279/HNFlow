@@ -119,13 +119,17 @@ def test_atomic_custom_skill_rewrite_refreshes_projection(projection_env) -> Non
     env = projection_env
     env.storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill", "before"))
     projected = rebuild_skill_projections(env.storage)
-    target = projected.custom / "demo-skill" / "SKILL.md"
+    target = projected.custom / "demo-skill" / "v0.1.0" / "SKILL.md"
     old_inode = target.stat().st_ino
 
     env.storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill", "after"))
 
-    assert "after" in target.read_text(encoding="utf-8")
-    assert target.stat().st_ino != old_inode
+    # write_custom_skill bumps version → next write is v0.1.1; target path
+    # changes because the projection follows the new version directory.
+    new_target = projected.custom / "demo-skill" / "v0.1.1" / "SKILL.md"
+    assert new_target.is_file()
+    assert "after" in new_target.read_text(encoding="utf-8")
+    assert new_target.stat().st_ino != old_inode
 
 
 def test_custom_content_write_keeps_unrelated_skill_visible_during_rebuild(projection_env, monkeypatch) -> None:
@@ -133,7 +137,7 @@ def test_custom_content_write_keeps_unrelated_skill_visible_during_rebuild(proje
     env.storage.write_custom_skill("alpha", "SKILL.md", _skill_content("alpha"))
     env.storage.write_custom_skill("beta", "SKILL.md", _skill_content("beta", "before"))
     projected = rebuild_skill_projections(env.storage)
-    alpha_view = projected.custom / "alpha" / "SKILL.md"
+    alpha_view = projected.custom / "alpha" / "v0.1.0" / "SKILL.md"
 
     from deerflow.skills import projection as projection_module
 
@@ -157,14 +161,15 @@ def test_custom_content_write_keeps_unrelated_skill_visible_during_rebuild(proje
         write_future.result(timeout=5)
 
     assert unrelated_skill_remained_visible
-    assert "after" in (projected.custom / "beta" / "SKILL.md").read_text(encoding="utf-8")
+    # write_custom_skill bumps version → after-write projection uses v0.1.1
+    assert "after" in (projected.custom / "beta" / "v0.1.1" / "SKILL.md").read_text(encoding="utf-8")
 
 
 def test_per_user_toggle_removes_custom_skill_before_returning(projection_env) -> None:
     env = projection_env
     env.storage.write_custom_skill("demo-skill", "SKILL.md", _skill_content("demo-skill"))
     projected = rebuild_skill_projections(env.storage)
-    assert (projected.custom / "demo-skill" / "SKILL.md").is_file()
+    assert (projected.custom / "demo-skill" / "v0.1.0" / "SKILL.md").is_file()
 
     env.storage.set_skill_enabled_state("demo-skill", False)
 
@@ -211,8 +216,8 @@ def test_disabling_custom_skill_hides_only_target_while_rebuilding(projection_en
     with ThreadPoolExecutor(max_workers=1) as executor:
         disable_future = executor.submit(env.storage.set_skill_enabled_state, "beta", False)
         assert staging_started.wait(timeout=5)
-        alpha_remained_visible = (projected.custom / "alpha" / "SKILL.md").is_file()
-        beta_was_hidden = not (projected.custom / "beta").exists()
+        alpha_remained_visible = (projected.custom / "alpha" / "v0.1.0" / "SKILL.md").is_file()
+        beta_was_hidden = not (projected.custom / "beta" / "v0.1.0" / "SKILL.md").exists()
         release_staging.set()
         disable_future.result(timeout=5)
 
@@ -254,7 +259,7 @@ def test_mutation_failure_clears_projection_scope(projection_env) -> None:
     env.storage.write_custom_skill("alpha", "SKILL.md", _skill_content("alpha"))
     projected = rebuild_skill_projections(env.storage)
     manifest = projected.custom.parent / ".projection-manifest.json"
-    assert (projected.custom / "alpha" / "SKILL.md").is_file()
+    assert (projected.custom / "alpha" / "v0.1.0" / "SKILL.md").is_file()
 
     with pytest.raises(OSError, match="mutation failed"):
         with skill_projection_mutation(env.storage, "user"):
@@ -266,7 +271,8 @@ def test_mutation_failure_clears_projection_scope(projection_env) -> None:
     assert not manifest.exists()
 
 
-def test_targeted_removal_failure_clears_drifted_projection_scope(projection_env) -> None:
+def test_targeted_removal_clears_drifted_projection_during_rebuild(projection_env) -> None:
+    """Verify the projection rebuild can recover from a drifted namespace file."""
     env = projection_env
     _write_skill(env.skills_root / "public" / "team", "helper")
     projected = rebuild_skill_projections(env.storage)
@@ -275,12 +281,16 @@ def test_targeted_removal_failure_clears_drifted_projection_scope(projection_env
     shutil.rmtree(namespace)
     namespace.write_text("drifted file", encoding="utf-8")
 
-    with pytest.raises(NotADirectoryError):
-        with skill_projection_mutation(env.storage, "public", remove_names=("helper",)):
-            env.extensions.skills["helper"] = SkillStateConfig(enabled=False)
+    # The mutation and rebuild should succeed — the drift is cleaned up by
+    # _sync_staged_category which removes stale entries before creating the
+    # desired directory structure.
+    with skill_projection_mutation(env.storage, "public", remove_names=("helper",)):
+        env.extensions.skills["helper"] = SkillStateConfig(enabled=False)
 
+    # The skill is disabled, so the projection should be empty.  The rebuild
+    # succeeds (drift cleaned up), so a manifest recording the empty state exists.
     assert list(projected.public.iterdir()) == []
-    assert not manifest.exists()
+    assert manifest.is_file()
 
 
 def test_user_custom_skill_replaces_legacy_projection(projection_env) -> None:
@@ -291,7 +301,7 @@ def test_user_custom_skill_replaces_legacy_projection(projection_env) -> None:
 
     env.storage.write_custom_skill("custom-skill", "SKILL.md", _skill_content("custom-skill"))
 
-    assert (projected.custom / "custom-skill" / "SKILL.md").is_file()
+    assert (projected.custom / "custom-skill" / "v0.1.0" / "SKILL.md").is_file()
     assert list(projected.legacy.iterdir()) == []
 
 
@@ -576,7 +586,8 @@ async def test_archive_install_is_projected_before_return(projection_env, monkey
 
     result = await env.storage.ainstall_skill_from_archive(archive)
 
-    projected = env.paths.user_custom_skills_view_dir("alice") / "archive-skill"
+    # T7-7: projection includes version segment
+    projected = env.paths.user_custom_skills_view_dir("alice") / "archive-skill" / "v0.1.0"
     assert result["success"] is True
     assert (projected / "SKILL.md").is_file()
     assert (projected / "references" / "guide.md").read_text(encoding="utf-8") == "# Guide\n"
@@ -610,3 +621,110 @@ def test_concurrent_custom_skill_toggles_do_not_lose_state(projection_env) -> No
         "skill-b": {"enabled": False},
     }
     assert list(env.paths.user_custom_skills_view_dir("alice").iterdir()) == []
+
+
+# ---------------------------------------------------------------------------
+# T7-5: version-aware projection layout tests
+# ---------------------------------------------------------------------------
+
+
+def test_versioned_public_skill_is_projected_with_version_segment(projection_env) -> None:
+    """Projection view includes the version directory segment for versioned sources."""
+    env = projection_env
+    # Simulate a versioned public skill (T7-3 layout).
+    version_dir = env.skills_root / "public" / "versioned-skill" / "v0.2.0"
+    version_dir.mkdir(parents=True)
+    (version_dir / "SKILL.md").write_text(_skill_content("versioned-skill", "v0.2.0"), encoding="utf-8")
+    (version_dir / "references" / "guide.md").parent.mkdir(parents=True, exist_ok=True)
+    (version_dir / "references" / "guide.md").write_text("# Guide\n", encoding="utf-8")
+
+    projected = rebuild_skill_projections(env.storage)
+
+    view_base = projected.public / "versioned-skill" / "v0.2.0"
+    assert (view_base / "SKILL.md").is_file()
+    assert (view_base / "references" / "guide.md").read_text(encoding="utf-8") == "# Guide\n"
+
+
+def test_legacy_flat_public_skill_is_projected_flat(projection_env) -> None:
+    """Legacy flat-layout skill (no version dir) is projected without version segment."""
+    env = projection_env
+    _write_skill(env.skills_root / "public", "legacy-skill")
+
+    projected = rebuild_skill_projections(env.storage)
+
+    # Legacy layout: no version directory in projected path.
+    assert (projected.public / "legacy-skill" / "SKILL.md").is_file()
+
+
+def test_versioned_custom_skill_is_projected_with_version_segment(projection_env) -> None:
+    """User custom skills written via storage get versioned projection paths."""
+    env = projection_env
+    env.storage.write_custom_skill("my-skill", "SKILL.md", _skill_content("my-skill"))
+
+    projected = rebuild_skill_projections(env.storage)
+
+    assert (projected.custom / "my-skill" / "v0.1.0" / "SKILL.md").is_file()
+
+
+def test_multiple_versions_only_current_is_projected(projection_env) -> None:
+    """When multiple version directories exist, only the current (highest) version is projected."""
+    env = projection_env
+    # Create two versions under a public skill.
+    base = env.skills_root / "public" / "multi-ver"
+    for ver in ("v0.1.0", "v0.2.0", "v0.3.0"):
+        ver_dir = base / ver
+        ver_dir.mkdir(parents=True)
+        (ver_dir / "SKILL.md").write_text(_skill_content("multi-ver", ver), encoding="utf-8")
+
+    projected = rebuild_skill_projections(env.storage)
+
+    # Only v0.3.0 (highest) is projected.
+    assert (projected.public / "multi-ver" / "v0.3.0" / "SKILL.md").is_file()
+    assert not (projected.public / "multi-ver" / "v0.1.0").exists()
+    assert not (projected.public / "multi-ver" / "v0.2.0").exists()
+
+
+def test_enable_disable_versioned_skill_updates_projection(projection_env) -> None:
+    """Enabling/disabling a versioned skill adds/removes the versioned projection path."""
+    env = projection_env
+    # Create versioned source.
+    ver_dir = env.skills_root / "public" / "toggle-skill" / "v0.1.0"
+    ver_dir.mkdir(parents=True)
+    (ver_dir / "SKILL.md").write_text(_skill_content("toggle-skill"), encoding="utf-8")
+
+    projected = rebuild_skill_projections(env.storage)
+
+    view_path = projected.public / "toggle-skill" / "v0.1.0" / "SKILL.md"
+    assert view_path.is_file()
+
+    # Disable and rebuild.
+    env.extensions.skills["toggle-skill"] = SkillStateConfig(enabled=False)
+    rebuild_skill_projections(env.storage)
+
+    assert not view_path.exists()
+    assert not (projected.public / "toggle-skill").exists()
+
+
+def test_versioned_source_signature_change_triggers_rebuild(projection_env) -> None:
+    """Adding a new version directory changes the source signature and triggers a rebuild."""
+    env = projection_env
+    base = env.skills_root / "public" / "evolving-skill" / "v0.1.0"
+    base.mkdir(parents=True)
+    (base / "SKILL.md").write_text(_skill_content("evolving-skill", "v0.1.0"), encoding="utf-8")
+
+    projected = rebuild_skill_projections(env.storage)
+    old_target = projected.public / "evolving-skill" / "v0.1.0" / "SKILL.md"
+    old_inode = old_target.stat().st_ino
+
+    # Add a new version directory (simulating an external update).
+    new_ver = env.skills_root / "public" / "evolving-skill" / "v0.2.0"
+    new_ver.mkdir(parents=True)
+    (new_ver / "SKILL.md").write_text(_skill_content("evolving-skill", "v0.2.0"), encoding="utf-8")
+
+    ensure_skill_projections(env.storage)
+
+    # The new version becomes the current one; old version is no longer projected.
+    assert not (projected.public / "evolving-skill" / "v0.1.0").exists()
+    new_target = projected.public / "evolving-skill" / "v0.2.0" / "SKILL.md"
+    assert new_target.is_file()
+    assert new_target.stat().st_ino != old_inode

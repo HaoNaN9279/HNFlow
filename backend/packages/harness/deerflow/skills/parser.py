@@ -1,15 +1,16 @@
 import logging
-import re
+import re as _stdlib_re
 from pathlib import Path
 
 import yaml
 
 from .types import SKILL_MD_FILE, SecretRequirement, Skill, SkillCategory
+from .versions import parse_version
 
 logger = logging.getLogger(__name__)
 
 # Valid POSIX environment-variable name.
-_ENV_VAR_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ENV_VAR_NAME_RE = _stdlib_re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _format_yaml_error(skill_file: Path, exc: yaml.YAMLError, source: str) -> str:
@@ -134,7 +135,7 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
 
         # Keep parser diagnostics richer than the pure helper's host-path-free
         # error string; tests and authoring UX depend on the line-specific hint.
-        front_matter_match = re.match(r"^---\s*\n(.*?)\n---\s*\n?", content, re.DOTALL)
+        front_matter_match = _stdlib_re.match(r"^---\s*\n(.*?)\n---\s*\n?", content, _stdlib_re.DOTALL)
         if not front_matter_match:
             return None
         front_matter_text = front_matter_match.group(1)
@@ -181,6 +182,27 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
 
         secrets_autonomous = parse_secrets_autonomous(metadata.get("secrets-autonomous"), skill_file)
 
+        # --- version (T7) ---
+        version_raw = metadata.get("version")
+        if version_raw is not None:
+            try:
+                version = parse_version(str(version_raw))
+            except ValueError as exc:
+                logger.error("Invalid version in %s: %s", skill_file, exc)
+                return None
+        else:
+            version = "0.1.0"  # Legacy skill — no version field.
+
+        # --- compatibility (T7 / T8) ---
+        compat_raw = metadata.get("compatibility")
+        if compat_raw is None:
+            compatibility = None
+        elif isinstance(compat_raw, str):
+            compatibility = compat_raw.strip() or None
+        else:
+            logger.warning("Non-string compatibility value in %s: %r (ignored)", skill_file, compat_raw)
+            compatibility = None
+
         return Skill(
             name=name,
             description=description,
@@ -193,6 +215,8 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             enabled=True,  # Actual state comes from the extensions config file.
             required_secrets=required_secrets,
             secrets_autonomous=secrets_autonomous,
+            version=version,
+            compatibility=compatibility,
         )
 
     except Exception:

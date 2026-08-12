@@ -2,6 +2,11 @@
 
 The runtime parser, install-time validator, and review core all use this module
 as the schema source for DeerFlow SKILL.md metadata.
+
+.. note::
+
+   ``version`` (semver, validated from T7 onward) and ``compatibility`` (used
+   by T8 dependency resolution) are accepted but optional frontmatter fields.
 """
 
 from __future__ import annotations

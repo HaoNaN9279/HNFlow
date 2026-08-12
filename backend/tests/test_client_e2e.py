@@ -594,7 +594,7 @@ class TestSkillInstallation:
         result = c.install_skill(archive)
         assert result["success"] is True
         assert result["skill_name"] == "test-e2e-skill"
-        assert (self._skills_root / "custom" / "test-e2e-skill" / "SKILL.md").exists()
+        assert (self._skills_root / "custom" / "test-e2e-skill" / "v0.1.0" / "SKILL.md").exists()
 
     def test_install_skill_duplicate_rejected(self, e2e_env, tmp_path):
         """Installing the same skill twice raises ValueError."""

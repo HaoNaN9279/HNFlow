@@ -82,7 +82,8 @@ def test_skill_manage_create_and_patch(monkeypatch, tmp_path):
     assert "Patched custom skill" in patch_result
     # User-scoped: custom skills written under users/default/skills/custom/
     user_custom = tmp_path / "users" / "default" / "skills" / "custom"
-    assert "Patched skill" in (user_custom / "demo-skill" / "SKILL.md").read_text(encoding="utf-8")
+    # patch bumps version: v0.1.0 → v0.1.1
+    assert "Patched skill" in (user_custom / "demo-skill" / "v0.1.1" / "SKILL.md").read_text(encoding="utf-8")
     assert refresh_calls == [("refresh", "default"), ("refresh", "default")]
 
 
@@ -118,7 +119,8 @@ def test_skill_manage_patch_replaces_single_occurrence_by_default(monkeypatch, t
     )
 
     user_custom = tmp_path / "users" / "default" / "skills" / "custom"
-    skill_text = (user_custom / "demo-skill" / "SKILL.md").read_text(encoding="utf-8")
+    # patch bumps version: v0.1.0 → v0.1.1
+    skill_text = (user_custom / "demo-skill" / "v0.1.1" / "SKILL.md").read_text(encoding="utf-8")
     assert "1 replacement(s) applied, 2 match(es) found" in patch_result
     assert skill_text.count("Patched skill") == 1
     assert skill_text.count("Demo skill") == 1
@@ -236,7 +238,8 @@ def test_skill_manage_remove_file_updates_sandbox_projection_before_return(monke
         "supporting content",
         "references/guide.md",
     )
-    projected_file = tmp_path / "users" / "default" / "skills_view" / "custom" / "demo-skill" / "references" / "guide.md"
+    # T7-7: projection includes version segment (write_file bumps to v0.1.1)
+    projected_file = tmp_path / "users" / "default" / "skills_view" / "custom" / "demo-skill" / "v0.1.1" / "references" / "guide.md"
     assert projected_file.read_text(encoding="utf-8") == "supporting content"
 
     result = anyio.run(
