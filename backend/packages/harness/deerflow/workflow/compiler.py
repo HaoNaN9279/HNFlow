@@ -11,10 +11,14 @@ Key constraints:
   writes to undeclared fields.
 - ``flow:start`` / ``flow:end`` nodes are mapped to LangGraph ``START`` /
   ``END`` sentinels.
-- ``flow:if`` conditional edges are compiled into
+- ``flow:if`` / ``flow:switch`` conditional edges are compiled into
   ``add_conditional_edges`` with a route function that reads output
   ports from state and falls back to a mandatory default edge.
-- ``flow:loop`` / ``flow:parallel`` are NOT implemented in v1.
+- ``flow:loop`` compiles to a counting executor with conditional back-edge
+  to body entry + default exit edge.  State schema declares
+  ``wf:<loop_id>:__count`` so LangGraph persists the iteration counter.
+- ``flow:parallel`` compiles to a pass-through node — multiple regular
+  out edges produce LangGraph native fan-out parallelism.
 - Compile cache keys combine the definition hash *and* the set of
   registered ``NodeType`` values from ``CompileContext.executors``.
   Two calls with the same definition but different executor sets
@@ -33,6 +37,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+from langgraph.config import get_config  # type: ignore[import-untyped]
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -41,10 +46,28 @@ from deerflow.workflow.workflow_io import serialize, validate_definition
 
 # ── Public types ───────────────────────────────────────────────────────────
 
-# Executor contract:
-#   (params: dict[str, Any], inputs: dict[port_name, value]) → dict[port_name, value]
+
+@dataclass
+class WorkflowRuntime:
+    """Per-node execution context injected by the compiler.
+
+    Fields:
+        context: The ``context`` dict from LangGraph's runnable config
+            (caller-supplied per-run data — thread id, user id, secrets, etc.).
+        config: The full LangGraph ``RunnableConfig`` dictionary.
+        state: The current LangGraph state dict at the moment the node
+            function is invoked.
+    """
+
+    context: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    state: dict[str, Any] = field(default_factory=dict)
+
+
+# Executor contract (T5: three-parameter):
+#   (runtime: WorkflowRuntime, params: dict, inputs: dict) → dict
 # Supports both sync and async-returning implementations.
-Executor = Callable[[dict[str, Any], dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
+Executor = Callable[[WorkflowRuntime, dict[str, Any], dict[str, Any]], dict[str, Any] | Awaitable[dict[str, Any]]]
 
 
 class WorkflowCompileError(ValueError):
@@ -105,11 +128,16 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
     Keys follow the convention ``wf:<node_id>:<port_name>``, all typed
     ``Any`` and optional (``total=False``).  LangGraph will only persist
     fields declared here — undeclared writes are silently dropped.
+
+    Additionally, every ``flow:loop`` node gets a ``wf:<loop_id>:__count``
+    field for the loop iteration counter.
     """
     fields: dict[str, Any] = {}
     for node in def_.nodes:
         for port in node.outputs:
             fields[f"wf:{node.id}:{port.name}"] = Any
+        if node.type == NodeType.FLOW_LOOP:
+            fields[f"wf:{node.id}:__count"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -117,6 +145,7 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
 
 async def _resolve_executor(
     executor: Executor,
+    runtime: WorkflowRuntime,
     params: dict[str, Any],
     inputs: dict[str, Any],
 ) -> dict[str, Any]:
@@ -125,7 +154,7 @@ async def _resolve_executor(
     Supports sync executors (return plain dict) and async executors
     (return coroutine / awaitable).
     """
-    result = executor(params, inputs)
+    result = executor(runtime, params, inputs)
     if inspect.isawaitable(result):
         result = await result
     return result
@@ -159,7 +188,21 @@ def _make_node_fn(
             state_key = input_key_map.get(p.name, f"wf:{node.id}:{p.name}")
             inputs[p.name] = state.get(state_key)
 
-        result = await _resolve_executor(executor, node.params, inputs)
+        # Build WorkflowRuntime from LangGraph's runnable config context.
+        # get_config() is available inside LangGraph node execution.
+        # Fall back to empty runtime when running outside a LangGraph
+        # context (e.g. tests that invoke the node fn directly).
+        try:
+            config = get_config()
+            runtime = WorkflowRuntime(
+                context=config.get("context", {}),
+                config=config,
+                state=state,
+            )
+        except Exception:
+            runtime = WorkflowRuntime(state=state)
+
+        result = await _resolve_executor(executor, runtime, node.params, inputs)
 
         outputs: dict[str, Any] = {}
         for p in node.outputs:
@@ -262,12 +305,54 @@ def compile_definition(
         if node.type == NodeType.FLOW_END:
             end_node_id = node.id
             continue  # end node → LangGraph END, no add_node
-        if node.type == NodeType.FLOW_LOOP:
-            raise WorkflowCompileError(f"node '{node.id}' type 'flow:loop' not yet supported by compiler v1 (T5/T9)")
-        if node.type == NodeType.FLOW_PARALLEL:
-            raise WorkflowCompileError(f"node '{node.id}' type 'flow:parallel' not yet supported by compiler v1 (T5/T9)")
 
-        # Bind executor
+        if node.type == NodeType.FLOW_LOOP:
+            # Loop node: register a counting executor that reads/writes
+            # wf:<loop_id>:__count in state and outputs nothing (or empty).
+            loop_id = node.id
+            iterations = node.params.get("iterations", 1)
+
+            async def _loop_node_fn(state: dict[str, Any], *, _lid: str = loop_id, _max: int = iterations) -> dict[str, Any]:
+                count_key = f"wf:{_lid}:__count"
+                current: int = state.get(count_key, 0)
+                return {count_key: current + 1}
+
+            builder.add_node(node.id, _loop_node_fn)
+            continue
+
+        if node.type == NodeType.FLOW_PARALLEL:
+            # Parallel node: pass-through executor — inputs go straight to
+            # outputs; LangGraph's native fan-out from multiple regular
+            # out edges handles the parallelism.
+            async def _parallel_node_fn(state: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+                return {}
+
+            builder.add_node(node.id, _parallel_node_fn)
+            continue
+
+        if node.type == NodeType.FLOW_SWITCH:
+            # FLOW_SWITCH is a routing node — if CompileContext provides
+            # an executor use it (custom branch selection); otherwise
+            # register a built-in pass-through (output ports stay unset,
+            # route always falls through to default).
+            executor = ctx.executors.get(node.type)
+            if executor is not None:
+                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
+                builder.add_node(node.id, node_fn)
+            else:
+
+                async def _switch_builtin(state: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+                    return {}
+
+                builder.add_node(node.id, _switch_builtin)
+            continue
+
+        if node.type == NodeType.FLOW_WAIT:
+            # FLOW_WAIT is a normal node that gets resolved via executor
+            # lookup (T5-3 registers the actual wait executor).
+            pass
+
+        # Bind executor (for non-control-flow nodes including FLOW_WAIT)
         executor = ctx.executors.get(node.type)
         if executor is None:
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
@@ -278,8 +363,8 @@ def compile_definition(
     # ── 5. Process edges ──────────────────────────────────────────────
     # We do two passes:
     #   Pass A — regular edges (including start→X and X→end).
-    #   Pass B — conditional edges (from flow:if nodes, collected and
-    #            compiled as add_conditional_edges).
+    #   Pass B — conditional edges (from flow:if / flow:switch / flow:loop
+    #            nodes — collected and compiled as add_conditional_edges).
 
     # Pass A: regular edges
     for edge in def_.edges:
@@ -291,13 +376,17 @@ def compile_definition(
             builder.add_edge(START, target)
             continue
 
-        # Skip conditional edges — handled in Pass B
-        if edge.condition is not None:
-            # Only flow:if nodes support conditional edges
-            src_type = node_map[source].type
-            if src_type != NodeType.FLOW_IF:
-                raise WorkflowCompileError(f"edge from '{source}' to '{target}' has condition '{edge.condition}' but source node type is '{src_type.value}' (only 'flow:if' supports conditional edges)")
+        # All edges from conditional nodes (if / switch / loop) are
+        # handled in Pass B — both conditional AND default edges.
+        # Adding the default edge here would unconditionally fire the
+        # default target alongside any routed branch.
+        src_node = node_map[source]
+        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP):
             continue
+
+        # Non-conditional source node: conditional edges are NOT allowed.
+        if edge.condition is not None:
+            raise WorkflowCompileError(f"edge from '{source}' to '{target}' has condition '{edge.condition}' but source node type is '{src_node.type.value}' (only 'flow:if', 'flow:switch', 'flow:loop' support conditional edges)")
 
         # Edges to end node → LangGraph END
         if target == end_node_id:
@@ -307,13 +396,13 @@ def compile_definition(
         # Ordinary edge
         builder.add_edge(source, target)
 
-    # Pass B: conditional edges from if nodes
+    # Pass B: conditional edges from if / switch / loop nodes
     for node in def_.nodes:
-        if node.type != NodeType.FLOW_IF:
+        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP):
             continue
 
-        if_id = node.id
-        out_edges = [e for e in def_.edges if e.source == if_id]
+        cond_id = node.id
+        out_edges = [e for e in def_.edges if e.source == cond_id]
 
         cond_edges: list[tuple[str, str]] = []  # [(condition_port, target), ...]
         default_target: str | None = None
@@ -326,12 +415,12 @@ def compile_definition(
             else:
                 # Default (unconditional) edge
                 if default_target is not None:
-                    raise WorkflowCompileError(f"if node '{if_id}' has multiple default edges (only one allowed)")
+                    raise WorkflowCompileError(f"conditional node '{cond_id}' has multiple default edges (only one allowed)")
                 default_target = END if edge.target == end_node_id else edge.target
 
         # Validate: if there are conditional edges, a default edge is required
         if cond_edges and default_target is None:
-            raise WorkflowCompileError(f"if node '{if_id}' requires a default edge (no condition)")
+            raise WorkflowCompileError(f"conditional node '{cond_id}' requires a default edge (no condition)")
 
         if not cond_edges:
             continue  # no conditional edges — regular edges already handled in Pass A
@@ -339,17 +428,47 @@ def compile_definition(
         # default_target is guaranteed non-None here (guarded above)
         _default: str = cast(str, default_target)
 
-        # Build route function and path_map
+        # For loop nodes: build a route function that compares the
+        # iteration counter against the configured ``iterations``.
+        if node.type == NodeType.FLOW_LOOP:
+            loop_id = node.id
+            max_iterations: int = node.params.get("iterations", 1)
+
+            def _make_loop_route(
+                lid: str,
+                max_it: int,
+                conds: list[tuple[str, str]],
+                dflt: str,
+            ) -> Callable[[dict[str, Any]], str]:
+                def _route(state: dict[str, Any]) -> str:
+                    count = state.get(f"wf:{lid}:__count", 0)
+                    if count <= max_it:
+                        # Route to the body entry (the conditional edge target)
+                        for _condition_port, body_target in conds:
+                            return body_target
+                    return dflt
+
+                return _route
+
+            loop_route = _make_loop_route(loop_id, max_iterations, cond_edges, _default)
+            path_map: dict[str, str] = {}
+            for _, target in cond_edges:
+                path_map[target] = target
+            path_map[_default] = _default
+            builder.add_conditional_edges(cond_id, loop_route, path_map)
+            continue
+
+        # Build route function and path_map for if / switch nodes
         route_fn = _make_route_fn(node, cond_edges, _default)
 
         # path_map maps route_fn return values to LangGraph node names.
         # We use an identity mapping because route_fn returns target names directly.
-        path_map: dict[str, str] = {}
+        path_map = {}
         for _, target in cond_edges:
             path_map[target] = target
         path_map[_default] = _default
 
-        builder.add_conditional_edges(if_id, route_fn, path_map)
+        builder.add_conditional_edges(cond_id, route_fn, path_map)
 
     # ── 6. Compile ────────────────────────────────────────────────────
     compiled = builder.compile()

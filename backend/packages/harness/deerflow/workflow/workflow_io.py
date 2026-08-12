@@ -49,7 +49,7 @@ def validate_definition(def_: WorkflowDefinition) -> list[str]:
     node_ids = {n.id for n in def_.nodes}
     node_map: dict[str, Node] = {n.id: n for n in def_.nodes}
 
-    errors.extend(_find_cycles(node_ids, def_.edges))
+    errors.extend(_find_cycles(node_ids, node_map, def_.edges))
     errors.extend(_check_single_start_end(node_map, def_.edges))
     errors.extend(_check_edge_references(node_map, def_.edges))
     errors.extend(_check_port_types(node_map, def_.edges))
@@ -103,10 +103,13 @@ _GRAY = 1  # visiting (on current path)
 _BLACK = 2  # fully processed
 
 
-def _find_cycles(node_ids: set[str], edges: list[Edge]) -> list[str]:
+def _find_cycles(node_ids: set[str], node_map: dict[str, Node], edges: list[Edge]) -> list[str]:
     """Detect directed cycles using iterative DFS with an explicit stack.
 
     Returns one error per cycle containing the full path like ``"A→B→C→A"``.
+
+    Cycles that contain at least one ``flow:loop`` node are exempt —
+    loop nodes intentionally introduce a recursive self-loop.
     """
     errors: list[str] = []
 
@@ -142,7 +145,9 @@ def _find_cycles(node_ids: set[str], edges: list[Edge]) -> list[str]:
                     # Found a back edge → cycle detected
                     cycle_start_idx = path.index(neighbour)
                     cycle_path = path[cycle_start_idx:] + [neighbour]
-                    errors.append("→".join(cycle_path))
+                    # Exempt cycles that contain at least one flow:loop node
+                    if not _cycle_contains_loop(cycle_path, node_map):
+                        errors.append("→".join(cycle_path))
                 elif color[neighbour] == _WHITE:
                     # Unexplored node — descend
                     color[neighbour] = _GRAY
@@ -155,6 +160,15 @@ def _find_cycles(node_ids: set[str], edges: list[Edge]) -> list[str]:
                 path.pop()
 
     return errors
+
+
+def _cycle_contains_loop(cycle_path: list[str], node_map: dict[str, Node]) -> bool:
+    """Return True if any node in *cycle_path* is a ``flow:loop`` node."""
+    for nid in cycle_path:
+        node = node_map.get(nid)
+        if node is not None and node.type == NodeType.FLOW_LOOP:
+            return True
+    return False
 
 
 # ── Private: start/end node checks ───────────────────────────────────────────────

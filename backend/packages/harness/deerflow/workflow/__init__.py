@@ -8,6 +8,13 @@ from .compiler import (
     clear_compile_cache,
     compile_definition,
 )
+from .executors import build_default_registry  # noqa: E402
+from .registry import (  # noqa: E402
+    ExecutorRegistration,
+    ExecutorRegistry,
+    WorkflowExecutionError,
+    crash_confirm_required,
+)
 from .schema import (
     Edge,
     Node,
@@ -44,4 +51,9 @@ __all__ = [
     "Executor",
     "WorkflowCompileError",
     "WorkflowRouteError",
+    "ExecutorRegistration",
+    "ExecutorRegistry",
+    "WorkflowExecutionError",
+    "build_default_registry",
+    "crash_confirm_required",
 ]

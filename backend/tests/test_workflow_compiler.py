@@ -78,12 +78,12 @@ def _if_node(id_: str = "check") -> Node:
 
 def _exec_identity() -> Any:
     """Executor that returns input as-is under 'out'."""
-    return lambda _p, _i: {"out": _i.get("in")}
+    return lambda _rt, _p, _i: {"out": _i.get("in")}
 
 
 def _exec_prefix(prefix: str) -> Any:
     """Executor that prepends *prefix* to input."""
-    return lambda _p, _i: {"out": f"{prefix}{_i.get('in', '')}"}
+    return lambda _rt, _p, _i: {"out": f"{prefix}{_i.get('in', '')}"}
 
 
 async def _run(graph: Any, initial: dict[str, Any]) -> dict[str, Any]:
@@ -134,11 +134,11 @@ class TestSerialFlow:
     async def test_async_executor_data_flow(self) -> None:
         """Async executors — identical data flow as sync."""
 
-        async def _a_exec(_p: dict, _i: dict) -> dict:
+        async def _a_exec(_rt: dict, _p: dict, _i: dict) -> dict:
             await asyncio.sleep(0)
             return {"out": f"a:{_i.get('in', '')}"}
 
-        async def _b_exec(_p: dict, _i: dict) -> dict:
+        async def _b_exec(_rt: dict, _p: dict, _i: dict) -> dict:
             await asyncio.sleep(0)
             return {"out": f"b:{_i.get('in', '')}"}
 
@@ -166,7 +166,7 @@ class TestSerialFlow:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-def _if_exec_route(_p: dict, _i: dict) -> dict:
+def _if_exec_route(_rt: dict, _p: dict, _i: dict) -> dict:
     """Route value to 'true' port if input contains 'yes', else to 'false'."""
     val = str(_i.get("in", ""))
     if "yes" in val.lower():
@@ -227,7 +227,7 @@ class TestIfBranch:
     async def test_default_fallback(self) -> None:
         """Executor returns all-None → default edge taken."""
 
-        def _all_none(_p: dict, _i: dict) -> dict:
+        def _all_none(_rt: dict, _p: dict, _i: dict) -> dict:
             return {"true": None, "false": None}
 
         nodes = [_start_node(), _if_node("check"), _node("fallback"), _end_node()]
@@ -279,6 +279,88 @@ class TestIfBranch:
         # But yes_node reads wf:check:false → "nope" → output "nope"
         state2 = await _run(graph, {"wf:start:input": "nope"})
         assert state2.get("wf:yes_node:out") == "nope"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 2b. Conditional default-edge isolation (T5 bugfix)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestConditionalDefaultIsolation:
+    """Default edge of if / switch must NOT fire when a conditional branch matches."""
+
+    @pytest.mark.asyncio
+    async def test_if_default_edge_not_executed_on_branch_match(self) -> None:
+        """When if true-branch matches, the default-edge target stays idle."""
+        nodes = [
+            _start_node(),
+            _if_node("check"),
+            _node("yes_node"),
+            _node("default_node"),  # must NOT execute on true match
+            _end_node(),
+        ]
+        edges = [
+            Edge(source="start", source_port="input", target="check", target_port="in"),
+            Edge(source="check", source_port="true", target="yes_node", target_port="in", condition="true"),
+            Edge(source="check", source_port="false", target="default_node", target_port="in"),  # default
+            Edge(source="yes_node", source_port="out", target="end", target_port="in"),
+            Edge(source="default_node", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(
+            executors={
+                NodeType.FLOW_IF: _if_exec_route,
+                NodeType.DATA_ASSIGN: _exec_identity(),
+            }
+        )
+        graph = compile_definition(def_, context=ctx)
+        state = await _run(graph, {"wf:start:input": "yes please"})
+        # True branch matched → yes_node executed
+        assert state.get("wf:yes_node:out") == "yes please"
+        # Default-edge target must NOT have executed
+        assert state.get("wf:default_node:out") is None
+
+    @pytest.mark.asyncio
+    async def test_switch_default_edge_not_executed_on_branch_match(self) -> None:
+        """When switch case-a matches, the default-edge target stays idle."""
+
+        def _sw_exec_case_a(_rt: dict, _p: dict, _i: dict) -> dict:
+            """SWITCH executor — always routes to case_a."""
+            val = _i.get("in")
+            return {"case_a": val, "case_b": None}
+
+        nodes = [
+            _start_node(),
+            Node(
+                id="sw",
+                type=NodeType.FLOW_SWITCH,
+                inputs=[Port(name="in", type=PortType.DATA)],
+                outputs=[Port(name="case_a", type=PortType.DATA), Port(name="case_b", type=PortType.DATA)],
+            ),
+            _node("na"),
+            _node("nd"),  # must NOT execute on case_a match
+            _end_node(),
+        ]
+        edges = [
+            Edge(source="start", source_port="input", target="sw", target_port="in"),
+            Edge(source="sw", source_port="case_a", target="na", target_port="in", condition="case_a"),
+            Edge(source="sw", source_port="case_b", target="nd", target_port="in"),  # default
+            Edge(source="na", source_port="out", target="end", target_port="in"),
+            Edge(source="nd", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(
+            executors={
+                NodeType.FLOW_SWITCH: _sw_exec_case_a,
+                NodeType.DATA_ASSIGN: _exec_identity(),
+            }
+        )
+        graph = compile_definition(def_, context=ctx)
+        state = await _run(graph, {"wf:start:input": "hello"})
+        # case_a matched → na executed
+        assert state.get("wf:na:out") == "hello"
+        # Default-edge target must NOT have executed
+        assert state.get("wf:nd:out") is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -442,8 +524,8 @@ class TestBoundaryErrors:
         with pytest.raises(WorkflowCompileError, match="no registered executor"):
             compile_definition(def_, context=CompileContext())
 
-    def test_loop_node_rejected(self) -> None:
-        """flow:loop → WorkflowCompileError ('not yet supported')."""
+    def test_loop_node_compiles(self) -> None:
+        """flow:loop → now compiles (T5); no longer rejected."""
         nodes = [
             _start_node(),
             Node(id="loop", type=NodeType.FLOW_LOOP, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)]),
@@ -455,11 +537,12 @@ class TestBoundaryErrors:
         ]
         def_ = _make_def(nodes, edges)
         ctx = CompileContext(executors={NodeType.FLOW_LOOP: _exec_identity()})
-        with pytest.raises(WorkflowCompileError, match="flow:loop.*not yet supported"):
-            compile_definition(def_, context=ctx)
+        # Should compile without error (loop executor is registered inline by compiler)
+        graph = compile_definition(def_, context=ctx)
+        assert graph is not None
 
-    def test_parallel_node_rejected(self) -> None:
-        """flow:parallel → WorkflowCompileError ('not yet supported')."""
+    def test_parallel_node_compiles(self) -> None:
+        """flow:parallel → now compiles (T5); no longer rejected."""
         nodes = [
             _start_node(),
             Node(id="par", type=NodeType.FLOW_PARALLEL, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)]),
@@ -471,8 +554,9 @@ class TestBoundaryErrors:
         ]
         def_ = _make_def(nodes, edges)
         ctx = CompileContext(executors={NodeType.FLOW_PARALLEL: _exec_identity()})
-        with pytest.raises(WorkflowCompileError, match="flow:parallel.*not yet supported"):
-            compile_definition(def_, context=ctx)
+        # Should compile without error (parallel executor is registered inline by compiler)
+        graph = compile_definition(def_, context=ctx)
+        assert graph is not None
 
     def test_if_missing_default_edge(self) -> None:
         """if node with conditional edges but no default edge → WorkflowCompileError."""
@@ -513,7 +597,7 @@ class TestBoundaryErrors:
             compile_definition(def_, context=ctx)
 
     def test_non_if_conditional_edge(self) -> None:
-        """Conditional edge from non-if node → WorkflowCompileError."""
+        """Conditional edge from non-if/switch/loop node → WorkflowCompileError."""
         nodes = [_start_node(), _node("a"), _node("b"), _end_node()]
         edges = [
             Edge(source="start", source_port="input", target="a", target_port="in"),
@@ -522,7 +606,7 @@ class TestBoundaryErrors:
         ]
         def_ = _make_def(nodes, edges)
         ctx = CompileContext(executors={NodeType.DATA_ASSIGN: _exec_identity()})
-        with pytest.raises(WorkflowCompileError, match="only 'flow:if' supports"):
+        with pytest.raises(WorkflowCompileError, match="only 'flow:if'"):
             compile_definition(def_, context=ctx)
 
     def test_cycle_definition_rejected(self) -> None:
