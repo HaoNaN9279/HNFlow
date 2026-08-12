@@ -9,6 +9,13 @@ from .schema import (
     WorkflowDefinition,
     WorkflowMetadata,
 )
+from .workflow_io import (
+    SCHEMA_VERSION,
+    deserialize,
+    ports_compatible,
+    serialize,
+    validate_definition,
+)
 
 __all__ = [
     "PortType",
@@ -18,4 +25,9 @@ __all__ = [
     "Edge",
     "WorkflowMetadata",
     "WorkflowDefinition",
+    "SCHEMA_VERSION",
+    "deserialize",
+    "ports_compatible",
+    "serialize",
+    "validate_definition",
 ]
