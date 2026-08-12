@@ -1,0 +1,411 @@
+"""Router tests for workflow definition CRUD endpoints."""
+
+from __future__ import annotations
+
+import uuid
+from collections.abc import Callable
+from unittest.mock import patch
+
+import pytest
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import ASGIApp
+
+from app.gateway.auth.models import User
+from app.gateway.authz import AuthContext, Permissions
+from app.gateway.routers import workflow_routes
+from deerflow.config.database_config import DatabaseConfig
+from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
+from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
+
+# ── Fixtures ─────────────────────────────────────────────────────────────────
+
+_VALID_DEFINITION = {
+    "id": "wf-test-def",
+    "name": "Test Workflow",
+    "nodes": [
+        {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
+        {"id": "assign", "type": "data:assign", "inputs": [{"name": "in", "type": "data"}], "outputs": [{"name": "out", "type": "data"}]},
+        {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
+    ],
+    "edges": [
+        {"source": "start", "source_port": "out", "target": "assign", "target_port": "in"},
+        {"source": "assign", "source_port": "out", "target": "end", "target_port": "in"},
+    ],
+}
+
+_CYCLE_DEFINITION = {
+    "id": "cycle-wf",
+    "name": "Cycle Workflow",
+    "nodes": [
+        {"id": "A", "type": "data:assign", "inputs": [{"name": "in", "type": "data"}], "outputs": [{"name": "out", "type": "data"}]},
+        {"id": "B", "type": "data:assign", "inputs": [{"name": "in", "type": "data"}], "outputs": [{"name": "out", "type": "data"}]},
+        {"id": "C", "type": "data:assign", "inputs": [{"name": "in", "type": "data"}], "outputs": [{"name": "out", "type": "data"}]},
+    ],
+    "edges": [
+        {"source": "A", "source_port": "out", "target": "B", "target_port": "in"},
+        {"source": "B", "source_port": "out", "target": "C", "target_port": "in"},
+        {"source": "C", "source_port": "out", "target": "A", "target_port": "in"},
+    ],
+}
+
+_INVALID_DEFINITION_MISSING_ID = {
+    "name": "No ID Workflow",
+    "nodes": [],
+    "edges": [],
+}
+
+_STUB_PERMISSIONS: list[str] = [
+    Permissions.THREADS_READ,
+    Permissions.THREADS_WRITE,
+    Permissions.THREADS_DELETE,
+    Permissions.RUNS_CREATE,
+    Permissions.RUNS_READ,
+    Permissions.RUNS_CANCEL,
+]
+
+
+# ── Custom stub middleware ────────────────────────────────────────────────────
+
+
+class _WorkflowTestAuthMiddleware(BaseHTTPMiddleware):
+    """Stamp a fake user / AuthContext / auth_source onto every request.
+
+    Extends the standard stub from _router_auth_helpers with
+    ``auth_source = "session"`` so that ``get_current_user_from_request``
+    returns the stubbed user (it requires auth_source ∈ {session, auth_disabled,
+    internal} to short-circuit the JWT decode path).
+    """
+
+    def __init__(self, app: ASGIApp, user_factory: Callable[[], User]) -> None:
+        super().__init__(app)
+        self._user_factory = user_factory
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        user = self._user_factory()
+        request.state.user = user
+        request.state.auth_source = "session"
+        request.state.auth = AuthContext(user=user, permissions=list(_STUB_PERMISSIONS))
+        return await call_next(request)
+
+
+def _make_authed_workflow_app(repo, user_factory: Callable[[], User] | None = None):
+    """Build a FastAPI test app with stub auth + workflow repo on app.state."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    factory = user_factory or _make_stub_user
+    app = FastAPI()
+    app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=factory)
+    app.state.workflow_definition_repo = repo
+
+    # thread_store mock needed by @require_permission's owner_check
+    repo_mock = MagicMock()
+    repo_mock.check_access = AsyncMock(return_value=True)
+    app.state.thread_store = repo_mock
+
+    app.include_router(workflow_routes.router)
+    return app
+
+
+def _make_stub_user() -> User:
+    # Use a stable id so that the same user is returned across multiple
+    # requests within one test (POST + GET must share the same user_id).
+    return User(
+        email="test@example.com",
+        password_hash="x",
+        system_role="user",
+        id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
+    )
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+async def _make_repo(tmp_path):
+    """Create a WorkflowDefinitionRepository backed by a tmp_path SQLite DB."""
+    await init_engine_from_config(DatabaseConfig(backend="sqlite", sqlite_dir=str(tmp_path)))
+    sf = get_session_factory()
+    assert sf is not None
+    return WorkflowDefinitionRepository(sf)
+
+
+def _user_a() -> User:
+    return User(
+        id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+        email="alice@test.com",
+        password_hash="x",
+        system_role="user",
+    )
+
+
+def _user_b() -> User:
+    return User(
+        id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
+        email="bob@test.com",
+        password_hash="x",
+        system_role="user",
+    )
+
+
+# ── 5 端点注册 ───────────────────────────────────────────────────────────────
+
+
+def test_router_registers_list_endpoint():
+    """GET /api/workflows should not 404."""
+    app = FastAPI()
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+    response = client.get("/api/workflows")
+    assert response.status_code != 404
+
+
+def test_router_registers_create_endpoint():
+    """POST /api/workflows should not 404."""
+    app = FastAPI()
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+    response = client.post("/api/workflows", json={"name": "test"})
+    assert response.status_code != 404
+
+
+def test_router_registers_get_by_id_endpoint():
+    """GET /api/workflows/{id} should not 404."""
+    app = FastAPI()
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+    response = client.get("/api/workflows/wf-123")
+    assert response.status_code != 404
+
+
+def test_router_registers_put_endpoint():
+    """PUT /api/workflows/{id} should not 404."""
+    app = FastAPI()
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+    response = client.put("/api/workflows/wf-123", json={})
+    assert response.status_code != 404
+
+
+def test_router_registers_delete_endpoint():
+    """DELETE /api/workflows/{id} should not 404."""
+    app = FastAPI()
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+    response = client.delete("/api/workflows/wf-123")
+    assert response.status_code != 404
+
+
+# ── POST 合法定义 201 + 落库 ──────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_valid_definition_returns_ok_and_persists(tmp_path):
+    """POST with a valid definition returns 200/201 and the workflow appears in list."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    payload = {"name": "Valid WF", "definition": _VALID_DEFINITION}
+    response = client.post("/api/workflows", json=payload)
+    assert response.status_code in (200, 201), f"Got {response.status_code}: {response.text}"
+    data = response.json()
+    assert data["name"] == "Valid WF"
+    assert "id" in data
+    assert data["id"].startswith("wf-")
+
+    # Verify it appears in the list
+    list_resp = client.get("/api/workflows")
+    assert list_resp.status_code == 200
+    items = list_resp.json()
+    assert any(item["id"] == data["id"] for item in items)
+
+    await close_engine()
+
+
+# ── POST 环图 422 ─────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_cycle_definition_returns_422_with_cycle_path(tmp_path):
+    """POST with a cycle (A→B→C→A) returns 422 with errors mentioning cycle path."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    payload = {"name": "Cycle WF", "definition": _CYCLE_DEFINITION}
+    response = client.post("/api/workflows", json=payload)
+    assert response.status_code == 422, f"Got {response.status_code}: {response.text}"
+    body = response.json()
+    assert "errors" in body["detail"]
+    errors = body["detail"]["errors"]
+    assert len(errors) >= 1
+    # At least one error should mention cycle-related nodes
+    cycle_found = any("A" in e and "B" in e and "C" in e and "→" in e for e in errors)
+    assert cycle_found, f"Expected cycle error mentioning A/B/C with arrows; got {errors}"
+
+    await close_engine()
+
+
+# ── POST 结构非法 422 ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_invalid_definition_missing_id_returns_422(tmp_path):
+    """POST without required 'id' field returns 422."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    payload = {"name": "Invalid WF", "definition": _INVALID_DEFINITION_MISSING_ID}
+    response = client.post("/api/workflows", json=payload)
+    assert response.status_code == 422, f"Got {response.status_code}: {response.text}"
+    body = response.json()
+    assert "errors" in body["detail"]
+    errors = body["detail"]["errors"]
+    # Should contain a validation error about missing fields or "定义结构非法"
+    structural_msg = any("定义结构非法" in e or "id" in e.lower() for e in errors)
+    assert structural_msg, f"Expected structural error; got {errors}"
+
+    await close_engine()
+
+
+# ── PUT 更新 + 重新校验 ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_put_updates_name_and_revalidates(tmp_path):
+    """PUT a valid update → 200; PUT a cycle → 422; PUT non-existent → 404."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    # POST a valid definition first
+    payload = {"name": "Original Name", "definition": _VALID_DEFINITION}
+    create_resp = client.post("/api/workflows", json=payload)
+    assert create_resp.status_code in (200, 201)
+    wf_id = create_resp.json()["id"]
+
+    # GET the created workflow
+    get_resp = client.get(f"/api/workflows/{wf_id}")
+    assert get_resp.status_code == 200
+
+    # PUT to update name
+    put_resp = client.put(f"/api/workflows/{wf_id}", json={"name": "Updated Name"})
+    assert put_resp.status_code == 200, f"Got {put_resp.status_code}: {put_resp.text}"
+    assert put_resp.json()["name"] == "Updated Name"
+
+    # PUT with a cycle definition → 422
+    put_cycle = client.put(f"/api/workflows/{wf_id}", json={"definition": _CYCLE_DEFINITION})
+    assert put_cycle.status_code == 422, f"Got {put_cycle.status_code}"
+    assert "errors" in put_cycle.json()["detail"]
+
+    # PUT non-existent id → 404
+    put_missing = client.put("/api/workflows/wf-nonexistent", json={"name": "Ghost"})
+    assert put_missing.status_code == 404
+
+    await close_engine()
+
+
+# ── GET 404 / DELETE 404 ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_and_delete_nonexistent_returns_404(tmp_path):
+    """GET and DELETE for a non-existent id return 404."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    get_resp = client.get("/api/workflows/wf-ghost")
+    assert get_resp.status_code == 404
+
+    delete_resp = client.delete("/api/workflows/wf-ghost")
+    assert delete_resp.status_code == 404
+
+    await close_engine()
+
+
+# ── user 隔离（router 层） ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_router_user_isolation(tmp_path):
+    """User A's workflows are invisible to User B through the router."""
+    repo = await _make_repo(tmp_path)
+    user_a = _user_a()
+    user_b = _user_b()
+
+    # Build app with user_a as the stub user
+    app = _make_authed_workflow_app(repo, user_factory=lambda: user_a)
+    client = TestClient(app)
+
+    # POST as user_a
+    payload = {"name": "Alice's Workflow", "definition": _VALID_DEFINITION}
+    resp = client.post("/api/workflows", json=payload)
+    assert resp.status_code in (200, 201)
+    wf_id = resp.json()["id"]
+
+    # GET list as user_a — should contain the workflow
+    list_a = client.get("/api/workflows")
+    assert list_a.status_code == 200
+    ids_a = [item["id"] for item in list_a.json()]
+    assert wf_id in ids_a
+
+    # GET single as user_a — should return 200
+    get_a = client.get(f"/api/workflows/{wf_id}")
+    assert get_a.status_code == 200
+
+    # Now simulate user_b's view by monkeypatching get_optional_user_from_request
+    async def _return_user_b(request):
+        return user_b
+
+    with patch.object(workflow_routes, "get_optional_user_from_request", _return_user_b):
+        # GET list as user_b — should NOT contain user_a's workflow
+        list_b = client.get("/api/workflows")
+        assert list_b.status_code == 200
+        ids_b = [item["id"] for item in list_b.json()]
+        assert wf_id not in ids_b
+
+        # GET single as user_b — should return 404
+        get_b = client.get(f"/api/workflows/{wf_id}")
+        assert get_b.status_code == 404
+
+    await close_engine()
+
+
+# ── 503（repo 缺失） ──────────────────────────────────────────────────────────
+
+
+def test_missing_repo_returns_503():
+    """When workflow_definition_repo is not on app.state, requests return 503."""
+    # Build app manually without setting workflow_definition_repo
+    from unittest.mock import AsyncMock, MagicMock
+
+    app = FastAPI()
+    app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=_make_stub_user)
+    repo_mock = MagicMock()
+    repo_mock.check_access = AsyncMock(return_value=True)
+    app.state.thread_store = repo_mock
+    # Deliberately do NOT set app.state.workflow_definition_repo
+    app.include_router(workflow_routes.router)
+    client = TestClient(app)
+
+    for method, url, body in [
+        ("get", "/api/workflows", None),
+        ("post", "/api/workflows", {"name": "test", "definition": _VALID_DEFINITION}),
+        ("get", "/api/workflows/wf-1", None),
+        ("put", "/api/workflows/wf-1", {"name": "test"}),
+        ("delete", "/api/workflows/wf-1", None),
+    ]:
+        resp = None
+        if method == "get":
+            resp = client.get(url)
+        elif method == "post":
+            resp = client.post(url, json=body)
+        elif method == "put":
+            resp = client.put(url, json=body)
+        elif method == "delete":
+            resp = client.delete(url)
+        assert resp is not None
+        assert resp.status_code == 503, f"{method.upper()} {url} returned {resp.status_code}, expected 503"

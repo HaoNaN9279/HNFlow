@@ -30,6 +30,7 @@ from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.user.model import UserRow
 from deerflow.persistence.webhook_delivery.model import WebhookDeliveryRow
+from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
 
 __all__ = [
     "AgentRow",
@@ -46,4 +47,5 @@ __all__ = [
     "ThreadMetaRow",
     "UserRow",
     "WebhookDeliveryRow",
+    "WorkflowDefinitionRow",
 ]

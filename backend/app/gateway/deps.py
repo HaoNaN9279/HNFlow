@@ -448,14 +448,17 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 ScheduledTaskRunRepository,
             )
             from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
+            from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
 
             app.state.mcp_task_repo = McpTaskRepository(sf)
             app.state.scheduled_task_repo = ScheduledTaskRepository(sf)
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
+            app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
         else:
             app.state.mcp_task_repo = None
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
+            app.state.workflow_definition_repo = None
 
         # Run event store. The store and the matching ``run_events_config`` are
         # both frozen at startup so ``get_run_context`` does not combine a
@@ -604,6 +607,13 @@ def get_scheduled_task_service(request: Request):
     val = getattr(request.app.state, "scheduled_task_service", None)
     if val is None:
         raise HTTPException(status_code=503, detail="Scheduled task service not available")
+    return val
+
+
+def get_workflow_definition_repo(request: Request):
+    val = getattr(request.app.state, "workflow_definition_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Workflow definition repo not available")
     return val
 
 
