@@ -5,8 +5,10 @@ as the schema source for DeerFlow SKILL.md metadata.
 
 .. note::
 
-   ``version`` (semver, validated from T7 onward) and ``compatibility`` (used
-   by T8 dependency resolution) are accepted but optional frontmatter fields.
+   ``version`` (semver, validated from T7 onward), ``compatibility``,
+   ``dependencies``, and ``guid`` are accepted but optional frontmatter fields.
+   ``dependencies`` and ``guid`` support T8 (capability-group identity +
+   dependency resolution).
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ ALLOWED_FRONTMATTER_PROPERTIES = {
     "compatibility",
     "version",
     "author",
+    "dependencies",
+    "guid",
 }
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)

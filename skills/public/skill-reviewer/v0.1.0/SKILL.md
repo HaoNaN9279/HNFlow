@@ -1,5 +1,6 @@
 ---
 name: skill-reviewer
+version: 0.1.0
 description: Reviews DeerFlow skill packages for readiness, triggers, safety boundaries, resources, and evidence. Invoke when users ask to audit, grade, or production-check an existing skill.
 allowed-tools:
   - review_skill_package

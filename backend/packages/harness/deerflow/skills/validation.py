@@ -99,4 +99,37 @@ def _validate_skill_frontmatter(skill_dir: Path) -> tuple[bool, str, str | None]
     if compat_raw is not None and not isinstance(compat_raw, (str, dict)):
         return False, f"compatibility in {SKILL_MD_FILE} must be a string or a mapping, got {type(compat_raw).__name__}", None
 
+    # --- dependencies (T8 capability-group dependency declarations) ---
+    deps_raw = frontmatter.get("dependencies")
+    if deps_raw is not None:
+        if not isinstance(deps_raw, list):
+            return False, "dependencies must be a list of {guid, version} objects", None
+        for i, dep in enumerate(deps_raw):
+            if not isinstance(dep, dict):
+                return False, f"dependencies[{i}] must be a dict, got {type(dep).__name__}", None
+            dep_guid = dep.get("guid")
+            if not isinstance(dep_guid, str) or not _stdlib_re.fullmatch(r"^[0-9a-f]{32}$", dep_guid):
+                return False, f"dependencies[{i}].guid must be a 32-character lowercase hex string", None
+            dep_version = dep.get("version")
+            if not isinstance(dep_version, str) or not dep_version.strip():
+                return False, f"dependencies[{i}].version must be a non-empty string", None
+            # Lightweight semver validation: strip optional prefix (>=, ^, ~)
+            # then validate the bare version via parse_version.
+            bare = dep_version.strip()
+            if bare[0] in (">", "^", "~"):
+                if len(bare) > 1 and bare[1] == "=":
+                    bare = bare[2:]
+                else:
+                    bare = bare[1:]
+            try:
+                parse_version(bare)
+            except ValueError as e:
+                return False, f"dependencies[{i}].version {dep_version!r} is not a valid semver: {e}", None
+
+    # --- guid (T8 stable capability-group identifier) ---
+    guid_raw = frontmatter.get("guid")
+    if guid_raw is not None:
+        if not isinstance(guid_raw, str) or not _stdlib_re.fullmatch(r"^[0-9a-f]{32}$", guid_raw):
+            return False, f"guid must be a 32-character lowercase hex string, got {guid_raw!r}", None
+
     return True, "Skill is valid!", name

@@ -8,11 +8,17 @@ langgraph, langchain, or any app-layer code.
 
 from __future__ import annotations
 
+import logging
 import re
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+if TYPE_CHECKING:
+    from deerflow.skills.catalog import SkillCatalog
+
+logger = logging.getLogger(__name__)
 
 # ── ID validation ───────────────────────────────────────────────────────────────
 
@@ -143,3 +149,42 @@ class WorkflowDefinition(BaseModel):
     @classmethod
     def _validate_id(cls, value: str) -> str:
         return _validate_id(value)
+
+
+# ── Capability-group resolution ────────────────────────────────────────────────
+
+
+def collect_resolved_groups(
+    definition: WorkflowDefinition,
+    catalog: SkillCatalog,
+) -> list[str]:
+    """Collect the capability groups a workflow depends on, resolved to ``guid@version``.
+
+    Walks every node's ``capability_groups`` (skill names at authoring time),
+    maps each name to its skill via the catalog, and emits ``<guid>@v<version>``
+    strings.  Names that do not resolve to an installed skill are skipped
+    (backward compatible — a node may reference a not-yet-installed skill).
+    Results are deduplicated and order-stable.
+    """
+    raw_entries: list[str] = []
+    name_to_skill: dict[str, Any] = {s.name: s for s in catalog.skills}
+
+    for node in definition.nodes:
+        for name in node.capability_groups:
+            skill = name_to_skill.get(name)
+            if skill is None:
+                logger.warning(
+                    "Workflow node %r references unknown capability group %r — skipping",
+                    node.id,
+                    name,
+                )
+                continue
+            if not skill.skill_id:
+                logger.warning(
+                    "Skill %r has no skill_id (public/legacy), skipping resolved group",
+                    skill.name,
+                )
+                continue
+            raw_entries.append(f"{skill.skill_id}@v{skill.version}")
+
+    return list(dict.fromkeys(raw_entries))

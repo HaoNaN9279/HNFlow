@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI, Request, Response
@@ -15,9 +16,12 @@ from starlette.types import ASGIApp
 from app.gateway.auth.models import User
 from app.gateway.authz import AuthContext, Permissions
 from app.gateway.routers import workflow_routes
+from app.gateway.routers.workflow_routes import _resolve_workflow_metadata
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
+from deerflow.skills.types import Skill, SkillCategory
+from deerflow.workflow.schema import Node, NodeType, WorkflowDefinition
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -54,6 +58,21 @@ _INVALID_DEFINITION_MISSING_ID = {
     "name": "No ID Workflow",
     "nodes": [],
     "edges": [],
+}
+
+# Definition with capability_groups on one node
+_DEFINITION_WITH_CAPABILITY_GROUPS = {
+    "id": "wf-cap-groups",
+    "name": "Workflow With Skills",
+    "nodes": [
+        {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
+        {"id": "assign", "type": "data:assign", "inputs": [{"name": "in", "type": "data"}], "outputs": [{"name": "out", "type": "data"}], "capability_groups": ["data-analysis"]},
+        {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
+    ],
+    "edges": [
+        {"source": "start", "source_port": "out", "target": "assign", "target_port": "in"},
+        {"source": "assign", "source_port": "out", "target": "end", "target_port": "in"},
+    ],
 }
 
 _STUB_PERMISSIONS: list[str] = [
@@ -409,3 +428,321 @@ def test_missing_repo_returns_503():
             resp = client.delete(url)
         assert resp is not None
         assert resp.status_code == 503, f"{method.upper()} {url} returned {resp.status_code}, expected 503"
+
+
+# ── Helpers for resolved_groups tests ──────────────────────────────────────────
+
+
+def _make_skill(
+    name: str,
+    skill_id: str | None = None,
+    version: str = "0.1.0",
+) -> Skill:
+    """Construct a minimal Skill for test catalogs."""
+    return Skill(
+        name=name,
+        description=f"Skill {name}",
+        license=None,
+        skill_dir=Path("."),
+        skill_file=Path("SKILL.md"),
+        relative_path=Path("."),
+        category=SkillCategory.CUSTOM,
+        skill_id=skill_id,
+        version=version,
+    )
+
+
+def _make_definition(*group_sets: list[str]) -> WorkflowDefinition:
+    """Build a WorkflowDefinition with one node per group list."""
+    nodes = [Node(id=f"n{i}", type=NodeType.FLOW_START, capability_groups=groups) for i, groups in enumerate(group_sets)]
+    return WorkflowDefinition(id="test-wf", name="Test", nodes=nodes)
+
+
+# ── Tests: _resolve_workflow_metadata ──────────────────────────────────────────
+
+
+class TestResolveWorkflowMetadata:
+    """Unit tests for _resolve_workflow_metadata helper."""
+
+    def test_with_capability_groups_populates_resolved_groups(self):
+        """Metadata gets resolved_groups populated when nodes have capability_groups."""
+        mock_storage = MagicMock()
+        mock_storage.load_skills.return_value = [
+            _make_skill("data-analysis", skill_id="550e8400-e29b", version="0.2.0"),
+        ]
+
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
+            definition = _make_definition(["data-analysis"])
+            result = _resolve_workflow_metadata(definition, {"key": "val"})
+
+        assert result["key"] == "val"
+        assert result["resolved_groups"] == ["550e8400-e29b@v0.2.0"]
+
+    def test_no_capability_groups_returns_unchanged(self):
+        """Metadata is returned unchanged when no node has capability_groups."""
+        definition = _make_definition([])
+        metadata = {"key": "val"}
+        result = _resolve_workflow_metadata(definition, metadata)
+        assert result is metadata  # same object, no copy needed
+        assert result == {"key": "val"}
+
+    def test_unknown_skill_name_yields_none_resolved_groups(self):
+        """Unknown capability group name → resolved_groups set to None."""
+        mock_storage = MagicMock()
+        mock_storage.load_skills.return_value = [
+            _make_skill("known", skill_id="guid-known"),
+        ]
+
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
+            definition = _make_definition(["unknown"])
+            result = _resolve_workflow_metadata(definition, {})
+
+        assert result["resolved_groups"] is None
+
+    def test_storage_error_fail_open(self):
+        """Storage failure → metadata returned unchanged (fail-open)."""
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", side_effect=RuntimeError("boom")):
+            definition = _make_definition(["data-analysis"])
+            metadata = {"existing": "data"}
+            result = _resolve_workflow_metadata(definition, metadata)
+
+        # In fail-open mode, original metadata is returned unchanged
+        assert result is metadata
+        assert "resolved_groups" not in result
+
+    def test_preserves_existing_metadata_keys(self):
+        """Existing metadata keys survive resolution."""
+        mock_storage = MagicMock()
+        mock_storage.load_skills.return_value = [
+            _make_skill("data-analysis", skill_id="550e8400-e29b"),
+        ]
+
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
+            definition = _make_definition(["data-analysis"])
+            result = _resolve_workflow_metadata(definition, {"custom_field": 42, "another": "keep"})
+
+        assert result["custom_field"] == 42
+        assert result["another"] == "keep"
+        assert result["resolved_groups"] == ["550e8400-e29b@v0.1.0"]
+
+    def test_empty_resolved_becomes_none(self):
+        """When all capability_groups are unknown → resolved_groups becomes None (not empty list)."""
+        mock_storage = MagicMock()
+        mock_storage.load_skills.return_value = []  # no skills in catalog
+
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
+            definition = _make_definition(["missing"])
+            result = _resolve_workflow_metadata(definition, {})
+
+        assert result["resolved_groups"] is None
+
+    def test_mixed_known_and_unknown(self):
+        """Mixed groups: known resolves, unknown and no-id skipped."""
+        mock_storage = MagicMock()
+        mock_storage.load_skills.return_value = [
+            _make_skill("known", skill_id="guid-known", version="0.1.0"),
+            _make_skill("no-id", skill_id=None),
+        ]
+
+        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
+            definition = _make_definition(["known", "unknown", "no-id"])
+            result = _resolve_workflow_metadata(definition, {})
+
+        assert result["resolved_groups"] == ["guid-known@v0.1.0"]
+
+
+# ── Tests: create_workflow integration ─────────────────────────────────────────
+
+
+class TestCreateWorkflowResolvedGroups:
+    """Route-level tests: create_workflow passes resolved metadata to repo."""
+
+    def _make_app_with_mock_repo(self, repo):
+        """Build a test app with a mocked repo and stub auth."""
+        from unittest.mock import MagicMock as MM
+
+        app = FastAPI()
+        app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=_make_stub_user)
+        app.state.workflow_definition_repo = repo
+        repo_mock = MM()
+        repo_mock.check_access = AsyncMock(return_value=True)
+        app.state.thread_store = repo_mock
+        app.include_router(workflow_routes.router)
+        return app
+
+    def test_create_passes_resolved_metadata_to_repo(self):
+        """create_workflow calls repo.create with metadata including resolved_groups."""
+        mock_repo = MagicMock()
+        mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        # When _resolve_workflow_metadata runs, it needs skills storage.
+        # Mock the whole helper to return a known result so we test the
+        # integration point (metadata reaches repo.create).
+        expected_meta = {"resolved_groups": ["guid@v0.1.0"]}
+
+        with patch.object(workflow_routes, "_resolve_workflow_metadata", return_value=expected_meta):
+            payload = {"name": "WF With Skills", "definition": _DEFINITION_WITH_CAPABILITY_GROUPS}
+            response = client.post("/api/workflows", json=payload)
+
+        assert response.status_code in (200, 201), f"Got {response.status_code}: {response.text}"
+        mock_repo.create.assert_called_once()
+        call_kwargs = mock_repo.create.call_args[1]
+        assert call_kwargs["metadata"] is expected_meta
+
+    def test_create_without_capability_groups_passes_metadata_unchanged(self):
+        """When no capability_groups, metadata passes through without resolved_groups."""
+        mock_repo = MagicMock()
+        mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        user_metadata = {"custom": "value"}
+        payload = {"name": "Simple WF", "definition": _VALID_DEFINITION, "metadata": user_metadata}
+        response = client.post("/api/workflows", json=payload)
+
+        assert response.status_code in (200, 201), f"Got {response.status_code}: {response.text}"
+        call_kwargs = mock_repo.create.call_args[1]
+        # Without capability_groups, _resolve_workflow_metadata returns the same dict
+        assert call_kwargs["metadata"] == user_metadata
+        assert "resolved_groups" not in call_kwargs["metadata"] or call_kwargs["metadata"]["resolved_groups"] is None
+
+
+# ── Tests: update_workflow integration ─────────────────────────────────────────
+
+
+class TestUpdateWorkflowResolvedGroups:
+    """Route-level tests: update_workflow resolves metadata correctly."""
+
+    def _make_app_with_mock_repo(self, repo):
+        """Build a test app with a mocked repo and stub auth."""
+        from unittest.mock import MagicMock as MM
+
+        app = FastAPI()
+        app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=_make_stub_user)
+        app.state.workflow_definition_repo = repo
+        repo_mock = MM()
+        repo_mock.check_access = AsyncMock(return_value=True)
+        app.state.thread_store = repo_mock
+        app.include_router(workflow_routes.router)
+        return app
+
+    def test_update_definition_re_resolves_metadata(self):
+        """When definition changes, metadata is re-resolved from new definition."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(
+            return_value={
+                "id": "wf-123",
+                "name": "Old",
+                "definition": _VALID_DEFINITION,
+                "metadata": {"resolved_groups": ["old-guid@v0.1.0"]},
+            }
+        )
+        mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        new_meta = {"resolved_groups": ["new-guid@v0.2.0"]}
+
+        with patch.object(workflow_routes, "_resolve_workflow_metadata", return_value=new_meta):
+            response = client.put(
+                "/api/workflows/wf-123",
+                json={"definition": _DEFINITION_WITH_CAPABILITY_GROUPS},
+            )
+
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        call_kwargs = mock_repo.update.call_args[1]
+        assert call_kwargs["updates"]["metadata"] is new_meta
+
+    def test_update_definition_with_explicit_metadata_uses_it_as_base(self):
+        """When both definition and metadata are provided, body.metadata is used as base."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(
+            return_value={
+                "id": "wf-123",
+                "name": "Old",
+                "definition": _VALID_DEFINITION,
+                "metadata": {"resolved_groups": ["stale@v0.1.0"]},
+            }
+        )
+        mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        user_meta = {"resolved_groups": ["explicit@v1.0.0"], "version": "2"}
+        expected_result = dict(user_meta)  # the helper would merge
+
+        with patch.object(workflow_routes, "_resolve_workflow_metadata", return_value=expected_result) as mock_resolve:
+            response = client.put(
+                "/api/workflows/wf-123",
+                json={"definition": _DEFINITION_WITH_CAPABILITY_GROUPS, "metadata": user_meta},
+            )
+
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        # Helper called with user-provided metadata as base
+        mock_resolve.assert_called_once()
+        _call_model, base_meta_arg = mock_resolve.call_args[0]
+        # Pydantic deserializes body.metadata into a new dict; compare value, not identity.
+        assert base_meta_arg == user_meta
+
+    def test_update_metadata_without_definition_passes_through(self):
+        """When only metadata changes (no definition), it passes through unchanged."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(
+            return_value={
+                "id": "wf-123",
+                "name": "Old",
+                "definition": _VALID_DEFINITION,
+                "metadata": {"custom": "old"},
+            }
+        )
+        mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Old", "metadata": {"custom": "new"}})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        # Patch to verify it's NOT called
+        with patch.object(workflow_routes, "_resolve_workflow_metadata") as mock_resolve:
+            response = client.put(
+                "/api/workflows/wf-123",
+                json={"metadata": {"custom": "new"}},
+            )
+
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        # _resolve_workflow_metadata should NOT be called when definition is not provided
+        mock_resolve.assert_not_called()
+        call_kwargs = mock_repo.update.call_args[1]
+        assert call_kwargs["updates"]["metadata"] == {"custom": "new"}
+
+    def test_update_definition_without_existing_metadata_uses_empty_base(self):
+        """When existing has no metadata key, empty dict is used as base."""
+        mock_repo = MagicMock()
+        mock_repo.get = AsyncMock(
+            return_value={
+                "id": "wf-123",
+                "name": "Old",
+                "definition": _VALID_DEFINITION,
+                # No "metadata" key in existing
+            }
+        )
+        mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+
+        app = self._make_app_with_mock_repo(mock_repo)
+        client = TestClient(app)
+
+        expected_meta = {"resolved_groups": ["guid@v0.1.0"]}
+
+        with patch.object(workflow_routes, "_resolve_workflow_metadata", return_value=expected_meta) as mock_resolve:
+            response = client.put(
+                "/api/workflows/wf-123",
+                json={"definition": _DEFINITION_WITH_CAPABILITY_GROUPS},
+            )
+
+        assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
+        _call_model, base_meta_arg = mock_resolve.call_args[0]
+        assert base_meta_arg == {}  # empty dict when existing has no metadata

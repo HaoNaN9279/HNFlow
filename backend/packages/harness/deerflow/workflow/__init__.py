@@ -23,6 +23,7 @@ from .schema import (
     PortType,
     WorkflowDefinition,
     WorkflowMetadata,
+    collect_resolved_groups,
 )
 from .workflow_io import (
     SCHEMA_VERSION,
@@ -40,6 +41,7 @@ __all__ = [
     "Edge",
     "WorkflowMetadata",
     "WorkflowDefinition",
+    "collect_resolved_groups",
     "SCHEMA_VERSION",
     "deserialize",
     "ports_compatible",

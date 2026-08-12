@@ -1,3 +1,4 @@
+import copy
 import logging
 
 from langchain.tools import BaseTool
@@ -8,6 +9,7 @@ from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import ask_clarification_tool, list_uploaded_files, present_file_tool, review_skill_package, task_tool, view_image_tool
 from deerflow.tools.mcp_metadata import tag_mcp_tool
+from deerflow.tools.skill_metadata import prefixed_skill_tool_name, tag_skill_tool
 from deerflow.tools.sync import make_sync_tool_wrapper
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,36 @@ def _ensure_sync_invocable_tool(tool: BaseTool) -> BaseTool:
     if getattr(tool, "func", None) is None and getattr(tool, "coroutine", None) is not None:
         tool.func = make_sync_tool_wrapper(tool.coroutine, tool.name)
     return tool
+
+
+def _build_skill_tools(skills: list, available_tools: list[BaseTool]) -> list[BaseTool]:
+    """Build prefix-named tool wrappers for skills that declare allowed-tools.
+
+    Each enabled skill that declares ``allowed_tools`` gets a prefixed copy of
+    the matching base tool (e.g. ``my_skill_bash``).  Two skills allowing the
+    same base tool produce distinct names (``skill_a_bash`` / ``skill_b_bash``),
+    so they cannot collide.  Tools that don't match any base tool are silently
+    skipped.
+
+    Returns an empty list when *skills* is empty or no skill declares tools.
+    """
+    skill_tools: list[BaseTool] = []
+    base_tool_by_name: dict[str, BaseTool] = {t.name: t for t in available_tools}
+
+    for skill in skills:
+        if not skill.allowed_tools:
+            continue
+        for tool_name in skill.allowed_tools:
+            base_tool = base_tool_by_name.get(tool_name)
+            if base_tool is None:
+                continue
+            new_name = prefixed_skill_tool_name(skill.name, tool_name)
+            new_tool = copy.copy(base_tool)
+            new_tool.name = new_name  # type: ignore[attr-defined]
+            tag_skill_tool(new_tool, skill.name)
+            skill_tools.append(new_tool)
+
+    return skill_tools
 
 
 def get_available_tools(
@@ -165,10 +197,30 @@ def get_available_tools(
 
     logger.info(f"Total tools loaded: {len(loaded_tools)}, built-in tools: {len(builtin_tools)}, MCP tools: {len(mcp_tools)}, ACP tools: {len(acp_tools)}")
 
+    # ── Skill tools (T8 namespace prefix) ──
+    # Skills declare allowed-tools; when a skill is enabled and declares tools,
+    # expose them under a ``<skill_name>_<tool>`` prefixed name so two skills
+    # allowing the same base tool cannot collide.  This is infrastructure for
+    # skill-defined tools; today it re-exposes declared allowed-tools.
+    skill_tools: list[BaseTool] = []
+    try:
+        from deerflow.skills.storage import get_or_new_skill_storage
+
+        storage = get_or_new_skill_storage()
+        enabled_skills = storage.load_skills(enabled_only=True)
+        if enabled_skills:
+            # Build the available-tools name lookup from the current assembly
+            # (config + builtin + MCP + ACP), before deduplication.
+            skill_tools = _build_skill_tools(enabled_skills, loaded_tools + builtin_tools + mcp_tools + acp_tools)
+            if skill_tools:
+                logger.info("Built %d skill-tool prefix wrapper(s) from %d enabled skill(s)", len(skill_tools), len(enabled_skills))
+    except Exception as e:
+        logger.warning("Failed to build skill tools: %s", e)
+
     # Deduplicate by tool name — config-loaded tools take priority, followed by
     # built-ins, MCP tools, and ACP tools.  Duplicate names cause the LLM to
     # receive ambiguous or concatenated function schemas (issue #1803).
-    all_tools = [_ensure_sync_invocable_tool(t) for t in loaded_tools + builtin_tools + mcp_tools + acp_tools]
+    all_tools = [_ensure_sync_invocable_tool(t) for t in loaded_tools + builtin_tools + mcp_tools + acp_tools + skill_tools]
     seen_names: set[str] = set()
     unique_tools: list[BaseTool] = []
     for t in all_tools:

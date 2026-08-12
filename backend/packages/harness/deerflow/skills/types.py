@@ -38,6 +38,23 @@ class SecretRequirement:
 
 
 @dataclass(frozen=True)
+class GroupManifest:
+    """Skill capability-group identity manifest (group.json content)."""
+
+    guid: str
+    aliases: tuple[str, ...] = ()
+    created_at: str | None = None
+
+
+@dataclass(frozen=True)
+class DependencySpec:
+    """A capability-group dependency declaration (frontmatter ``dependencies``)."""
+
+    guid: str
+    version: str
+
+
+@dataclass(frozen=True)
 class Skill:
     """Represents a skill with its metadata and file path"""
 
@@ -62,6 +79,11 @@ class Skill:
     # Stored as-is; None when absent or when the frontmatter value is not a
     # plain string.
     compatibility: str | None = None
+    # Stable capability-group identifier (from group.json). None when the
+    # skill predates group-manifest storage (lazily assigned on first load).
+    skill_id: str | None = None
+    # Frontmatter ``dependencies`` declarations (T8 dependency resolution).
+    dependencies: tuple[DependencySpec, ...] | None = None
 
     @property
     def skill_path(self) -> str:

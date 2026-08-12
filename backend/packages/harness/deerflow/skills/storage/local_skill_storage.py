@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import tempfile
+import uuid
 from collections.abc import Iterable
 from contextlib import nullcontext
 from datetime import UTC, datetime
@@ -489,7 +490,7 @@ class LocalSkillStorage(SkillStorage):
 
             await _scan_skill_archive_contents_or_raise(skill_dir, skill_name, app_config=self._app_config)
 
-            await asyncio.to_thread(self._commit_skill_install, skill_dir, skill_name, custom_dir, target)
+            skill_id = await asyncio.to_thread(self._commit_skill_install, skill_dir, skill_name, custom_dir, target)
             logger.info("Skill %r installed to %s", skill_name, target)
         finally:
             try:
@@ -503,6 +504,7 @@ class LocalSkillStorage(SkillStorage):
         return {
             "success": True,
             "skill_name": skill_name,
+            "skill_id": skill_id,
             "message": f"Skill '{skill_name}' installed successfully",
         }
 
@@ -566,7 +568,11 @@ class LocalSkillStorage(SkillStorage):
 
         return skill_dir, skill_name, target
 
-    def _commit_skill_install(self, skill_dir: Path, skill_name: str, custom_dir: Path, target: Path) -> None:
+    def _commit_skill_install(self, skill_dir: Path, skill_name: str, custom_dir: Path, target: Path) -> str:
+        """Commit installed files to *target* and write ``group.json``.
+
+        Returns the skill's stable GUID (``skill_id``).
+        """
         from deerflow.skills.installer import _move_staged_skill_into_reserved_target
 
         with self._skill_projection_mutation():
@@ -575,6 +581,28 @@ class LocalSkillStorage(SkillStorage):
                 shutil.copytree(skill_dir, staging_target)
                 _move_staged_skill_into_reserved_target(staging_target, target)
             make_skill_written_path_sandbox_readable(custom_dir, target)
+
+            # T8: write group.json under the projection lock so the skill's
+            # GUID becomes visible atomically with the install (idempotent —
+            # preserves existing guid on reinstall).
+            group_file = target / "group.json"
+            if group_file.exists():
+                try:
+                    data = json.loads(group_file.read_text(encoding="utf-8"))
+                    existing = data.get("guid")
+                    if isinstance(existing, str) and existing:
+                        return existing
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            guid = uuid.uuid4().hex
+            group_data = {
+                "guid": guid,
+                "aliases": [],
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+            group_file.write_text(json.dumps(group_data), encoding="utf-8")
+            return guid
 
     # ------------------------------------------------------------------
     # delete_custom_skill — removes entire <name>/ tree (all versions)

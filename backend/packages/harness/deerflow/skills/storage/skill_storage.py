@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import re
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
@@ -281,6 +284,39 @@ class SkillStorage(ABC):
     # Final template-method flows
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _ensure_skill_guid(skill: Skill) -> Skill:
+        """Ensure *skill* has a stable ``skill_id``, generating one if absent.
+
+        Reads/writes ``group.json`` in the skill directory.  Idempotent:
+        when ``group.json`` already exists its ``guid`` is reused.
+        """
+        group_file = skill.skill_dir / "group.json"
+        if group_file.exists():
+            try:
+                data = json.loads(group_file.read_text(encoding="utf-8"))
+                existing = data.get("guid")
+                if isinstance(existing, str) and existing:
+                    return dataclasses.replace(skill, skill_id=existing)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        guid = uuid.uuid4().hex
+        group_data = {
+            "guid": guid,
+            "aliases": [],
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+        try:
+            group_file.write_text(json.dumps(group_data), encoding="utf-8")
+        except OSError:
+            logger.warning("Failed to write group.json for skill %s", skill.name)
+            # Persistence failed: keep the skill_id None so a later load retries
+            # instead of serving an in-memory guid that is not durable (the
+            # guid must be stable across loads).
+            return skill
+        return dataclasses.replace(skill, skill_id=guid)
+
     def load_skills(self, *, enabled_only: bool = False) -> list[Skill]:
         """Discover all skills, merge enabled state, sort and optionally filter.
 
@@ -296,6 +332,11 @@ class SkillStorage(ABC):
                 relative_path=md_path.parent.relative_to(category_root),
             )
             if skill:
+                # T8: lazy GUID generation for writable categories.
+                # PUBLIC and LEGACY skills are read-only / git-managed —
+                # they must not have group.json written to them.
+                if skill.skill_id is None and skill.category in (SkillCategory.CUSTOM, SkillCategory.INTEGRATION):
+                    skill = SkillStorage._ensure_skill_guid(skill)
                 skills_by_name[skill.name] = skill
 
         skills = list(skills_by_name.values())

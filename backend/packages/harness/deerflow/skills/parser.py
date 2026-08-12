@@ -1,10 +1,11 @@
+import json
 import logging
 import re as _stdlib_re
 from pathlib import Path
 
 import yaml
 
-from .types import SKILL_MD_FILE, SecretRequirement, Skill, SkillCategory
+from .types import SKILL_MD_FILE, DependencySpec, GroupManifest, SecretRequirement, Skill, SkillCategory
 from .versions import parse_version
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,57 @@ def parse_secrets_autonomous(raw: object, skill_file: Path) -> bool:
     return False
 
 
+def _read_group_manifest(skill_dir: Path) -> GroupManifest | None:
+    """Read ``group.json`` from *skill_dir*, returning ``None`` when absent or malformed."""
+    group_file = skill_dir / "group.json"
+    if not group_file.exists():
+        return None
+    try:
+        raw = group_file.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("Failed to read group.json in %s: %s", skill_dir, exc)
+        return None
+    try:
+        # Normalise JSON list → tuple for the frozen dataclass.
+        if isinstance(data.get("aliases"), list):
+            data["aliases"] = tuple(data["aliases"])
+        return GroupManifest(**data)
+    except TypeError as exc:
+        logger.warning("Malformed group.json in %s: %s", skill_dir, exc)
+        return None
+
+
+def parse_dependencies(raw: object, skill_file: Path) -> tuple[DependencySpec, ...] | None:
+    """Parse the optional ``dependencies`` frontmatter field.
+
+    Each element must be a mapping with ``guid`` (str, 32 hex chars) and
+    ``version`` (non-empty str).  Returns ``None`` when the field is omitted.
+    Raises ``ValueError`` for malformed values.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError(f"dependencies in {skill_file} must be a list")
+
+    deps: list[DependencySpec] = []
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"dependencies[{i}] in {skill_file} must be a mapping")
+        guid = item.get("guid")
+        version = item.get("version")
+        if not isinstance(guid, str) or len(guid) != 32:
+            raise ValueError(f"dependencies[{i}].guid in {skill_file} must be a 32-character hex string")
+        try:
+            int(guid, 16)
+        except ValueError:
+            raise ValueError(f"dependencies[{i}].guid in {skill_file} must be a valid hex string")
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError(f"dependencies[{i}].version in {skill_file} must be a non-empty string")
+        deps.append(DependencySpec(guid=guid, version=version.strip()))
+    return tuple(deps)
+
+
 def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: Path | None = None) -> Skill | None:
     """Parse a SKILL.md file and extract metadata.
 
@@ -203,6 +255,17 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             logger.warning("Non-string compatibility value in %s: %r (ignored)", skill_file, compat_raw)
             compatibility = None
 
+        # --- group manifest (T8) ---
+        manifest = _read_group_manifest(skill_file.parent)
+        skill_id = manifest.guid if manifest is not None else None
+
+        # --- dependencies (T8) ---
+        try:
+            dependencies = parse_dependencies(metadata.get("dependencies"), skill_file)
+        except ValueError as exc:
+            logger.error("Invalid dependencies in %s: %s", skill_file, exc)
+            return None
+
         return Skill(
             name=name,
             description=description,
@@ -217,6 +280,8 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             secrets_autonomous=secrets_autonomous,
             version=version,
             compatibility=compatibility,
+            skill_id=skill_id,
+            dependencies=dependencies,
         )
 
     except Exception:

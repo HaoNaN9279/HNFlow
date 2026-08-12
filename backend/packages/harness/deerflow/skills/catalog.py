@@ -56,6 +56,13 @@ class SkillCatalog:
         """All skill names in insertion order."""
         return frozenset(s.name for s in self.skills)
 
+    def find_by_guid(self, guid: str) -> Skill | None:
+        """Return the first skill whose ``skill_id`` matches *guid*, else None."""
+        for s in self.skills:
+            if s.skill_id == guid:
+                return s
+        return None
+
     def search(self, query: str) -> list[Skill]:
         """Match *query* against skill names and descriptions.
 

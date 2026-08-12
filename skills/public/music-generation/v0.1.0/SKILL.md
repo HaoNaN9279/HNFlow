@@ -1,5 +1,6 @@
 ---
 name: music-generation
+version: 0.1.0
 description: Use this skill when the user requests to generate, create, compose, or produce music or songs — background music, theme songs, jingles, or instrumental tracks. Generates a song from a style/mood prompt and optional lyrics via the MiniMax music API.
 ---
 

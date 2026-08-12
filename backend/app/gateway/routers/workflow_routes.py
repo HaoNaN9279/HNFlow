@@ -7,6 +7,7 @@ validated against the ``WorkflowDefinition`` schema before persistence.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any
 
@@ -15,8 +16,11 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo
-from deerflow.workflow.schema import WorkflowDefinition
+from deerflow.skills.catalog import SkillCatalog
+from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["workflows"])
 
@@ -39,6 +43,31 @@ class WorkflowUpdateRequest(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[str, Any]) -> dict[str, Any]:
+    """Populate ``metadata["resolved_groups"]`` from the definition's capability groups.
+
+    Only when any node declares ``capability_groups``; otherwise ``resolved_groups``
+    is left untouched.  Fail-open: a skills-storage failure leaves metadata
+    unchanged rather than rejecting the save.
+    """
+    if not any(node.capability_groups for node in definition.nodes):
+        return metadata
+
+    try:
+        from deerflow.skills.storage import get_or_new_skill_storage
+
+        storage = get_or_new_skill_storage()
+        skills = storage.load_skills(enabled_only=False)
+        catalog = SkillCatalog(skills=tuple(skills))
+        resolved = collect_resolved_groups(definition, catalog)
+        result = dict(metadata)
+        result["resolved_groups"] = resolved if resolved else None
+        return result
+    except Exception as e:
+        logger.warning("Failed to resolve workflow capability groups: %s", e)
+        return metadata
 
 
 def _format_validation_errors(exc: ValidationError) -> list[str]:
@@ -78,13 +107,14 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
         raise HTTPException(status_code=422, detail={"errors": errors})
 
     repo = get_workflow_definition_repo(request)
+    metadata = _resolve_workflow_metadata(model, body.metadata)
     result = await repo.create(
         definition_id=f"wf-{uuid.uuid4().hex}",
         user_id=str(user.id),
         name=body.name,
         schema_version=SCHEMA_VERSION,
         definition=model.model_dump(mode="json"),
-        metadata=body.metadata,
+        metadata=metadata,
         version=body.version,
     )
     return result
@@ -131,12 +161,21 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
 
         updates["definition"] = model.model_dump(mode="json")
         updates["schema_version"] = SCHEMA_VERSION
+        # Re-resolve capability groups when the definition changes.
+        # If the user also sent metadata, use it as base; otherwise
+        # carry forward the existing metadata so keys like resolved_groups
+        # can be rebuilt from the definition without wiping user fields.
+        base_meta = body.metadata if body.metadata is not None else existing.get("metadata") or {}
+        updates["metadata"] = _resolve_workflow_metadata(model, base_meta)
 
     if body.name is not None:
         updates["name"] = body.name
 
     if body.metadata is not None:
-        updates["metadata"] = body.metadata
+        # If definition was updated above, metadata has already been resolved.
+        # Otherwise pass the user-supplied metadata through as-is (no auto-injection).
+        if "metadata" not in updates:
+            updates["metadata"] = body.metadata
 
     if body.version is not None:
         updates["version"] = body.version

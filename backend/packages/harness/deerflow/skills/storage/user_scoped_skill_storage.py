@@ -370,7 +370,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
 
             await _scan_skill_archive_contents_or_raise(skill_dir, skill_name)
 
-            await asyncio.to_thread(self._commit_skill_install, skill_dir, skill_name, custom_dir, target)
+            skill_id = await asyncio.to_thread(self._commit_skill_install, skill_dir, skill_name, custom_dir, target)
             logger.info("Skill %r installed to %s for user %s", skill_name, target, self._user_id)
         finally:
             try:
@@ -384,6 +384,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
         return {
             "success": True,
             "skill_name": skill_name,
+            "skill_id": skill_id,
             "message": f"Skill '{skill_name}' installed successfully for user '{self._user_id}'",
         }
 

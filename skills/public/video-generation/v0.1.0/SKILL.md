@@ -1,5 +1,6 @@
 ---
 name: video-generation
+version: 0.1.0
 description: Use this skill when the user requests to generate, create, or imagine videos. Supports structured prompts and reference image for guided generation.
 ---
 

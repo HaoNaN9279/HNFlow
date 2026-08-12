@@ -191,3 +191,71 @@ def test_frozen_catalog_is_hashable(catalog: SkillCatalog):
 def test_names_cached_property_stable(catalog: SkillCatalog):
     """Multiple accesses to .names should return the same frozenset."""
     assert catalog.names is catalog.names
+
+
+# ── find_by_guid ──────────────────────────────────────────────────────────────
+
+
+def test_find_by_guid_returns_matching_skill():
+    """find_by_guid must return the skill whose skill_id matches."""
+    s1 = _make_skill("chart-visualization")
+    s1 = Skill(
+        name=s1.name,
+        description=s1.description,
+        license=s1.license,
+        skill_dir=s1.skill_dir,
+        skill_file=s1.skill_file,
+        relative_path=s1.relative_path,
+        category=s1.category,
+        allowed_tools=s1.allowed_tools,
+        enabled=s1.enabled,
+        skill_id="guid-chart-001",
+    )
+    catalog = SkillCatalog((s1,))
+    found = catalog.find_by_guid("guid-chart-001")
+    assert found is not None
+    assert found.name == "chart-visualization"
+
+
+def test_find_by_guid_returns_none_for_missing():
+    catalog = SkillCatalog(())
+    assert catalog.find_by_guid("nonexistent") is None
+
+
+def test_find_by_guid_skips_none_skill_id():
+    """Skills with None skill_id should never match."""
+    s1 = _make_skill("chart-visualization")  # skill_id defaults to None
+    catalog = SkillCatalog((s1,))
+    assert catalog.find_by_guid("chart-visualization") is None
+
+
+def test_find_by_guid_handles_multiple_skills():
+    s1 = _make_skill("a")
+    s1 = Skill(
+        name=s1.name,
+        description=s1.description,
+        license=s1.license,
+        skill_dir=s1.skill_dir,
+        skill_file=s1.skill_file,
+        relative_path=s1.relative_path,
+        category=s1.category,
+        allowed_tools=s1.allowed_tools,
+        enabled=s1.enabled,
+        skill_id="g1",
+    )
+    s2 = _make_skill("b")
+    s2 = Skill(
+        name=s2.name,
+        description=s2.description,
+        license=s2.license,
+        skill_dir=s2.skill_dir,
+        skill_file=s2.skill_file,
+        relative_path=s2.relative_path,
+        category=s2.category,
+        allowed_tools=s2.allowed_tools,
+        enabled=s2.enabled,
+        skill_id="g2",
+    )
+    catalog = SkillCatalog((s1, s2))
+    assert catalog.find_by_guid("g2").name == "b"
+    assert catalog.find_by_guid("g1").name == "a"

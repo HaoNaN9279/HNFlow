@@ -1,5 +1,6 @@
 ---
 name: bootstrap
+version: 0.1.0
 description: >-
   Generate a personalized SOUL.md through a warm, adaptive onboarding conversation.
   Trigger when the user wants to create, set up, or initialize their AI partner's
