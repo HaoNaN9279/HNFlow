@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import select, update
+from sqlalchemy import JSON, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.human_tasks.model import HumanTaskRow
@@ -80,6 +80,23 @@ class HumanTaskRepository:
                 return None
             return self._row_to_dict(row)
 
+    async def find_by_run_and_node(self, *, run_id: str, node_id: str) -> dict[str, Any] | None:
+        """Return the latest human task for a run+node (any status), or ``None``.
+
+        Used by the ``human:task`` executor (T13-4 idempotency) so that a
+        LangGraph node re-execution on ``Command(resume=...)`` reuses the
+        already-created task instead of minting a duplicate.  A single-confirm
+        model is assumed: the latest row (by ``created_at`` / ``id``) wins
+        regardless of status — the re-execution happens after the original task
+        was already submitted/skipped, so status is not a discriminator.
+        Loop-internal multiple suspensions would need a finer idempotency key;
+        out of scope for now.
+        """
+        async with self._sf() as session:
+            stmt = select(HumanTaskRow).where(HumanTaskRow.workflow_run_id == run_id, HumanTaskRow.node_id == node_id).order_by(HumanTaskRow.created_at.desc(), HumanTaskRow.id.desc()).limit(1)
+            row = (await session.execute(stmt)).scalar_one_or_none()
+            return self._row_to_dict(row) if row is not None else None
+
     async def list_by_user(self, user_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
         stmt = select(HumanTaskRow).where(HumanTaskRow.user_id == user_id)
         if status is not None:
@@ -148,3 +165,53 @@ class HumanTaskRepository:
             await session.delete(row)
             await session.commit()
             return True
+
+    async def update_checkpoint_ref_by_run(self, *, run_id: str, checkpoint_ref: dict[str, Any] | None) -> int:
+        """Backfill ``checkpoint_ref`` on all pending/reopened human tasks of a run.
+
+        Used by the workflow worker once a run has interrupted on a ``human:task``
+        (T13-2): the suspended checkpoint coordinate is only known after the graph
+        has hung, so it is written back to the executor-created rows.  Returns the
+        number of rows updated (``0`` when there are no matching tasks, or when the
+        ref was already backfilled).
+        """
+        async with self._sf() as session:
+            result = await session.execute(
+                update(HumanTaskRow)
+                .where(
+                    HumanTaskRow.workflow_run_id == run_id,
+                    HumanTaskRow.status.in_(["pending", "reopened"]),
+                )
+                .values(checkpoint_ref=checkpoint_ref, updated_at=datetime.now(UTC))
+            )
+            await session.commit()
+            return result.rowcount or 0
+
+    async def delete_pending_by_run(self, *, run_id: str) -> int:
+        """Compensation: delete a run's unresolved pending tasks that never hung.
+
+        When ``interrupt()`` or the checkpoint write fails, the ``human:task``
+        executor has already created a pending row (``checkpoint_ref=None``) but
+        the graph never suspended, so the row can never be resumed.  Deleting is
+        the clean compensation — the state machine has no ``failed`` status, and a
+        half-state row would leak into ``list_by_user``/route filtering.
+
+        Only ``pending`` rows whose ``checkpoint_ref`` is unset (stored as JSON
+        ``null`` — the column uses ``none_as_null=False``, so ``None`` serializes
+        to JSON null, not SQL NULL) are deleted: a row whose ref was backfilled
+        did hang successfully and is NOT a failure residue, while
+        ``submitted``/``skipped``/``reopened``/``expired`` rows are resolved
+        user-facing state and must never be swept.
+
+        Returns the number of rows deleted.
+        """
+        async with self._sf() as session:
+            result = await session.execute(
+                delete(HumanTaskRow).where(
+                    HumanTaskRow.workflow_run_id == run_id,
+                    HumanTaskRow.status == "pending",
+                    HumanTaskRow.checkpoint_ref == JSON.NULL,
+                )
+            )
+            await session.commit()
+            return result.rowcount or 0

@@ -1392,6 +1392,8 @@ async def start_workflow_run(
     *,
     on_disconnect: str = "cancel",
     metadata: dict[str, Any] | None = None,
+    resume: Any | None = None,
+    origin_run_id: str | None = None,
 ) -> RunRecord:
     """Create a RunRecord and launch the background workflow task.
 
@@ -1411,6 +1413,18 @@ async def start_workflow_run(
         ``"cancel"`` (default) or ``"continue"``.
     metadata : dict | None
         Optional run metadata.
+    resume : Any | None
+        Optional ``langgraph.types.Command`` instance.  When set, the run
+        resumes the graph from the interrupted ``human:task`` checkpoint
+        (``Command(resume=...)``) on the same ``thread_id`` instead of seeding
+        a fresh run from ``params``.
+    origin_run_id : str | None
+        Optional original (hung) run id forwarded to :func:`run_workflow`.  A
+        resume run creates a *new* ``RunRecord`` (a new ``run_id``), but the
+        ``human:task`` executor's idempotency key is ``(run_id, node_id)``; by
+        overriding ``config["context"]["run_id"]`` with the original run id the
+        resume re-execution reuses the existing pending task instead of minting
+        a duplicate.
     """
     try:
         validate_thread_id(thread_id)
@@ -1420,6 +1434,10 @@ async def start_workflow_run(
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
     run_ctx = get_run_context(request)
+    # Human-task repo is optional (None on the memory backend); the worker
+    # injects it into ``config["context"]`` so the ``human:task`` executor can
+    # persist pending tasks.
+    human_task_repo = getattr(request.app.state, "human_task_repo", None)
 
     disconnect = DisconnectMode.cancel if on_disconnect == "cancel" else DisconnectMode.continue_
 
@@ -1460,6 +1478,9 @@ async def start_workflow_run(
                         definition=definition,
                         params=params,
                         definition_resolver=definition_resolver,
+                        resume=resume,
+                        human_task_repo=human_task_repo,
+                        origin_run_id=origin_run_id,
                     )
 
                 try:

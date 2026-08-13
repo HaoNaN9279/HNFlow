@@ -31,6 +31,9 @@ async def run_workflow(
     definition: WorkflowDefinition,
     params: dict[str, Any],
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None,
+    resume: Any | None = None,
+    human_task_repo: Any | None = None,
+    origin_run_id: str | None = None,
 ) -> None:
     """Execute a compiled workflow graph in the background.
 
@@ -61,6 +64,26 @@ async def run_workflow(
         Optional synchronous resolver ``(template_id, version) -> WorkflowDefinition | None``
         used to expand ``nested:subworkflow`` template references.  Must be a
         pure in-memory lookup (no IO) — the compile path must stay loop-safe.
+    resume:
+        Optional ``langgraph.types.Command`` instance.  When set, the graph is
+        resumed from its interrupted checkpoint (``Command(resume=...)``) instead
+        of starting from a fresh ``params`` mapping — the ``_build_graph_input``
+        step is skipped.
+    human_task_repo:
+        Optional human-task repository injected into ``config["context"]`` so the
+        ``human:task`` executor can persist pending tasks.  ``None`` on memory
+        backends (or when the T13 executor is not wired).
+    origin_run_id:
+        Optional original run id used to seed ``config["context"]["run_id"]``
+        instead of the new run's id.  On a resume run the record carries a fresh
+        ``run_id`` (``record.run_id``), but the ``human:task`` executor keys its
+        idempotency on ``(run_id, node_id)``; LangGraph re-executes the node from
+        head on ``Command(resume=...)``, so injecting the *original* (hung) run id
+        makes ``find_by_run_and_node`` hit the existing pending task instead of
+        minting a duplicate.  ``None`` (default) keeps ``record.run_id``.  The
+        ``run_id`` local variable is left unchanged — ``event_store.put``,
+        ``bridge.publish``, and ``run_manager.set_status`` all still use the new
+        run id.
     """
 
     run_id = record.run_id
@@ -96,7 +119,12 @@ async def run_workflow(
     )
 
     # ── 4. Build graph input from params → start node ──────────────────
-    graph_input: dict[str, Any] = _build_graph_input(definition, params)
+    if resume is not None:
+        # Resume run: the caller supplies a langgraph ``Command(resume=...)`` that
+        # re-enters the graph from the interrupted ``human:task`` checkpoint.
+        graph_input: Any = resume
+    else:
+        graph_input = _build_graph_input(definition, params)
 
     # ── 5. Compile the workflow definition ─────────────────────────────
     registry = build_default_registry()
@@ -119,8 +147,14 @@ async def run_workflow(
         if isinstance(config["context"], dict):
             config["context"]["app_config"] = ctx.app_config
             config["context"]["thread_id"] = thread_id
-            config["context"]["run_id"] = run_id
+            config["context"]["run_id"] = origin_run_id or run_id
             config["context"]["delegation_depth"] = 0
+    if human_task_repo is not None:
+        # Injected independently of app_config so the human:task executor and the
+        # hangup backfill (T13-2) both see the repo even when app_config is absent.
+        config.setdefault("context", {})
+        if isinstance(config["context"], dict):
+            config["context"]["human_task_repo"] = human_task_repo
 
     # Collect non-start/end node ids for astream_events filtering.
     node_ids: list[str] = [n.id for n in definition.nodes if n.type not in (NodeType.FLOW_START, NodeType.FLOW_END)]
@@ -299,13 +333,45 @@ async def run_workflow(
                 except asyncio.CancelledError:
                     pass
 
-        # ── 9. Determine terminal status ───────────────────────────────
+        # ── 9. Read final state snapshot ───────────────────────────────
+        # ``aget_state`` serves two purposes: hangup detection (``snapshot.next``
+        # is non-empty when the graph suspended on an ``interrupt()``) and
+        # ``run.end`` content (``snapshot.values``).  It raises without a
+        # checkpointer, which is fine — both consumers degrade gracefully.
+        snapshot = None
+        need_state = (not record.abort_event.is_set()) or (event_store is not None)
+        if need_state:
+            try:
+                snapshot = await graph.aget_state(config)
+            except Exception:
+                logger.warning("Failed to read final state for run %s (non-fatal)", run_id, exc_info=True)
+
+        # A graph interrupted on a ``human:task`` (or any ``interrupt()``) leaves
+        # pending tasks in ``snapshot.next``; treat that as ``interrupted`` rather
+        # than the old unconditional ``success``.
+        has_pending = snapshot is not None and not record.abort_event.is_set() and bool(getattr(snapshot, "next", None))
+
+        # ── 10. Determine terminal status ──────────────────────────────
         if record.abort_event.is_set():
             await run_manager.set_status(
                 run_id,
                 RunStatus.interrupted,
                 **terminal_status_kwargs,
             )
+        elif has_pending:
+            await run_manager.set_status(
+                run_id,
+                RunStatus.interrupted,
+                **terminal_status_kwargs,
+            )
+            # Backfill checkpoint_ref on this run's pending human tasks so the
+            # recovery path (T13-3) can resume from the exact checkpoint.
+            repo = (config.get("context") or {}).get("human_task_repo")
+            if repo is not None:
+                try:
+                    await _backfill_checkpoint_ref(repo, run_id, thread_id, snapshot)
+                except Exception:
+                    logger.warning("Failed to backfill checkpoint_ref for run %s (non-fatal)", run_id, exc_info=True)
         else:
             await run_manager.set_status(
                 run_id,
@@ -313,14 +379,11 @@ async def run_workflow(
                 **terminal_status_kwargs,
             )
 
-        # ── 10. Persist run.end with final state ───────────────────────
+        # ── 11. Persist run.end with final state ───────────────────────
         if event_store is not None:
             final_output: dict[str, Any] = {}
-            try:
-                state_snapshot = await graph.aget_state(config)
-                final_output = getattr(state_snapshot, "values", {}) or {}
-            except Exception:
-                logger.warning("Failed to read final state for run.end (non-fatal)", exc_info=True)
+            if snapshot is not None:
+                final_output = getattr(snapshot, "values", {}) or {}
             if not final_output:
                 final_output = accumulated_output
 
@@ -331,7 +394,7 @@ async def run_workflow(
                     event_type="run.end",
                     category="outputs",
                     content=final_output,
-                    metadata={"status": "success"},
+                    metadata={"status": "interrupted" if has_pending else "success"},
                 )
             except Exception:
                 logger.warning("Failed to persist run.end for run %s (non-fatal)", run_id, exc_info=True)
@@ -347,6 +410,19 @@ async def run_workflow(
     except Exception as exc:
         error_msg = f"{exc}"
         logger.exception("Run %s failed: %s", run_id, error_msg)
+
+        # ── Compensation (T13-4) ────────────────────────────────────────
+        # interrupt()/checkpoint-write failure: the human:task executor may have
+        # already created a pending row that never hung (checkpoint_ref=None), so
+        # it can never be resumed.  Clean it up before marking the run errored —
+        # no half-state.  Aborts (CancelledError) are handled separately and must
+        # NOT compensate: a user cancellation should not delete the task.
+        repo = (config.get("context") or {}).get("human_task_repo")
+        if repo is not None:
+            try:
+                await repo.delete_pending_by_run(run_id=run_id)
+            except Exception:
+                logger.warning("Compensation cleanup failed for run %s (non-fatal)", run_id, exc_info=True)
 
         # ── Emit wf:node:failed for the node that was executing ────────
         if recent_node_id is not None:
@@ -430,6 +506,20 @@ def _build_graph_input(definition: WorkflowDefinition, params: dict[str, Any]) -
         return {}
 
     return {f"wf:{start_node.id}:{port_name}": value for port_name, value in params.items()}
+
+
+async def _backfill_checkpoint_ref(repo: Any, run_id: str, thread_id: str, snapshot: Any) -> None:
+    """Backfill ``checkpoint_ref`` on a hung run's pending human tasks.
+
+    The ``human:task`` executor creates its pending rows *before* the graph
+    suspends, so the checkpoint id is not yet known at creation time.  Once the
+    graph has interrupted, the suspended checkpoint is readable from
+    ``snapshot.config`` — write that coordinate back so the recovery path
+    (T13-3) can resume the run with ``Command(resume=...)``.
+    """
+    checkpoint_id = ((snapshot.config or {}).get("configurable") or {}).get("checkpoint_id")
+    ref = {"thread_id": thread_id, "checkpoint_id": checkpoint_id}
+    await repo.update_checkpoint_ref_by_run(run_id=run_id, checkpoint_ref=ref)
 
 
 __all__ = ["run_workflow"]

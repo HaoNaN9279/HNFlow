@@ -13,11 +13,14 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
+from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from app.gateway.authz import require_permission
-from app.gateway.deps import get_human_task_repo, get_optional_user_from_request
+from app.gateway.deps import get_human_task_repo, get_optional_user_from_request, get_run_manager, get_workflow_definition_repo
+from app.gateway.services import start_workflow_run
 from deerflow.workflow.human_task_state import HumanTaskStatus, validate_human_task_submission
+from deerflow.workflow.schema import WorkflowDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +42,70 @@ def _task_field(task: Any, key: str) -> Any:
     if isinstance(task, dict):
         return task.get(key)
     return getattr(task, key, None)
+
+
+async def _resume_workflow(
+    task: Any,
+    resume_value: Any,
+    request: Request,
+    *,
+    task_id: str,
+    user_id: str,
+) -> None:
+    """Fire a resume run on the task's original thread (best-effort).
+
+    submit → ``resume_value`` is the user-submitted values dict; skip →
+    ``{"__skip": True}``.  The engine creates a *resume* run on the same
+    ``thread_id`` with ``Command(resume=...)`` so the graph continues from the
+    interrupted ``human:task`` checkpoint.
+
+    Any failure here only logs a warning — it never changes the submit/skip
+    HTTP result (the frontend already sees ``submitted`` + the pending card
+    gone; a lost resume is recovered by T13-4 / operations).
+    """
+    try:
+        checkpoint_ref = _task_field(task, "checkpoint_ref")
+        if not isinstance(checkpoint_ref, dict) or not checkpoint_ref.get("thread_id"):
+            logger.warning("Human task %s has no checkpoint_ref — skip resume", task_id)
+            return
+
+        workflow_run_id = _task_field(task, "workflow_run_id")
+        if not workflow_run_id:
+            logger.warning("Human task %s has no workflow_run_id — skip resume", task_id)
+            return
+
+        run_mgr = get_run_manager(request)
+        record = await run_mgr.get(workflow_run_id, user_id=user_id)
+        definition_id = (record.kwargs or {}).get("definition_id") if record else None
+        if not definition_id:
+            logger.warning("Human task %s has no resolvable definition_id — skip resume", task_id)
+            return
+
+        repo = get_workflow_definition_repo(request)
+        row = await repo.get(definition_id, user_id=user_id)
+        if row is None:
+            logger.warning("Human task %s definition %s not found — skip resume", task_id, definition_id)
+            return
+        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+        if definition_dict is None:
+            logger.warning("Human task %s definition %s has no body — skip resume", task_id, definition_id)
+            return
+
+        definition = WorkflowDefinition.model_validate(definition_dict)
+
+        await start_workflow_run(
+            definition_id=definition_id,
+            definition=definition,
+            params={},
+            thread_id=checkpoint_ref["thread_id"],
+            request=request,
+            on_disconnect="cancel",
+            metadata={},
+            resume=Command(resume=resume_value),
+            origin_run_id=workflow_run_id,
+        )
+    except Exception:
+        logger.warning("Resume run for human task %s failed (non-fatal)", task_id, exc_info=True)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -82,6 +149,7 @@ async def submit_human_task(task_id: str, body: HumanTaskSubmitRequest, request:
     result = await repo.submit(task_id, user_id=str(user.id), values=body.values, to_status="submitted")
     if result is None:
         raise HTTPException(status_code=409, detail={"errors": ["任务当前状态不允许提交"]})
+    await _resume_workflow(task, body.values, request, task_id=task_id, user_id=str(user.id))
     return result
 
 
@@ -100,6 +168,7 @@ async def skip_human_task(task_id: str, request: Request):
     result = await repo.skip(task_id, user_id=str(user.id))
     if result is None:
         raise HTTPException(status_code=409, detail={"errors": ["任务当前状态不允许跳过"]})
+    await _resume_workflow(task, {"__skip": True}, request, task_id=task_id, user_id=str(user.id))
     return result
 
 

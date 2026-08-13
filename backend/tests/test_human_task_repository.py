@@ -231,3 +231,79 @@ async def test_delete_and_user_isolation(tmp_path) -> None:
     assert await repo.delete(created["id"], user_id="user-a") is True
     assert await repo.get(created["id"], user_id="user-a") is None
     await close_engine()
+
+
+# ── find_by_run_and_node ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_find_by_run_and_node_returns_none_when_absent(tmp_path) -> None:
+    repo = await _make_repo(tmp_path)
+    assert await repo.find_by_run_and_node(run_id="missing-run", node_id="node-1") is None
+    await close_engine()
+
+
+@pytest.mark.asyncio
+async def test_find_by_run_and_node_returns_latest(tmp_path) -> None:
+    repo = await _make_repo(tmp_path)
+    await _create(repo, workflow_run_id="run-x", node_id="node-a")
+    await asyncio.sleep(0.01)
+    second = await _create(repo, workflow_run_id="run-x", node_id="node-a")
+    await _create(repo, workflow_run_id="run-x", node_id="node-b")
+
+    found = await repo.find_by_run_and_node(run_id="run-x", node_id="node-a")
+    assert found is not None
+    assert found["id"] == second["id"]
+    await close_engine()
+
+
+@pytest.mark.asyncio
+async def test_find_by_run_and_node_scoped_to_run(tmp_path) -> None:
+    """A task with the same node_id but a different run is not returned."""
+    repo = await _make_repo(tmp_path)
+    await _create(repo, workflow_run_id="run-1", node_id="node-a")
+    assert await repo.find_by_run_and_node(run_id="run-2", node_id="node-a") is None
+    await close_engine()
+
+
+# ── delete_pending_by_run（补偿）────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_pending_by_run_only_pending_unrefed(tmp_path) -> None:
+    """Only pending rows with checkpoint_ref IS NULL are deleted."""
+    repo = await _make_repo(tmp_path)
+    pending = await _create(repo, workflow_run_id="run-del", node_id="node-1")
+    submitted = await _create(repo, workflow_run_id="run-del", node_id="node-2")
+    await repo.submit(submitted["id"], user_id="user-1", values={"x": 1}, to_status="submitted")
+
+    deleted = await repo.delete_pending_by_run(run_id="run-del")
+    assert deleted == 1
+    assert await repo.get(pending["id"], user_id="user-1") is None
+    assert await repo.get(submitted["id"], user_id="user-1") is not None
+    await close_engine()
+
+
+@pytest.mark.asyncio
+async def test_delete_pending_by_run_skips_backfilled(tmp_path) -> None:
+    """A pending row whose checkpoint_ref was backfilled (did hang) is not deleted."""
+    repo = await _make_repo(tmp_path)
+    backfilled = await _create(repo, workflow_run_id="run-bf", node_id="node-1")
+    await repo.update_checkpoint_ref_by_run(run_id="run-bf", checkpoint_ref={"thread_id": "t", "checkpoint_id": "cp-1"})
+
+    deleted = await repo.delete_pending_by_run(run_id="run-bf")
+    assert deleted == 0
+    assert await repo.get(backfilled["id"], user_id="user-1") is not None
+    await close_engine()
+
+
+@pytest.mark.asyncio
+async def test_delete_pending_by_run_scoped_to_run(tmp_path) -> None:
+    """A pending task in another run is not deleted."""
+    repo = await _make_repo(tmp_path)
+    other = await _create(repo, workflow_run_id="run-other", node_id="node-1")
+
+    deleted = await repo.delete_pending_by_run(run_id="run-target")
+    assert deleted == 0
+    assert await repo.get(other["id"], user_id="user-1") is not None
+    await close_engine()

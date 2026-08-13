@@ -572,7 +572,7 @@ class TestRegistry:
 
 
 class TestPlaceholderExecutors:
-    """notify, nested, human-task executors raise NotImplementedError."""
+    """notify and nested executors raise their placeholder errors."""
 
     def test_exec_notify_not_implemented(self) -> None:
         rt = _dummy_runtime()
@@ -584,10 +584,11 @@ class TestPlaceholderExecutors:
         with pytest.raises(WorkflowExecutionError, match="nested:subworkflow"):
             exec_nested_subworkflow(rt, {}, {})
 
-    def test_exec_human_task_not_implemented(self) -> None:
+    def test_exec_human_task_missing_repo_raises(self) -> None:
+        """human:task without a repo in context degrades to WorkflowExecutionError."""
         rt = _dummy_runtime()
-        with pytest.raises(NotImplementedError, match="human:task"):
-            exec_human_task(rt, {}, {})
+        with pytest.raises(WorkflowExecutionError, match="human_task_repo"):
+            asyncio.run(exec_human_task(rt, {}, {}))
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -620,8 +621,8 @@ class TestDirectExecutorCall:
         # Placeholder — raises
         with pytest.raises(NotImplementedError):
             exec_notify(rt, {}, {})
-        with pytest.raises(NotImplementedError):
-            exec_human_task(rt, {}, {})
+        with pytest.raises(WorkflowExecutionError):
+            asyncio.run(exec_human_task(rt, {}, {}))
         with pytest.raises(WorkflowExecutionError):
             exec_nested_subworkflow(rt, {}, {})
         with pytest.raises(WorkflowExecutionError):

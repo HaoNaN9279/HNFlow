@@ -337,6 +337,12 @@ def _make_node_fn(
             executor_params.setdefault("agent_name", node.agent_name)
             executor_params.setdefault("capability_groups", list(node.capability_groups))
             executor_params.setdefault("node_id", node.id)
+        if node.type == NodeType.HUMAN_TASK:
+            executor_params = dict(node.params)
+            executor_params.setdefault("node_id", node.id)
+            from deerflow.workflow.human_task_state import derive_output_spec  # deferred import — keeps the compiler's import graph free of a human-task cycle
+
+            executor_params.setdefault("output_spec", derive_output_spec(node))
 
         result = await _resolve_executor(executor, runtime, executor_params, inputs)
 
