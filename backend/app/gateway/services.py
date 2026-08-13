@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
@@ -22,7 +22,7 @@ from langchain_core.messages.utils import convert_to_messages
 from langgraph.types import Command
 
 from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL
-from app.gateway.deps import get_checkpointer, get_local_provider, get_run_context, get_run_manager, get_stream_bridge
+from app.gateway.deps import get_checkpointer, get_local_provider, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
 from app.gateway.internal_auth import (
     INTERNAL_OWNER_USER_ID_HEADER_NAME,
     INTERNAL_SYSTEM_ROLE,
@@ -72,7 +72,8 @@ from deerflow.runtime.stream_modes import normalize_stream_modes
 from deerflow.runtime.user_context import reset_current_user, set_current_user
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
 from deerflow.utils.thread_id import validate_thread_id
-from deerflow.workflow.schema import WorkflowDefinition
+from deerflow.workflow.compiler import WorkflowCompileError, parse_subworkflow_spec
+from deerflow.workflow.schema import NodeType, WorkflowDefinition
 from deerflow.workflow.worker import run_workflow
 
 logger = logging.getLogger(__name__)
@@ -1272,6 +1273,116 @@ async def start_run(
             reset_current_user(owner_context_token)
 
 
+def _collect_template_refs(definition: WorkflowDefinition) -> set[str]:
+    """Collect every template id referenced by *definition* (inline subgraphs recursed).
+
+    Walks ``nested:subworkflow`` nodes: template specs contribute their
+    ``template_id``; inline specs are re-parsed as ``WorkflowDefinition`` and
+    scanned recursively.  Malformed specs are skipped — the compile step
+    surfaces the real error later.
+    """
+
+    def _walk(current: WorkflowDefinition) -> None:
+        for node in current.nodes:
+            if node.type != NodeType.NESTED_SUBWORKFLOW:
+                continue
+            try:
+                spec = parse_subworkflow_spec(node)
+            except WorkflowCompileError:
+                continue
+            if spec is None:
+                continue
+            if spec["type"] == "template":
+                refs.add(spec["template_id"])
+                continue
+            try:
+                child = WorkflowDefinition.model_validate(spec["definition"])
+            except Exception:
+                continue
+            _walk(child)
+
+    refs: set[str] = set()
+    _walk(definition)
+    return refs
+
+
+async def _prefetch_workflow_templates(
+    definition: WorkflowDefinition,
+    repo: Any,
+    user_id: str,
+) -> dict[str, WorkflowDefinition]:
+    """Load the transitive closure of template references into a dict.
+
+    The top-level definition's own ``id`` is seeded first (so a cycle that
+    points back at it is caught by the compiler before any resolver miss),
+    then each referenced template is loaded via ``repo.get`` and scanned for
+    further references until a fixed point is reached.  Missing templates are
+    skipped — the resolver returns ``None`` for them and the compile step
+    reports ``not found``.
+    """
+    result: dict[str, WorkflowDefinition] = {definition.id: definition}
+    pending: set[str] = _collect_template_refs(definition)
+    visited: set[str] = set()
+
+    while pending:
+        template_id = pending.pop()
+        if template_id in visited or template_id in result:
+            continue
+        visited.add(template_id)
+
+        row = await repo.get(template_id, user_id=user_id)
+        if row is None:
+            continue
+        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+        if definition_dict is None:
+            continue
+        try:
+            parsed = WorkflowDefinition.model_validate(definition_dict)
+        except Exception:
+            continue
+        result[template_id] = parsed
+        pending |= _collect_template_refs(parsed)
+
+    return result
+
+
+def _make_template_resolver(templates: dict[str, WorkflowDefinition]) -> Callable[[str, str | None], WorkflowDefinition | None]:
+    """Build a pure synchronous dict-lookup resolver for template references."""
+
+    def resolver(template_id: str, _version: str | None = None) -> WorkflowDefinition | None:
+        return templates.get(template_id)
+
+    return resolver
+
+
+async def _build_workflow_template_resolver(
+    definition: WorkflowDefinition,
+    request: Request,
+    *,
+    user_id: str | None,
+) -> Callable[[str, str | None], WorkflowDefinition | None] | None:
+    """Prefetch template references and return a sync resolver (fail-open).
+
+    A repo failure or missing templates degrade to ``None`` so run creation is
+    never blocked by template prefetch; a template reference then fails at
+    compile time with the explicit ``not found`` / ``no definition_resolver``
+    error instead of silently skipping.
+    """
+    if user_id is None:
+        return None
+    try:
+        repo = get_workflow_definition_repo(request)
+        templates = await _prefetch_workflow_templates(definition, repo, user_id)
+    except Exception:
+        logger.warning(
+            "Workflow template prefetch failed for definition %s (non-fatal)",
+            sanitize_log_param(definition.id),
+            exc_info=True,
+        )
+        return None
+    return _make_template_resolver(templates)
+
+
 async def start_workflow_run(
     definition_id: str,
     definition: WorkflowDefinition,
@@ -1323,6 +1434,12 @@ async def start_workflow_run(
 
     owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
     try:
+        prefetch_user_id: str | None = str(user.id) if user is not None else owner_user_id
+        definition_resolver = await _build_workflow_template_resolver(
+            definition,
+            request,
+            user_id=prefetch_user_id,
+        )
         try:
             async with goal_thread_lock(thread_id):
                 record = await run_mgr.create_or_reject(
@@ -1342,6 +1459,7 @@ async def start_workflow_run(
                         ctx=run_ctx,
                         definition=definition,
                         params=params,
+                        definition_resolver=definition_resolver,
                     )
 
                 try:

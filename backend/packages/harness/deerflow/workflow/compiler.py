@@ -74,21 +74,95 @@ class WorkflowCompileError(ValueError):
     """Compile-time error — invalid definition, missing executor, no default if-branch, etc."""
 
 
+def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
+    """Parse a ``nested:subworkflow`` node's ``params["subworkflow"]`` spec.
+
+    Returns ``None`` when the node carries no ``subworkflow`` param — the node
+    then falls back to the legacy executor path.  Otherwise returns a
+    normalized spec dict:
+
+    - ``{"type": "inline", "definition": {...}}`` — an inline sub-workflow,
+      where ``definition`` is a ``WorkflowDefinition``-valid JSON dict.
+    - ``{"type": "template", "template_id": "wf-xxx", "version": "0.1.0"}`` —
+      a reference to a stored workflow template (``version`` omitted when absent).
+
+    Raises :class:`WorkflowCompileError` (with the node id) for any malformed
+    spec: non-dict value, unknown ``type``, missing required fields, a
+    ``definition`` that fails ``WorkflowDefinition.model_validate``, or both an
+    inline ``definition`` and a ``template_id`` present at once.
+    """
+    spec = node.params.get("subworkflow")
+    if spec is None:
+        return None
+
+    if not isinstance(spec, dict):
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow spec must be a dict, got {type(spec).__name__}")
+
+    spec_type = spec.get("type")
+    if spec_type not in ("inline", "template"):
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow spec 'type' must be 'inline' or 'template', got {spec_type!r}")
+
+    has_definition = "definition" in spec
+    has_template_id = "template_id" in spec
+
+    if spec_type == "inline":
+        if has_template_id:
+            raise WorkflowCompileError(f"node '{node.id}': subworkflow spec cannot combine inline 'definition' with 'template_id'")
+        definition = spec.get("definition")
+        if not isinstance(definition, dict):
+            raise WorkflowCompileError(f"node '{node.id}': subworkflow inline spec requires a 'definition' dict")
+        try:
+            WorkflowDefinition.model_validate(definition)
+        except Exception as exc:
+            raise WorkflowCompileError(f"node '{node.id}': subworkflow inline 'definition' failed validation: {exc}") from exc
+        return {"type": "inline", "definition": definition}
+
+    # spec_type == "template"
+    if has_definition:
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow spec cannot combine inline 'definition' with 'template_id'")
+    template_id = spec.get("template_id")
+    if not isinstance(template_id, str) or not template_id:
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow template spec requires a non-empty 'template_id' string")
+    version = spec.get("version")
+    if version is not None and not isinstance(version, str):
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow template 'version' must be a string")
+
+    result: dict[str, Any] = {"type": "template", "template_id": template_id}
+    if version is not None:
+        result["version"] = version
+    return result
+
+
 class WorkflowRouteError(RuntimeError):
     """Execution-time error — conditional edge with no matching condition and no default edge."""
 
 
 @dataclass
 class CompileContext:
-    """Compilation context holding the executor registry.
+    """Compilation context holding the executor registry and subgraph expansion.
 
     Each ``NodeType`` that appears in the workflow must have a registered
     ``Executor`` callable, otherwise compilation raises
     :class:`WorkflowCompileError`.
+
+    Fields:
+        executors: ``NodeType`` → executor callable registry.
+        checkpointer: Optional LangGraph checkpointer for the top-level graph.
+            Subgraphs are always compiled with ``checkpointer=None`` so their
+            channels never pollute the parent thread checkpoint.
+        definition_resolver: Optional synchronous resolver
+            ``(template_id, version) -> WorkflowDefinition | None`` used to
+            expand ``nested:subworkflow`` template references.  Must be a
+            pure in-memory lookup (no IO) — the compile path must stay
+            loop-safe, and ``_cache_key`` also calls it outside any lock.
+        max_nesting_depth: Maximum subgraph nesting depth (default 10).
+            Deeper nesting raises :class:`WorkflowCompileError`.
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
     checkpointer: Any | None = None
+    definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
+    max_nesting_depth: int = 10
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -115,6 +189,14 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
     ``NodeType`` set level — per-executor callable identity is not hashed
     because callables are not reliably hashable, and T5 registry
     semantics map ``NodeType`` → executor globally.
+
+    Additionally (D9-6), the serialized content of every directly-referenced
+    template subgraph is folded into the digest, so an update to a stored
+    template invalidates the parent graph's cache entry.  The resolver is a
+    synchronous in-memory lookup (no IO), and this function is only called
+    *outside* ``_compile_cache_lock``.  Resolution failures (missing template,
+    malformed spec) are skipped here — the real error is raised later, during
+    expansion, so cache-key computation itself never throws.
     """
     digest = hashlib.sha256(serialize(def_).encode("utf-8"))
     if context is not None and context.executors:
@@ -122,6 +204,19 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
         digest.update(f"\0executors:{type_fp}".encode())
     if context is not None and context.checkpointer is not None:
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
+    if context is not None and context.definition_resolver is not None:
+        for node in def_.nodes:
+            if node.type != NodeType.NESTED_SUBWORKFLOW:
+                continue
+            try:
+                spec = parse_subworkflow_spec(node)
+            except WorkflowCompileError:
+                continue  # real error surfaces during expansion
+            if spec is None or spec["type"] != "template":
+                continue
+            child = context.definition_resolver(spec["template_id"], spec.get("version"))
+            if child is not None:
+                digest.update(b"\0template:" + serialize(child).encode())
     return digest.hexdigest()
 
 
@@ -195,10 +290,15 @@ def _make_node_fn(
         # get_config() is available inside LangGraph node execution.
         # Fall back to empty runtime when running outside a LangGraph
         # context (e.g. tests that invoke the node fn directly).
+        # LangGraph moves a top-level ``config["context"]`` into
+        # ``config["configurable"]["context"]`` before a node runs, so read
+        # both locations (top-level first for forward-compatibility).
         try:
             config = get_config()
+            configurable = config.get("configurable", {}) or {}
+            context = config.get("context") or configurable.get("context") or {}
             runtime = WorkflowRuntime(
-                context=config.get("context", {}),
+                context=context,
                 config=config,
                 state=state,
             )
@@ -215,6 +315,212 @@ def _make_node_fn(
         return outputs
 
     return _node_fn
+
+
+def _make_end_node_fn(node: Node, incoming_edges: list[Edge]) -> Callable[..., Any]:
+    """Build a pass-through node fn for an ``flow:end`` node with output ports.
+
+    A normal ``flow:end`` node has no output ports and maps directly to the
+    LangGraph ``END`` sentinel.  A subworkflow-boundary ``flow:end`` node
+    *does* declare output ports — those are the subgraph's external outputs.
+    For such a node we register a real node function that forwards incoming
+    input values to the output ports:
+
+    - each output port reads the *same-named* input port's value;
+    - otherwise, if the end node has exactly one input port, that single input
+      feeds every output port (the common subgraph boundary shape);
+    - otherwise the output port stays unset.
+
+    State keys follow ``wf:<node_id>:<port_name>``, exactly like ``_make_node_fn``.
+    """
+    input_key_map: dict[str, str] = {}
+    for edge in incoming_edges:
+        input_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+
+    input_names = [p.name for p in node.inputs]
+
+    async def _end_fn(state: dict[str, Any]) -> dict[str, Any]:
+        outputs: dict[str, Any] = {}
+        for p in node.outputs:
+            key = input_key_map.get(p.name)
+            if key is None and len(input_names) == 1:
+                key = input_key_map.get(input_names[0])
+            if key is not None:
+                outputs[f"wf:{node.id}:{p.name}"] = state.get(key)
+        return outputs
+
+    return _end_fn
+
+
+def _make_subworkflow_node_fn(
+    node: Node,
+    child: CompiledStateGraph,
+    child_start_id: str,
+    child_end_id: str,
+    incoming_edges: list[Edge],
+) -> Callable[..., Any]:
+    """Build the parent-graph node fn for an expanded ``nested:subworkflow`` node.
+
+    The node function is an adapter between the parent and the subgraph:
+    it reads parent-state inputs, builds the subgraph's initial state, invokes
+    the subgraph manually, and writes the subgraph's outputs back to parent
+    state — so parent and child state/channels stay fully isolated.
+    """
+    from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    input_key_map: dict[str, str] = {}
+    for edge in incoming_edges:
+        input_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+
+    mapping = node.params.get("mapping")
+    map_inputs = (mapping or {}).get("inputs") or {}
+    map_outputs = (mapping or {}).get("outputs") or {}
+
+    async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
+        # 1. Read this node's inputs from parent state (input_key_map mechanism).
+        inputs: dict[str, Any] = {}
+        for p in node.inputs:
+            state_key = input_key_map.get(p.name, f"wf:{node.id}:{p.name}")
+            inputs[p.name] = state.get(state_key)
+
+        # 2. Build the subgraph's initial state from ``mapping.inputs``.
+        #    A ``wf:``-prefixed value is a parent-state reference; a value
+        #    matching one of this node's input ports resolves through the
+        #    input_key_map read above; anything else is a literal passed
+        #    through unchanged.
+        sub_input: dict[str, Any] = {}
+        for child_port, parent_ref in map_inputs.items():
+            if isinstance(parent_ref, str) and parent_ref.startswith("wf:"):
+                sub_input[f"wf:{child_start_id}:{child_port}"] = state.get(parent_ref)
+            elif isinstance(parent_ref, str) and parent_ref in inputs:
+                sub_input[f"wf:{child_start_id}:{child_port}"] = inputs[parent_ref]
+            else:
+                sub_input[f"wf:{child_start_id}:{child_port}"] = parent_ref
+
+        # 3. Resolve the parent config (must be forwarded explicitly so the
+        #    subgraph's nodes see context via get_config()).
+        try:
+            config = get_config()
+        except Exception:
+            config = {}
+
+        # 4. Invoke the subgraph, wrapping failures with the node path.
+        try:
+            result = await child.ainvoke(sub_input, config)
+        except Exception as exc:
+            raise WorkflowExecutionError(f"{node.id} > {exc}") from exc
+
+        # 5. Write subgraph outputs back to parent state.
+        outputs: dict[str, Any] = {}
+        for child_port, parent_port in map_outputs.items():
+            outputs[f"wf:{node.id}:{parent_port}"] = result.get(f"wf:{child_end_id}:{child_port}")
+
+        return outputs
+
+    return _node_fn
+
+
+def _validate_subworkflow_mapping(node: Node, child: WorkflowDefinition) -> None:
+    """Validate a ``nested:subworkflow`` node's ``params.mapping`` against the child graph.
+
+    Raises :class:`WorkflowCompileError` when a referenced port does not exist:
+
+    - ``mapping.inputs`` child port names must exist in the child start node's
+      *output* ports (subgraph inputs are injected as ``wf:<start>:<port>``,
+      which ``_build_state_schema`` only declares for output ports).
+    - ``mapping.outputs`` child port names must exist in the child end node's
+      output ports.
+    - ``mapping.outputs`` parent port names must be declared on the parent node's
+      ``outputs`` — otherwise LangGraph silently drops the write.
+    """
+    mapping = node.params.get("mapping") or {}
+    map_inputs = mapping.get("inputs") or {}
+    map_outputs = mapping.get("outputs") or {}
+
+    child_start = next((n for n in child.nodes if n.type == NodeType.FLOW_START), None)
+    child_end = next((n for n in child.nodes if n.type == NodeType.FLOW_END), None)
+
+    if child_start is not None:
+        start_ports = {p.name for p in child_start.outputs}
+        for child_port in map_inputs:
+            if child_port not in start_ports:
+                raise WorkflowCompileError(f"node '{node.id}': mapping input port '{child_port}' not found in subworkflow start node outputs (available: {sorted(start_ports)})")
+
+    if child_end is not None:
+        end_ports = {p.name for p in child_end.outputs}
+        for child_port in map_outputs:
+            if child_port not in end_ports:
+                raise WorkflowCompileError(f"node '{node.id}': mapping output port '{child_port}' not found in subworkflow end node outputs (available: {sorted(end_ports)})")
+
+    parent_ports = {p.name for p in node.outputs}
+    for parent_port in map_outputs.values():
+        if parent_port not in parent_ports:
+            raise WorkflowCompileError(f"node '{node.id}': mapping output parent port '{parent_port}' not declared in node outputs (available: {sorted(parent_ports)})")
+
+
+def _expand_subworkflow(
+    node: Node,
+    ctx: CompileContext,
+    *,
+    depth: int,
+    visiting: set[str],
+    chain_path: list[str],
+) -> tuple[CompiledStateGraph, WorkflowDefinition]:
+    """Recursively compile an inline/template subgraph for a ``nested:subworkflow`` node.
+
+    Enforces nesting-depth limit and template reference-cycle detection before
+    recursing, then compiles the child graph with ``checkpointer=None`` and the
+    same executors/resolver/depth-limit as the parent context.
+
+    Args:
+        node: The ``nested:subworkflow`` node carrying a valid ``subworkflow`` spec.
+        ctx: The current compile context.
+        depth: Current nesting depth (1 for the top-level graph).
+        visiting: ``template_id`` set currently on the expansion stack (cycle detection).
+        chain_path: Node-id/template-id path from the top level, for error messages.
+
+    Returns:
+        A ``(compiled_child_graph, child_definition)`` pair.
+    """
+    spec = parse_subworkflow_spec(node)
+    assert spec is not None, "caller must pass a node with a valid subworkflow spec"
+
+    # ── Depth limit ─────────────────────────────────────────────────────
+    if depth + 1 > ctx.max_nesting_depth:
+        chain = " > ".join([*chain_path, node.id])
+        raise WorkflowCompileError(f"subworkflow nesting depth exceeded: {chain} (max {ctx.max_nesting_depth})")
+
+    # ── Resolve child definition (with cycle detection for templates) ──
+    if spec["type"] == "inline":
+        child = WorkflowDefinition.model_validate(spec["definition"])
+        child_visiting = visiting  # inline is a value copy — no template_id to track
+        child_chain = [*chain_path, node.id]
+    else:  # template
+        template_id = spec["template_id"]
+        if template_id in visiting:
+            chain = " → ".join([*chain_path, template_id])
+            raise WorkflowCompileError(f"subworkflow reference cycle detected: {chain}")
+        resolver = ctx.definition_resolver
+        if resolver is None:
+            raise WorkflowCompileError(f"node '{node.id}': cannot resolve subworkflow template '{template_id}' (no definition_resolver in CompileContext)")
+        child = resolver(template_id, spec.get("version"))
+        if child is None:
+            raise WorkflowCompileError(f"node '{node.id}': subworkflow template '{template_id}' not found")
+        child_visiting = visiting | {template_id}
+        child_chain = [*chain_path, template_id]
+
+    # ── Validate port mapping against the child graph ──────────────────
+    _validate_subworkflow_mapping(node, child)
+
+    # ── Recurse: child graph compiles with checkpointer=None ───────────
+    child_ctx = CompileContext(
+        executors=ctx.executors,
+        checkpointer=None,
+        definition_resolver=ctx.definition_resolver,
+        max_nesting_depth=ctx.max_nesting_depth,
+    )
+    child_graph = _compile_impl(child, child_ctx, depth=depth + 1, visiting=child_visiting, chain_path=child_chain)
+    return child_graph, child
 
 
 def _make_route_fn(
@@ -259,9 +565,9 @@ def compile_definition(
     Args:
         def_: The workflow definition to compile.
         context: Optional :class:`CompileContext` carrying executor
-            registrations and overrides.  If ``None``, an empty context
-            is used (which means every non-control-flow node will fail
-            compilation unless executors are registered).
+            registrations, checkpointer, and subgraph resolver.  If ``None``,
+            an empty context is used (which means every non-control-flow node
+            will fail compilation unless executors are registered).
 
     Returns:
         A compiled LangGraph graph ready for ``ainvoke`` / ``astream``.
@@ -271,6 +577,26 @@ def compile_definition(
             executor is missing.
     """
     ctx = context or CompileContext()
+    return _compile_impl(def_, ctx, depth=1, visiting=set(), chain_path=[])
+
+
+def _compile_impl(
+    def_: WorkflowDefinition,
+    ctx: CompileContext,
+    *,
+    depth: int,
+    visiting: set[str],
+    chain_path: list[str],
+) -> CompiledStateGraph:
+    """Recursive implementation of :func:`compile_definition`.
+
+    Carries the subgraph-expansion state (``depth`` / ``visiting`` /
+    ``chain_path``) explicitly so nested ``compile_definition`` calls share
+    cycle/depth tracking without any mutable context.  The cache lookup and
+    store are each scoped to a single ``with _compile_cache_lock`` block that
+    never spans compilation, so recursive subgraph compilation (which happens
+    outside the lock) cannot dead-lock the non-reentrant ``threading.Lock``.
+    """
 
     # ── Cache hit? ─────────────────────────────────────────────────────
     cache_key = _cache_key(def_, ctx)
@@ -307,7 +633,12 @@ def compile_definition(
             continue  # start node → LangGraph START, no add_node
         if node.type == NodeType.FLOW_END:
             end_node_id = node.id
-            continue  # end node → LangGraph END, no add_node
+            if node.outputs:
+                # Subworkflow-boundary end node: it declares output ports, so
+                # register a pass-through node fn to forward inputs to outputs.
+                end_fn = _make_end_node_fn(node, incoming_edges.get(node.id, []))
+                builder.add_node(node.id, end_fn)
+            continue  # normal end node → LangGraph END, no add_node
 
         if node.type == NodeType.FLOW_LOOP:
             # Loop node: register a counting executor that reads/writes
@@ -355,6 +686,18 @@ def compile_definition(
             # lookup (T5-3 registers the actual wait executor).
             pass
 
+        if node.type == NodeType.NESTED_SUBWORKFLOW:
+            spec = parse_subworkflow_spec(node)
+            if spec is not None:
+                # Compile-time subgraph expansion (inline/template reference).
+                child_graph, child_def = _expand_subworkflow(node, ctx, depth=depth, visiting=visiting, chain_path=chain_path)
+                child_start_id = next((n.id for n in child_def.nodes if n.type == NodeType.FLOW_START), "")
+                child_end_id = next((n.id for n in child_def.nodes if n.type == NodeType.FLOW_END), "")
+                node_fn = _make_subworkflow_node_fn(node, child_graph, child_start_id, child_end_id, incoming_edges.get(node.id, []))
+                builder.add_node(node.id, node_fn)
+                continue
+            # No subworkflow spec → fall through to the legacy executor path.
+
         # Bind executor (for non-control-flow nodes including FLOW_WAIT)
         executor = ctx.executors.get(node.type)
         if executor is None:
@@ -362,6 +705,16 @@ def compile_definition(
 
         node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
         builder.add_node(node.id, node_fn)
+
+    # Determine whether the end node is a registered pass-through (subgraph
+    # boundary) — in that case edges must route *into* it rather than to END.
+    end_node = node_map.get(end_node_id) if end_node_id is not None else None
+    end_has_outputs = bool(end_node is not None and end_node.outputs)
+
+    def _end_target(target: str) -> Any:
+        if target == end_node_id:
+            return end_node_id if end_has_outputs else END
+        return target
 
     # ── 5. Process edges ──────────────────────────────────────────────
     # We do two passes:
@@ -391,9 +744,9 @@ def compile_definition(
         if edge.condition is not None:
             raise WorkflowCompileError(f"edge from '{source}' to '{target}' has condition '{edge.condition}' but source node type is '{src_node.type.value}' (only 'flow:if', 'flow:switch', 'flow:loop' support conditional edges)")
 
-        # Edges to end node → LangGraph END
+        # Edges to end node → LangGraph END (or the pass-through end node)
         if target == end_node_id:
-            builder.add_edge(source, END)
+            builder.add_edge(source, _end_target(target))
             continue
 
         # Ordinary edge
@@ -413,13 +766,13 @@ def compile_definition(
         for edge in out_edges:
             if edge.condition is not None:
                 # Conditional edge — target could be a regular node or end
-                target = END if edge.target == end_node_id else edge.target
+                target = _end_target(edge.target)
                 cond_edges.append((edge.condition, target))
             else:
                 # Default (unconditional) edge
                 if default_target is not None:
                     raise WorkflowCompileError(f"conditional node '{cond_id}' has multiple default edges (only one allowed)")
-                default_target = END if edge.target == end_node_id else edge.target
+                default_target = _end_target(edge.target)
 
         # Validate: if there are conditional edges, a default edge is required
         if cond_edges and default_target is None:
@@ -472,6 +825,11 @@ def compile_definition(
         path_map[_default] = _default
 
         builder.add_conditional_edges(cond_id, route_fn, path_map)
+
+    # If the end node is a registered pass-through (subgraph boundary), connect
+    # it to the END sentinel after all regular/conditional edges.
+    if end_has_outputs and end_node_id is not None:
+        builder.add_edge(end_node_id, END)
 
     # ── 6. Compile ────────────────────────────────────────────────────
     compiled = builder.compile(checkpointer=ctx.checkpointer)

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from deerflow.runtime.runs.manager import RunManager, RunRecord, RunStartOutcome
@@ -29,6 +30,7 @@ async def run_workflow(
     ctx: RunContext,
     definition: WorkflowDefinition,
     params: dict[str, Any],
+    definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None,
 ) -> None:
     """Execute a compiled workflow graph in the background.
 
@@ -55,6 +57,10 @@ async def run_workflow(
         The workflow definition to compile and execute.
     params:
         Port-name → value mapping that seeds the ``flow:start`` node inputs.
+    definition_resolver:
+        Optional synchronous resolver ``(template_id, version) -> WorkflowDefinition | None``
+        used to expand ``nested:subworkflow`` template references.  Must be a
+        pure in-memory lookup (no IO) — the compile path must stay loop-safe.
     """
 
     run_id = record.run_id
@@ -97,6 +103,7 @@ async def run_workflow(
     compile_ctx = CompileContext(
         executors=registry.build_context().executors,
         checkpointer=checkpointer,
+        definition_resolver=definition_resolver,
     )
     graph = compile_definition(definition, context=compile_ctx)
 

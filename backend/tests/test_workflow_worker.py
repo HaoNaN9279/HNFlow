@@ -426,3 +426,84 @@ class TestWithCheckpointer:
         # The state should contain wf: keys from the workflow
         content = run_end["content"]
         assert content, "run.end content must be non-empty from checkpoint state"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 7. Template subworkflow execution via definition_resolver (T9-3)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestTemplateResolver:
+    """run_workflow with ``definition_resolver`` expands and executes template subworkflows."""
+
+    @pytest.mark.asyncio
+    async def test_template_subworkflow_executes_via_resolver(self) -> None:
+        """A ``nested:subworkflow`` template reference resolves through the resolver
+        and the child graph executes, feeding its result back to the parent node."""
+        child = _make_def(
+            nodes=[
+                Node(id="cstart", type=NodeType.FLOW_START, inputs=[], outputs=[Port(name="in", type=PortType.DATA)]),
+                Node(
+                    id="cassign",
+                    type=NodeType.DATA_ASSIGN,
+                    params={"value": "from-template"},
+                    inputs=[Port(name="in", type=PortType.DATA)],
+                    outputs=[Port(name="out", type=PortType.DATA)],
+                ),
+                Node(id="cend", type=NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="result", type=PortType.DATA)]),
+            ],
+            edges=[
+                Edge(source="cstart", source_port="in", target="cassign", target_port="in"),
+                Edge(source="cassign", source_port="out", target="cend", target_port="in"),
+            ],
+            id="wf-tpl",
+            name="wf-tpl",
+        )
+        templates: dict[str, WorkflowDefinition] = {"wf-tpl": child}
+
+        def resolver(template_id: str, _version: str | None) -> WorkflowDefinition | None:
+            return templates.get(template_id)
+
+        sub = Node(
+            id="sub",
+            type=NodeType.NESTED_SUBWORKFLOW,
+            params={
+                "subworkflow": {"type": "template", "template_id": "wf-tpl"},
+                "mapping": {"inputs": {"in": "wf:start:input"}, "outputs": {"result": "out"}},
+            },
+            inputs=[Port(name="in", type=PortType.DATA)],
+            outputs=[Port(name="out", type=PortType.DATA)],
+        )
+        definition = _make_def(
+            nodes=[_start_node("start"), sub, _end_node("end")],
+            edges=[
+                Edge(source="start", source_port="input", target="sub", target_port="in"),
+                Edge(source="sub", source_port="out", target="end", target_port="in"),
+            ],
+            id="tpl-parent",
+            name="Tpl Parent",
+        )
+
+        manager = RunManager()
+        record = await _make_record(manager, "thread-tpl", definition.id)
+        bridge = _make_bridge()
+        event_store = AsyncMock()
+        event_store.put = AsyncMock()
+
+        ctx = RunContext(checkpointer=None, event_store=event_store)
+
+        await run_workflow(
+            bridge,  # type: ignore[arg-type]
+            manager,
+            record,
+            ctx=ctx,
+            definition=definition,
+            params={"input": "ignored"},
+            definition_resolver=resolver,
+        )
+
+        assert record.status is RunStatus.success
+        completed = [e for e in bridge.events if e[1] == "wf:node:completed" and e[2].get("node_id") == "sub"]
+        assert len(completed) == 1
+        output = completed[0][2].get("output") or {}
+        assert output.get("wf:sub:out") == "from-template"

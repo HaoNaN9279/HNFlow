@@ -369,3 +369,91 @@ class TestPortsCompatible:
         assert ports_compatible(PortType.DATA, PortType.FILE) is False
         assert ports_compatible(PortType.DATA, PortType.BOOL) is False
         assert ports_compatible(PortType.FILE, PortType.DATA) is False
+
+
+# ── 12. subworkflow params shape 校验 ──────────────────────────────────────────────
+
+
+def _subworkflow_node(params: dict | None = None) -> Node:
+    return Node(
+        id="sub",
+        type=NodeType.NESTED_SUBWORKFLOW,
+        inputs=[Port(name="in", type=PortType.DATA)],
+        outputs=[Port(name="out", type=PortType.DATA)],
+        params=params or {},
+    )
+
+
+def _wf_with_subworkflow(params: dict | None = None) -> WorkflowDefinition:
+    return _make_wf(
+        nodes=[_start_node(), _subworkflow_node(params), _end_node()],
+        edges=[
+            Edge(source="start", source_port="out", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ],
+    )
+
+
+class TestSubworkflowParams:
+    """validate_definition shape-checks params['subworkflow'] on nested:subworkflow nodes."""
+
+    def test_valid_inline_spec_passes(self):
+        """Inline spec with a model-validatable definition passes."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "inline", "definition": {"id": "sub-wf", "name": "Sub"}}})
+        errors = validate_definition(wf)
+        assert errors == []
+
+    def test_valid_template_spec_passes(self):
+        """Template spec with template_id + version passes."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "template", "template_id": "wf-abc", "version": "0.1.0"}})
+        errors = validate_definition(wf)
+        assert errors == []
+
+    def test_missing_type_rejected(self):
+        """Spec without a 'type' key is rejected."""
+        wf = _wf_with_subworkflow({"subworkflow": {"definition": {"id": "sub-wf", "name": "Sub"}}})
+        errors = validate_definition(wf)
+        assert any("sub" in e and "'type'" in e for e in errors)
+
+    def test_invalid_type_rejected(self):
+        """Spec with an unknown 'type' value is rejected."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "bogus"}})
+        errors = validate_definition(wf)
+        assert any("sub" in e and "'type'" in e for e in errors)
+
+    def test_inline_missing_definition_rejected(self):
+        """Inline spec without 'definition' is rejected."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "inline"}})
+        errors = validate_definition(wf)
+        assert any("sub" in e and "definition" in e for e in errors)
+
+    def test_template_missing_template_id_rejected(self):
+        """Template spec without 'template_id' is rejected."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "template"}})
+        errors = validate_definition(wf)
+        assert any("sub" in e and "template_id" in e for e in errors)
+
+    def test_inline_and_template_together_rejected(self):
+        """Spec carrying both inline 'definition' and 'template_id' is rejected."""
+        wf = _wf_with_subworkflow({"subworkflow": {"type": "inline", "definition": {"id": "sub-wf", "name": "Sub"}, "template_id": "wf-abc"}})
+        errors = validate_definition(wf)
+        assert any("sub" in e and "combine" in e for e in errors)
+
+    def test_non_subworkflow_node_with_key_ignored(self):
+        """A DATA_ASSIGN node carrying a 'subworkflow' key is not inspected."""
+        assign = Node(
+            id="assign",
+            type=NodeType.DATA_ASSIGN,
+            inputs=[Port(name="in", type=PortType.DATA)],
+            outputs=[Port(name="out", type=PortType.DATA)],
+            params={"subworkflow": {"type": "bogus"}},
+        )
+        wf = _make_wf(
+            nodes=[_start_node(), assign, _end_node()],
+            edges=[
+                Edge(source="start", source_port="out", target="assign", target_port="in"),
+                Edge(source="assign", source_port="out", target="end", target_port="in"),
+            ],
+        )
+        errors = validate_definition(wf)
+        assert errors == []

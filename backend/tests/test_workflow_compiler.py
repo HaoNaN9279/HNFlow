@@ -20,6 +20,7 @@ from deerflow.workflow.compiler import (
     WorkflowCompileError,
     clear_compile_cache,
     compile_definition,
+    parse_subworkflow_spec,
 )
 from deerflow.workflow.schema import (
     Edge,
@@ -653,3 +654,94 @@ class TestBoundaryErrors:
         ctx = CompileContext(executors={NodeType.DATA_ASSIGN: _exec_identity()})
         with pytest.raises(WorkflowCompileError, match=pattern):
             compile_definition(def_, context=ctx)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 6. parse_subworkflow_spec (T9-1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _sub_node(params: dict[str, Any] | None = None) -> Node:
+    return Node(id="sub", type=NodeType.NESTED_SUBWORKFLOW, params=params or {})
+
+
+class TestParseSubworkflowSpec:
+    """parse_subworkflow_spec: None for legacy path, normalized dict otherwise, WorkflowCompileError on malformed."""
+
+    def test_no_subworkflow_key_returns_none(self) -> None:
+        """Node without params['subworkflow'] → None (legacy executor path)."""
+        assert parse_subworkflow_spec(_sub_node()) is None
+
+    def test_inline_valid_returns_dict(self) -> None:
+        """Valid inline spec returns a dict whose definition is model-validatable."""
+        definition: dict[str, Any] = {"id": "sub-wf", "name": "Sub"}
+        node = _sub_node({"subworkflow": {"type": "inline", "definition": definition}})
+        spec = parse_subworkflow_spec(node)
+        assert spec == {"type": "inline", "definition": definition}
+        WorkflowDefinition.model_validate(spec["definition"])
+
+    def test_template_valid_returns_dict(self) -> None:
+        """Valid template spec returns a dict with template_id + version."""
+        node = _sub_node({"subworkflow": {"type": "template", "template_id": "wf-abc", "version": "0.1.0"}})
+        spec = parse_subworkflow_spec(node)
+        assert spec == {"type": "template", "template_id": "wf-abc", "version": "0.1.0"}
+
+    def test_template_version_optional(self) -> None:
+        """Template without 'version' omits it from the result."""
+        node = _sub_node({"subworkflow": {"type": "template", "template_id": "wf-abc"}})
+        spec = parse_subworkflow_spec(node)
+        assert spec == {"type": "template", "template_id": "wf-abc"}
+
+    def test_non_dict_spec_raises(self) -> None:
+        """A non-dict subworkflow value raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": "inline"})
+        with pytest.raises(WorkflowCompileError, match="sub"):
+            parse_subworkflow_spec(node)
+
+    def test_missing_type_raises(self) -> None:
+        """Spec without 'type' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"definition": {"id": "sub-wf", "name": "Sub"}}})
+        with pytest.raises(WorkflowCompileError, match="'type'"):
+            parse_subworkflow_spec(node)
+
+    def test_invalid_type_raises(self) -> None:
+        """Unknown 'type' value raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "bogus"}})
+        with pytest.raises(WorkflowCompileError, match="'type'"):
+            parse_subworkflow_spec(node)
+
+    def test_inline_missing_definition_raises(self) -> None:
+        """Inline spec without 'definition' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "inline"}})
+        with pytest.raises(WorkflowCompileError, match="definition"):
+            parse_subworkflow_spec(node)
+
+    def test_inline_invalid_definition_raises(self) -> None:
+        """Inline spec whose definition fails model_validate raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "inline", "definition": {"id": "sub-wf"}}})  # missing name
+        with pytest.raises(WorkflowCompileError, match="sub"):
+            parse_subworkflow_spec(node)
+
+    def test_template_missing_template_id_raises(self) -> None:
+        """Template spec without 'template_id' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "template"}})
+        with pytest.raises(WorkflowCompileError, match="template_id"):
+            parse_subworkflow_spec(node)
+
+    def test_template_empty_template_id_raises(self) -> None:
+        """Empty 'template_id' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "template", "template_id": ""}})
+        with pytest.raises(WorkflowCompileError, match="template_id"):
+            parse_subworkflow_spec(node)
+
+    def test_template_non_string_version_raises(self) -> None:
+        """Non-string 'version' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "template", "template_id": "wf-abc", "version": 1}})
+        with pytest.raises(WorkflowCompileError, match="version"):
+            parse_subworkflow_spec(node)
+
+    def test_inline_and_template_together_raises(self) -> None:
+        """Spec carrying both 'definition' and 'template_id' raises WorkflowCompileError."""
+        node = _sub_node({"subworkflow": {"type": "inline", "definition": {"id": "sub-wf", "name": "Sub"}, "template_id": "wf-abc"}})
+        with pytest.raises(WorkflowCompileError, match="sub"):
+            parse_subworkflow_spec(node)
