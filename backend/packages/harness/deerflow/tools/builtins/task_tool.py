@@ -362,14 +362,37 @@ async def task_tool(
         resolved_app_config = get_app_config()
     effective_model = resolve_subagent_model_name(config, parent_model, app_config=resolved_app_config)
 
-    # Subagents should not have subagent tools enabled (prevent recursive nesting).
+    # Bound recursive nesting by delegation depth. The parent depth is carried
+    # in the runtime context (``task_tool`` dispatches through the lead/subagent
+    # run, which passes ``delegation_depth``); the ceiling comes from
+    # ``subagents.max_delegation_depth``. When the parent has already reached
+    # the ceiling, refuse to launch rather than spawn an unbounded chain.
+    parent_depth = parent_context.get("delegation_depth", 0)
+    if not isinstance(parent_depth, int):
+        parent_depth = 0
+    subagents_cfg = resolved_app_config.subagents if resolved_app_config is not None else None
+    if subagents_cfg is None:
+        from deerflow.config.subagents_config import get_subagents_app_config
+
+        subagents_cfg = get_subagents_app_config()
+    max_delegation_depth = subagents_cfg.max_delegation_depth
+    if parent_depth >= max_delegation_depth:
+        return _task_result_command(
+            tool_call_id=tool_call_id,
+            status="failed",
+            error=f"subagent delegation depth exceeded: max {max_delegation_depth}",
+        )
+
+    # Subagents only get subagent tools (task) when the subagent config opts
+    # into recursion via allow_recursion; this prevents accidental recursive
+    # nesting while still allowing bounded delegation chains.
     # Subagents also must not get list_uploaded_files — they have an independent
     # ThreadState where runtime.state["uploaded_files"] is absent, so the
     # current-run file exclusion would not work.
     available_tools_kwargs = {
         "model_name": effective_model,
         "groups": parent_tool_groups,
-        "subagent_enabled": False,
+        "subagent_enabled": config.allow_recursion,
         "include_upload_tool": False,
     }
     if resolved_app_config is not None:
@@ -399,6 +422,7 @@ async def task_tool(
         executor_kwargs["app_config"] = resolved_app_config
     if run_extensions is not None:
         executor_kwargs["extensions"] = run_extensions
+    executor_kwargs["delegation_depth"] = parent_depth + 1
     executor = SubagentExecutor(**executor_kwargs)
 
     # Keep the provider tool-call ID for stream/message correlation, but use a

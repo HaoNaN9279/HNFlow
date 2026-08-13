@@ -139,6 +139,12 @@ class SubagentsAppConfig(BaseModel):
         le=MAX_TOTAL_SUBAGENTS_PER_RUN,
         description="Default total number of subagent delegations allowed in one lead-agent run. This is a deterministic backstop against repeated legal-sized task batches. Valid range: 1-50.",
     )
+    max_delegation_depth: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum nested subagent delegation depth (workflow delegate nodes + task recursion).",
+    )
     token_budget: TokenBudgetConfig = Field(
         default_factory=default_subagent_token_budget,
         description="Default per-run token budget for subagents — a cost-ceiling backstop that engages by default (#3875 Phase 2). Set enabled: false to disable, or override per agent via agents.<name>.token_budget.",

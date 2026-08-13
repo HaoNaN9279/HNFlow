@@ -104,6 +104,7 @@ async def run_workflow(
         executors=registry.build_context().executors,
         checkpointer=checkpointer,
         definition_resolver=definition_resolver,
+        max_delegation_depth=ctx.app_config.subagents.max_delegation_depth if ctx.app_config is not None else 3,
     )
     graph = compile_definition(definition, context=compile_ctx)
 
@@ -119,6 +120,7 @@ async def run_workflow(
             config["context"]["app_config"] = ctx.app_config
             config["context"]["thread_id"] = thread_id
             config["context"]["run_id"] = run_id
+            config["context"]["delegation_depth"] = 0
 
     # Collect non-start/end node ids for astream_events filtering.
     node_ids: list[str] = [n.id for n in definition.nodes if n.type not in (NodeType.FLOW_START, NodeType.FLOW_END)]

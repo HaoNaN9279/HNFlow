@@ -458,6 +458,10 @@ class SubagentExecutor:
         authz_attributes: Mapping[str, Any] | None = None,
         deerflow_trace_id: str | None = None,
         extensions: Any | None = None,
+        checkpointer: Any | None = None,
+        checkpoint_thread_id: str | None = None,
+        resume_checkpoint_id: str | None = None,
+        delegation_depth: int = 0,
     ):
         """Initialize the executor.
 
@@ -486,6 +490,19 @@ class SubagentExecutor:
                 captured at ``task_tool`` dispatch. When None (embedded client,
                 standalone LangGraph Server), ``_aexecute`` falls back to the
                 process-wide singleton.
+            checkpointer: LangGraph checkpointer (saver) instance used when
+                ``config.checkpointer`` is True. Required in that case; the
+                constructor validates the pairing.
+            checkpoint_thread_id: Checkpoint thread id for a checkpoint-enabled
+                subagent. Defaults to ``f"{thread_id}:wfsub:{task_id}"`` when
+                unset. Kept separate from the parent ``thread_id`` so a
+                checkpoint-enabled subagent owns an independent lineage.
+            resume_checkpoint_id: Optional checkpoint id to resume from; when
+                set it is written into the child config's ``configurable`` so
+                LangGraph resumes rather than replaying from scratch.
+            delegation_depth: Current nested-delegation depth (0 = top-level
+                ``task`` dispatch). Propagated by ``task_tool`` so recursive
+                delegation can be bounded by ``subagents.max_delegation_depth``.
         """
         self.config = config
         self.app_config = app_config
@@ -525,6 +542,15 @@ class SubagentExecutor:
         # generation underneath the delegated work.
         self.extensions = extensions
 
+        # Checkpoint-resume wiring for checkpoint-enabled subagents. The
+        # checkpointer instance is only consumed when ``config.checkpointer`` is
+        # True; otherwise these remain inert and the child graph keeps its
+        # default ``checkpointer=False`` compilation.
+        self.checkpointer = checkpointer
+        self.checkpoint_thread_id = checkpoint_thread_id
+        self.resume_checkpoint_id = resume_checkpoint_id
+        self.delegation_depth = delegation_depth
+
         self._base_tools = _filter_tools(
             tools,
             config.tools,
@@ -543,6 +569,9 @@ class SubagentExecutor:
         # not just the first — because the v2 contract advertises more than one
         # cap reason.
         self._stop_reason_middlewares: list[Any] = []
+
+        if config.checkpointer and checkpointer is None:
+            raise ValueError(f"Subagent {config.name!r} is configured with checkpointer=True but no checkpointer instance was provided; pass a LangGraph checkpointer (saver) via the ``checkpointer`` argument.")
 
         logger.info(f"[trace={self.trace_id}] SubagentExecutor initialized: {config.name} with {len(self.tools)} tools")
 
@@ -610,7 +639,7 @@ class SubagentExecutor:
             middleware=middlewares,
             system_prompt=None,
             state_schema=ThreadState,
-            checkpointer=False,
+            checkpointer=self.checkpointer if self.config.checkpointer else False,
         )
 
     def _consume_guard_stop_reason(self) -> str | None:
@@ -879,7 +908,7 @@ class SubagentExecutor:
             collector = SubagentTokenCollector(caller=collector_caller)
 
             # Do not put checkpoint coordinates (thread_id/checkpoint_ns/etc.)
-            # in the child config. LangGraph inherits those coordinates from
+            # in the child config by default. LangGraph inherits those coordinates from
             # the ambient parent run so this execution keeps its subgraph
             # namespace. Business consumers receive thread_id via ``context``
             # below instead.
@@ -888,6 +917,20 @@ class SubagentExecutor:
                 "callbacks": [collector],
                 "tags": [collector_caller],
             }
+
+            # Checkpoint-enabled subagents use an independent checkpoint
+            # namespace ("subagent") so their checkpoint writes never pollute
+            # the parent's lineage. This is only wired when a checkpointer is
+            # explicitly enabled AND supplied; the default path above stays
+            # untouched (zero breakage for ordinary subagents).
+            if self.config.checkpointer and self.checkpointer is not None:
+                checkpoint_thread_id = self.checkpoint_thread_id or f"{self.thread_id or 'sub'}:wfsub:{result.task_id}"
+                run_config["configurable"] = {
+                    "thread_id": checkpoint_thread_id,
+                    "checkpoint_ns": "subagent",
+                }
+                if self.resume_checkpoint_id is not None:
+                    run_config["configurable"]["checkpoint_id"] = self.resume_checkpoint_id
 
             # Inject tracing callbacks at the graph level so a single subagent run
             # produces one trace with all node / LLM / tool calls as child spans.
@@ -946,6 +989,11 @@ class SubagentExecutor:
             if self.deerflow_trace_id:
                 context[DEERFLOW_TRACE_METADATA_KEY] = self.deerflow_trace_id
             context["is_subagent"] = True
+            # Propagate the nested-delegation depth so a sub-agent's own
+            # ``task`` tool reads the correct depth (bounded by
+            # ``subagents.max_delegation_depth``). Without this, recursive
+            # delegation always sees depth 0 and the cap never engages.
+            context["delegation_depth"] = self.delegation_depth
 
             logger.info(f"[trace={self.trace_id}] Subagent {self.config.name} starting async execution with max_turns={self.config.max_turns}")
 

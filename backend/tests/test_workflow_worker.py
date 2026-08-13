@@ -14,11 +14,13 @@ Covers T6-5 acceptance criteria:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from deerflow.config.app_config import AppConfig
+from deerflow.config.sandbox_config import SandboxConfig
 from deerflow.runtime.runs.manager import RunManager, RunRecord
 from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.runtime.runs.worker import RunContext
@@ -507,3 +509,81 @@ class TestTemplateResolver:
         assert len(completed) == 1
         output = completed[0][2].get("output") or {}
         assert output.get("wf:sub:out") == "from-template"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 8. Runtime context wiring — delegation_depth seed + app_config passthrough (T10-4)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class _ConfigCaptureGraph:
+    """Fake compiled graph that records the config passed to ``astream_events``."""
+
+    def __init__(self) -> None:
+        self.captured_config: dict[str, Any] | None = None
+
+    async def astream_events(self, graph_input: dict[str, Any], config: dict[str, Any], **kwargs: Any) -> Any:
+        self.captured_config = config
+        if False:
+            yield
+
+
+class TestConfigContext:
+    """``run_workflow`` seeds runtime context with delegation_depth=0 and,
+    when ``app_config`` is provided, app_config / thread_id / run_id."""
+
+    @pytest.mark.asyncio
+    async def test_run_workflow_context_has_delegation_depth_zero(self) -> None:
+        definition = _make_def(nodes=[_start_node("start"), _end_node("end")], id="ctx-wf", name="Ctx WF")
+
+        manager = RunManager()
+        record = await _make_record(manager, "thread-ctx", definition.id)
+        bridge = _make_bridge()
+
+        fake_graph = _ConfigCaptureGraph()
+        app_config = AppConfig(sandbox=SandboxConfig(use="test"))
+        ctx = RunContext(checkpointer=None, event_store=None, app_config=app_config)
+
+        with patch("deerflow.workflow.worker.compile_definition", return_value=fake_graph):
+            await run_workflow(
+                bridge,  # type: ignore[arg-type]
+                manager,
+                record,
+                ctx=ctx,
+                definition=definition,
+                params={},
+            )
+
+        assert fake_graph.captured_config is not None
+        context = fake_graph.captured_config["context"]
+        assert context["delegation_depth"] == 0
+        assert record.status is RunStatus.success
+
+    @pytest.mark.asyncio
+    async def test_run_workflow_context_has_app_config_when_provided(self) -> None:
+        definition = _make_def(nodes=[_start_node("start"), _end_node("end")], id="ctx-wf2", name="Ctx WF2")
+
+        manager = RunManager()
+        record = await _make_record(manager, "thread-ctx2", definition.id)
+        bridge = _make_bridge()
+
+        fake_graph = _ConfigCaptureGraph()
+        app_config = AppConfig(sandbox=SandboxConfig(use="test"))
+        ctx = RunContext(checkpointer=None, event_store=None, app_config=app_config)
+
+        with patch("deerflow.workflow.worker.compile_definition", return_value=fake_graph):
+            await run_workflow(
+                bridge,  # type: ignore[arg-type]
+                manager,
+                record,
+                ctx=ctx,
+                definition=definition,
+                params={},
+            )
+
+        assert fake_graph.captured_config is not None
+        context = fake_graph.captured_config["context"]
+        assert context["app_config"] is app_config
+        assert context["thread_id"] == "thread-ctx2"
+        assert context["run_id"] == record.run_id
+        assert context["delegation_depth"] == 0

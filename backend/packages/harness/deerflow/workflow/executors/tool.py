@@ -147,4 +147,8 @@ def exec_notify(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[s
 
 def exec_nested_subworkflow(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     """Placeholder — nested subworkflow executor not yet implemented (planned T10)."""
-    raise NotImplementedError("nested:subworkflow executor not implemented yet — subworkflow composition will be added in T10")
+    raise WorkflowExecutionError(
+        "nested:subworkflow without a subworkflow spec or with mode=delegate requires the delegate executor path; "
+        "specify params.subworkflow with type='template' and mode='delegate' for runtime delegation, "
+        "or type='inline'/'template' with mode='compile' for compile-time expansion"
+    )

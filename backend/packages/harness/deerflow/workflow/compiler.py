@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -86,10 +87,17 @@ def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
     - ``{"type": "template", "template_id": "wf-xxx", "version": "0.1.0"}`` —
       a reference to a stored workflow template (``version`` omitted when absent).
 
+    A ``"mode"`` key (``"compile"`` | ``"delegate"``) is accepted; it defaults
+    to ``"compile"`` when absent.  ``"mode": "delegate"`` is only allowed for
+    template references (it is returned on the normalized spec as
+    ``"mode": "delegate"``); an inline spec with ``"mode": "delegate"`` is
+    rejected.  The default (``"compile"`` / absent) keeps the exact T9
+    normalized shape — the ``"mode"`` key is only added when ``"delegate"``.
+
     Raises :class:`WorkflowCompileError` (with the node id) for any malformed
-    spec: non-dict value, unknown ``type``, missing required fields, a
-    ``definition`` that fails ``WorkflowDefinition.model_validate``, or both an
-    inline ``definition`` and a ``template_id`` present at once.
+    spec: non-dict value, unknown ``type``, unknown ``mode``, missing required
+    fields, a ``definition`` that fails ``WorkflowDefinition.model_validate``,
+    or both an inline ``definition`` and a ``template_id`` present at once.
     """
     spec = node.params.get("subworkflow")
     if spec is None:
@@ -102,10 +110,16 @@ def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
     if spec_type not in ("inline", "template"):
         raise WorkflowCompileError(f"node '{node.id}': subworkflow spec 'type' must be 'inline' or 'template', got {spec_type!r}")
 
+    mode = spec.get("mode", "compile")
+    if mode not in ("compile", "delegate"):
+        raise WorkflowCompileError(f"node '{node.id}': subworkflow spec 'mode' must be 'compile' or 'delegate', got {mode!r}")
+
     has_definition = "definition" in spec
     has_template_id = "template_id" in spec
 
     if spec_type == "inline":
+        if mode == "delegate":
+            raise WorkflowCompileError(f"node '{node.id}': delegate mode requires a template subworkflow reference, got inline")
         if has_template_id:
             raise WorkflowCompileError(f"node '{node.id}': subworkflow spec cannot combine inline 'definition' with 'template_id'")
         definition = spec.get("definition")
@@ -130,6 +144,8 @@ def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
     result: dict[str, Any] = {"type": "template", "template_id": template_id}
     if version is not None:
         result["version"] = version
+    if mode == "delegate":
+        result["mode"] = mode
     return result
 
 
@@ -157,12 +173,18 @@ class CompileContext:
             loop-safe, and ``_cache_key`` also calls it outside any lock.
         max_nesting_depth: Maximum subgraph nesting depth (default 10).
             Deeper nesting raises :class:`WorkflowCompileError`.
+        max_delegation_depth: Maximum runtime-delegation depth for
+            ``nested:subworkflow`` nodes compiled in ``mode="delegate"``
+            (default 3).  Delegation depth is read from the run-time context
+            (``delegation_depth``) at node execution; reaching this bound
+            raises :class:`WorkflowExecutionError`.
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
     checkpointer: Any | None = None
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
     max_nesting_depth: int = 10
+    max_delegation_depth: int = 3
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -420,6 +442,165 @@ def _make_subworkflow_node_fn(
     return _node_fn
 
 
+def _make_delegate_node_fn(
+    node: Node,
+    child_graph: CompiledStateGraph,
+    child_def: WorkflowDefinition,
+    child_start_id: str,
+    child_end_id: str,
+    incoming_edges: list[Edge],
+    ctx: CompileContext,
+) -> Callable[..., Any]:
+    """Build the parent-graph node fn for a runtime-delegated subworkflow node.
+
+    Unlike :func:`_make_subworkflow_node_fn` (compile-time expansion, which
+    invokes the child graph directly in-graph), this adapter hands the
+    sub-workflow to a one-shot sub-agent via
+    :class:`deerflow.subagents.SubagentExecutor`.  The sub-agent is bound with
+    the ``invoke_workflow`` tool (closing over the pre-compiled child graph)
+    and instructed to execute it and return the structured output dict
+    verbatim.  The node fn then parses that result and writes the child
+    end-node outputs back to parent state.
+
+    Requires ``ctx.checkpointer`` — a delegated sub-agent runs under an
+    independent checkpoint namespace and cannot be checkpointed without a saver.
+    """
+    from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    input_key_map: dict[str, str] = {}
+    for edge in incoming_edges:
+        input_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+
+    mapping = node.params.get("mapping")
+    map_inputs = (mapping or {}).get("inputs") or {}
+    map_outputs = (mapping or {}).get("outputs") or {}
+
+    child_start = next((n for n in child_def.nodes if n.type == NodeType.FLOW_START), None)
+    child_end = next((n for n in child_def.nodes if n.type == NodeType.FLOW_END), None)
+    start_ports = [p.name for p in child_start.outputs] if child_start is not None else []
+    end_ports = [p.name for p in child_end.outputs] if child_end is not None else []
+
+    max_depth = ctx.max_delegation_depth
+
+    async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
+        # Deferred imports: SubagentExecutor lives behind a lazy package export,
+        # and importing it at module scope would pull the agent graph into the
+        # workflow compiler's import path (a circular import).
+        from deerflow.subagents import SubagentExecutor
+        from deerflow.subagents.config import SubagentConfig
+        from deerflow.workflow.delegate import build_invoke_workflow_tool
+
+        # 1. Read this node's inputs from parent state (input_key_map mechanism).
+        inputs: dict[str, Any] = {}
+        for p in node.inputs:
+            state_key = input_key_map.get(p.name, f"wf:{node.id}:{p.name}")
+            inputs[p.name] = state.get(state_key)
+
+        # Resolve the runtime context (LangGraph moves a top-level
+        # ``config["context"]`` into ``config["configurable"]["context"]``).
+        try:
+            config = get_config()
+            configurable = config.get("configurable", {}) or {}
+            context = config.get("context") or configurable.get("context") or {}
+            runtime = WorkflowRuntime(context=context, config=config, state=state)
+        except Exception:
+            runtime = WorkflowRuntime(state=state)
+        context = runtime.context
+
+        # 2. Delegation-depth guard (bounded by CompileContext.max_delegation_depth).
+        depth = context.get("delegation_depth", 0)
+        if depth >= max_depth:
+            raise WorkflowExecutionError(f"delegation depth exceeded at node '{node.id}': max {max_depth}")
+
+        # A delegated sub-agent is checkpoint-enabled, so it needs a saver.
+        checkpointer = ctx.checkpointer
+        if checkpointer is None:
+            raise WorkflowExecutionError(f"node '{node.id}': delegate mode requires a checkpointer (CompileContext.checkpointer is None)")
+
+        # 3. Build the one-shot sub-agent executor bound to the child graph.
+        system_prompt = (
+            f"你是一个工作流执行代理。你的任务是执行子工作流「{child_def.name}（{child_def.id}）」。\n"
+            f"工作流输入端口：{', '.join(start_ports) or '（无）'}\n"
+            f"工作流输出端口：{', '.join(end_ports) or '（无）'}\n"
+            "使用 invoke_workflow 工具执行。工具会返回结构化输出 dict。请直接返回工具结果，不要编造内容。"
+        )
+        subagent_config = SubagentConfig(
+            name=f"wf:{node.id}",
+            description=f"Execute sub-workflow {child_def.id} via delegation",
+            system_prompt=system_prompt,
+            tools=None,
+            disallowed_tools=["ask_clarification", "present_files"],
+            checkpointer=True,
+            allow_recursion=bool(node.params.get("allow_recursion", False)),
+        )
+
+        # 4. Bind the invoke_workflow tool (closing over the pre-compiled child).
+        tools = [build_invoke_workflow_tool(child_graph, child_def, child_start_id, child_end_id)]
+
+        checkpoint_thread_id = f"{context.get('thread_id', 'sub')}:wfsub:{node.id}"
+
+        executor_kwargs: dict[str, Any] = {
+            "config": subagent_config,
+            "tools": tools,
+            "checkpointer": checkpointer,
+            "checkpoint_thread_id": checkpoint_thread_id,
+            "delegation_depth": depth + 1,
+        }
+        if context.get("thread_id"):
+            executor_kwargs["thread_id"] = context["thread_id"]
+        for key in ("user_id", "run_id", "app_config"):
+            if context.get(key) is not None:
+                executor_kwargs[key] = context[key]
+
+        executor = SubagentExecutor(**executor_kwargs)
+
+        # 5. Build the delegation prompt from the resolved child inputs and run.
+        sub_input: dict[str, Any] = {}
+        for child_port, parent_ref in map_inputs.items():
+            if isinstance(parent_ref, str) and parent_ref.startswith("wf:"):
+                sub_input[child_port] = state.get(parent_ref)
+            elif isinstance(parent_ref, str) and parent_ref in inputs:
+                sub_input[child_port] = inputs[parent_ref]
+            else:
+                sub_input[child_port] = parent_ref
+
+        prompt = f"执行子工作流「{child_def.name}」，输入如下：\n{json.dumps(sub_input, ensure_ascii=False, default=str)}\n使用 invoke_workflow 工具执行，并只返回工具输出的原始 JSON dict，不要添加任何额外说明。"
+
+        result = await executor._aexecute(prompt)
+
+        # Non-completed delegation → runtime failure (SubagentResult.status is a
+        # SubagentStatus enum; compare by value so this module stays free of a
+        # runtime import of the enum).
+        status_value = getattr(result.status, "value", None)
+        if status_value != "completed":
+            error_detail = getattr(result, "error", None) or status_value or "unknown"
+            raise WorkflowExecutionError(f"node '{node.id}': subagent delegation failed: {error_detail}")
+
+        # 6. Parse the sub-agent's final text as the child's structured output.
+        text = getattr(result, "result", None)
+        parsed: dict[str, Any] = {}
+        if isinstance(text, str):
+            try:
+                candidate = json.loads(text)
+                if isinstance(candidate, dict):
+                    parsed = candidate
+            except (ValueError, TypeError):
+                parsed = {}
+
+        outputs: dict[str, Any] = {}
+        if parsed:
+            for child_port, parent_port in map_outputs.items():
+                outputs[f"wf:{node.id}:{parent_port}"] = parsed.get(child_port)
+        else:
+            # Fallback: unparseable result → whole text lands on the first output port.
+            if node.outputs:
+                outputs[f"wf:{node.id}:{node.outputs[0].name}"] = text
+
+        return outputs
+
+    return _node_fn
+
+
 def _validate_subworkflow_mapping(node: Node, child: WorkflowDefinition) -> None:
     """Validate a ``nested:subworkflow`` node's ``params.mapping`` against the child graph.
 
@@ -518,6 +699,7 @@ def _expand_subworkflow(
         checkpointer=None,
         definition_resolver=ctx.definition_resolver,
         max_nesting_depth=ctx.max_nesting_depth,
+        max_delegation_depth=ctx.max_delegation_depth,
     )
     child_graph = _compile_impl(child, child_ctx, depth=depth + 1, visiting=child_visiting, chain_path=child_chain)
     return child_graph, child
@@ -689,10 +871,17 @@ def _compile_impl(
         if node.type == NodeType.NESTED_SUBWORKFLOW:
             spec = parse_subworkflow_spec(node)
             if spec is not None:
-                # Compile-time subgraph expansion (inline/template reference).
+                # Pre-compile the child graph for both delegation and expansion.
                 child_graph, child_def = _expand_subworkflow(node, ctx, depth=depth, visiting=visiting, chain_path=chain_path)
                 child_start_id = next((n.id for n in child_def.nodes if n.type == NodeType.FLOW_START), "")
                 child_end_id = next((n.id for n in child_def.nodes if n.type == NodeType.FLOW_END), "")
+                if spec.get("mode") == "delegate":
+                    # Runtime delegation: bind a delegation node fn that executes
+                    # the child through a sub-agent instead of expanding it in-graph.
+                    node_fn = _make_delegate_node_fn(node, child_graph, child_def, child_start_id, child_end_id, incoming_edges.get(node.id, []), ctx)
+                    builder.add_node(node.id, node_fn)
+                    continue
+                # Compile-time subgraph expansion (inline/template reference).
                 node_fn = _make_subworkflow_node_fn(node, child_graph, child_start_id, child_end_id, incoming_edges.get(node.id, []))
                 builder.add_node(node.id, node_fn)
                 continue

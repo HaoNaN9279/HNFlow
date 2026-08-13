@@ -17,6 +17,14 @@ class SubagentConfig:
         system_prompt: The system prompt that guides the subagent's behavior.
         tools: Optional list of tool names to allow. If None, inherits all tools.
         disallowed_tools: Optional list of tool names to deny.
+        checkpointer: When True, the subagent graph is compiled with a
+            checkpointer and runs under an independent checkpoint namespace
+            (``subagent``) so its checkpoint writes never pollute the parent
+            lineage. ``True`` requires a saver instance to be passed to
+            ``SubagentExecutor`` (validated in its ``__init__``).
+        allow_recursion: When True, this subagent may itself delegate via the
+            ``task`` tool (recursive nesting). Default False keeps subagents
+            from recursing.
         skills: Optional list of skill names to make discoverable and activatable.
                 If None, all enabled skills are available. If empty, skills are
                 disabled for this subagent. Skill bodies and their allowed-tools
@@ -36,6 +44,9 @@ class SubagentConfig:
     system_prompt: str | None = None
     tools: list[str] | None = None
     disallowed_tools: list[str] | None = field(default_factory=lambda: ["task"])
+    # See the class docstring for the checkpoint/recursion semantics.
+    checkpointer: bool = False
+    allow_recursion: bool = False
     skills: list[str] | None = None
     model: str = "inherit"
     max_turns: int = 50

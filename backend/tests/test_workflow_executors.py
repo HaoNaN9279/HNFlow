@@ -581,7 +581,7 @@ class TestPlaceholderExecutors:
 
     def test_exec_nested_not_implemented(self) -> None:
         rt = _dummy_runtime()
-        with pytest.raises(NotImplementedError, match="nested:subworkflow"):
+        with pytest.raises(WorkflowExecutionError, match="nested:subworkflow"):
             exec_nested_subworkflow(rt, {}, {})
 
     def test_exec_human_task_not_implemented(self) -> None:
@@ -622,7 +622,7 @@ class TestDirectExecutorCall:
             exec_notify(rt, {}, {})
         with pytest.raises(NotImplementedError):
             exec_human_task(rt, {}, {})
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(WorkflowExecutionError):
             exec_nested_subworkflow(rt, {}, {})
         with pytest.raises(WorkflowExecutionError):
             exec_llm_agent(rt, {}, {})
