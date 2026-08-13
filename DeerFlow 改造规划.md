@@ -147,6 +147,12 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 | T16 | 运行监控/调试面板 | T6, T14 | F |
 | T17 | lead agent 工作流工具（生成/编辑/校验） | T8, T14 | G 对话侧 |
 | T18 | 对话调度/进度汇报/异常修复 | T6, T17 | G |
+| T19 | Node 模型补主身份绑定字段（agent_name） | T10 | D+ 身份绑定 |
+| T20 | 三层提示词组装器（身份→能力→任务） | T19 | D+ |
+| T21 | AI 节点执行器模板模式（复用委派执行体） | T20, T10 | D+ |
+| T22 | 委派节点提示词接入三层组装 | T20 | D+ |
+| T23 | 校验器扩展：agent_name 引用存在性 | T19, T2 | D+ |
+| T24 | 测试矩阵 + 回归验证 | T21, T22, T23 | D+ |
 
 ---
 
@@ -381,6 +387,107 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 
 ---
 
+### 阶段 D+：AI 节点身份 × 功能组 × agent 绑定（补充修改）
+
+> 本阶段解决《DeerFlow 改造规划-设计空白记录.md》空白 1：一个 AI 节点声明多个功能组（每功能组含身份）时如何决定当前任务使用哪个 agent。方案：**静态绑定主身份 + 能力并集**（详见 T19 内容）。执行顺序上插在 T10 之后、T11/T12 之前——AI 节点执行器（T21）依赖 T10 委派执行体，且本阶段必须早于画布（T14/T15 需暴露主身份表单）。
+
+#### T19 Node 模型补主身份绑定字段（模型层）
+
+**内容**
+1. `workflow/schema.py` 的 `Node` 加字段 `agent_name: str | None = None`——绑定 custom agent（config.yaml + SOUL.md）作为该 AI 节点主身份；`None` 表示用默认 lead 身份
+2. 明确 `capability_groups` 语义为「能力供给组」（allowed-tools 并集 + rules 并入 prompt），不再是身份候选——同步更新字段 docstring
+3. 兼容性：新字段有默认值，旧 definition JSON 往返/序列化不破坏（`extra="forbid"` 不受影响）；不引入功能组 `agent.md` 新身份概念（功能组=skills 无身份层，custom agent 机制成熟，复用即可）
+
+**注意点**
+- 一个节点 = 一个主 agent（走 custom agent 路由），其余功能组只供给工具与规则——对应 HNFlow「AI 节点 ≠ 自由 ReAct loop」约束
+- `agent_name` 校验复用 `validate_agent_name`（`config/agents_config.py`），非法名构造报 `ValidationError`
+- 多 agent 动态路由不支持：拆多 AI 节点 + 条件边，或走 T10 委派模式显式画进图
+
+**验证点**
+- [ ] `Node` 带/不带 `agent_name` 均可构造；非法名拒绝
+- [ ] 含 `agent_name` 的 WorkflowDefinition `model_dump()`/`model_validate()` 往返无损
+- [ ] 既有 golden test / 定义序列化测试无回归（新字段默认值零破坏）
+
+#### T20 三层提示词组装器（prompts.py）
+
+**内容**
+1. 新建 `workflow/prompts.py`（纯函数，不 import app）：
+   - `build_identity_layer(agent_name, user_id)`：custom agent SOUL（复用 `get_agent_soul` 同款加载）+ 身份声明；`None` → 默认 lead 身份
+   - `build_capability_layer(capability_groups, agent_config)`：功能组工具描述 + rules + allowed-tools 并集；与 custom agent 自身 `AgentConfig.skills` 配置合并（None=全部启用、[]=禁用、[列表]=指定）
+   - `build_task_layer(instruction_template, inputs)`：任务层模板，支持上游端口数据插值 `{{port}}`
+   - `assemble_ai_node_prompt(node, inputs, agent_name, user_id)`：按「身份 → 能力 → 任务」拼装最终 prompt
+2. 任务层两档模式占位：模板模式（本阶段实现 `{{port}}` 插值）；委托模式（T10 委派已有，T22 接入同一组装器）
+
+**注意点**
+- 身份层只有一份（主 agent 的 SOUL），能力层可并集多组——避免人格冲突
+- 工具集并集是模型可见集合，运行时执行边界由 `SkillToolPolicyMiddleware` 等现有机制兜底（allowed-tools 策略现成）
+- 保持纯函数便于单测与画布表单预览复用
+
+**验证点**
+- [ ] 三层拼装单测：身份层来自 agent_name SOUL、能力层含功能组工具描述、任务层插值正确
+- [ ] `{{port}}` 插值：缺失端口插值为空串不抛错
+- [ ] `agent_name=None` 时身份层为默认 lead 声明
+- [ ] custom agent skills 配置与功能组并集合并结果正确
+
+#### T21 AI 节点执行器模板模式（复用委派执行体）
+
+**内容**
+1. `executors/ai.py` 实现 `exec_llm_agent` 模板模式：调 `prompts.assemble_ai_node_prompt` 拼装 prompt，构建受限 SubagentExecutor（T10 委派节点同款 `_aexecute` 路径）执行，结果写回输出端口
+2. 工具集 = 主 agent 工具 + 全部关联功能组 allowed-tools 并集（复用 `get_available_tools` 装配层 + SkillActivation 语义）
+3. `params.instruction` 模板必填：保存校验（T23）与执行时兜底校验，留空抛可读错误
+
+**注意点**
+- **不重写执行循环**：复用 T10 已验证的 SubagentExecutor `_aexecute`（checkpointer/深度传播/结果提取全白捡），只换 prompt 组装与工具集
+- AI 节点非幂等：`idempotent=False` 保持（registry.py 已标注），重试需人工确认
+- 无 `agent_name` 时走默认身份，行为与普通子代理一致——存量工作流定义零破坏
+
+**验证点**
+- [ ] AI 节点 e2e（mock 模型）：prompt = 三层组装输出，执行成功结果回端口
+- [ ] 工具集并集正确：主 agent 工具 + 功能组 allowed-tools 均在集合内
+- [ ] `instruction` 留空执行报可读错误
+- [ ] 无 `agent_name` 节点执行成功（默认身份路径）
+
+#### T22 委派节点提示词接入三层组装
+
+**内容**
+1. `compiler.py` `_make_delegate_node_fn`：硬编码 system_prompt 改为走 `assemble_ai_node_prompt`（主身份 + 能力层 + 委派任务指令），委派节点同样可绑定 `agent_name`/`capability_groups`
+
+**注意点**
+- 委派节点的任务层 = 「执行子工作流 X，输入如下…」指令模板，通过 `{{port}}` 插值子图输入
+- 行为保持：不指定 `agent_name` 时与 T10 现状输出等价（回归零破坏）
+
+**验证点**
+- [ ] 委派节点带 `agent_name` 时 system_prompt 含身份层
+- [ ] T10 既有委派测试全绿（默认路径无回归）
+
+#### T23 校验器扩展：agent_name 引用存在性
+
+**内容**
+1. `workflow_io.py` `validate_definition`：对 `ai:llm_agent` / `nested:subworkflow`(delegate) 节点的 `agent_name` 做存在性校验（custom agent catalog），不存在报错且携带具体节点路径
+2. `agent_name=None` 跳过校验（零破坏）
+
+**注意点**
+- 校验为静态存在性检查，不解析版本/环（那是 T8/T11 的职责，分层别混）
+- 报错格式复用 T2 既有「节点路径」风格，前端画布可直接定位
+
+**验证点**
+- [ ] 无效 `agent_name` 校验失败并含节点路径
+- [ ] `agent_name=None` 通过校验
+- [ ] 校验失败保存返回 422（routes 层复用 T3 行为）
+
+#### T24 测试矩阵 + 回归验证
+
+**内容**
+1. 验证矩阵：三层拼装正确（T20）、工具集并集（T21）、主身份路由（T21/T22）、无 agent_name 默认（T21）、委派适配无回归（T22）、schema 兼容（T19）、校验器（T23）
+2. 全相关模块回归：workflow 全部 + schema/io/executors + 既有 T10 测试 + ruff
+
+**验证点**
+- [ ] 补充阶段各任务验证点全部覆盖
+- [ ] 回归全绿（含 T10 全部测试，确认零破坏）
+- [ ] ruff check + format 通过
+
+---
+
 ### 阶段 E：人工与挂起
 
 #### T12 HumanTask 数据模型 + 持久化
@@ -450,7 +557,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 
 **内容**
 1. subworkflow 节点渲染：画布上可展开/折叠（内联子图展示子节点），双击进入内部编辑区（子 definition 编辑页）
-2. 节点表单面板：侧面板按节点类型渲染参数表单（端口映射、AI 节点模板输入、人工节点描述/校验规则）
+2. 节点表单面板：侧面板按节点类型渲染参数表单（端口映射、AI 节点模板输入、人工节点描述/校验规则）——**AI 节点表单含主身份选择（agent_name，custom agent 下拉）+ 辅助功能组勾选（capability_groups）**，对应 D+ 阶段（T19）新增字段；表单预览复用 `prompts.assemble_ai_node_prompt` 的三层拼装结果
 3. 子工作流参数映射 UI：从内部子节点端口选暴露端口、参数映射（对应 HNFlow 接口封装）
 4. 版本角标占位：subworkflow 节点右上角显示引用版本号（版本交互完整功能留 T17 后）
 
@@ -539,11 +646,13 @@ T1 → T2 → T3 ──────────────→ T14 → T15 → T
       └→ T7 → T8 → T9        └→ T17 → T18
             └→ T11
 T10 (依赖 T4，可与 T9 并行)     T12 (独立，尽早做，供 T13)
+T19 → T20 → T21 / T22 / T23 → T24   (D+ 阶段，插 T10 后；T21/T22 依赖 T10 委派执行体)
 ```
 
 - 关键路径：T1→T2→T3→T14→T15→T16（定义层→画布），与 T4→T6 执行线并行推进
 - T12（HumanTask 模型）无依赖，可第一时间启动
 - T7（Skills 版本化）无依赖，可并行；它是功能组体系的地基，越早越好
+- **D+ 阶段（T19-T24）在 T10 后尽早启动**：AI 节点执行器（T21）是 T5/T6 遗留缺口，且画布（T14/T15）需要主身份表单——D+ 必须早于 T14
 
 ## 七、一句话总结
 

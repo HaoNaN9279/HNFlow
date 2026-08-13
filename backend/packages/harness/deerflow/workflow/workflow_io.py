@@ -39,11 +39,17 @@ def ports_compatible(src: PortType, dst: PortType) -> bool:
     return src is dst
 
 
-def validate_definition(def_: WorkflowDefinition) -> list[str]:
+def validate_definition(def_: WorkflowDefinition, known_agent_names: set[str] | None = None) -> list[str]:
     """Validate a workflow definition and return a list of error messages.
 
     An empty result means the definition is structurally legal.
     Pure function — no IO.
+
+    When *known_agent_names* is provided, every node carrying a non-``None``
+    ``agent_name`` must reference a name in that set (the custom-agent
+    catalog); an unknown binding is reported with the node's id.  ``None``
+    (the default) skips this existence check entirely, preserving backward
+    compatibility for callers that do not yet resolve the catalog.
     """
     errors: list[str] = []
     node_ids = {n.id for n in def_.nodes}
@@ -55,6 +61,8 @@ def validate_definition(def_: WorkflowDefinition) -> list[str]:
     errors.extend(_check_port_types(node_map, def_.edges))
     errors.extend(_check_params_json_compatible(def_.nodes))
     errors.extend(_check_subworkflow_params(def_.nodes))
+    if known_agent_names is not None:
+        errors.extend(_check_agent_name_references(def_.nodes, known_agent_names))
 
     return errors
 
@@ -331,6 +339,27 @@ def _check_subworkflow_params(nodes: list[Node]) -> list[str]:
             version = spec.get("version")
             if version is not None and not isinstance(version, str):
                 errors.append(f"node '{node.id}': subworkflow template 'version' must be a string")
+
+    return errors
+
+
+# ── Private: agent_name reference checks ──────────────────────────────────────────
+
+
+def _check_agent_name_references(nodes: list[Node], known_agent_names: set[str]) -> list[str]:
+    """Verify every bound ``agent_name`` exists in the custom-agent catalog.
+
+    A node with ``agent_name=None`` (the default lead-agent binding) is skipped.
+    Any non-``None`` binding must name a known custom agent, regardless of node
+    type — binding an agent implies the agent must exist.
+    """
+    errors: list[str] = []
+
+    for node in nodes:
+        if node.agent_name is None:
+            continue
+        if node.agent_name not in known_agent_names:
+            errors.append(f"node '{node.id}': agent_name '{node.agent_name}' does not exist")
 
     return errors
 

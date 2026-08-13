@@ -457,3 +457,93 @@ class TestSubworkflowParams:
         )
         errors = validate_definition(wf)
         assert errors == []
+
+
+# ── 13. agent_name 存在性校验 ──────────────────────────────────────────────────────
+
+
+def _ai_node_with_agent(agent_name: str | None, id_: str = "ai") -> Node:
+    return Node(
+        id=id_,
+        type=NodeType.AI_LLM_AGENT,
+        inputs=[Port(name="in", type=PortType.DATA)],
+        outputs=[Port(name="out", type=PortType.DATA)],
+        agent_name=agent_name,
+    )
+
+
+def _wf_with_agent(agent_name: str | None) -> WorkflowDefinition:
+    return _make_wf(
+        nodes=[_start_node(), _ai_node_with_agent(agent_name), _end_node()],
+        edges=[
+            Edge(source="start", source_port="out", target="ai", target_port="in"),
+            Edge(source="ai", source_port="out", target="end", target_port="in"),
+        ],
+    )
+
+
+class TestAgentNameValidation:
+    """validate_definition checks agent_name references when known_agent_names is provided."""
+
+    def test_none_set_skips_validation(self):
+        """known_agent_names=None (default) skips existence checks (backward compatible)."""
+        wf = _wf_with_agent("publisher")
+        errors = validate_definition(wf)
+        assert errors == []
+
+    def test_unknown_agent_name_rejected(self):
+        """Unknown agent_name fails validation with the node path in the error."""
+        wf = _wf_with_agent("publisher")
+        errors = validate_definition(wf, known_agent_names={"researcher"})
+        assert any("ai" in e and "publisher" in e and "agent_name" in e for e in errors)
+
+    def test_known_agent_name_passes(self):
+        """Known agent_name passes validation."""
+        wf = _wf_with_agent("publisher")
+        errors = validate_definition(wf, known_agent_names={"publisher", "researcher"})
+        assert errors == []
+
+    def test_none_agent_name_not_validated(self):
+        """A node with agent_name=None is not subject to existence checks."""
+        wf = _wf_with_agent(None)
+        errors = validate_definition(wf, known_agent_names=set())
+        assert errors == []
+
+    def test_non_ai_node_with_agent_name_validated(self):
+        """Any node type carrying agent_name is validated (binding implies existence)."""
+        assign = Node(
+            id="assign",
+            type=NodeType.DATA_ASSIGN,
+            inputs=[Port(name="in", type=PortType.DATA)],
+            outputs=[Port(name="out", type=PortType.DATA)],
+            agent_name="publisher",
+        )
+        wf = _make_wf(
+            nodes=[_start_node(), assign, _end_node()],
+            edges=[
+                Edge(source="start", source_port="out", target="assign", target_port="in"),
+                Edge(source="assign", source_port="out", target="end", target_port="in"),
+            ],
+        )
+        errors = validate_definition(wf, known_agent_names={"researcher"})
+        assert any("assign" in e and "publisher" in e and "agent_name" in e for e in errors)
+
+    def test_empty_set_reports_all_bound_agents(self):
+        """Empty known set reports every node with a bound agent_name."""
+        nodes = [
+            _start_node(),
+            _ai_node_with_agent("a", id_="ai1"),
+            _ai_node_with_agent("b", id_="ai2"),
+            _end_node(),
+        ]
+        wf = _make_wf(
+            nodes=nodes,
+            edges=[
+                Edge(source="start", source_port="out", target="ai1", target_port="in"),
+                Edge(source="ai1", source_port="out", target="ai2", target_port="in"),
+                Edge(source="ai2", source_port="out", target="end", target_port="in"),
+            ],
+        )
+        errors = validate_definition(wf, known_agent_names=set())
+        agent_errors = [e for e in errors if "agent_name" in e]
+        assert len(agent_errors) == 2

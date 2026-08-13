@@ -42,6 +42,7 @@ from langgraph.config import get_config  # type: ignore[import-untyped]
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
@@ -327,7 +328,17 @@ def _make_node_fn(
         except Exception:
             runtime = WorkflowRuntime(state=state)
 
-        result = await _resolve_executor(executor, runtime, node.params, inputs)
+        # AI nodes: inject identity / capability / id into the executor params
+        # via a shallow copy so the original ``node.params`` definition is never
+        # mutated.  Non-AI nodes pass ``node.params`` through unchanged.
+        executor_params = node.params
+        if node.type == NodeType.AI_LLM_AGENT:
+            executor_params = dict(node.params)
+            executor_params.setdefault("agent_name", node.agent_name)
+            executor_params.setdefault("capability_groups", list(node.capability_groups))
+            executor_params.setdefault("node_id", node.id)
+
+        result = await _resolve_executor(executor, runtime, executor_params, inputs)
 
         outputs: dict[str, Any] = {}
         for p in node.outputs:
@@ -518,11 +529,25 @@ def _make_delegate_node_fn(
             raise WorkflowExecutionError(f"node '{node.id}': delegate mode requires a checkpointer (CompileContext.checkpointer is None)")
 
         # 3. Build the one-shot sub-agent executor bound to the child graph.
-        system_prompt = (
-            f"你是一个工作流执行代理。你的任务是执行子工作流「{child_def.name}（{child_def.id}）」。\n"
-            f"工作流输入端口：{', '.join(start_ports) or '（无）'}\n"
-            f"工作流输出端口：{', '.join(end_ports) or '（无）'}\n"
+        # Three-layer prompt assembly (T22): identity (agent_name binding) +
+        # capability (capability_groups) + task (delegation instruction). The
+        # instruction is built here (delegate nodes carry no ``instruction``
+        # param) and passed straight into the task layer, so the original node
+        # object is never mutated.
+        instruction = (
+            f"执行子工作流「{child_def.name}（{child_def.id}）」，"
+            f"工作流输入端口：{', '.join(start_ports) or '（无）'}，"
+            f"工作流输出端口：{', '.join(end_ports) or '（无）'}。"
             "使用 invoke_workflow 工具执行。工具会返回结构化输出 dict。请直接返回工具结果，不要编造内容。"
+        )
+        system_prompt = "\n\n".join(
+            section
+            for section in (
+                build_identity_layer(node.agent_name, user_id=context.get("user_id")),
+                build_capability_layer(node.capability_groups, agent_skills=None),
+                build_task_layer(instruction, inputs),
+            )
+            if section
         )
         subagent_config = SubagentConfig(
             name=f"wf:{node.id}",

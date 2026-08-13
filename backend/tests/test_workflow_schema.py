@@ -190,3 +190,62 @@ class TestExtraFieldsRejected:
         """WorkflowDefinition with an undeclared field raises ValidationError."""
         with pytest.raises(ValidationError):
             WorkflowDefinition(id="wf-extra", name="Extra Test", bogus=1)
+
+
+# ── agent_name 主身份绑定 ────────────────────────────────────────────────────────
+
+INVALID_AGENT_NAMES = [
+    "publisher_x",  # underscore
+    "publisher x",  # space
+    "pub..lisher",  # dots
+    "publisher/1",  # slash
+    "publisher$",  # special char
+    "发布",  # non-ASCII
+    "",  # empty
+]
+
+
+class TestAgentNameBinding:
+    """Node.agent_name — primary identity binding for AI nodes."""
+
+    def test_agent_name_constructs_and_roundtrips(self):
+        """Node with agent_name="publisher" constructs and survives model_dump round-trip."""
+        node = Node(id="ai-1", type=NodeType.AI_LLM_AGENT, agent_name="publisher")
+        assert node.agent_name == "publisher"
+
+        dumped = node.model_dump()
+        assert dumped["agent_name"] == "publisher"
+        reloaded = Node.model_validate(dumped)
+        assert reloaded.agent_name == "publisher"
+
+    def test_agent_name_defaults_to_none_legacy_json(self):
+        """Legacy JSON without agent_name validates with agent_name == None."""
+        node = Node.model_validate({"id": "n1", "type": "flow:start"})
+        assert node.agent_name is None
+
+    def test_agent_name_explicit_none(self):
+        """agent_name=None is legal (explicit default-agent binding)."""
+        node = Node(id="n2", type=NodeType.FLOW_START, agent_name=None)
+        assert node.agent_name is None
+
+    def test_workflow_definition_with_agent_bound_node_roundtrips(self):
+        """A WorkflowDefinition embedding an agent-bound node round-trips."""
+        wf = WorkflowDefinition(
+            id="wf-agent",
+            name="Agent WF",
+            nodes=[Node(id="ai", type=NodeType.AI_LLM_AGENT, agent_name="publisher")],
+        )
+        reloaded = WorkflowDefinition.model_validate(wf.model_dump())
+        assert reloaded.nodes[0].agent_name == "publisher"
+
+    @pytest.mark.parametrize("bad_name", INVALID_AGENT_NAMES)
+    def test_invalid_agent_name_rejected(self, bad_name: str):
+        """Agent names failing the ^[A-Za-z0-9-]+$ grammar raise ValidationError."""
+        with pytest.raises(ValidationError):
+            Node(id="n", type=NodeType.FLOW_START, agent_name=bad_name)
+
+    @pytest.mark.parametrize("bad_value", [123, True, 3.14, ["publisher"], {"name": "publisher"}])
+    def test_non_string_agent_name_rejected(self, bad_value: object):
+        """Non-string agent_name values raise ValidationError."""
+        with pytest.raises(ValidationError):
+            Node(id="n", type=NodeType.FLOW_START, agent_name=bad_value)

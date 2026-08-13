@@ -3,8 +3,8 @@ integration, registry completeness, and crash-confirm gates.
 
 Covers T5-4 acceptance criteria:
 - Every atomic node type ≥1 direct-call test (input → output assertion)
-- Compiled-graph: loop fixed 3 iterations, parallel 2-branch concurrency, AI "not
-  implemented", crash_confirm rejection / admission
+- Compiled-graph: loop fixed 3 iterations, parallel 2-branch concurrency, AI
+  missing-instruction error, crash_confirm rejection / admission
 - Registry idempotent coverage + default registry completeness
 - Mock sandbox / httpx — no real external side-effects
 """
@@ -449,11 +449,11 @@ class TestParallelCompiled:
 
 
 class TestAINodeCompiled:
-    """ai:llm_agent — raises WorkflowExecutionError with readable message."""
+    """ai:llm_agent — missing instruction raises WorkflowExecutionError."""
 
     @pytest.mark.asyncio
-    async def test_ai_node_not_implemented(self) -> None:
-        """Compiled graph with ai:llm_agent → ainvoke raises WorkflowExecutionError."""
+    async def test_ai_node_requires_instruction(self) -> None:
+        """Compiled graph with ai:llm_agent (no instruction) → ainvoke raises WorkflowExecutionError."""
         nodes = [
             _start_node(),
             _node("ai_step", NodeType.AI_LLM_AGENT),
@@ -467,7 +467,7 @@ class TestAINodeCompiled:
         ctx = build_default_registry().build_context()
         graph = compile_definition(def_, context=ctx)
 
-        with pytest.raises(WorkflowExecutionError, match="not implemented"):
+        with pytest.raises(WorkflowExecutionError, match="instruction"):
             await _run(graph, {"wf:start:input": "query"})
 
 
@@ -625,4 +625,4 @@ class TestDirectExecutorCall:
         with pytest.raises(WorkflowExecutionError):
             exec_nested_subworkflow(rt, {}, {})
         with pytest.raises(WorkflowExecutionError):
-            exec_llm_agent(rt, {}, {})
+            asyncio.run(exec_llm_agent(rt, {}, {}))

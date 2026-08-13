@@ -84,6 +84,8 @@ def _delegate_node(
     template_id: str = "wf-child",
     mapping: dict[str, Any] | None = None,
     allow_recursion: bool = False,
+    agent_name: str | None = None,
+    capability_groups: list[str] | None = None,
 ) -> Node:
     """Build a ``nested:subworkflow`` node carrying a ``mode="delegate"`` template spec."""
     params: dict[str, Any] = {"subworkflow": {"type": "template", "template_id": template_id, "mode": "delegate"}}
@@ -97,6 +99,8 @@ def _delegate_node(
         params=params,
         inputs=[Port(name="in", type=PortType.DATA)],
         outputs=[Port(name="out", type=PortType.DATA)],
+        agent_name=agent_name,
+        capability_groups=capability_groups or [],
     )
 
 
@@ -135,6 +139,16 @@ def _parent_def_with_delegate(mapping: dict[str, Any], *, template_id: str = "wf
     edges = [
         Edge(source="start", source_port="input", target="sub", target_port="in"),
         Edge(source="sub", source_port="out", target="end", target_port="in"),
+    ]
+    return _make_def(nodes, edges)
+
+
+def _parent_def_with_sub(sub: Node) -> WorkflowDefinition:
+    """Wrap an arbitrary delegate node in a start → sub → end parent graph."""
+    nodes = [_start_node(), sub, _end_node()]
+    edges = [
+        Edge(source="start", source_port="input", target=sub.id, target_port="in"),
+        Edge(source=sub.id, source_port="out", target="end", target_port="in"),
     ]
     return _make_def(nodes, edges)
 
@@ -400,3 +414,69 @@ class TestDelegationDepthChain:
                 {"wf:start:input": "x"},
                 {"configurable": {"thread_id": "t"}, "context": {"delegation_depth": 3}},
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 5. T22: delegate-node system_prompt routes through the three-layer assembler
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def _run_delegate(node: Node, fake_executor: dict[str, Any]) -> str:
+    """Compile a parent around ``node``, run it, and return the system prompt.
+
+    The fake executor captures the ``SubagentConfig`` it was handed, whose
+    ``system_prompt`` is the three-layer assembled prompt under test.
+    """
+    child = _child_def(child_id="wf-child")
+    fake_executor["result"] = _completed_result('{"result": "hello"}')
+    def_ = _parent_def_with_sub(node)
+    ctx = CompileContext(
+        executors={NodeType.DATA_ASSIGN: exec_assign},
+        checkpointer=InMemorySaver(),
+        definition_resolver=_resolver(child),
+    )
+    graph = compile_definition(def_, context=ctx)
+    await graph.ainvoke(
+        {"wf:start:input": "ignored"},
+        {"configurable": {"thread_id": "t"}, "context": {"thread_id": "t", "delegation_depth": 0}},
+    )
+    return fake_executor["kwargs"]["config"].system_prompt
+
+
+class TestDelegateNodePromptAssembly:
+    """T22: delegate-node system prompt is assembled from three layers."""
+
+    @pytest.fixture(autouse=True)
+    def _no_soul(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Keep identity-layer SOUL lookups hermetic (missing agent → no SOUL)."""
+        monkeypatch.setattr(
+            "deerflow.workflow.prompts.load_agent_soul",
+            lambda agent_name, user_id=None: None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_custom_agent_identity_marker_in_prompt(self, fake_executor: dict[str, Any]) -> None:
+        node = _delegate_node("sub", agent_name="publisher", mapping=_roundtrip_mapping())
+        prompt = await _run_delegate(node, fake_executor)
+        assert "自定义 agent「publisher」" in prompt
+
+    @pytest.mark.asyncio
+    async def test_capability_groups_in_prompt(self, fake_executor: dict[str, Any]) -> None:
+        node = _delegate_node("sub", capability_groups=["data-analysis"], mapping=_roundtrip_mapping())
+        prompt = await _run_delegate(node, fake_executor)
+        assert "data-analysis" in prompt
+        assert "已启用能力组" in prompt
+
+    @pytest.mark.asyncio
+    async def test_default_prompt_keeps_delegation_instruction(self, fake_executor: dict[str, Any]) -> None:
+        node = _delegate_node("sub", mapping=_roundtrip_mapping())
+        prompt = await _run_delegate(node, fake_executor)
+        assert "invoke_workflow" in prompt
+        assert "wf-child" in prompt
+        assert "自定义 agent" not in prompt
+
+    @pytest.mark.asyncio
+    async def test_original_node_params_not_polluted(self, fake_executor: dict[str, Any]) -> None:
+        node = _delegate_node("sub", mapping=_roundtrip_mapping())
+        await _run_delegate(node, fake_executor)
+        assert "instruction" not in node.params

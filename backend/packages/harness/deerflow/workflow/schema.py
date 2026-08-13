@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from deerflow.config.agents_config import AGENT_NAME_PATTERN
+
 if TYPE_CHECKING:
     from deerflow.skills.catalog import SkillCatalog
 
@@ -29,6 +31,23 @@ def _validate_id(value: str) -> str:
     """Validate a workflow component id against the safe-identifier contract."""
     if not isinstance(value, str) or not _ID_PATTERN.match(value):
         raise ValueError(f"id must match {_ID_PATTERN.pattern!r} (1-64 safe ASCII chars); got {value!r}")
+    return value
+
+
+def _validate_agent_name(value: str | None) -> str | None:
+    """Validate an optional custom-agent name (primary identity binding).
+
+    ``None`` is legal — an AI node without an explicit binding falls back to the
+    default lead agent. Any non-``None`` value must be a string matching the
+    shared :data:`AGENT_NAME_PATTERN` (``^[A-Za-z0-9-]+$``) imported from
+    ``deerflow.config.agents_config``.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"agent_name must be a string or None; got {value!r}")
+    if not AGENT_NAME_PATTERN.fullmatch(value):
+        raise ValueError(f"agent_name must match {AGENT_NAME_PATTERN.pattern!r}; got {value!r}")
     return value
 
 
@@ -103,12 +122,24 @@ class Node(BaseModel):
     inputs: list[Port] = Field(default_factory=list)
     outputs: list[Port] = Field(default_factory=list)
     params: dict[str, Any] = Field(default_factory=dict)
+    # Capability supplier groups, not identity candidates: each group contributes
+    # its allowed-tools union plus rules merged into the prompt. The node's
+    # primary identity is bound via ``agent_name`` instead.
     capability_groups: list[str] = Field(default_factory=list)
+    # Primary identity binding for AI nodes: a custom-agent name (e.g.
+    # "publisher"). ``None`` (default) means the lead agent. Must match the
+    # custom-agent name grammar ``^[A-Za-z0-9-]+$``.
+    agent_name: str | None = None
 
     @field_validator("id", mode="before")
     @classmethod
     def _validate_id(cls, value: str) -> str:
         return _validate_id(value)
+
+    @field_validator("agent_name", mode="before")
+    @classmethod
+    def _validate_agent_name(cls, value: str | None) -> str | None:
+        return _validate_agent_name(value)
 
 
 class Edge(BaseModel):
