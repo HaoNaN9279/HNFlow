@@ -22,6 +22,7 @@ from deerflow.persistence.channel_connections.model import (
     ChannelOAuthStateRow,
 )
 from deerflow.persistence.feedback.model import FeedbackRow
+from deerflow.persistence.human_tasks.model import HumanTaskRow
 from deerflow.persistence.mcp_tasks.model import McpTaskRow
 from deerflow.persistence.models.run_event import RunEventRow
 from deerflow.persistence.run.model import RunRow
@@ -39,6 +40,7 @@ __all__ = [
     "ChannelCredentialRow",
     "ChannelOAuthStateRow",
     "FeedbackRow",
+    "HumanTaskRow",
     "McpTaskRow",
     "RunEventRow",
     "RunRow",

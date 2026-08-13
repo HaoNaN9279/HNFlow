@@ -443,6 +443,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         app.state.thread_store = make_thread_store(sf, app.state.store)
         if sf is not None:
+            from deerflow.persistence.human_tasks import HumanTaskRepository
             from deerflow.persistence.mcp_tasks import McpTaskRepository
             from deerflow.persistence.scheduled_task_runs import (
                 ScheduledTaskRunRepository,
@@ -454,11 +455,13 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_repo = ScheduledTaskRepository(sf)
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
+            app.state.human_task_repo = HumanTaskRepository(sf)
         else:
             app.state.mcp_task_repo = None
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
             app.state.workflow_definition_repo = None
+            app.state.human_task_repo = None
 
         # Run event store. The store and the matching ``run_events_config`` are
         # both frozen at startup so ``get_run_context`` does not combine a
@@ -614,6 +617,13 @@ def get_workflow_definition_repo(request: Request):
     val = getattr(request.app.state, "workflow_definition_repo", None)
     if val is None:
         raise HTTPException(status_code=503, detail="Workflow definition repo not available")
+    return val
+
+
+def get_human_task_repo(request: Request):
+    val = getattr(request.app.state, "human_task_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Human task repo not available")
     return val
 
 

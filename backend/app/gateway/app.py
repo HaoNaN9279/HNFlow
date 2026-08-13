@@ -24,6 +24,7 @@ from app.gateway.routers import (
     features,
     feedback,
     github_webhooks,
+    human_task_routes,
     input_polish,
     integrations,
     mcp,
@@ -689,6 +690,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     from app.gateway.routers import workflow_run_routes
 
     app.include_router(workflow_run_routes.router)
+
+    # Human tasks API is mounted at /api/human-tasks
+    app.include_router(human_task_routes.router)
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)

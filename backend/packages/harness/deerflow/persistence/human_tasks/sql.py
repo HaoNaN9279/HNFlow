@@ -1,0 +1,150 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from deerflow.persistence.human_tasks.model import HumanTaskRow
+from deerflow.utils.time import coerce_iso
+from deerflow.workflow.human_task_state import ALLOWED_TRANSITIONS, HumanTaskStatus
+
+
+def _allowed_sources(to_status: str) -> list[str]:
+    """Return the statuses from which a transition to *to_status* is legal.
+
+    Derived from :data:`deerflow.workflow.human_task_state.ALLOWED_TRANSITIONS`
+    (reverse lookup) so the repository never hard-codes a source set that could
+    drift from the state machine. Unknown or unreachable *to_status* values
+    yield an empty list, so the conditional UPDATE below matches no rows and the
+    transition is rejected.
+    """
+    try:
+        target = HumanTaskStatus(to_status)
+    except ValueError:
+        return []
+    return [source.value for source, allowed in ALLOWED_TRANSITIONS.items() if target in allowed]
+
+
+class HumanTaskRepository:
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._sf = session_factory
+
+    @staticmethod
+    def _row_to_dict(row: HumanTaskRow) -> dict[str, Any]:
+        data = row.to_dict()
+        for key in ("created_at", "updated_at"):
+            if data.get(key) is not None:
+                data[key] = coerce_iso(data[key])
+        return data
+
+    async def create(
+        self,
+        *,
+        user_id: str,
+        workflow_run_id: str,
+        node_id: str,
+        description: str = "",
+        inputs_snapshot: dict[str, Any] | None = None,
+        output_spec: dict[str, Any] | None = None,
+        validation_rules: dict[str, Any] | None = None,
+        checkpoint_ref: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = datetime.now(UTC)
+        row = HumanTaskRow(
+            id=f"ht-{uuid4().hex}",
+            user_id=user_id,
+            workflow_run_id=workflow_run_id,
+            node_id=node_id,
+            status=HumanTaskStatus.PENDING.value,
+            description=description,
+            inputs_snapshot=dict(inputs_snapshot or {}),
+            output_spec=dict(output_spec or {}),
+            validation_rules=dict(validation_rules or {}),
+            checkpoint_ref=checkpoint_ref,
+            created_at=now,
+            updated_at=now,
+        )
+        async with self._sf() as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            return self._row_to_dict(row)
+
+    async def get(self, task_id: str, *, user_id: str) -> dict[str, Any] | None:
+        async with self._sf() as session:
+            row = await session.get(HumanTaskRow, task_id)
+            if row is None or row.user_id != user_id:
+                return None
+            return self._row_to_dict(row)
+
+    async def list_by_user(self, user_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
+        stmt = select(HumanTaskRow).where(HumanTaskRow.user_id == user_id)
+        if status is not None:
+            stmt = stmt.where(HumanTaskRow.status == status)
+        stmt = stmt.order_by(HumanTaskRow.created_at.desc(), HumanTaskRow.id.desc())
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [self._row_to_dict(row) for row in result.scalars()]
+
+    async def submit(self, task_id: str, *, user_id: str, values: dict[str, Any], to_status: str) -> dict[str, Any] | None:
+        return await self._transition(task_id, user_id=user_id, to_status=to_status, submission=values)
+
+    async def skip(self, task_id: str, *, user_id: str) -> dict[str, Any] | None:
+        return await self._transition(task_id, user_id=user_id, to_status=HumanTaskStatus.SKIPPED.value)
+
+    async def reopen(self, task_id: str, *, user_id: str) -> dict[str, Any] | None:
+        return await self._transition(task_id, user_id=user_id, to_status=HumanTaskStatus.REOPENED.value)
+
+    async def mark_expired(self, task_id: str, *, user_id: str) -> dict[str, Any] | None:
+        return await self._transition(task_id, user_id=user_id, to_status=HumanTaskStatus.EXPIRED.value)
+
+    async def _transition(
+        self,
+        task_id: str,
+        *,
+        user_id: str,
+        to_status: str,
+        submission: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Conditional-UPDATE transition; returns the refreshed row or None on conflict."""
+        sources = _allowed_sources(to_status)
+        if not sources:
+            return None
+        values: dict[str, Any] = {
+            "status": to_status,
+            "updated_at": datetime.now(UTC),
+        }
+        if submission is not None:
+            values["submission"] = submission
+        stmt = (
+            update(HumanTaskRow)
+            .where(
+                HumanTaskRow.id == task_id,
+                HumanTaskRow.user_id == user_id,
+                HumanTaskRow.status.in_(sources),
+                HumanTaskRow.status != to_status,
+            )
+            .values(**values)
+        )
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            if result.rowcount != 1:
+                await session.rollback()
+                return None
+            await session.commit()
+            row = await session.get(HumanTaskRow, task_id)
+            if row is None or row.user_id != user_id:
+                return None
+            return self._row_to_dict(row)
+
+    async def delete(self, task_id: str, *, user_id: str) -> bool:
+        async with self._sf() as session:
+            row = await session.get(HumanTaskRow, task_id)
+            if row is None or row.user_id != user_id:
+                return False
+            await session.delete(row)
+            await session.commit()
+            return True
