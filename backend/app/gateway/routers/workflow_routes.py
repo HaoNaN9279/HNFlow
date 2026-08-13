@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field, ValidationError
 from app.gateway.authz import require_permission
 from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo
 from deerflow.skills.catalog import SkillCatalog
+from deerflow.skills.types import Skill
+from deerflow.workflow.dependency_graph import find_dependency_cycles
 from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
@@ -70,6 +72,50 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
         return metadata
 
 
+async def _check_workflow_dependency_cycles(
+    request: Request,
+    repo: Any,
+    user_id: str,
+    target_id: str,
+    target_def: WorkflowDefinition,
+) -> list[str]:
+    """Detect dependency cycles across the user's workflows and capability groups.
+
+    Builds a definition map keyed by DB id from every stored workflow, then
+    overlays *target_def* under *target_id* so the to-be-saved definition
+    replaces the stored one (update) or joins as a new node (create).  A single
+    unparseable stored row is skipped rather than aborting the whole check.
+
+    Skills are loaded fail-open: a storage failure degrades to workflow-only
+    cycle detection (partial detection) instead of rejecting the save with a 500.
+    """
+    rows = await repo.list_by_user(user_id)
+    definitions: dict[str, WorkflowDefinition] = {}
+    for row in rows:
+        row_id = row.get("id") if isinstance(row, dict) else getattr(row, "id", None)
+        if not row_id:
+            continue
+        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+        if definition_dict is None:
+            continue
+        try:
+            definitions[row_id] = WorkflowDefinition.model_validate(definition_dict)
+        except Exception:
+            continue
+    definitions[target_id] = target_def
+
+    skills: list[Skill] = []
+    try:
+        from deerflow.skills.storage import get_or_new_skill_storage
+
+        storage = get_or_new_skill_storage()
+        skills = storage.load_skills(enabled_only=False)
+    except Exception as e:
+        logger.warning("Failed to load skills for workflow dependency cycle detection: %s", e)
+
+    return find_dependency_cycles(definitions, skills)
+
+
 def _format_validation_errors(exc: ValidationError) -> list[str]:
     """Convert a Pydantic v2 ValidationError into a list of human-readable strings."""
     return [f"定义结构非法: {'.'.join(str(loc) for loc in e['loc'])} — {e['msg']}" for e in exc.errors(include_url=False)]
@@ -107,9 +153,13 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
         raise HTTPException(status_code=422, detail={"errors": errors})
 
     repo = get_workflow_definition_repo(request)
+    target_id = f"wf-{uuid.uuid4().hex}"
+    cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), target_id, model)
+    if cycle_errors:
+        raise HTTPException(status_code=422, detail={"errors": [f"依赖环: {e}" for e in cycle_errors]})
     metadata = _resolve_workflow_metadata(model, body.metadata)
     result = await repo.create(
-        definition_id=f"wf-{uuid.uuid4().hex}",
+        definition_id=target_id,
         user_id=str(user.id),
         name=body.name,
         schema_version=SCHEMA_VERSION,
@@ -158,6 +208,10 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         errors = validate_definition(model)
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
+
+        cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), definition_id, model)
+        if cycle_errors:
+            raise HTTPException(status_code=422, detail={"errors": [f"依赖环: {e}" for e in cycle_errors]})
 
         updates["definition"] = model.model_dump(mode="json")
         updates["schema_version"] = SCHEMA_VERSION

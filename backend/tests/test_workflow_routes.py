@@ -574,6 +574,7 @@ class TestCreateWorkflowResolvedGroups:
         """create_workflow calls repo.create with metadata including resolved_groups."""
         mock_repo = MagicMock()
         mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
+        mock_repo.list_by_user = AsyncMock(return_value=[])
 
         app = self._make_app_with_mock_repo(mock_repo)
         client = TestClient(app)
@@ -596,6 +597,7 @@ class TestCreateWorkflowResolvedGroups:
         """When no capability_groups, metadata passes through without resolved_groups."""
         mock_repo = MagicMock()
         mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
+        mock_repo.list_by_user = AsyncMock(return_value=[])
 
         app = self._make_app_with_mock_repo(mock_repo)
         client = TestClient(app)
@@ -642,6 +644,7 @@ class TestUpdateWorkflowResolvedGroups:
             }
         )
         mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+        mock_repo.list_by_user = AsyncMock(return_value=[])
 
         app = self._make_app_with_mock_repo(mock_repo)
         client = TestClient(app)
@@ -670,6 +673,7 @@ class TestUpdateWorkflowResolvedGroups:
             }
         )
         mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+        mock_repo.list_by_user = AsyncMock(return_value=[])
 
         app = self._make_app_with_mock_repo(mock_repo)
         client = TestClient(app)
@@ -731,6 +735,7 @@ class TestUpdateWorkflowResolvedGroups:
             }
         )
         mock_repo.update = AsyncMock(return_value={"id": "wf-123", "name": "Updated"})
+        mock_repo.list_by_user = AsyncMock(return_value=[])
 
         app = self._make_app_with_mock_repo(mock_repo)
         client = TestClient(app)
