@@ -6,6 +6,7 @@ from .setup_agent_tool import setup_agent
 from .task_tool import task_tool
 from .update_agent_tool import update_agent
 from .view_image_tool import view_image_tool
+from .workflow_runtime_tools import cancel_workflow, get_workflow_run, list_human_tasks, pause_workflow, run_workflow, skip_human_task, submit_human_task
 from .workflow_tools import edit_workflow, generate_workflow
 
 __all__ = [
@@ -19,4 +20,11 @@ __all__ = [
     "list_uploaded_files",
     "edit_workflow",
     "generate_workflow",
+    "run_workflow",
+    "pause_workflow",
+    "cancel_workflow",
+    "get_workflow_run",
+    "list_human_tasks",
+    "submit_human_task",
+    "skip_human_task",
 ]

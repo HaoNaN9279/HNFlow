@@ -632,12 +632,13 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - 进度汇报频控：事件风暴时聚合汇报（如每 N 节点或超时汇报一次），别逐节点刷屏
 - 异常修复的自动重试仅限幂等节点（T5 标注），非幂等节点必须转人工确认——与 HNFlow 幂等原则一致
 - 本任务收尾阶段：将 T9 遗留的「引用传递/写时复制」与 T15 遗留的「参数映射」按需补做，形成闭环
+- T9「引用传递/写时复制」与 T15「参数映射 UI」**本轮未实现**（规划原句「按需补做」，二者是独立大任务且与对话侧无依赖——建议后续专项 T18a/T18b）
 
 **验证点**
-- [ ] 对话中发起运行，收到关键节点进度汇报
-- [ ] 人为制造节点失败，agent 给出可操作修复建议
-- [ ] 对话中查询 pending 任务并提示处理
-- [ ] 双入口（画布/对话）控制同一 run 行为一致，无竞态
+- [x] 对话中发起运行，收到关键节点进度汇报 —— `run_workflow(definition_id, params, wait)` 启动运行；`wait=True` 轮询至终态并聚合节点进度（`completed_nodes`/`total_nodes` + `current_node` + `failed_node`/`failed_error`/`idempotent_retryable`）；`wait=False` 立即返回 `{run_id, status}` 后台执行；`get_workflow_run` 可反复查询进度（工具：`workflow_runtime_tools.py`）
+- [x] 人为制造节点失败，agent 给出可操作修复建议 —— 失败时返回失败节点 + 错误信息 + 幂等标注（`_NON_IDEMPOTENT_TYPES` 之外标注 `idempotent_retryable=true` 可安全重试，非幂等转人工）；dispatch 层经 `RunEventStore.list_events` 聚合 `wf:node:*` 事件（`workflow/dispatch.py`）
+- [x] 对话中查询 pending 任务并提示处理 —— `list_human_tasks(status)` 列当前用户任务（可过滤）；`submit_human_task(task_id, values)` 校验 `output_spec`+`validation_rules` 后提交并触发 resume；`skip_human_task(task_id)` 跳过并 resume（`{"__skip": True}`）
+- [x] 双入口（画布/对话）控制同一 run 行为一致，无竞态 —— 工具从 `runtime.context[__workflow_runtime]` 读 Gateway 运行单例（同一 RunManager/StreamBridge/RunContext + human_task_repo，worker.py 注入），与画布共用同一 run 生命周期，非旁路；submit/skip resume 复用 T13 挂起恢复机制（`Command(resume=...)` + `origin_run_id`，resume 值推导：submitted→submission，否则 `{"__skip": True}`）；集成测试覆盖（`tests/test_workflow_dispatch.py`、`test_workflow_runtime_tools.py`、`test_workflow_human_task_tools.py`、`test_workflow_runtime_context.py`、`test_workflow_runtime_integration.py`）
 
 ---
 

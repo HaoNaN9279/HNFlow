@@ -48,7 +48,10 @@ from deerflow.runtime.checkpoint_state import (
     graph_state_schema,
     graph_writable_channels,
 )
-from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
+from deerflow.runtime.context_keys import (
+    CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY,
+    WORKFLOW_RUNTIME_CONTEXT_KEY,
+)
 from deerflow.runtime.goal import (
     DEFAULT_MAX_GOAL_CONTINUATIONS,
     DEFAULT_MAX_NO_PROGRESS_CONTINUATIONS,
@@ -372,6 +375,7 @@ def _build_runtime_context(
     app_config: AppConfig | None = None,
     task_store: Any | None = None,
     extensions: Any | None = None,
+    workflow_runtime: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the dict that becomes ``ToolRuntime.context`` for the run.
 
@@ -380,6 +384,11 @@ def _build_runtime_context(
     are merged in but never override ``thread_id``/``run_id``. The resolved
     ``AppConfig`` is added by the worker so tools can consume it without ambient
     global lookups.
+
+    ``workflow_runtime`` packages the Gateway run singletons (``RunManager`` /
+    ``StreamBridge`` / ``RunContext``) for T18 dialogue-side workflow dispatch
+    tools. It is written after the caller merge and popped when absent, so a
+    caller-supplied ``__workflow_runtime`` is never authoritative.
 
     langgraph 1.1+ surfaces this as ``runtime.context`` via the parent runtime stored
     under ``config['configurable']['__pregel_runtime']`` — see
@@ -408,6 +417,14 @@ def _build_runtime_context(
         runtime_ctx[EXTENSION_SNAPSHOT_CONTEXT_KEY] = extensions
     else:
         runtime_ctx.pop(EXTENSION_SNAPSHOT_CONTEXT_KEY, None)
+    # Publish the workflow runtime singletons so T18 dialogue-side dispatch
+    # tools can start runs through the same Gateway run lifecycle. Written after
+    # the caller merge and popped when absent, because a caller-supplied value
+    # for this host-internal key is never authoritative.
+    if workflow_runtime is not None:
+        runtime_ctx[WORKFLOW_RUNTIME_CONTEXT_KEY] = workflow_runtime
+    else:
+        runtime_ctx.pop(WORKFLOW_RUNTIME_CONTEXT_KEY, None)
     return runtime_ctx
 
 
@@ -785,6 +802,11 @@ async def run_agent(
             ctx.app_config,
             task_store,
             extensions,
+            workflow_runtime={
+                "run_manager": run_manager,
+                "stream_bridge": bridge,
+                "run_ctx": ctx,
+            },
         )
         incoming_metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
         deerflow_trace_id = resolve_deerflow_trace_id(incoming_metadata.get(DEERFLOW_TRACE_METADATA_KEY))

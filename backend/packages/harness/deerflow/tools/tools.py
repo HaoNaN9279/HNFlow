@@ -7,7 +7,23 @@ from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
-from deerflow.tools.builtins import ask_clarification_tool, edit_workflow, generate_workflow, list_uploaded_files, present_file_tool, review_skill_package, task_tool, view_image_tool
+from deerflow.tools.builtins import (
+    ask_clarification_tool,
+    cancel_workflow,
+    edit_workflow,
+    generate_workflow,
+    get_workflow_run,
+    list_human_tasks,
+    list_uploaded_files,
+    pause_workflow,
+    present_file_tool,
+    review_skill_package,
+    run_workflow,
+    skip_human_task,
+    submit_human_task,
+    task_tool,
+    view_image_tool,
+)
 from deerflow.tools.mcp_metadata import tag_mcp_tool
 from deerflow.tools.skill_metadata import prefixed_skill_tool_name, tag_skill_tool
 from deerflow.tools.sync import make_sync_tool_wrapper
@@ -20,6 +36,13 @@ BUILTIN_TOOLS = [
     review_skill_package,
     generate_workflow,
     edit_workflow,
+    run_workflow,
+    pause_workflow,
+    cancel_workflow,
+    get_workflow_run,
+    list_human_tasks,
+    submit_human_task,
+    skip_human_task,
 ]
 
 SUBAGENT_TOOLS = [
