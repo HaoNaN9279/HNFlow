@@ -480,12 +480,17 @@ export const zhCN: Translations = {
         modeLabel: "模式",
         versionLabel: "版本",
         noTemplates: "没有其他可用的工作流",
+        mappingTitle: "端口映射",
+        inputMappingLabel: "输入映射",
+        outputMappingLabel: "输出映射",
+        unmappedPlaceholder: "未映射",
       },
       validation: {
         instructionRequired: "指令为必填项",
         templateRequired: "工作流模板为必填项",
         invalidAgentName: "智能体名称必须匹配 ^[A-Za-z0-9-]+$",
         agentNotFoundWarning: "智能体尚不存在 — 可在创建前引用",
+        mappingInvalid: "端口映射无效 — 输出映射到了未声明的父端口",
       },
     },
     run: {

@@ -406,12 +406,17 @@ export interface Translations {
         modeLabel: string;
         versionLabel: string;
         noTemplates: string;
+        mappingTitle: string;
+        inputMappingLabel: string;
+        outputMappingLabel: string;
+        unmappedPlaceholder: string;
       };
       validation: {
         instructionRequired: string;
         templateRequired: string;
         invalidAgentName: string;
         agentNotFoundWarning: string;
+        mappingInvalid: string;
       };
     };
     run: {

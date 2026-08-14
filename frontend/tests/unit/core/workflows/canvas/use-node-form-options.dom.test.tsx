@@ -23,7 +23,10 @@ import {
   useSkillOptions,
   useWorkflowTemplateOptions,
 } from "@/core/workflows/canvas/use-node-form-options";
-import { type WorkflowRecord } from "@/core/workflows/types";
+import {
+  type Node as WorkflowNode,
+  type WorkflowRecord,
+} from "@/core/workflows/types";
 
 const mockedListAgents = rs.mocked(listAgents);
 const mockedLoadSkills = rs.mocked(loadSkills);
@@ -68,6 +71,7 @@ function workflowRecord(
   id: string,
   name: string,
   version = "0.1.0",
+  nodes: WorkflowNode[] = [],
 ): WorkflowRecord {
   return {
     id,
@@ -78,7 +82,7 @@ function workflowRecord(
       id,
       name,
       version,
-      nodes: [],
+      nodes,
       edges: [],
       metadata: {},
     },
@@ -151,10 +155,7 @@ describe("useSkillOptions", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.data).toEqual([
-        "web-research",
-        "code-review",
-      ]);
+      expect(result.current.data).toEqual(["web-research", "code-review"]);
     });
   });
 
@@ -193,7 +194,13 @@ describe("useWorkflowTemplateOptions", () => {
 
     await waitFor(() => {
       expect(result.current.data).toEqual([
-        { id: "wf-2", name: "Beta", version: "0.2.0" },
+        {
+          id: "wf-2",
+          name: "Beta",
+          version: "0.2.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
       ]);
     });
   });
@@ -210,8 +217,20 @@ describe("useWorkflowTemplateOptions", () => {
 
     await waitFor(() => {
       expect(result.current.data).toEqual([
-        { id: "wf-1", name: "Alpha", version: "0.1.0" },
-        { id: "wf-2", name: "Beta", version: "0.1.0" },
+        {
+          id: "wf-1",
+          name: "Alpha",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
+        {
+          id: "wf-2",
+          name: "Beta",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
       ]);
     });
   });
@@ -247,13 +266,135 @@ describe("useWorkflowTemplateOptions", () => {
 
     await waitFor(() => {
       expect(result.current.data).toEqual([
-        { id: "wf-2", name: "Beta", version: "0.1.0" },
-        { id: "wf-3", name: "Gamma", version: "0.1.0" },
+        {
+          id: "wf-2",
+          name: "Beta",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
+        {
+          id: "wf-3",
+          name: "Gamma",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
       ]);
     });
 
     rerender({ excludeId: "wf-2" });
 
     expect(mockedListWorkflows).toHaveBeenCalledTimes(1);
+  });
+
+  it("extracts start/end output ports from the definition", async () => {
+    mockedListWorkflows.mockResolvedValue([
+      workflowRecord("wf-1", "Alpha", "0.1.0", [
+        {
+          id: "start",
+          type: "flow:start",
+          inputs: [],
+          outputs: [
+            { name: "payload", type: "data" },
+            { name: "mode", type: "enum" },
+          ],
+          params: {},
+        },
+        {
+          id: "end",
+          type: "flow:end",
+          inputs: [],
+          outputs: [{ name: "result", type: "file" }],
+          params: {},
+        },
+      ]),
+    ]);
+
+    const { result } = renderHook(() => useWorkflowTemplateOptions(null), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.data).toEqual([
+        {
+          id: "wf-1",
+          name: "Alpha",
+          version: "0.1.0",
+          startOutputPorts: [
+            { name: "payload", type: "data" },
+            { name: "mode", type: "enum" },
+          ],
+          endOutputPorts: [{ name: "result", type: "file" }],
+        },
+      ]);
+    });
+  });
+
+  it("returns an empty startOutputPorts when flow:start is missing", async () => {
+    mockedListWorkflows.mockResolvedValue([
+      workflowRecord("wf-1", "Alpha", "0.1.0", [
+        {
+          id: "end",
+          type: "flow:end",
+          inputs: [],
+          outputs: [{ name: "result", type: "file" }],
+          params: {},
+        },
+      ]),
+    ]);
+
+    const { result } = renderHook(() => useWorkflowTemplateOptions(null), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.data).toEqual([
+        {
+          id: "wf-1",
+          name: "Alpha",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [{ name: "result", type: "file" }],
+        },
+      ]);
+    });
+  });
+
+  it("returns empty port lists when flow nodes have no outputs", async () => {
+    mockedListWorkflows.mockResolvedValue([
+      workflowRecord("wf-1", "Alpha", "0.1.0", [
+        {
+          id: "start",
+          type: "flow:start",
+          inputs: [],
+          outputs: [],
+          params: {},
+        },
+        {
+          id: "end",
+          type: "flow:end",
+          inputs: [],
+          outputs: [],
+          params: {},
+        },
+      ]),
+    ]);
+
+    const { result } = renderHook(() => useWorkflowTemplateOptions(null), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => {
+      expect(result.current.data).toEqual([
+        {
+          id: "wf-1",
+          name: "Alpha",
+          version: "0.1.0",
+          startOutputPorts: [],
+          endOutputPorts: [],
+        },
+      ]);
+    });
   });
 });

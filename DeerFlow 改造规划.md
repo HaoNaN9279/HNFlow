@@ -339,7 +339,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - **子图数据隔离**：子图 state 与父图 state 分离（独立命名空间），仅通过端口映射通信——对应 HNFlow「子工作流拥有独立上下文」原则
 - 递归深度限制：编译时检测嵌套深度（默认 ≤10 层，可配置），超限拒绝编译——防栈溢出
 - 循环引用检测：definition 引用图的环在编译前拦截（比 T11 的运行时检测更早），报完整引用链
-- 大文件传参：先做值传递，引用传递/写时复制留 T18 优化——别让本任务膨胀
+- 大文件传参：先做值传递，引用传递/写时复制留 T18 优化——别让本任务膨胀（已闭环 T9A：引用传递已天然实现（Python 引用零复制）；写时复制 = 子图边界 `_copy_on_write` 浅复制（`compiler._make_subworkflow_node_fn` + `delegate._invoke`，不 deepcopy 保持大值嵌套共享）；`test_workflow_subgraph.py` TestCopyOnWriteBoundary 锁定）
 
 **验证点**
 - [ ] 3 层嵌套工作流编译执行成功，参数经端口映射正确传入返回
@@ -563,7 +563,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 
 **注意点**
 - 子图编辑是递归页面：深层嵌套注意页面栈/浏览器历史处理，避免层级过深卡死
-- 参数映射表单是子工作流节点体验核心，先做「输入端口映射」，「参数映射」（内部节点参数对外）留 T18 完善——控制任务规模
+- 参数映射表单是子工作流节点体验核心，先做「输入端口映射」，「参数映射」（内部节点参数对外）留 T18 完善——控制任务规模。**已闭环**：参数映射 UI 已实现：SubworkflowForm 端口映射区（输入/输出映射行编辑）+ node-form.ts mapping 逻辑 + 模板端口提取 + 后端 _validate_subworkflow_mapping 契约对齐；workflow-node-form.dom.test.tsx 覆盖
 - 表单组件复用现有 workspace 的 CodeMirror/表单模式，不新引 UI 库
 
 **验证点**
@@ -632,7 +632,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - 进度汇报频控：事件风暴时聚合汇报（如每 N 节点或超时汇报一次），别逐节点刷屏
 - 异常修复的自动重试仅限幂等节点（T5 标注），非幂等节点必须转人工确认——与 HNFlow 幂等原则一致
 - 本任务收尾阶段：将 T9 遗留的「引用传递/写时复制」与 T15 遗留的「参数映射」按需补做，形成闭环
-- T9「引用传递/写时复制」与 T15「参数映射 UI」**本轮未实现**（规划原句「按需补做」，二者是独立大任务且与对话侧无依赖——建议后续专项 T18a/T18b）
+- T9「引用传递/写时复制」已闭环：引用传递天然实现（Python 引用零复制）+ 子图边界 `_copy_on_write` 浅复制（`compiler._make_subworkflow_node_fn` + `delegate._invoke`，不 deepcopy 保持大值嵌套共享，`test_workflow_subgraph.py` TestCopyOnWriteBoundary 锁定）；T15「参数映射 UI」已闭环：`SubworkflowForm` 端口映射区（输入/输出映射行编辑，`node-form.ts` mapping 逻辑 + 模板端口提取，后端 `_validate_subworkflow_mapping` 契约对齐）
 
 **验证点**
 - [x] 对话中发起运行，收到关键节点进度汇报 —— `run_workflow(definition_id, params, wait)` 启动运行；`wait=True` 轮询至终态并聚合节点进度（`completed_nodes`/`total_nodes` + `current_node` + `failed_node`/`failed_error`/`idempotent_retryable`）；`wait=False` 立即返回 `{run_id, status}` 后台执行；`get_workflow_run` 可反复查询进度（工具：`workflow_runtime_tools.py`）

@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 import { WorkflowNodeForm } from "@/components/workspace/workflows/workflow-node-form";
 import { WorkflowPropertiesPanel } from "@/components/workspace/workflows/workflow-properties-panel";
@@ -42,12 +48,18 @@ rs.mock("@/core/i18n/hooks", () => ({
             modeLabel: "Mode",
             versionLabel: "Version",
             noTemplates: "No other workflows available",
+            mappingTitle: "Port mapping",
+            inputMappingLabel: "Input mapping",
+            outputMappingLabel: "Output mapping",
+            unmappedPlaceholder: "Not mapped",
           },
           validation: {
             instructionRequired: "Instruction is required",
             templateRequired: "Workflow template is required",
             invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
             agentNotFoundWarning: "Agent does not exist yet",
+            mappingInvalid:
+              "Invalid port mapping — output maps to an undeclared parent port",
           },
         },
       },
@@ -61,7 +73,13 @@ rs.mock("@/core/agents/api", () => ({
 
 let agentOptions: { name: string }[] = [{ name: "researcher" }];
 let skillOptions: string[] = ["web-research", "code-review"];
-let templateOptions: { id: string; name: string; version: string }[] = [
+let templateOptions: {
+  id: string;
+  name: string;
+  version: string;
+  startOutputPorts?: { name: string; type: string }[];
+  endOutputPorts?: { name: string; type: string }[];
+}[] = [
   { id: "wf-1", name: "Alpha", version: "0.1.0" },
   { id: "wf-2", name: "Beta", version: "0.2.0" },
 ];
@@ -256,7 +274,9 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
     );
 
     openSelect("Agent");
-    fireEvent.click(screen.getByRole("option", { name: "Lead agent (default)" }));
+    fireEvent.click(
+      screen.getByRole("option", { name: "Lead agent (default)" }),
+    );
 
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith(
@@ -410,12 +430,8 @@ describe("WorkflowNodeForm — nested:subworkflow", () => {
     );
 
     openSelect("Workflow template");
-    expect(
-      screen.getByRole("option", { name: "Alpha (0.1.0)" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("option", { name: "Beta (0.2.0)" }),
-    ).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Alpha (0.1.0)" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Beta (0.2.0)" })).toBeTruthy();
     expect(screen.getByText("Version")).toBeTruthy();
     expect(screen.getByText("0.1.0")).toBeTruthy();
   });
@@ -511,6 +527,215 @@ describe("WorkflowNodeForm — nested:subworkflow", () => {
     );
 
     expect(screen.getByText("No other workflows available")).toBeTruthy();
+  });
+});
+
+describe("WorkflowNodeForm — nested:subworkflow port mapping", () => {
+  function renderPorted(
+    onChange: ReturnType<typeof rs.fn>,
+    workflow: Partial<WorkflowNode> = {},
+    readonly = false,
+  ) {
+    templateOptions = [
+      {
+        id: "wf-1",
+        name: "Alpha",
+        version: "0.1.0",
+        startOutputPorts: [{ name: "query", type: "data" }],
+        endOutputPorts: [{ name: "result", type: "data" }],
+      },
+    ];
+    return render(
+      <WorkflowNodeForm
+        node={makeSubworkflowNode({
+          inputs: [{ name: "user_input", type: "data" }],
+          outputs: [{ name: "out", type: "data" }],
+          ...workflow,
+        })}
+        readonly={readonly}
+        onChange={onChange}
+      />,
+    );
+  }
+
+  it("renders mapping rows for the template start/end output ports", () => {
+    renderPorted(rs.fn());
+
+    expect(screen.getByText("Port mapping")).toBeTruthy();
+    expect(screen.getByText("Input mapping")).toBeTruthy();
+    expect(screen.getByText("Output mapping")).toBeTruthy();
+    // Fixed row labels are the child ports.
+    expect(screen.getByText("query")).toBeTruthy();
+    expect(screen.getByText("result")).toBeTruthy();
+    // Each row carries a select whose options are the parent ports.
+    expect(
+      screen.getByRole("combobox", { name: "Input mapping: query" }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("combobox", { name: "Output mapping: result" }),
+    ).toBeTruthy();
+  });
+
+  it("commits input and output mappings into params.mapping", () => {
+    const onChange = rs.fn();
+    renderPorted(onChange);
+
+    openSelect("Input mapping: query");
+    fireEvent.click(screen.getByRole("option", { name: "user_input" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          mapping: {
+            inputs: { query: "user_input" },
+            outputs: {},
+          },
+        }),
+      }),
+    );
+
+    openSelect("Output mapping: result");
+    fireEvent.click(screen.getByRole("option", { name: "out" }));
+
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          mapping: {
+            inputs: { query: "user_input" },
+            outputs: { result: "out" },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("clears one mapping and keeps the other side", () => {
+    const onChange = rs.fn();
+    renderPorted(onChange, {
+      params: {
+        subworkflow: {
+          type: "template",
+          mode: "compile",
+          template_id: "wf-1",
+          version: "0.1.0",
+        },
+        mapping: {
+          inputs: { query: "user_input" },
+          outputs: { result: "out" },
+        },
+      },
+    });
+
+    openSelect("Input mapping: query");
+    fireEvent.click(screen.getByRole("option", { name: "Not mapped" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          mapping: {
+            inputs: {},
+            outputs: { result: "out" },
+          },
+        }),
+      }),
+    );
+  });
+
+  it("removes params.mapping entirely when the last mapping is cleared", () => {
+    const onChange = rs.fn();
+    renderPorted(onChange, {
+      params: {
+        subworkflow: {
+          type: "template",
+          mode: "compile",
+          template_id: "wf-1",
+          version: "0.1.0",
+        },
+        mapping: {
+          inputs: { query: "user_input" },
+          outputs: {},
+        },
+      },
+    });
+
+    openSelect("Input mapping: query");
+    fireEvent.click(screen.getByRole("option", { name: "Not mapped" }));
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    const next = onChange.mock.calls[0]![0] as WorkflowNode;
+    expect(next.params.mapping).toBeUndefined();
+  });
+
+  it("disables every mapping select when readonly", () => {
+    renderPorted(rs.fn(), {}, true);
+
+    const inputSelect = screen.getByRole<HTMLButtonElement>("combobox", {
+      name: "Input mapping: query",
+    });
+    const outputSelect = screen.getByRole<HTMLButtonElement>("combobox", {
+      name: "Output mapping: result",
+    });
+    expect(inputSelect.disabled).toBe(true);
+    expect(outputSelect.disabled).toBe(true);
+  });
+
+  it("does not render the mapping section without a selected template", () => {
+    render(
+      <WorkflowNodeForm
+        node={makeSubworkflowNode({
+          inputs: [{ name: "user_input", type: "data" }],
+          outputs: [{ name: "out", type: "data" }],
+          params: {},
+        })}
+        readonly={false}
+        onChange={rs.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Port mapping")).toBeNull();
+  });
+
+  it("does not render the mapping section when the template has no ports", () => {
+    templateOptions = [{ id: "wf-1", name: "Alpha", version: "0.1.0" }];
+    render(
+      <WorkflowNodeForm
+        node={makeSubworkflowNode({
+          inputs: [{ name: "user_input", type: "data" }],
+          outputs: [{ name: "out", type: "data" }],
+        })}
+        readonly={false}
+        onChange={rs.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("Port mapping")).toBeNull();
+  });
+
+  it("shows the mapping-invalid error for an output mapped to an undeclared parent port", () => {
+    renderPorted(rs.fn(), {
+      outputs: [],
+      params: {
+        subworkflow: {
+          type: "template",
+          mode: "compile",
+          template_id: "wf-1",
+          version: "0.1.0",
+        },
+        mapping: {
+          inputs: {},
+          outputs: { result: "ghost" },
+        },
+      },
+    });
+
+    expect(
+      screen.getByText(
+        "Invalid port mapping — output maps to an undeclared parent port",
+      ),
+    ).toBeTruthy();
   });
 });
 

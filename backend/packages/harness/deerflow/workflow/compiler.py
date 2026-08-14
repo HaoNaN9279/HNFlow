@@ -30,6 +30,7 @@ Key constraints:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import inspect
 import json
@@ -391,6 +392,33 @@ def _make_end_node_fn(node: Node, incoming_edges: list[Edge]) -> Callable[..., A
     return _end_fn
 
 
+def _copy_on_write(value: Any) -> Any:
+    """Shallow-copy a mutable container before it crosses a subgraph boundary.
+
+    Copy-on-write (COW) contract:
+    - ``dict`` → ``copy.copy(value)``; ``list`` → ``value.copy()``;
+      ``set`` → ``value.copy()`` — the *top-level* container is replaced, so an
+      in-place mutation by a subgraph node (e.g. a custom executor mutating its
+      inputs) cannot pollute the parent state.
+    - Nested objects inside the container stay **shared** by reference.  This is
+      deliberately NOT ``copy.deepcopy`` — deep-copying large payloads (file
+      bytes, big documents) would recreate exactly the copy cost this boundary
+      exists to avoid.
+    - Scalars / strings / ``None`` / immutables return the original value
+      unchanged (zero-cost pass-through — they cannot be mutated in place).
+
+    Callers must treat subgraph inputs as read-only at the top level; mutating a
+    *nested* object shared with the parent remains an executor anti-pattern.
+    """
+    if isinstance(value, dict):
+        return copy.copy(value)
+    if isinstance(value, list):
+        return value.copy()
+    if isinstance(value, set):
+        return value.copy()
+    return value
+
+
 def _make_subworkflow_node_fn(
     node: Node,
     child: CompiledStateGraph,
@@ -404,6 +432,14 @@ def _make_subworkflow_node_fn(
     it reads parent-state inputs, builds the subgraph's initial state, invokes
     the subgraph manually, and writes the subgraph's outputs back to parent
     state — so parent and child state/channels stay fully isolated.
+
+    Copy-on-write boundary: every value placed into the subgraph's initial
+    state passes through :func:`_copy_on_write`, so the child never receives a
+    reference to a parent-state container.  A child node that mutates its input
+    in place (a custom executor anti-pattern) therefore cannot pollute the
+    parent state.  Only the *top level* is copied — nested objects stay shared
+    with the parent, and subgraph inputs are read-only at the top level by
+    contract.
     """
     from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
 
@@ -426,15 +462,18 @@ def _make_subworkflow_node_fn(
         #    A ``wf:``-prefixed value is a parent-state reference; a value
         #    matching one of this node's input ports resolves through the
         #    input_key_map read above; anything else is a literal passed
-        #    through unchanged.
+        #    through unchanged.  Every value crosses the boundary through
+        #    ``_copy_on_write`` (COW): mutable top-level containers are
+        #    shallow-copied so an in-place mutation by a child node cannot
+        #    pollute the parent state, while nested objects stay shared.
         sub_input: dict[str, Any] = {}
         for child_port, parent_ref in map_inputs.items():
             if isinstance(parent_ref, str) and parent_ref.startswith("wf:"):
-                sub_input[f"wf:{child_start_id}:{child_port}"] = state.get(parent_ref)
+                sub_input[f"wf:{child_start_id}:{child_port}"] = _copy_on_write(state.get(parent_ref))
             elif isinstance(parent_ref, str) and parent_ref in inputs:
-                sub_input[f"wf:{child_start_id}:{child_port}"] = inputs[parent_ref]
+                sub_input[f"wf:{child_start_id}:{child_port}"] = _copy_on_write(inputs[parent_ref])
             else:
-                sub_input[f"wf:{child_start_id}:{child_port}"] = parent_ref
+                sub_input[f"wf:{child_start_id}:{child_port}"] = _copy_on_write(parent_ref)
 
         # 3. Resolve the parent config (must be forwarded explicitly so the
         #    subgraph's nodes see context via get_config()).

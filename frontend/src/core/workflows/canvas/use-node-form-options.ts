@@ -4,11 +4,20 @@ import { listAgents } from "@/core/agents/api";
 import { loadSkills } from "@/core/skills/api";
 
 import { listWorkflows } from "../api";
+import {
+  type NodeType,
+  type PortType,
+  type WorkflowDefinition,
+} from "../types";
+
+export type WorkflowTemplatePort = { name: string; type: PortType };
 
 export type WorkflowTemplateOption = {
   id: string;
   name: string;
   version: string;
+  startOutputPorts: WorkflowTemplatePort[];
+  endOutputPorts: WorkflowTemplatePort[];
 };
 
 const OPTIONS_STALE_TIME_MS = 60_000;
@@ -55,6 +64,8 @@ export function useWorkflowTemplateOptions(excludeId: string | null) {
             id: workflow.id,
             name: workflow.name,
             version: workflow.version,
+            startOutputPorts: outputPortsOf(workflow.definition, "flow:start"),
+            endOutputPorts: outputPortsOf(workflow.definition, "flow:end"),
           }));
       } catch {
         return [];
@@ -62,4 +73,15 @@ export function useWorkflowTemplateOptions(excludeId: string | null) {
     },
     staleTime: OPTIONS_STALE_TIME_MS,
   });
+}
+
+function outputPortsOf(
+  definition: WorkflowDefinition,
+  nodeType: NodeType,
+): WorkflowTemplatePort[] {
+  const node = definition.nodes.find((node) => node.type === nodeType);
+  if (!node) {
+    return [];
+  }
+  return node.outputs.map(({ name, type }) => ({ name, type }));
 }

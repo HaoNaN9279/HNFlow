@@ -589,3 +589,157 @@ class TestSseNoSubgraphLeak:
         # so the pass cannot be a false green from an over-filtered (empty) stream.
         assert "p_sub" in starts
         assert "p_sub" in ends
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 12. Subgraph-input copy-on-write boundary (T9A-1)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCopyOnWriteBoundary:
+    """Subgraph inputs cross the boundary via ``_copy_on_write``.
+
+    A child node that mutates its input in place (a custom-executor anti-pattern)
+    must not pollute the parent state: only the top-level container is copied
+    (COW), while nested objects stay shared by reference (no deepcopy — that
+    copy cost is exactly what the boundary avoids).
+    """
+
+    @pytest.mark.asyncio
+    async def test_cow_input_dict_mutation_does_not_pollute_parent(self) -> None:
+        """In-place top-level dict mutation inside the child leaves the parent value intact."""
+
+        def mutating_exec(_rt: Any, _p: dict, inputs: dict) -> dict[str, Any]:
+            # Simulates a custom executor that mutates its input in place.
+            payload = inputs["in"]
+            payload["mutated"] = True
+            return {"out": payload}
+
+        child = _child_def()
+        sub = _sub_node("sub", definition=child.model_dump(mode="json"), mapping=_roundtrip_mapping())
+        nodes = [_start_node(), sub, _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: mutating_exec})
+        graph = compile_definition(def_, context=ctx)
+
+        parent_payload: dict[str, Any] = {"a": 1, "b": 2}
+        state = await _run(graph, {"wf:start:input": parent_payload})
+
+        # Parent value is un-polluted; the child mutation landed on the COW copy.
+        assert parent_payload == {"a": 1, "b": 2}
+        assert state.get("wf:sub:out") == {"a": 1, "b": 2, "mutated": True}
+        assert state["wf:sub:out"] is not parent_payload
+
+    @pytest.mark.asyncio
+    async def test_cow_input_list_mutation_does_not_pollute_parent(self) -> None:
+        """In-place top-level list mutation inside the child leaves the parent value intact."""
+
+        def mutating_exec(_rt: Any, _p: dict, inputs: dict) -> dict[str, Any]:
+            payload = inputs["in"]
+            payload.append("mutated")
+            return {"out": payload}
+
+        child = _child_def()
+        sub = _sub_node("sub", definition=child.model_dump(mode="json"), mapping=_roundtrip_mapping())
+        nodes = [_start_node(), sub, _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: mutating_exec})
+        graph = compile_definition(def_, context=ctx)
+
+        parent_payload: list[Any] = [1, 2, 3]
+        state = await _run(graph, {"wf:start:input": parent_payload})
+
+        assert parent_payload == [1, 2, 3]
+        assert state.get("wf:sub:out") == [1, 2, 3, "mutated"]
+        assert state["wf:sub:out"] is not parent_payload
+
+    @pytest.mark.asyncio
+    async def test_cow_nested_objects_shared_no_deepcopy(self) -> None:
+        """Top-level container is copied; nested objects keep the same id (zero deepcopy)."""
+        captured: dict[str, Any] = {}
+
+        def probe_exec(_rt: Any, _p: dict, inputs: dict) -> dict[str, Any]:
+            captured["child_value"] = inputs["in"]
+            return {"out": inputs["in"]}
+
+        child = _child_def()
+        sub = _sub_node("sub", definition=child.model_dump(mode="json"), mapping=_roundtrip_mapping())
+        nodes = [_start_node(), sub, _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: probe_exec})
+        graph = compile_definition(def_, context=ctx)
+
+        nested: dict[str, Any] = {"deep": [1, 2, 3]}
+        parent_payload: dict[str, Any] = {"meta": nested, "data": "x"}
+        await _run(graph, {"wf:start:input": parent_payload})
+
+        child_value = captured["child_value"]
+        # Shallow copy: the child sees a different top-level dict ...
+        assert child_value is not parent_payload
+        # ... but the nested objects stay shared — no deepcopy was performed.
+        assert child_value["meta"] is parent_payload["meta"]
+        assert child_value["meta"]["deep"] is parent_payload["meta"]["deep"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scalar", [42, "immutable-string", None, 3.14, (1, 2)])
+    async def test_cow_scalars_passed_by_reference(self, scalar: Any) -> None:
+        """Scalars / strings / None / tuples pass through unchanged (zero-cost direct pass)."""
+        captured: dict[str, Any] = {}
+
+        def probe_exec(_rt: Any, _p: dict, inputs: dict) -> dict[str, Any]:
+            captured["child_value"] = inputs["in"]
+            return {"out": inputs["in"]}
+
+        child = _child_def()
+        sub = _sub_node("sub", definition=child.model_dump(mode="json"), mapping=_roundtrip_mapping())
+        nodes = [_start_node(), sub, _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ]
+        def_ = _make_def(nodes, edges)
+        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: probe_exec})
+        graph = compile_definition(def_, context=ctx)
+
+        await _run(graph, {"wf:start:input": scalar})
+        assert captured["child_value"] is scalar
+
+    @pytest.mark.asyncio
+    async def test_delegate_invoke_cow(self) -> None:
+        """``invoke_workflow`` tool applies the same COW boundary to its sub_input."""
+        from deerflow.workflow.delegate import build_invoke_workflow_tool
+
+        captured: dict[str, Any] = {}
+
+        def probe_exec(_rt: Any, _p: dict, inputs: dict) -> dict[str, Any]:
+            captured["child_value"] = inputs["in"]
+            return {"out": inputs["in"]}
+
+        child = _child_def()
+        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: probe_exec})
+        child_graph = compile_definition(child, context=ctx)
+        tool = build_invoke_workflow_tool(child_graph, child, "cstart", "cend")
+
+        nested: dict[str, Any] = {"deep": [1, 2, 3]}
+        payload: dict[str, Any] = {"a": 1, "nested": nested}
+        result = await tool.ainvoke({"template_id": "wf-tpl", "inputs": {"in": payload}})
+
+        child_value = captured["child_value"]
+        # The child graph received a shallow copy of the caller's dict ...
+        assert child_value is not payload
+        # ... while nested objects stay shared (no deepcopy).
+        assert child_value["nested"] is payload["nested"]
+        # Value content round-trips unchanged (COW must not break semantics).
+        assert result["result"] == payload

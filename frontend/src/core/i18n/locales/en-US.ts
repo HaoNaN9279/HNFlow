@@ -499,6 +499,10 @@ export const enUS: Translations = {
         modeLabel: "Mode",
         versionLabel: "Version",
         noTemplates: "No other workflows available",
+        mappingTitle: "Port mapping",
+        inputMappingLabel: "Input mapping",
+        outputMappingLabel: "Output mapping",
+        unmappedPlaceholder: "Not mapped",
       },
       validation: {
         instructionRequired: "Instruction is required",
@@ -506,6 +510,8 @@ export const enUS: Translations = {
         invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
         agentNotFoundWarning:
           "Agent does not exist yet — it can be referenced before creation",
+        mappingInvalid:
+          "Invalid port mapping — output maps to an undeclared parent port",
       },
     },
     run: {

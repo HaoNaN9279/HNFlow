@@ -24,6 +24,7 @@ from langgraph.config import get_config  # type: ignore[import-untyped]
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import BaseModel, Field
 
+from deerflow.workflow.compiler import _copy_on_write
 from deerflow.workflow.schema import WorkflowDefinition
 
 
@@ -60,8 +61,13 @@ def build_invoke_workflow_tool(
 
     async def _invoke(template_id: str, inputs: dict[str, Any]) -> dict[str, Any] | str:
         # Build the child initial state from the caller-supplied inputs using
-        # the compiler's ``wf:<child_start_id>:<port>`` key convention.
-        sub_input: dict[str, Any] = {f"wf:{child_start_id}:{port}": value for port, value in inputs.items()}
+        # the compiler's ``wf:<child_start_id>:<port>`` key convention.  Every
+        # value crosses the boundary through the compiler's ``_copy_on_write``
+        # (COW), matching the compile-time subgraph adapter: mutable top-level
+        # containers are shallow-copied so an in-place mutation by a child node
+        # cannot pollute the parent's input values, while nested objects stay
+        # shared (no deepcopy).
+        sub_input: dict[str, Any] = {f"wf:{child_start_id}:{port}": _copy_on_write(value) for port, value in inputs.items()}
 
         # Forward the parent config (context, thread id, ...) when available;
         # fall back to {} when invoked outside a LangGraph context.

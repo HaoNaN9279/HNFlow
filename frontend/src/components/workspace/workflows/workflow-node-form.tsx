@@ -35,6 +35,9 @@ const AGENT_CUSTOM_VALUE = "__custom__";
 const CUSTOM_AGENT_LABEL = "Custom agent...";
 const NO_SKILLS_LABEL = "No skills available";
 
+/** Sentinel select value meaning "this subworkflow port is not mapped". */
+const UNMAPPED_VALUE = "__unmapped__";
+
 type WorkflowNodeFormProps = {
   node: RFNode;
   readonly: boolean;
@@ -51,7 +54,11 @@ type WorkflowNodeFormProps = {
  * immutable `WorkflowNode` produced by `applyNodeFormValues`. Saving stays the
  * toolbar's job — this form never calls the API directly.
  */
-export function WorkflowNodeForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
+export function WorkflowNodeForm({
+  node,
+  readonly,
+  onChange,
+}: WorkflowNodeFormProps) {
   const workflow = node.data?.workflow;
   if (!workflow) {
     return null;
@@ -60,7 +67,9 @@ export function WorkflowNodeForm({ node, readonly, onChange }: WorkflowNodeFormP
     return <AiAgentForm node={node} readonly={readonly} onChange={onChange} />;
   }
   if (workflow.type === "nested:subworkflow") {
-    return <SubworkflowForm node={node} readonly={readonly} onChange={onChange} />;
+    return (
+      <SubworkflowForm node={node} readonly={readonly} onChange={onChange} />
+    );
   }
   return null;
 }
@@ -99,8 +108,7 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
 
   const customAgentActive =
     customAgentOpen ||
-    (values.agent_name !== "" &&
-      !agentNames.includes(values.agent_name ?? ""));
+    (values.agent_name !== "" && !agentNames.includes(values.agent_name ?? ""));
 
   const agentSelectValue = customAgentActive
     ? AGENT_CUSTOM_VALUE
@@ -239,7 +247,7 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           </p>
         )}
         {agentWarning && (
-          <p className="text-amber-600 text-xs" role="alert">
+          <p className="text-xs text-amber-600" role="alert">
             {labels.validation.agentNotFoundWarning}
           </p>
         )}
@@ -272,10 +280,7 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
         {skills.length > 0 ? (
           <div className="flex flex-col gap-1">
             {skills.map((skill) => (
-              <label
-                key={skill}
-                className="flex items-center gap-1.5 text-xs"
-              >
+              <label key={skill} className="flex items-center gap-1.5 text-xs">
                 <input
                   type="checkbox"
                   checked={selectedSkills.includes(skill)}
@@ -311,7 +316,16 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   const templateQuery = useWorkflowTemplateOptions(node.id);
   const templates = templateQuery.data ?? [];
 
-  const errors = validateNodeForm(values);
+  const errors = validateNodeForm(values, workflow);
+
+  const selectedTemplate = templates.find(
+    (template) => template.id === values.template_id,
+  );
+  const startOutputPorts = selectedTemplate?.startOutputPorts ?? [];
+  const endOutputPorts = selectedTemplate?.endOutputPorts ?? [];
+  const mapping = values.mapping ?? { inputs: {}, outputs: {} };
+  const showMappingSection =
+    startOutputPorts.length > 0 || endOutputPorts.length > 0;
 
   const commit = (next: NodeFormValues) => {
     onChange(applyNodeFormValues(node.data.workflow, next));
@@ -323,6 +337,38 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
       ...values,
       template_id: id,
       version: option?.version ?? values.version,
+    };
+    setValues(next);
+    commit(next);
+  };
+
+  /**
+   * Wire one child port to a parent port (or clear it with `UNMAPPED_VALUE`).
+   * Iteration is child-first on both sides to mirror the backend wire format
+   * (`mapping.inputs` / `mapping.outputs` are keyed by child port name): the
+   * fixed row label is the child start/end output port and the select offers
+   * the parent's declared input/output ports.
+   */
+  const handleMappingChange = (
+    kind: "inputs" | "outputs",
+    childPort: string,
+    value: string,
+  ) => {
+    const current = values.mapping ?? { inputs: {}, outputs: {} };
+    const side = { ...current[kind] };
+    if (value === UNMAPPED_VALUE) {
+      delete side[childPort];
+    } else {
+      side[childPort] = value;
+    }
+    const nextMapping = { ...current, [kind]: side };
+    const next: NodeFormValues = {
+      ...values,
+      mapping:
+        Object.keys(nextMapping.inputs).length > 0 ||
+        Object.keys(nextMapping.outputs).length > 0
+          ? nextMapping
+          : undefined,
     };
     setValues(next);
     commit(next);
@@ -382,6 +428,104 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           <span className="text-muted-foreground font-mono text-xs">
             {values.version}
           </span>
+        </div>
+      )}
+
+      {showMappingSection && (
+        <div className="flex flex-col gap-3">
+          <div className="text-xs font-medium">
+            {labels.subworkflow.mappingTitle}
+          </div>
+
+          {startOutputPorts.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium">
+                {labels.subworkflow.inputMappingLabel}
+              </span>
+              {startOutputPorts.map((port) => (
+                <div key={port.name} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    {port.name}
+                  </span>
+                  <Select
+                    value={mapping.inputs[port.name] ?? UNMAPPED_VALUE}
+                    disabled={readonly}
+                    onValueChange={(value) =>
+                      handleMappingChange("inputs", port.name, value)
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label={`${labels.subworkflow.inputMappingLabel}: ${port.name}`}
+                      className="h-7 w-40 shrink-0 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={UNMAPPED_VALUE}>
+                        {labels.subworkflow.unmappedPlaceholder}
+                      </SelectItem>
+                      {workflow.inputs.map((parentPort) => (
+                        <SelectItem
+                          key={parentPort.name}
+                          value={parentPort.name}
+                        >
+                          {parentPort.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {endOutputPorts.length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium">
+                {labels.subworkflow.outputMappingLabel}
+              </span>
+              {endOutputPorts.map((port) => (
+                <div key={port.name} className="flex items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    {port.name}
+                  </span>
+                  <Select
+                    value={mapping.outputs[port.name] ?? UNMAPPED_VALUE}
+                    disabled={readonly}
+                    onValueChange={(value) =>
+                      handleMappingChange("outputs", port.name, value)
+                    }
+                  >
+                    <SelectTrigger
+                      aria-label={`${labels.subworkflow.outputMappingLabel}: ${port.name}`}
+                      className="h-7 w-40 shrink-0 text-xs"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={UNMAPPED_VALUE}>
+                        {labels.subworkflow.unmappedPlaceholder}
+                      </SelectItem>
+                      {workflow.outputs.map((parentPort) => (
+                        <SelectItem
+                          key={parentPort.name}
+                          value={parentPort.name}
+                        >
+                          {parentPort.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {errors["mapping.outputs"] && (
+            <p className="text-destructive text-xs" role="alert">
+              {labels.validation.mappingInvalid}
+            </p>
+          )}
         </div>
       )}
     </div>
