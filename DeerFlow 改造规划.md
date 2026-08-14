@@ -610,10 +610,14 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - 工具名与现有 builtin 冲突检查（`tools/tools.py` 去重逻辑）
 
 **验证点**
-- [ ] 「创建一个发布流程，包含资源导入、打包、测试」生成合法定义并可通过校验
-- [ ] 生成含环/端口错误的定义被自动修正或拒绝
-- [ ] 危险节点（bash）默认带待审核标记
-- [ ] 对话中可自然语言修改已存在工作流
+- [x] 「创建一个发布流程，包含资源导入、打包、测试」生成合法定义并可通过校验
+  - 已实现：`generate_workflow` 走 LLM 生成 → `validate_definition` 校验（≤2 次重试）→ 保存；集成测试覆盖合法生成（`backend/tests/test_workflow_tools_integration.py`）
+- [x] 生成含环/端口错误的定义被自动修正或拒绝
+  - 已实现：校验失败带错误列表重试，耗尽后返回结构化错误（`backend/packages/harness/deerflow/tools/builtins/workflow_tools.py`；测试 `backend/tests/test_workflow_tools.py`）
+- [x] 危险节点（bash）默认带待审核标记
+  - 已实现：`tool:bash`/`tool:http` 默认写入 `pending_review_nodes` 元数据（`backend/packages/harness/deerflow/workflow/danger.py`；测试 `backend/tests/test_workflow_danger.py`）
+- [x] 对话中可自然语言修改已存在工作流
+  - 已实现：`edit_workflow` 读现有定义 + 指令完整重生成，更新同一 `definition_id`（测试 `backend/tests/test_workflow_tools.py` + 集成）
 
 #### T18 对话调度/进度汇报/异常修复
 

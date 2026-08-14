@@ -867,6 +867,9 @@ that cannot tell sibling branches apart.
    - `view_image` - Read image as base64 (added only if model supports vision)
    - `setup_agent` - Bootstrap-only: persist a brand-new custom agent's `SOUL.md` and `config.yaml`. Bound only when `is_bootstrap=True`.
    - `update_agent` - Custom-agent-only: persist self-updates to the current agent's `SOUL.md` / `config.yaml` from inside a normal chat (partial update + atomic write). Bound when `agent_name` is set and `is_bootstrap=False`.
+   - `generate_workflow` - Generate a workflow definition draft from natural language (`prompt` → LLM generation via `run_oneshot_llm` → `validate_definition` with ≤2 corrective retries → mark dangerous nodes pending review → persist through the harness save service)
+   - `edit_workflow` - Edit an existing workflow definition from a natural-language instruction (read the current definition + instruction → regenerate the complete definition → validate with the same retry loop → update the same `definition_id`)
+   - **Workflow generation safety boundary** (`workflow_tools.py`, T17): a draft is saved only after passing `validate_definition` graph-structure checks — invalid output retries up to 2 times, then collapses to a structured `status="error"` ToolMessage; dangerous nodes (`tool:bash` / `tool:http`) carry a `pending_review` mark by default (`WorkflowMetadata.pending_review_nodes`, unless `crash_confirm=False`; runtime confirmation ships in T18); saving on `database.backend: memory` raises `WorkflowDefinitionSaveError` with an explicit SQL-backend requirement
 4. **Subagent tool** (if enabled):
    - `task` - Delegate to subagent (description, prompt, subagent_type)
 

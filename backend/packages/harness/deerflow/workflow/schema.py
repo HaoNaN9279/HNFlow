@@ -162,6 +162,9 @@ class WorkflowMetadata(BaseModel):
     resolved_groups: list[str] | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    # 非幂等/危险节点（如 bash、http）的 id 列表，运行时确认留 T18；
+    # None = 无待审核节点。
+    pending_review_nodes: list[str] | None = None
 
 
 class WorkflowDefinition(BaseModel):
