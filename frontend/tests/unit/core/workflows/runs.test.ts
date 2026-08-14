@@ -11,6 +11,7 @@ rs.mock("@/core/config", () => ({
 import { fetch as fetcher } from "@/core/api/fetcher";
 import {
   cancelWorkflowRun,
+  continueWorkflowNode,
   createWorkflowRun,
   getWorkflowRun,
   parseWorkflowSseLine,
@@ -159,6 +160,72 @@ describe("cancelWorkflowRun", () => {
   });
 });
 
+describe("continueWorkflowNode", () => {
+  test("posts to /runs/{runId}/continue with node_id and prompt", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    const result = await continueWorkflowNode(
+      "wf-1",
+      "run-1",
+      "ai_step",
+      "keep going",
+    );
+
+    const { url, init } = lastCall();
+    expect(url).toContain("/api/workflows/wf-1/runs/run-1/continue");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      node_id: "ai_step",
+      prompt: "keep going",
+    });
+    expect(result).toEqual(SAMPLE_RUN);
+  });
+
+  test("omits params when not supplied", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    await continueWorkflowNode("wf-1", "run-1", "ai_step", "p");
+
+    const { init } = lastCall();
+    const body = JSON.parse(init?.body as string);
+    expect(body).not.toHaveProperty("params");
+  });
+
+  test("includes params when supplied", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    await continueWorkflowNode("wf-1", "run-1", "ai_step", "p", {
+      input: "fresh",
+    });
+
+    const { init } = lastCall();
+    expect(JSON.parse(init?.body as string)).toEqual({
+      node_id: "ai_step",
+      prompt: "p",
+      params: { input: "fresh" },
+    });
+  });
+
+  test("URL-encodes the run id", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    await continueWorkflowNode("wf-1", "run 1/x", "ai_step", "p");
+
+    const { url } = lastCall();
+    expect(url).toContain("/api/workflows/wf-1/runs/run%201%2Fx/continue");
+  });
+
+  test("throws the backend detail on non-2xx", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(503, { detail: "Workflow dispatch unavailable" }),
+    );
+
+    await expect(
+      continueWorkflowNode("wf-1", "run-1", "ai_step", "p"),
+    ).rejects.toThrow("Workflow dispatch unavailable");
+  });
+});
+
 describe("parseWorkflowSseLine", () => {
   test("maps a metadata frame", () => {
     expect(
@@ -227,7 +294,9 @@ describe("parseWorkflowSseLine", () => {
 
   test("falls back to the data type field when the event line is missing", () => {
     expect(
-      parseWorkflowSseLine(['data: {"type":"wf:node:started","node_id":"n1","step":1}']),
+      parseWorkflowSseLine([
+        'data: {"type":"wf:node:started","node_id":"n1","step":1}',
+      ]),
     ).toEqual({ type: "node-started", nodeId: "n1", step: 1 });
   });
 
@@ -238,7 +307,9 @@ describe("parseWorkflowSseLine", () => {
   });
 
   test("returns null for malformed JSON", () => {
-    expect(parseWorkflowSseLine(["event: metadata", "data: {not-json"])).toBeNull();
+    expect(
+      parseWorkflowSseLine(["event: metadata", "data: {not-json"]),
+    ).toBeNull();
   });
 
   test("returns null when required fields are missing", () => {
@@ -246,7 +317,10 @@ describe("parseWorkflowSseLine", () => {
       parseWorkflowSseLine(["event: metadata", 'data: {"run_id":"r1"}']),
     ).toBeNull();
     expect(
-      parseWorkflowSseLine(["event: wf:node:started", 'data: {"node_id":"n1"}']),
+      parseWorkflowSseLine([
+        "event: wf:node:started",
+        'data: {"node_id":"n1"}',
+      ]),
     ).toBeNull();
   });
 });
@@ -307,9 +381,9 @@ describe("streamWorkflowRun", () => {
   test("ignores heartbeat comments and blank lines", async () => {
     mockedFetch.mockResolvedValueOnce(
       sseResponse([
-        ': heartbeat\n\n',
+        ": heartbeat\n\n",
         'event: metadata\ndata: {"run_id":"r1","thread_id":"t1"}\n\n',
-        '\n\n',
+        "\n\n",
       ]),
     );
 
@@ -338,7 +412,9 @@ describe("streamWorkflowRun", () => {
 
   test("handles CRLF line endings", async () => {
     mockedFetch.mockResolvedValueOnce(
-      sseResponse(['event: metadata\r\ndata: {"run_id":"r1","thread_id":"t1"}\r\n\r\n']),
+      sseResponse([
+        'event: metadata\r\ndata: {"run_id":"r1","thread_id":"t1"}\r\n\r\n',
+      ]),
     );
 
     const events = await collect(streamWorkflowRun("wf-1"));
@@ -351,7 +427,9 @@ describe("streamWorkflowRun", () => {
 
   test("emits a terminal end event when the stream closes without one", async () => {
     mockedFetch.mockResolvedValueOnce(
-      sseResponse(['event: metadata\ndata: {"run_id":"r1","thread_id":"t1"}\n\n']),
+      sseResponse([
+        'event: metadata\ndata: {"run_id":"r1","thread_id":"t1"}\n\n',
+      ]),
     );
 
     const events = await collect(streamWorkflowRun("wf-1"));
@@ -379,9 +457,7 @@ describe("streamWorkflowRun", () => {
   });
 
   test("throws on non-2xx before reading the body", async () => {
-    mockedFetch.mockResolvedValueOnce(
-      sseResponse([], 500),
-    );
+    mockedFetch.mockResolvedValueOnce(sseResponse([], 500));
 
     await expect(collect(streamWorkflowRun("wf-1"))).rejects.toThrow(
       /Failed to stream workflow run/,

@@ -229,6 +229,39 @@ export async function cancelWorkflowRun(
 }
 
 /**
+ * Continue a completed / interrupted run's AI node in its own session
+ * (W2B). Admits a new workflow run that resumes the original run's session
+ * checkpoint; ``params`` overrides the inherited defaults when supplied.
+ */
+export async function continueWorkflowNode(
+  workflowId: string,
+  runId: string,
+  nodeId: string,
+  prompt: string,
+  params?: Record<string, unknown>,
+): Promise<WorkflowRunRecord> {
+  const response = await fetch(
+    workflowRunsUrl(workflowId, `/${encodeURIComponent(runId)}/continue`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        node_id: nodeId,
+        prompt,
+        ...(params !== undefined ? { params } : {}),
+      }),
+    },
+  );
+  if (!response.ok) {
+    await throwWorkflowRunApiError(
+      response,
+      `Failed to continue workflow run: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<WorkflowRunRecord>;
+}
+
+/**
  * Create a workflow run and stream its events over SSE. Frames are split on
  * blank lines with a buffer, so events spanning chunk boundaries are joined
  * before parsing; an explicit ``end`` event passes through, and one is emitted

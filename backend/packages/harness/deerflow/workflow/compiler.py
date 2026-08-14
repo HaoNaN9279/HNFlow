@@ -260,6 +260,12 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             fields[f"wf:{node.id}:{port.name}"] = Any
         if node.type == NodeType.FLOW_LOOP:
             fields[f"wf:{node.id}:__count"] = Any
+        if node.type == NodeType.AI_LLM_AGENT:
+            # Reserved observability channel: the sub-agent's aggregated token
+            # usage, lifted from the executor result's reserved key by
+            # ``_make_node_fn``.  Declared here so LangGraph persists the write
+            # into the final state → run.end content / get_workflow_run.
+            fields[f"wf:{node.id}:__token_usage"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -351,6 +357,16 @@ def _make_node_fn(
         for p in node.outputs:
             if p.name in result:
                 outputs[f"wf:{node.id}:{p.name}"] = result[p.name]
+
+        # AI nodes: surface the sub-agent's aggregated token usage on a
+        # reserved state channel (declared in ``_build_state_schema``) instead
+        # of a declared output port. ``exec_llm_agent`` returns the reserved
+        # ``__workflow_token_usage`` key only when provider usage was observed,
+        # so absent usage leaves no channel write.
+        if node.type == NodeType.AI_LLM_AGENT:
+            token_usage = result.get("__workflow_token_usage")
+            if isinstance(token_usage, dict):
+                outputs[f"wf:{node.id}:__token_usage"] = token_usage
 
         return outputs
 
@@ -894,14 +910,40 @@ def _compile_impl(
 
         if node.type == NodeType.FLOW_LOOP:
             # Loop node: register a counting executor that reads/writes
-            # wf:<loop_id>:__count in state and outputs nothing (or empty).
+            # wf:<loop_id>:__count in state and writes the declared
+            # ``iteration`` / ``out`` output ports (the frontend catalog
+            # declares both).  ``iteration`` mirrors the counter (current
+            # round = count + 1); ``out`` pass-throughs the ``in`` input
+            # port value resolved via the same incoming-edge key map as
+            # ``_make_node_fn``.  Missing upstream (no ``in`` edge or the
+            # producer never ran) yields ``None`` instead of an error.
             loop_id = node.id
-            iterations = node.params.get("iterations", 1)
+            # Build the input-port → state-key mapping from incoming edges.
+            # A tuple of pairs keeps the closure default immutable (B006).
+            loop_in_edges: tuple[tuple[str, str], ...] = tuple((edge.target_port, f"wf:{edge.source}:{edge.source_port}") for edge in incoming_edges.get(node.id, []))
 
-            async def _loop_node_fn(state: dict[str, Any], *, _lid: str = loop_id, _max: int = iterations) -> dict[str, Any]:
+            async def _loop_node_fn(
+                state: dict[str, Any],
+                *,
+                _lid: str = loop_id,
+                _in_edges: tuple[tuple[str, str], ...] = loop_in_edges,
+            ) -> dict[str, Any]:
                 count_key = f"wf:{_lid}:__count"
                 current: int = state.get(count_key, 0)
-                return {count_key: current + 1}
+                iteration = current + 1
+                outputs: dict[str, Any] = {count_key: iteration}
+                # iteration output port — mirrors the counter every round.
+                outputs[f"wf:{_lid}:iteration"] = iteration
+                # out = in pass-through: resolve the ``in`` port's upstream
+                # state key from incoming edges (last matching edge wins,
+                # exactly like ``_make_node_fn``'s dict key map).  Missing
+                # upstream yields None instead of raising.
+                in_state_key: str | None = None
+                for port, key in _in_edges:
+                    if port == "in":
+                        in_state_key = key
+                outputs[f"wf:{_lid}:out"] = state.get(in_state_key) if in_state_key is not None else None
+                return outputs
 
             builder.add_node(node.id, _loop_node_fn)
             continue

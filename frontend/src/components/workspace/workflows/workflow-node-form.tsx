@@ -195,6 +195,15 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
       </div>
 
       <div className="flex flex-col gap-1">
+        <span className="text-xs font-medium">
+          {labels.ai.continuePromptLabel}
+        </span>
+        <p className="text-muted-foreground text-[11px]">
+          {labels.ai.continuePromptHint}
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-1">
         <label className="text-xs font-medium">{labels.ai.agentLabel}</label>
         {customAgentActive ? (
           <Input

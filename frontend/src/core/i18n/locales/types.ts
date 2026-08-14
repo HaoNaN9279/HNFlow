@@ -398,6 +398,8 @@ export interface Translations {
         agentHint: string;
         capabilityGroupsLabel: string;
         capabilityGroupsPlaceholder: string;
+        continuePromptLabel: string;
+        continuePromptHint: string;
       };
       subworkflow: {
         title: string;
@@ -446,6 +448,11 @@ export interface Translations {
         completed: string;
         failed: string;
       };
+      continueSession: string;
+      continuePromptPlaceholder: string;
+      continuePromptSubmit: string;
+      continueCancel: string;
+      continueStarted: (runId: string) => string;
       panel: {
         title: string;
         idleHint: string;

@@ -71,6 +71,15 @@ class WorkflowDispatchUnavailableError(RuntimeError):
     """
 
 
+class WorkflowRunNotFoundError(RuntimeError):
+    """Raised when a workflow run id cannot be resolved for continuation.
+
+    ``continue_workflow_node`` requires the original run record to derive the
+    session checkpoint thread (``origin_thread_id``) and to inherit the
+    definition / params.  A missing or inaccessible run cannot be continued.
+    """
+
+
 # ── Public entry points ───────────────────────────────────────────────────────
 
 
@@ -85,6 +94,8 @@ async def start_workflow_run(
     metadata: dict[str, Any] | None = None,
     resume: Any | None = None,
     origin_run_id: str | None = None,
+    continue_nodes: dict[str, str] | None = None,
+    origin_thread_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a workflow ``RunRecord`` and launch the background worker task.
 
@@ -118,6 +129,16 @@ async def start_workflow_run(
         Optional original (hung) run id forwarded to ``run_workflow`` so the
         ``human:task`` executor reuses the existing pending task (see
         ``deerflow.workflow.worker.run_workflow``).
+    continue_nodes:
+        Optional ``{node_id: prompt}`` mapping forwarded to ``run_workflow``
+        (W2B).  The ``ai:llm_agent`` executor falls back to it when the node has
+        no ``continue_prompt`` input, letting a fresh run continue the target
+        node's session.  Also persisted on the run record's ``kwargs`` so a
+        chained continue can inherit it.
+    origin_thread_id:
+        Optional original run's thread id forwarded to ``run_workflow`` (W2B).
+        Used as the checkpoint-thread prefix for cross-run continuation.
+        Persisted on the run record's ``kwargs`` for chained continues.
 
     Raises
     ------
@@ -143,12 +164,18 @@ async def start_workflow_run(
     deps = _deps()
     disconnect = deps["DisconnectMode"].cancel if on_disconnect == "cancel" else deps["DisconnectMode"].continue_
 
+    run_kwargs: dict[str, Any] = {"params": params, "definition_id": definition_id}
+    if continue_nodes is not None:
+        run_kwargs["continue_nodes"] = continue_nodes
+    if origin_thread_id is not None:
+        run_kwargs["origin_thread_id"] = origin_thread_id
+
     record = await run_manager.create_or_reject(
         resolved_thread_id,
         definition_id,
         on_disconnect=disconnect,
         metadata=metadata or {},
-        kwargs={"params": params, "definition_id": definition_id},
+        kwargs=run_kwargs,
         user_id=user_id,
     )
 
@@ -167,6 +194,8 @@ async def start_workflow_run(
             resume=resume,
             human_task_repo=human_task_repo,
             origin_run_id=origin_run_id,
+            continue_nodes=continue_nodes,
+            origin_thread_id=origin_thread_id,
         )
 
     try:
@@ -254,6 +283,80 @@ async def resume_workflow_run(task: Any, *, runtime: Any) -> None:
         logger.warning("Resume run for human task %s failed (non-fatal)", task_label, exc_info=True)
 
 
+async def continue_workflow_node(
+    run_id: str,
+    node_id: str,
+    prompt: str,
+    *,
+    runtime: Any,
+    definition_id: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Start a same-session continue run for a target ``ai:llm_agent`` node.
+
+    W2B: the lead agent can continue a completed / interrupted run's AI node in
+    the *same sub-agent session* instead of starting a fresh one-shot turn.  A
+    new workflow run is admitted and executed with ``continue_nodes={node_id:
+    prompt}`` plus ``origin_thread_id=<original run's thread>``; the executor
+    then resumes the original session checkpoint
+    (``f"{origin_thread_id}:wfai:{node_id}"``) rather than the new run's thread.
+
+    ``definition_id`` / ``params`` default to the original run's own values
+    (inherited from ``record.kwargs``) so a single ``run_id`` is usually
+    enough; pass them explicitly to override.
+
+    Returns the ``start_workflow_run`` summary augmented with ``continue_node_id``
+    and ``origin_run_id``.
+
+    Raises
+    ------
+    WorkflowRunNotFoundError:
+        No run record exists for ``run_id`` (or it is inaccessible).
+    WorkflowDispatchUnavailableError:
+        No injected runtime bundle.
+    ValueError:
+        The definition cannot be inherited (no reference on the original run)
+        or its body cannot be resolved.
+    """
+    bundle = _require_runtime_bundle(runtime)
+    run_manager = bundle.get("run_manager")
+    if run_manager is None:
+        raise WorkflowDispatchUnavailableError("Workflow runtime bundle has no 'run_manager' — cannot continue workflow runs")
+    user_id = resolve_runtime_user_id(runtime)
+    record = await run_manager.get(run_id, user_id=user_id)
+    if record is None:
+        raise WorkflowRunNotFoundError(f"workflow run '{run_id}' not found or not accessible")
+
+    # Inherit definition / params from the original run when not supplied.
+    resolved_definition_id = definition_id
+    if resolved_definition_id is None:
+        resolved_definition_id = (record.kwargs or {}).get("definition_id") or record.assistant_id
+        if not resolved_definition_id:
+            raise ValueError(f"cannot continue workflow node '{node_id}': run '{run_id}' has no definition reference — pass definition_id explicitly")
+    resolved_params = params if params is not None else (record.kwargs or {}).get("params") or {}
+
+    # Resolve the definition body from the persisted definitions service.
+    deps = _deps()
+    row = await deps["get_workflow_definition"](user_id=user_id, definition_id=resolved_definition_id)
+    if row is None:
+        raise ValueError(f"workflow definition '{resolved_definition_id}' not found for user '{user_id}'")
+    definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+    if definition_dict is None:
+        raise ValueError(f"workflow definition '{resolved_definition_id}' has no body")
+    definition = deps["WorkflowDefinition"].model_validate(definition_dict)
+
+    started = await start_workflow_run(
+        definition_id=resolved_definition_id,
+        definition=definition,
+        params=resolved_params,
+        runtime=runtime,
+        continue_nodes={node_id: prompt},
+        origin_thread_id=record.thread_id,
+        metadata={"continue_from_run_id": run_id, "continue_node_id": node_id},
+    )
+    return {**started, "continue_node_id": node_id, "origin_run_id": run_id}
+
+
 async def cancel_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any]:
     """Cancel a workflow run via the injected run manager.
 
@@ -275,7 +378,11 @@ async def cancel_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any]:
 async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | None:
     """Return a compact run summary, or ``None`` when no record exists.
 
-    Summary shape: ``{run_id, thread_id, status, error, created_at}``.
+    Summary shape: ``{run_id, thread_id, status, error, created_at}``.  When
+    the run has terminated and its ``run.end`` event is persisted in the
+    injected event store, an additive optional ``token_usage`` key carries the
+    aggregated AI-node sub-agent tokens (input/output/total + prompt-cache
+    ``cache_read_tokens``, plus a per-node ``nodes`` breakdown).
     """
     bundle = _require_runtime_bundle(runtime)
     run_manager = bundle.get("run_manager")
@@ -285,13 +392,50 @@ async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | Non
     record = await run_manager.get(run_id, user_id=user_id)
     if record is None:
         return None
-    return {
+    summary = {
         "run_id": record.run_id,
         "thread_id": record.thread_id,
         "status": record.status.value,
         "error": record.error,
         "created_at": record.created_at,
     }
+    token_usage = await _read_run_token_usage(record, bundle)
+    if token_usage is not None:
+        summary["token_usage"] = token_usage
+    return summary
+
+
+async def _read_run_token_usage(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """Read the run's terminal ``run.end`` event and return its ``token_usage``.
+
+    The workflow worker writes an additive ``token_usage`` aggregate onto the
+    ``run.end`` content (see ``deerflow.workflow.worker``).  This lookup is
+    best-effort and optional: without a run context / event store, or before
+    the run has terminated, the key stays absent rather than failing the
+    summary read.
+    """
+    run_ctx = bundle.get("run_ctx")
+    if run_ctx is None:
+        return None
+    event_store = getattr(run_ctx, "event_store", None)
+    if event_store is None:
+        return None
+    try:
+        events = await event_store.list_events(
+            record.thread_id,
+            record.run_id,
+            event_types=["run.end"],
+        )
+    except Exception:  # noqa: BLE001 - observability must never fail the read
+        logger.warning("Failed to read run.end for run %s (non-fatal)", record.run_id, exc_info=True)
+        return None
+    if not events:
+        return None
+    content = events[-1].get("content")
+    if not isinstance(content, dict):
+        return None
+    token_usage = content.get("token_usage")
+    return token_usage if isinstance(token_usage, dict) else None
 
 
 async def list_run_events(run_id: str, *, runtime: Any) -> list[dict[str, Any]]:
@@ -562,8 +706,10 @@ def _deps() -> dict[str, Any]:
 __all__ = [
     "WORKFLOW_RUNTIME_CONTEXT_KEY",
     "WorkflowDispatchUnavailableError",
+    "WorkflowRunNotFoundError",
     "start_workflow_run",
     "resume_workflow_run",
+    "continue_workflow_node",
     "cancel_workflow_run",
     "get_workflow_run",
     "list_run_events",

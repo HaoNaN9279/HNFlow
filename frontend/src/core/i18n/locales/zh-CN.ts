@@ -472,6 +472,9 @@ export const zhCN: Translations = {
         agentHint: "^[A-Za-z0-9-]+$ — 自定义智能体名称，或留空使用默认",
         capabilityGroupsLabel: "能力组（技能）",
         capabilityGroupsPlaceholder: "选择技能...",
+        continuePromptLabel: "继续提示词",
+        continuePromptHint:
+          "在画布上将上游值连入 continue_prompt 输入端口，即可用新提示词继续该智能体的会话。",
       },
       subworkflow: {
         title: "子工作流",
@@ -520,6 +523,11 @@ export const zhCN: Translations = {
         completed: "已完成",
         failed: "失败",
       },
+      continueSession: "继续会话",
+      continuePromptPlaceholder: "输入该 AI 节点的提示词…",
+      continuePromptSubmit: "继续",
+      continueCancel: "取消",
+      continueStarted: (runId: string) => `继续会话已启动（run ${runId}）`,
       panel: {
         title: "运行",
         idleHint: "运行此工作流以查看节点状态",

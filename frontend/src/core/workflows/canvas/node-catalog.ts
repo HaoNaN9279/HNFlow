@@ -1,9 +1,4 @@
-import type {
-  NodeCategory,
-  NodeType,
-  Port,
-  WorkflowNode,
-} from "./types";
+import type { NodeCategory, NodeType, Port, WorkflowNode } from "./types";
 
 /**
  * Node palette catalogue — every workflow node type with its default
@@ -179,7 +174,21 @@ export const NODE_CATALOG = [
     type: "ai:llm_agent",
     label: "LLM Agent",
     category: "ai",
-    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultInputs: [
+      { name: "in", type: "data", required: true },
+      {
+        name: "template_prompt",
+        type: "data",
+        required: false,
+        description: "Template prompt (future)",
+      },
+      {
+        name: "continue_prompt",
+        type: "data",
+        required: false,
+        description: "Continue this node's session with a new prompt",
+      },
+    ],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { instruction: "" },
     description: "Run a one-shot sub-agent from an instruction template.",
@@ -200,7 +209,8 @@ export const NODE_CATALOG = [
     defaultInputs: [{ name: "in", type: "data", required: true }],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { subworkflow: { type: "template", template_id: "" } },
-    description: "Nested workflow reference (placeholder — editing lands later).",
+    description:
+      "Nested workflow reference (placeholder — editing lands later).",
   },
 ] as const satisfies readonly NodeCatalogEntry[];
 
@@ -213,7 +223,9 @@ export function getNodeCatalog(): NodeCatalogEntry[] {
   return [...NODE_CATALOG];
 }
 
-export function getNodeCatalogEntry(type: NodeType): NodeCatalogEntry | undefined {
+export function getNodeCatalogEntry(
+  type: NodeType,
+): NodeCatalogEntry | undefined {
   return NODE_CATALOG.find((entry) => entry.type === type);
 }
 

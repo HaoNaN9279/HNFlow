@@ -491,6 +491,9 @@ export const enUS: Translations = {
         agentHint: "^[A-Za-z0-9-]+$ — custom agent name or leave default",
         capabilityGroupsLabel: "Capability groups (skills)",
         capabilityGroupsPlaceholder: "Select skills...",
+        continuePromptLabel: "Continue prompt",
+        continuePromptHint:
+          "Wire a value into the continue_prompt input port on the canvas to resume this agent's session with a new prompt.",
       },
       subworkflow: {
         title: "Subworkflow",
@@ -541,6 +544,12 @@ export const enUS: Translations = {
         completed: "Completed",
         failed: "Failed",
       },
+      continueSession: "Continue session",
+      continuePromptPlaceholder: "Prompt for this AI node…",
+      continuePromptSubmit: "Continue",
+      continueCancel: "Cancel",
+      continueStarted: (runId: string) =>
+        `Continue session started (run ${runId})`,
       panel: {
         title: "Run",
         idleHint: "Run this workflow to see node status",

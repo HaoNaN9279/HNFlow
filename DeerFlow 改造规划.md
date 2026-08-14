@@ -250,6 +250,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 **注意点**
 - 原子节点执行器与 AI 节点执行器（T6 后）分层：本任务只做无 LLM 的确定性子集，AI 节点先注册为「未实现」占位并抛明确错误
 - loop/parallel 的语义先做「简单版」：loop 用固定迭代数、parallel 用 `asyncio.gather`，复杂语义（迭代状态持久化、分支上下文隔离）留 T9 与 T16 细化——**不要一次做完，防止任务膨胀**
+- **已闭环（W2B）**：loop 输出端口 `iteration`/`out` 已补写（`compiler._loop_node_fn`，与前端 catalog 声明对齐）——`iteration` 镜像轮次计数（`wf:<loop_id>:iteration`），`out` = `in` 入口值透传（`state.get(in_state_key)`）；正宗版（子图展开 + 条件边 + results 聚合）留后续
 - bash/command 类节点必须走 sandbox 执行（复用 `sandbox/` 的 `Sandbox.execute_command`），禁止直连宿主 shell——安全边界不能绕过
 - 幂等标注：对照 HNFlow v0.9.5 的 registry 审计模式，每个节点显式标注 `idempotent`，非幂等节点（bash/http/mcpTool）留 crashConfirm 钩子
 
@@ -271,6 +272,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - **不要新写执行循环**——直接调 `graph.astream`，run 事件、断点、取消全部继承 LangGraph/DeerFlow 现有语义；只做「节点级进度映射」薄层
 - SSE 事件格式遵循 `contracts/run_event_stream_contract.json` 现有 envelope，新增 `wf:*` 子类型，别另起一套
 - checkpoint 的 thread_id 映射：一个工作流实例 = 一个 thread_id，子图/并行分支共享同一 thread 但用不同 `recursion` 命名空间，防止状态串扰
+- **已闭环（W2B，AI 节点会话 + 缓存观测）**：AI 节点会话 checkpoint_thread_id = `{origin_thread_id}:wfai:{node_id}`（跨 run continue 经 context 注入 `ai_origin_thread_id` 定位旧会话），`checkpointer=None` 显式降级 reset 模式；缓存观测——`wf:<node_id>:__token_usage` 保留通道由 worker 聚合进 `run.end.content["token_usage"]`（无 provider 用量时 absent 保持 absent，绝不补零），`get_workflow_run` 暴露可选 `token_usage` 字段
 - run 取消/超时复用 `runtime/runs/` 现有取消机制，不重复实现
 
 **验证点**
@@ -340,6 +342,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - 递归深度限制：编译时检测嵌套深度（默认 ≤10 层，可配置），超限拒绝编译——防栈溢出
 - 循环引用检测：definition 引用图的环在编译前拦截（比 T11 的运行时检测更早），报完整引用链
 - 大文件传参：先做值传递，引用传递/写时复制留 T18 优化——别让本任务膨胀（已闭环 T9A：引用传递已天然实现（Python 引用零复制）；写时复制 = 子图边界 `_copy_on_write` 浅复制（`compiler._make_subworkflow_node_fn` + `delegate._invoke`，不 deepcopy 保持大值嵌套共享）；`test_workflow_subgraph.py` TestCopyOnWriteBoundary 锁定）
+- loop 正宗版（子图展开 + 条件边 + results 聚合）仍留后续——本期仅简单版补端口（见 T5 已闭环），T9 语义不改
 
 **验证点**
 - [ ] 3 层嵌套工作流编译执行成功，参数经端口映射正确传入返回
@@ -564,6 +567,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 **注意点**
 - 子图编辑是递归页面：深层嵌套注意页面栈/浏览器历史处理，避免层级过深卡死
 - 参数映射表单是子工作流节点体验核心，先做「输入端口映射」，「参数映射」（内部节点参数对外）留 T18 完善——控制任务规模。**已闭环**：参数映射 UI 已实现：SubworkflowForm 端口映射区（输入/输出映射行编辑）+ node-form.ts mapping 逻辑 + 模板端口提取 + 后端 _validate_subworkflow_mapping 契约对齐；workflow-node-form.dom.test.tsx 覆盖
+- **已闭环（W2B，AI 节点双端口）**：`node-catalog.ts` AI 节点默认 inputs 含 `template_prompt`/`continue_prompt`（text/data，可选）；`workflow-node-form.tsx` 可编辑 continue 提示词且 round-trip 无损；i18n en/zh 有对应文案
 - 表单组件复用现有 workspace 的 CodeMirror/表单模式，不新引 UI 库
 
 **验证点**
@@ -633,6 +637,7 @@ DeerFlow 净缺三样：**流程定义 DSL、端口数据流绑定、可持久�
 - 异常修复的自动重试仅限幂等节点（T5 标注），非幂等节点必须转人工确认——与 HNFlow 幂等原则一致
 - 本任务收尾阶段：将 T9 遗留的「引用传递/写时复制」与 T15 遗留的「参数映射」按需补做，形成闭环
 - T9「引用传递/写时复制」已闭环：引用传递天然实现（Python 引用零复制）+ 子图边界 `_copy_on_write` 浅复制（`compiler._make_subworkflow_node_fn` + `delegate._invoke`，不 deepcopy 保持大值嵌套共享，`test_workflow_subgraph.py` TestCopyOnWriteBoundary 锁定）；T15「参数映射 UI」已闭环：`SubworkflowForm` 端口映射区（输入/输出映射行编辑，`node-form.ts` mapping 逻辑 + 模板端口提取，后端 `_validate_subworkflow_mapping` 契约对齐）
+- **已闭环（W2B，AI 节点会话 + loop 端口 + 缓存观测）**：① AI 节点 continue——`continue_node(run_id, node_id, prompt)` 工具（`workflow_runtime_tools.py`，经 `continue_workflow_node` 服务复用同一 run 生命周期）+ REST `POST /{definition_id}/runs/{run_id}/continue`（`workflow_run_routes.py`）+ 画布运行面板 continue 表单（`workflow-run-panel.tsx`，仅 AI 节点可继续）② loop 端口——`iteration`/`out` 已补写（见 T5 已闭环）③ 缓存观测——见 T6 已闭环。测试：`tests/test_workflow_ai_continue.py`、`test_workflow_loop_ports.py`、`test_workflow_cache_observability.py`、`test_workflow_continue_tool.py`、`test_workflow_run_continue_route.py`
 
 **验证点**
 - [x] 对话中发起运行，收到关键节点进度汇报 —— `run_workflow(definition_id, params, wait)` 启动运行；`wait=True` 轮询至终态并聚合节点进度（`completed_nodes`/`total_nodes` + `current_node` + `failed_node`/`failed_error`/`idempotent_retryable`）；`wait=False` 立即返回 `{run_id, status}` 后台执行；`get_workflow_run` 可反复查询进度（工具：`workflow_runtime_tools.py`）

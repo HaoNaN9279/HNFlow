@@ -4,6 +4,7 @@ import {
   definitionToFlow,
   flowToDefinition,
 } from "@/core/workflows/canvas/mapping";
+import { getDefaultNode } from "@/core/workflows/canvas/node-catalog";
 import {
   applyNodeFormValues,
   parseNodeFormValues,
@@ -154,6 +155,21 @@ describe("applyNodeFormValues", () => {
     const applied = applyNodeFormValues(node, parseNodeFormValues(node));
     expect(applied).toEqual(node);
     expect(applied).not.toBe(node);
+  });
+
+  test("default AI node with template_prompt/continue_prompt ports round-trips untouched", () => {
+    const node = getDefaultNode("ai:llm_agent");
+    expect(node.inputs.map((p) => p.name)).toEqual([
+      "in",
+      "template_prompt",
+      "continue_prompt",
+    ]);
+    const applied = applyNodeFormValues(node, parseNodeFormValues(node));
+    // Ports stay on the node (they are wired via canvas edges, not form values).
+    expect(applied.inputs).toEqual(node.inputs);
+    expect(applied.params.instruction).toBe("");
+    expect(applied.agent_name).toBeNull();
+    expect(applied.capability_groups).toEqual([]);
   });
 
   test("parse → apply round-trips a subworkflow node's template fields", () => {

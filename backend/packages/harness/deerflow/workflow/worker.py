@@ -34,6 +34,8 @@ async def run_workflow(
     resume: Any | None = None,
     human_task_repo: Any | None = None,
     origin_run_id: str | None = None,
+    continue_nodes: dict[str, str] | None = None,
+    origin_thread_id: str | None = None,
 ) -> None:
     """Execute a compiled workflow graph in the background.
 
@@ -84,6 +86,21 @@ async def run_workflow(
         ``run_id`` local variable is left unchanged — ``event_store.put``,
         ``bridge.publish``, and ``run_manager.set_status`` all still use the new
         run id.
+    continue_nodes:
+        Optional ``{node_id: prompt}`` mapping for W2B cross-run AI-node
+        continuation.  When provided, it is injected into
+        ``config["context"]["__ai_continue"]``; the ``ai:llm_agent`` executor
+        falls back to this per-node prompt when ``inputs["continue_prompt"]`` is
+        empty, so a fresh run can continue the target node's session instead of
+        starting a new one-shot turn.  ``None`` (default) leaves the key absent.
+    origin_thread_id:
+        Optional original run's thread id used as the checkpoint-thread prefix
+        (``f"{origin_thread_id}:wfai:{node_id}"``) for a cross-run continue.
+        The new run's own ``thread_id`` differs from the original run's, so the
+        executor must locate the original session checkpoint via this prefix.
+        Injected as ``config["context"]["ai_origin_thread_id"]`` only when not
+        ``None``; absent, the executor falls back to the current
+        ``thread_id`` (W1A behavior).
     """
 
     run_id = record.run_id
@@ -155,6 +172,26 @@ async def run_workflow(
         config.setdefault("context", {})
         if isinstance(config["context"], dict):
             config["context"]["human_task_repo"] = human_task_repo
+    # Injected independently of app_config so the ai:llm_agent continue executor
+    # can derive its session checkpoint thread.  None on memory backends — the
+    # executor fails closed when continue is requested without one.
+    config.setdefault("context", {})
+    if isinstance(config["context"], dict):
+        config["context"]["checkpointer"] = checkpointer
+
+    # W2B cross-run AI-node continuation.  ``__ai_continue`` carries the
+    # per-node continue prompts for this run; ``ai_origin_thread_id`` lets the
+    # executor locate the ORIGINAL run's session checkpoint thread (the new
+    # run's thread_id differs from the original run's).  Both keys stay absent
+    # for ordinary runs so existing behavior is untouched.
+    if continue_nodes is not None:
+        config.setdefault("context", {})
+        if isinstance(config["context"], dict):
+            config["context"]["__ai_continue"] = continue_nodes
+    if origin_thread_id is not None:
+        config.setdefault("context", {})
+        if isinstance(config["context"], dict):
+            config["context"]["ai_origin_thread_id"] = origin_thread_id
 
     # Collect non-start/end node ids for astream_events filtering.
     node_ids: list[str] = [n.id for n in definition.nodes if n.type not in (NodeType.FLOW_START, NodeType.FLOW_END)]
@@ -387,13 +424,23 @@ async def run_workflow(
             if not final_output:
                 final_output = accumulated_output
 
+            # Additive observability key (run.end content is opaque per
+            # contracts/run_event_stream_contract.json — existing keys are
+            # preserved untouched).  Every AI node's reserved
+            # ``wf:<node>:__token_usage`` channel is aggregated into one
+            # ``token_usage`` dict consumed by ``get_workflow_run``.
+            run_end_content: dict[str, Any] = dict(final_output)
+            token_usage = _aggregate_final_token_usage(final_output)
+            if token_usage is not None:
+                run_end_content["token_usage"] = token_usage
+
             try:
                 await event_store.put(
                     thread_id=thread_id,
                     run_id=run_id,
                     event_type="run.end",
                     category="outputs",
-                    content=final_output,
+                    content=run_end_content,
                     metadata={"status": "interrupted" if has_pending else "success"},
                 )
             except Exception:
@@ -520,6 +567,37 @@ async def _backfill_checkpoint_ref(repo: Any, run_id: str, thread_id: str, snaps
     checkpoint_id = ((snapshot.config or {}).get("configurable") or {}).get("checkpoint_id")
     ref = {"thread_id": thread_id, "checkpoint_id": checkpoint_id}
     await repo.update_checkpoint_ref_by_run(run_id=run_id, checkpoint_ref=ref)
+
+
+def _aggregate_final_token_usage(final_output: dict[str, Any]) -> dict[str, Any] | None:
+    """Collapse per-node reserved ``wf:<node>:__token_usage`` state into one dict.
+
+    Each AI node's executor writes its aggregated sub-agent token usage onto
+    ``wf:<node_id>:__token_usage`` (see ``deerflow.workflow.compiler``); this
+    sums them into a run-level aggregate::
+
+        {"input_tokens": int, "output_tokens": int, "total_tokens": int,
+         "cache_read_tokens": int, "nodes": {<node_id>: <per-node dict>}}
+
+    Returns ``None`` when no token-usage channel is present so the caller can
+    keep the additive ``token_usage`` key absent instead of emitting an empty
+    structure.
+    """
+    per_node: dict[str, dict[str, int]] = {}
+    for key, value in final_output.items():
+        if not (isinstance(key, str) and key.startswith("wf:") and key.endswith(":__token_usage")):
+            continue
+        if not isinstance(value, dict):
+            continue
+        node_id = key[len("wf:") : -len(":__token_usage")]
+        per_node[node_id] = value
+    if not per_node:
+        return None
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cache_read_tokens": 0}
+    for value in per_node.values():
+        for field in totals:
+            totals[field] += int(value.get(field) or 0)
+    return {**totals, "nodes": per_node}
 
 
 __all__ = ["run_workflow"]

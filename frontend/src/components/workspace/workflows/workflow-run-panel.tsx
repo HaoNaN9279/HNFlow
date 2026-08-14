@@ -1,17 +1,21 @@
 "use client";
 
+import { useMemo, useState } from "react";
+import { toast } from "sonner";
+
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
 import type { RunStatus } from "@/core/workflows/run-state";
+import { continueWorkflowNode } from "@/core/workflows/runs";
 import { cn } from "@/lib/utils";
 
-import { useWorkflowRun } from "./workflow-editor-context";
+import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
 
 /** Badge tint per overall run status, mirroring the workflow-list row badges. */
 const RUN_STATUS_BADGE_CLASSES: Record<RunStatus, string> = {
   idle: "border-transparent bg-muted text-muted-foreground",
-  running:
-    "border-transparent bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  running: "border-transparent bg-blue-500/10 text-blue-600 dark:text-blue-400",
   success:
     "border-transparent bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   error: "border-transparent bg-destructive/10 text-destructive",
@@ -48,10 +52,53 @@ function timelineStatusLabel(
 export function WorkflowRunPanel() {
   const { t } = useI18n();
   const { runState } = useWorkflowRun();
+  const { definition, workflowId } = useWorkflowEditor();
   const labels = t.workflows.run;
 
   const isTerminal =
     runState.status !== "idle" && runState.status !== "running";
+  const runId = runState.runId;
+
+  // Continue is only meaningful for AI nodes: the backend resumes the node's
+  // own session checkpoint (W2B continue_workflow_node).
+  const aiNodeIds = useMemo(
+    () =>
+      new Set(
+        definition.nodes
+          .filter((node) => node.type === "ai:llm_agent")
+          .map((node) => node.id),
+      ),
+    [definition],
+  );
+
+  const [continueTarget, setContinueTarget] = useState<string | null>(null);
+  const [continuePrompt, setContinuePrompt] = useState("");
+  const [continueSubmitting, setContinueSubmitting] = useState(false);
+  const [continueError, setContinueError] = useState<string | null>(null);
+
+  const handleContinue = async (nodeId: string) => {
+    const prompt = continuePrompt.trim();
+    if (!runId || prompt === "") {
+      return;
+    }
+    setContinueSubmitting(true);
+    setContinueError(null);
+    try {
+      const record = await continueWorkflowNode(
+        workflowId,
+        runId,
+        nodeId,
+        prompt,
+      );
+      toast.success(labels.continueStarted(record.run_id));
+      setContinueTarget(null);
+      setContinuePrompt("");
+    } catch (error) {
+      setContinueError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setContinueSubmitting(false);
+    }
+  };
 
   return (
     <aside
@@ -95,7 +142,7 @@ export function WorkflowRunPanel() {
                       data-timeline-node={entry.nodeId}
                     >
                       <div className="flex items-center justify-between gap-2 text-xs">
-                        <span className="font-mono truncate">
+                        <span className="truncate font-mono">
                           {entry.nodeId}
                         </span>
                         <span
@@ -107,13 +154,86 @@ export function WorkflowRunPanel() {
                           {labels.nodeStatus[statusLabel]}
                         </span>
                       </div>
+                      {isTerminal &&
+                        runId != null &&
+                        aiNodeIds.has(entry.nodeId) &&
+                        (continueTarget === entry.nodeId ? (
+                          <div
+                            className="flex flex-col gap-1.5"
+                            data-testid="workflow-run-continue-form"
+                          >
+                            <textarea
+                              className="bg-muted min-h-16 w-full resize-y rounded border p-1.5 font-mono text-[11px]"
+                              value={continuePrompt}
+                              onChange={(event) =>
+                                setContinuePrompt(event.target.value)
+                              }
+                              placeholder={labels.continuePromptPlaceholder}
+                              data-testid="workflow-run-continue-prompt"
+                            />
+                            {continueError != null && (
+                              <span
+                                className="text-destructive text-[11px]"
+                                data-testid="workflow-run-continue-error"
+                              >
+                                {continueError}
+                              </span>
+                            )}
+                            <div className="flex gap-1.5">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-6 px-1.5 text-[11px]"
+                                disabled={
+                                  continueSubmitting ||
+                                  continuePrompt.trim() === ""
+                                }
+                                onClick={() => handleContinue(entry.nodeId)}
+                                data-testid="workflow-run-continue-submit"
+                              >
+                                {labels.continuePromptSubmit}
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-6 px-1.5 text-[11px]"
+                                disabled={continueSubmitting}
+                                onClick={() => {
+                                  setContinueTarget(null);
+                                  setContinuePrompt("");
+                                  setContinueError(null);
+                                }}
+                              >
+                                {labels.continueCancel}
+                              </Button>
+                            </div>
+                          </div>
+                        ) : (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            className="h-6 px-1.5 text-[11px]"
+                            onClick={() => {
+                              setContinueTarget(entry.nodeId);
+                              setContinuePrompt("");
+                              setContinueError(null);
+                            }}
+                            data-testid="workflow-run-continue"
+                            data-continue-node={entry.nodeId}
+                          >
+                            {labels.continueSession}
+                          </Button>
+                        ))}
                       {entry.status === "completed" &&
                         (hasOutput ? (
                           <details className="text-muted-foreground text-xs">
                             <summary className="cursor-pointer">
                               {labels.panel.output}
                             </summary>
-                            <pre className="mt-1 max-h-40 overflow-auto rounded bg-muted p-1.5 font-mono text-[11px]">
+                            <pre className="bg-muted mt-1 max-h-40 overflow-auto rounded p-1.5 font-mono text-[11px]">
                               {JSON.stringify(entry.output, null, 2)}
                             </pre>
                           </details>
@@ -136,7 +256,7 @@ export function WorkflowRunPanel() {
 
           {runState.errorMessage != null && (
             <div
-              className="bg-destructive/10 text-destructive flex flex-col gap-0.5 rounded-md border border-destructive/30 p-2 text-xs"
+              className="bg-destructive/10 text-destructive border-destructive/30 flex flex-col gap-0.5 rounded-md border p-2 text-xs"
               data-testid="workflow-run-error"
             >
               <span className="font-medium">{labels.panel.errorDetail}</span>

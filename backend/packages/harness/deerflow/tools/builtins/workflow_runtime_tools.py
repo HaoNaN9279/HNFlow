@@ -181,6 +181,50 @@ def get_workflow_run(run_id: str, runtime: Runtime) -> Command:
     return _rt_success_command("get_workflow_run", tool_call_id, result)
 
 
+@tool(parse_docstring=True)
+def continue_node(
+    run_id: str,
+    node_id: str,
+    prompt: str,
+    runtime: Runtime,
+    definition_id: str | None = None,
+    params: dict | None = None,
+) -> Command:
+    """Continue a workflow's AI node in the same session.
+
+    Starts a NEW workflow run that continues the target ``ai:llm_agent`` node of
+    a previous (completed or interrupted) run in the same sub-agent session: the
+    new run reuses the original run's session checkpoint for that node, so the
+    prompt is appended to the node's existing conversation history instead of
+    starting a fresh one-shot turn.  Returns the new run id immediately
+    (``{run_id, thread_id, status}``); use ``get_workflow_run`` to poll it.
+
+    Args:
+        run_id: Identifier of the previous workflow run whose AI-node session to continue.
+        node_id: Id of the ``ai:llm_agent`` node in that run to continue.
+        prompt: The user prompt appended to the node's existing session.
+        definition_id: Optional definition id to run (defaults to the original run's).
+        params: Optional start-node params (defaults to the original run's).
+    """
+    tool_call_id = runtime.tool_call_id
+    try:
+        result = _rt_run_async(
+            _continue_node_async(
+                run_id=run_id,
+                node_id=node_id,
+                prompt=prompt,
+                runtime=runtime,
+                definition_id=definition_id,
+                params=params,
+            )
+        )
+    except Exception as exc:
+        return _rt_error_command("continue_node", tool_call_id, [_rt_operation_error("continue_node", exc)])
+    if not result.get("ok"):
+        return _rt_error_command("continue_node", tool_call_id, result.get("errors") or [])
+    return _rt_success_command("continue_node", tool_call_id, result)
+
+
 # ── T18-3: async implementations ────────────────────────────────────────────
 
 
@@ -272,6 +316,36 @@ async def _get_workflow_run_async(*, run_id: str, runtime: Runtime) -> dict:
         "status": record.get("status"),
         "events": events[-_RECENT_EVENTS:],
     }
+
+
+async def _continue_node_async(
+    *,
+    run_id: str,
+    node_id: str,
+    prompt: str,
+    runtime: Runtime,
+    definition_id: str | None,
+    params: dict | None,
+) -> dict:
+    deps = _rt_deps()
+    try:
+        started = await deps["continue_workflow_node"](
+            run_id,
+            node_id,
+            prompt,
+            runtime=runtime,
+            definition_id=definition_id,
+            params=params,
+        )
+    except deps["WorkflowRunNotFoundError"]:
+        return {
+            "ok": False,
+            "errors": [{"code": "run_not_found", "message": f"workflow run '{run_id}' not found or not accessible"}],
+        }
+    run_id_value = started.get("run_id")
+    if not isinstance(run_id_value, str) or not run_id_value:
+        raise ValueError(f"continue_workflow_node returned no run_id: {started!r}")
+    return {"ok": True, **started}
 
 
 async def _rt_poll_until_terminal(
@@ -384,7 +458,9 @@ def _rt_deps() -> dict[str, Any]:
     from deerflow.persistence.workflow_definitions.service import get_workflow_definition
     from deerflow.workflow.danger import collect_pending_review_nodes
     from deerflow.workflow.dispatch import (
+        WorkflowRunNotFoundError,
         cancel_workflow_run,
+        continue_workflow_node,
         get_workflow_run,
         list_run_events,
         start_workflow_run,
@@ -400,6 +476,8 @@ def _rt_deps() -> dict[str, Any]:
         "get_workflow_run": get_workflow_run,
         "cancel_workflow_run": cancel_workflow_run,
         "list_run_events": list_run_events,
+        "continue_workflow_node": continue_workflow_node,
+        "WorkflowRunNotFoundError": WorkflowRunNotFoundError,
         "non_idempotent_types": _NON_IDEMPOTENT_TYPES,
         "flow_types": (NodeType.FLOW_START, NodeType.FLOW_END),
     }
@@ -668,6 +746,7 @@ __all__ = [
     "pause_workflow",
     "cancel_workflow",
     "get_workflow_run",
+    "continue_node",
     "list_human_tasks",
     "submit_human_task",
     "skip_human_task",

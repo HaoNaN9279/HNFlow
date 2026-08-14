@@ -40,6 +40,9 @@ rs.mock("@/core/i18n/hooks", () => ({
             agentHint: "^[A-Za-z0-9-]+$",
             capabilityGroupsLabel: "Capability groups",
             capabilityGroupsPlaceholder: "Select skills...",
+            continuePromptLabel: "Continue prompt",
+            continuePromptHint:
+              "Wire into continue_prompt on the canvas to resume",
           },
           subworkflow: {
             title: "Subworkflow",
@@ -207,6 +210,23 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
         params: expect.objectContaining({ instruction: "New instruction" }),
       }),
     );
+  });
+
+  it("renders the continue-prompt wiring hint without an editable textarea", () => {
+    render(
+      <WorkflowNodeForm
+        node={makeAINode()}
+        readonly={false}
+        onChange={rs.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Continue prompt")).toBeTruthy();
+    expect(
+      screen.getByText("Wire into continue_prompt on the canvas to resume"),
+    ).toBeTruthy();
+    // No textarea — the value arrives via canvas edges, not the form.
+    expect(screen.queryByLabelText("Continue prompt")).toBeNull();
   });
 
   it("shows the required error for an empty instruction", () => {

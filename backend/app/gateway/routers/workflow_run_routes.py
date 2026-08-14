@@ -1,4 +1,4 @@
-"""Workflow run endpoints — create, stream, wait, cancel, join, state.
+"""Workflow run endpoints — create, stream, wait, cancel, join, state, continue.
 
 Follows the pattern established by ``thread_runs.py``, adapted for
 workflow executions where each run is a single-thread workflow instance
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -33,6 +34,12 @@ class WorkflowRunRequest(BaseModel):
     thread_id: str | None = None
     on_disconnect: str = "cancel"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowRunContinueRequest(BaseModel):
+    node_id: str = Field(min_length=1)
+    prompt: str = Field(min_length=1)
+    params: dict[str, Any] | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -197,6 +204,71 @@ async def cancel_workflow_run(definition_id: str, run_id: str, request: Request)
         raise HTTPException(status_code=409, detail=f"Run {run_id} is active on another worker")
 
     raise HTTPException(status_code=409, detail=f"Run {run_id} cannot be cancelled")
+
+
+@router.post("/{definition_id}/runs/{run_id}/continue", response_model=RunResponse)
+@require_permission("runs", "create")
+async def continue_workflow_run(definition_id: str, run_id: str, body: WorkflowRunContinueRequest, request: Request) -> RunResponse:
+    """Continue a completed / interrupted run's AI node in its own session.
+
+    Admits a new workflow run whose ``ai:llm_agent`` executor resumes the
+    *original* run's session checkpoint (W2B ``deerflow.workflow.dispatch.
+    continue_workflow_node``).  The definition and params inherit from the
+    original run unless ``params`` is supplied.
+
+    Error mapping:
+    - ``WorkflowRunNotFoundError`` → 404 (the original run is unknown)
+    - ``WorkflowDispatchUnavailableError`` → 503 (no workflow runtime bundle)
+    - ``ValueError`` → 422 (definition cannot be inherited / not found)
+    """
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    # The harness dispatch layer reads a run-singleton bundle from
+    # ``runtime.context[WORKFLOW_RUNTIME_CONTEXT_KEY]`` (the same injection the
+    # run worker performs for the conversation-side tools).  Reconstruct that
+    # bundle from the request singletons so the REST path reuses the W2B
+    # continue logic instead of a parallel execution stack.
+    from deerflow.runtime.context_keys import WORKFLOW_RUNTIME_CONTEXT_KEY
+    from deerflow.workflow.dispatch import (
+        WorkflowDispatchUnavailableError,
+        WorkflowRunNotFoundError,
+        continue_workflow_node,
+    )
+
+    runtime = SimpleNamespace(
+        context={
+            WORKFLOW_RUNTIME_CONTEXT_KEY: {
+                "run_manager": get_run_manager(request),
+                "stream_bridge": get_stream_bridge(request),
+                "run_ctx": get_run_context(request),
+                "human_task_repo": getattr(request.app.state, "human_task_repo", None),
+            },
+            "user_id": str(user.id),
+        },
+    )
+
+    try:
+        summary = await continue_workflow_node(
+            run_id,
+            body.node_id,
+            body.prompt,
+            runtime=runtime,
+            params=body.params,
+        )
+    except WorkflowRunNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except WorkflowDispatchUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    run_mgr = get_run_manager(request)
+    record = await run_mgr.get(summary["run_id"], user_id=str(user.id))
+    if record is None:
+        raise HTTPException(status_code=500, detail=f"Continue run {summary['run_id']} was not created")
+    return _record_to_response(record)
 
 
 @router.get("/{definition_id}/runs/{run_id}/join")
