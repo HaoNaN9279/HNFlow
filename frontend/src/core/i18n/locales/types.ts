@@ -347,6 +347,61 @@ export interface Translations {
     };
   };
 
+  // Workflows
+  workflows: {
+    title: string;
+    empty: string;
+    create: string;
+    createTitle: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    deleteConfirm: (name: string) => string;
+    save: string;
+    saving: string;
+    unsaved: string;
+    readonly: string;
+    canvas: {
+      paletteTitle: string;
+      searchPlaceholder: string;
+      fitView: string;
+      zoomIn: string;
+      zoomOut: string;
+    };
+    categories: {
+      flow: string;
+      data: string;
+      tool: string;
+      ai: string;
+      human: string;
+      subworkflow: string;
+    };
+    properties: {
+      title: string;
+      paramsTitle: string;
+      portsTitle: string;
+      inputs: string;
+      outputs: string;
+      deleteNode: string;
+      paramKey: string;
+      paramValue: string;
+      addParam: string;
+      removeParam: string;
+      nodeIdLabel: string;
+      nodeTypeLabel: string;
+      noSelection: string;
+    };
+    errors: {
+      loadFailed: string;
+      saveFailed: string;
+      saveSuccess: string;
+      deleteFailed: string;
+      validationPrefix: string;
+      portTypeMismatch: string;
+      selfConnection: string;
+      missingPort: string;
+    };
+  };
+
   // Agents
   agents: {
     title: string;

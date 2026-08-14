@@ -438,6 +438,62 @@ export const enUS: Translations = {
     },
   },
 
+  // Workflows
+  workflows: {
+    title: "Workflows",
+    empty: "No workflows yet",
+    create: "New workflow",
+    createTitle: "Create workflow",
+    nameLabel: "Name",
+    namePlaceholder: "e.g. Data analysis pipeline",
+    deleteConfirm: (name) =>
+      `Are you sure you want to delete workflow "${name}"? This action cannot be undone.`,
+    save: "Save",
+    saving: "Saving...",
+    unsaved: "Unsaved",
+    readonly: "Read only",
+    canvas: {
+      paletteTitle: "Palette",
+      searchPlaceholder: "Search nodes...",
+      fitView: "Fit view",
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
+    },
+    categories: {
+      flow: "Flow",
+      data: "Data",
+      tool: "Tools",
+      ai: "AI",
+      human: "Human",
+      subworkflow: "Subworkflow",
+    },
+    properties: {
+      title: "Properties",
+      paramsTitle: "Parameters",
+      portsTitle: "Ports",
+      inputs: "Inputs",
+      outputs: "Outputs",
+      deleteNode: "Delete node",
+      paramKey: "Parameter name",
+      paramValue: "Parameter value",
+      addParam: "Add parameter",
+      removeParam: "Remove parameter",
+      nodeIdLabel: "Node ID",
+      nodeTypeLabel: "Node type",
+      noSelection: "No node selected",
+    },
+    errors: {
+      loadFailed: "Failed to load workflows",
+      saveFailed: "Failed to save workflow",
+      saveSuccess: "Workflow saved",
+      deleteFailed: "Failed to delete workflow",
+      validationPrefix: "Validation failed: ",
+      portTypeMismatch: "Port types do not match",
+      selfConnection: "A node cannot connect to itself",
+      missingPort: "Missing port",
+    },
+  },
+
   // Agents
   agents: {
     title: "Agents",
