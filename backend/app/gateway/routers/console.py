@@ -358,6 +358,7 @@ async def console_runs(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None, description="Filter by run status (e.g. running, success, error)"),
+    assistant_id: str | None = Query(default=None, description="Filter by assistant (workflow definition) id"),
 ) -> ConsoleRunsResponse:
     """Return a page of the user's runs across all threads."""
     sf = _session_factory_or_503()
@@ -373,6 +374,8 @@ async def console_runs(
     )
     if user_id:
         stmt = stmt.where(RunRow.user_id == user_id)
+    if assistant_id:
+        stmt = stmt.where(RunRow.assistant_id == assistant_id)
     if status:
         stmt = stmt.where(RunRow.status == status)
 

@@ -6,6 +6,7 @@ import {
   WorkflowEditorProvider,
   useWorkflowEditor,
 } from "@/components/workspace/workflows/workflow-editor-context";
+import { I18nProvider } from "@/core/i18n/context";
 import { flowToDefinition } from "@/core/workflows/canvas/mapping";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
@@ -64,9 +65,11 @@ function makeRecord(): WorkflowRecord {
 function renderEditor() {
   return renderHook(() => useWorkflowEditor(), {
     wrapper: ({ children }: { children: ReactNode }) => (
-      <WorkflowEditorProvider record={makeRecord()}>
-        {children}
-      </WorkflowEditorProvider>
+      <I18nProvider initialLocale="en-US">
+        <WorkflowEditorProvider record={makeRecord()}>
+          {children}
+        </WorkflowEditorProvider>
+      </I18nProvider>
     ),
   });
 }
@@ -111,9 +114,11 @@ describe("WorkflowEditorProvider canvas positions", () => {
       { def: result.current.definition, positions: result.current.positions },
     );
     const positions =
-      (definition.metadata.canvas as
-        | { positions?: Record<string, { x: number; y: number }> }
-        | undefined)?.positions ?? {};
+      (
+        definition.metadata.canvas as
+          | { positions?: Record<string, { x: number; y: number }> }
+          | undefined
+      )?.positions ?? {};
     expect(positions).not.toHaveProperty("n-a");
     expect(positions).toHaveProperty("n-b");
   });

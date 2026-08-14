@@ -13,6 +13,7 @@ import {
   createWorkflow,
   deleteWorkflow,
   getWorkflow,
+  listWorkflowRuns,
   listWorkflows,
   updateWorkflow,
   type CreateWorkflowPayload,
@@ -81,6 +82,78 @@ describe("listWorkflows", () => {
     expect(url).toContain("/api/workflows");
     expect(init?.method).toBeUndefined();
     expect(result).toEqual([SAMPLE_RECORD]);
+  });
+});
+
+describe("listWorkflowRuns", () => {
+  const SAMPLE_RUN = {
+    run_id: "run-1",
+    thread_id: "thread-1",
+    thread_title: "Sample run",
+    assistant_id: "wf-1",
+    status: "success",
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:01:00Z",
+    duration_seconds: 42,
+    error: null,
+  };
+
+  test("hits GET /api/console/runs with an encoded assistant_id and limit", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { runs: [SAMPLE_RUN], has_more: false }),
+    );
+
+    const result = await listWorkflowRuns("wf 1/x", { limit: 1 });
+
+    const { url, init } = lastCall();
+    expect(url).toContain("/api/console/runs");
+    expect(url).toContain("assistant_id=wf+1%2Fx");
+    expect(url).toContain("limit=1");
+    expect(init?.method).toBeUndefined();
+    expect(result).toEqual({ runs: [SAMPLE_RUN], hasMore: false });
+  });
+
+  test("omits limit when not provided", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { runs: [], has_more: false }),
+    );
+
+    await listWorkflowRuns("wf-1");
+
+    const { url } = lastCall();
+    expect(url).toContain("assistant_id=wf-1");
+    expect(url).not.toContain("limit=");
+  });
+
+  test("maps has_more to hasMore", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(200, { runs: [], has_more: true }),
+    );
+
+    const result = await listWorkflowRuns("wf-1");
+
+    expect(result.hasMore).toBe(true);
+    expect(result.runs).toEqual([]);
+  });
+
+  test("throws the backend detail message on a 503", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(503, { detail: "Run history requires a SQL database backend" }),
+    );
+
+    await expect(listWorkflowRuns("wf-1")).rejects.toThrow(
+      "Run history requires a SQL database backend",
+    );
+  });
+
+  test("falls back to the generated message when detail is missing", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      new Response("", { status: 503, statusText: "Service Unavailable" }),
+    );
+
+    await expect(listWorkflowRuns("wf-1")).rejects.toThrow(
+      /Failed to load workflow runs/,
+    );
   });
 });
 

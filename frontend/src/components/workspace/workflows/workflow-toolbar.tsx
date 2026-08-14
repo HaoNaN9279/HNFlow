@@ -11,7 +11,7 @@ import { updateWorkflow, type UpdateWorkflowPayload } from "@/core/workflows/api
 import { flowToDefinition } from "@/core/workflows/canvas/mapping";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
 
-import { useWorkflowEditor } from "./workflow-editor-context";
+import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
 import { WorkflowErrorList } from "./workflow-error-list";
 
 /**
@@ -19,6 +19,11 @@ import { WorkflowErrorList } from "./workflow-error-list";
  * definition (positions included) and PUTs it; a 422 surfaces the parsed
  * validation errors in the error strip (and highlights the offending canvas
  * nodes), any other failure is toasted.
+ *
+ * The Run/Stop control lives here too: Run is green and gated on a clean
+ * document (dirty disables it with a tooltip), while a live run swaps it for a
+ * destructive Stop. Saving is disabled during a run so the persisted
+ * definition cannot drift from the instance being executed.
  */
 export function WorkflowToolbar() {
   const { t } = useI18n();
@@ -35,6 +40,8 @@ export function WorkflowToolbar() {
     markSaved,
     readonly,
   } = useWorkflowEditor();
+  const { isRunning, startRun, cancelRun } = useWorkflowRun();
+  const runLabels = t.workflows.run;
 
   const saveMutation = useMutation({
     mutationFn: (payload: UpdateWorkflowPayload) =>
@@ -78,10 +85,29 @@ export function WorkflowToolbar() {
         </span>
       )}
       {readonly && <Badge variant="outline">{t.workflows.readonly}</Badge>}
+      {isRunning ? (
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={() => void cancelRun()}
+        >
+          {runLabels.stop}
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          className="bg-emerald-600 text-white hover:bg-emerald-600/90"
+          onClick={() => void startRun()}
+          disabled={readonly || dirty}
+          title={dirty ? runLabels.runDisabled : undefined}
+        >
+          {runLabels.run}
+        </Button>
+      )}
       <Button
         size="sm"
         onClick={handleSave}
-        disabled={readonly || !dirty || saveMutation.isPending}
+        disabled={readonly || !dirty || saveMutation.isPending || isRunning}
       >
         {saveMutation.isPending ? t.workflows.saving : t.workflows.save}
       </Button>

@@ -7,6 +7,7 @@ import {
   createWorkflow,
   deleteWorkflow,
   getWorkflow,
+  listWorkflowRuns,
   listWorkflows,
   updateWorkflow,
   type CreateWorkflowPayload,
@@ -26,6 +27,23 @@ export function useWorkflow(id: string | null | undefined) {
     queryKey: ["workflows", id],
     queryFn: () => getWorkflow(id ?? ""),
     enabled: Boolean(id),
+  });
+}
+
+/**
+ * Recent runs for one workflow from the console history endpoint.
+ *
+ * Run history is monitor metadata — when the backend cannot serve it (e.g.
+ * 503 without the SQL memory backend) the failure must not disturb the list
+ * page, so the query is non-retrying and callers render nothing on error.
+ */
+export function useWorkflowRuns(id: string, opts?: { limit?: number }) {
+  return useQuery({
+    queryKey: ["workflow-runs", id],
+    queryFn: () => listWorkflowRuns(id, opts),
+    enabled: Boolean(id),
+    staleTime: 60_000,
+    retry: false,
   });
 }
 

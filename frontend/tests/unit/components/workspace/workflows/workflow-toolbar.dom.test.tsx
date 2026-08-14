@@ -8,6 +8,7 @@ import {
 } from "@/components/workspace/workflows/workflow-editor-context";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
+import { streamWorkflowRun } from "@/core/workflows/runs";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
 const apiMock = rs.hoisted(() => ({ updateWorkflow: rs.fn() }));
@@ -21,6 +22,13 @@ rs.mock("sonner", () => ({
   toast: toastMock,
 }));
 
+rs.mock("@/core/workflows/runs", () => ({
+  streamWorkflowRun: rs.fn(),
+  cancelWorkflowRun: rs.fn(),
+}));
+
+const mockedStream = rs.mocked(streamWorkflowRun);
+
 rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
@@ -29,6 +37,11 @@ rs.mock("@/core/i18n/hooks", () => ({
         readonly: "Read only",
         save: "Save",
         saving: "Saving...",
+        run: {
+          run: "Run",
+          runDisabled: "Save unsaved changes first",
+          stop: "Stop",
+        },
         errors: {
           saveSuccess: "Workflow saved",
           saveFailed: "Failed to save workflow",
@@ -43,6 +56,7 @@ afterEach(() => {
   apiMock.updateWorkflow.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
+  mockedStream.mockReset();
   cleanup();
 });
 
@@ -88,7 +102,7 @@ function DirtyBridge() {
   );
 }
 
-function renderToolbar() {
+function renderToolbar(options: { readonly?: boolean } = {}) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -97,7 +111,7 @@ function renderToolbar() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <WorkflowEditorProvider record={makeRecord()}>
+      <WorkflowEditorProvider record={makeRecord()} readonly={options.readonly}>
         <DirtyBridge />
         <WorkflowToolbar />
       </WorkflowEditorProvider>
@@ -196,5 +210,85 @@ describe("WorkflowToolbar", () => {
         .disabled,
     ).toBe(true);
     expect(screen.queryByText("Unsaved")).toBeNull();
+  });
+
+  it("gates Run on a clean document and offers a run-disabled tooltip", () => {
+    renderToolbar();
+
+    // Clean document: runnable without a tooltip.
+    const runButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Run",
+    });
+    expect(runButton.disabled).toBe(false);
+    expect(runButton.title).toBe("");
+
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+
+    // Unsaved changes: the run is blocked until the document is saved.
+    const blockedRun = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Run",
+    });
+    expect(blockedRun.disabled).toBe(true);
+    expect(blockedRun.title).toBe("Save unsaved changes first");
+  });
+
+  it("swaps Run for Stop and disables Save while a run is active", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockedStream.mockImplementation(async function* () {
+      yield { type: "metadata", runId: "run-1", threadId: "t1" };
+      yield { type: "node-started", nodeId: "n_1", step: 1 };
+      await gate;
+      yield { type: "end" };
+    });
+
+    renderToolbar();
+    // Clean document: Save is disabled, Run is enabled.
+    expect(
+      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
+        .disabled,
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+    expect(
+      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
+        .disabled,
+    ).toBe(true);
+
+    // Editing while running must keep Save disabled (isRunning wins over
+    // dirty), and Run stays hidden for the whole run.
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+    expect(
+      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
+        .disabled,
+    ).toBe(true);
+    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
+
+    release();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    // The run ended but the document is still dirty -> Run stays blocked.
+    expect(
+      (screen.getByRole<HTMLButtonElement>("button", { name: "Run" }) )
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("keeps Run disabled in readonly mode", () => {
+    renderToolbar({ readonly: true });
+
+    expect(
+      (screen.getByRole<HTMLButtonElement>("button", { name: "Run" }) )
+        .disabled,
+    ).toBe(true);
   });
 });

@@ -5,6 +5,7 @@ import {
   WorkflowValidationErrors,
   parseWorkflowValidationErrors,
 } from "./errors";
+import type { WorkflowRunStatus } from "./runs";
 import type { WorkflowDefinition, WorkflowRecord } from "./types";
 
 function workflowsUrl(path: string): string {
@@ -136,4 +137,61 @@ export async function deleteWorkflow(
     );
   }
   return response.json() as Promise<{ id: string; deleted: boolean }>;
+}
+
+/**
+ * One run row from ``GET /api/console/runs`` (Gateway ``ConsoleRunItem``).
+ *
+ * The console runs endpoint spans every workflow; the list view scopes it with
+ * ``assistant_id`` to get one workflow's recent runs.
+ */
+export type WorkflowConsoleRun = {
+  run_id: string;
+  thread_id: string;
+  thread_title?: string;
+  assistant_id?: string;
+  status: WorkflowRunStatus;
+  created_at?: string;
+  updated_at?: string;
+  duration_seconds?: number;
+  error?: string;
+};
+
+/** Page returned by ``listWorkflowRuns`` — ``hasMore`` mirrors ``has_more``. */
+export type WorkflowRunsPage = {
+  runs: WorkflowConsoleRun[];
+  hasMore: boolean;
+};
+
+/**
+ * List runs for one workflow from the console history endpoint.
+ *
+ * ``assistant_id`` scopes the query to the workflow and ``limit`` trims the
+ * page (the list badge only asks for one). Non-2xx responses — including 503
+ * when the SQL/memory backend is unavailable — throw with the backend
+ * ``detail`` message when present.
+ */
+export async function listWorkflowRuns(
+  workflowId: string,
+  opts?: { limit?: number },
+): Promise<WorkflowRunsPage> {
+  const params = new URLSearchParams();
+  params.set("assistant_id", workflowId);
+  if (opts?.limit !== undefined) {
+    params.set("limit", String(opts.limit));
+  }
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/console/runs?${params.toString()}`,
+  );
+  if (!response.ok) {
+    await throwWorkflowApiError(
+      response,
+      `Failed to load workflow runs: ${response.statusText}`,
+    );
+  }
+  const body = (await response.json()) as {
+    runs: WorkflowConsoleRun[];
+    has_more: boolean;
+  };
+  return { runs: body.runs, hasMore: body.has_more };
 }

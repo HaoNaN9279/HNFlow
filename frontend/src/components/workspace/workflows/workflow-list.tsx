@@ -4,6 +4,7 @@ import { PlusIcon, Trash2Icon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -18,8 +19,10 @@ import { useI18n } from "@/core/i18n/hooks";
 import {
   useCreateWorkflow,
   useDeleteWorkflow,
+  useWorkflowRuns,
   useWorkflows,
 } from "@/core/workflows/hooks";
+import type { WorkflowRunStatus } from "@/core/workflows/runs";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
 /**
@@ -44,6 +47,48 @@ function formatTimestamp(value: string, locale: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+/** Tailwind classes per run status for the list-row badge. */
+const RUN_STATUS_BADGE_CLASSES: Record<WorkflowRunStatus, string> = {
+  pending: "border-transparent bg-muted text-muted-foreground",
+  running: "border-transparent bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  success:
+    "border-transparent bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  error: "border-transparent bg-destructive/10 text-destructive",
+  timeout:
+    "border-transparent bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  interrupted: "border-transparent bg-muted text-muted-foreground",
+};
+
+/**
+ * Latest-run status badge for one workflow row.
+ *
+ * Run history is monitor metadata: while it loads, when the workflow has no
+ * runs, or when the backend cannot serve it (e.g. 503 without the SQL memory
+ * backend) the badge renders nothing so a monitoring outage never disturbs
+ * the list page.
+ */
+function LatestRunBadge({ workflowId }: { workflowId: string }) {
+  const { t } = useI18n();
+  const runs = useWorkflowRuns(workflowId, { limit: 1 });
+  if (runs.isLoading || runs.isError) {
+    return null;
+  }
+  const latest = runs.data?.runs[0];
+  if (!latest) {
+    return null;
+  }
+  return (
+    <Badge
+      variant="outline"
+      className={RUN_STATUS_BADGE_CLASSES[latest.status]}
+      data-testid="workflow-run-badge"
+      data-status={latest.status}
+    >
+      {t.workflows.run.runStatus[latest.status]}
+    </Badge>
+  );
 }
 
 export function WorkflowList() {
@@ -133,6 +178,7 @@ export function WorkflowList() {
                     </span>
                   </span>
                 </button>
+                <LatestRunBadge workflowId={workflow.id} />
                 <Button
                   type="button"
                   variant="ghost"

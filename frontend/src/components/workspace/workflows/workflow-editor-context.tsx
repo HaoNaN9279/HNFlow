@@ -12,13 +12,16 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
+import { toast } from "sonner";
 
+import { useI18n } from "@/core/i18n/hooks";
 import {
   definitionToFlow,
   type PositionsMap,
@@ -27,7 +30,16 @@ import {
 } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import type { WorkflowValidationError } from "@/core/workflows/errors";
-import type { WorkflowDefinition, WorkflowRecord } from "@/core/workflows/types";
+import {
+  createInitialRunState,
+  workflowRunReducer,
+  type WorkflowRunState,
+} from "@/core/workflows/run-state";
+import { cancelWorkflowRun, streamWorkflowRun } from "@/core/workflows/runs";
+import type {
+  WorkflowDefinition,
+  WorkflowRecord,
+} from "@/core/workflows/types";
 
 /**
  * Shared editor state for the workflow canvas page.
@@ -73,10 +85,17 @@ type WorkflowEditorContextValue = {
    */
   updateNode: (nodeId: string, next: WorkflowNode) => void;
   deleteNode: (nodeId: string) => void;
+  /** Runtime run state for the current workflow (painted on the canvas). */
+  runState: WorkflowRunState;
+  isRunning: boolean;
+  startRun: () => Promise<void>;
+  cancelRun: () => Promise<void>;
+  clearRun: () => void;
 };
 
-const WorkflowEditorContext =
-  createContext<WorkflowEditorContextValue | null>(null);
+const WorkflowEditorContext = createContext<WorkflowEditorContextValue | null>(
+  null,
+);
 
 export function useWorkflowEditor(): WorkflowEditorContextValue {
   const value = useContext(WorkflowEditorContext);
@@ -88,8 +107,26 @@ export function useWorkflowEditor(): WorkflowEditorContextValue {
   return value;
 }
 
+/** Run-control slice of the editor context, exposed to run-aware consumers. */
+export function useWorkflowRun(): {
+  runState: WorkflowRunState;
+  isRunning: boolean;
+  startRun: () => Promise<void>;
+  cancelRun: () => Promise<void>;
+  clearRun: () => void;
+} {
+  const { runState, isRunning, startRun, cancelRun, clearRun } =
+    useWorkflowEditor();
+  return { runState, isRunning, startRun, cancelRun, clearRun };
+}
+
 /** Node/edge changes that mutate the document (selection/dimensions do not). */
-const MODIFYING_NODE_CHANGE_TYPES = new Set(["add", "remove", "replace", "position"]);
+const MODIFYING_NODE_CHANGE_TYPES = new Set([
+  "add",
+  "remove",
+  "replace",
+  "position",
+]);
 const MODIFYING_EDGE_CHANGE_TYPES = new Set(["add", "remove", "replace"]);
 
 export function WorkflowEditorProvider({
@@ -132,7 +169,9 @@ export function WorkflowEditorProvider({
   const onNodesChange = useCallback(
     (changes: NodeChange<RFNode>[]) => {
       baseOnNodesChange(changes);
-      if (changes.some((change) => MODIFYING_NODE_CHANGE_TYPES.has(change.type))) {
+      if (
+        changes.some((change) => MODIFYING_NODE_CHANGE_TYPES.has(change.type))
+      ) {
         markDirty();
       }
     },
@@ -142,7 +181,9 @@ export function WorkflowEditorProvider({
   const onEdgesChange = useCallback(
     (changes: EdgeChange<RFEdge>[]) => {
       baseOnEdgesChange(changes);
-      if (changes.some((change) => MODIFYING_EDGE_CHANGE_TYPES.has(change.type))) {
+      if (
+        changes.some((change) => MODIFYING_EDGE_CHANGE_TYPES.has(change.type))
+      ) {
         markDirty();
       }
     },
@@ -189,9 +230,7 @@ export function WorkflowEditorProvider({
     (nodeId: string, next: WorkflowNode) => {
       setNodes((current) =>
         current.map((node) =>
-          node.id === nodeId
-            ? { ...node, data: { workflow: next } }
-            : node,
+          node.id === nodeId ? { ...node, data: { workflow: next } } : node,
         ),
       );
       markDirty();
@@ -203,7 +242,9 @@ export function WorkflowEditorProvider({
     (nodeId: string) => {
       setNodes((current) => current.filter((node) => node.id !== nodeId));
       setEdges((current) =>
-        current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+        current.filter(
+          (edge) => edge.source !== nodeId && edge.target !== nodeId,
+        ),
       );
       prunePositions([nodeId]);
       setSelectedNodeId((current) => (current === nodeId ? null : current));
@@ -212,6 +253,82 @@ export function WorkflowEditorProvider({
     [markDirty, prunePositions, setEdges, setNodes],
   );
 
+  // --- Runtime run state ---------------------------------------------------
+  const workflowId = record.id;
+  const { t } = useI18n();
+
+  const [runState, dispatchRun] = useReducer(
+    workflowRunReducer,
+    undefined,
+    createInitialRunState,
+  );
+  // runId must be readable synchronously from cancelRun (dispatch is async).
+  const runIdRef = useRef<string | null>(null);
+  // Guards against double-starts before the state update lands.
+  const runActiveRef = useRef(false);
+  // Set by a successful cancel; wins the terminal-status decision at stream end.
+  const cancelledRef = useRef(false);
+
+  const startRun = useCallback(async () => {
+    if (runActiveRef.current) {
+      return;
+    }
+    runActiveRef.current = true;
+    cancelledRef.current = false;
+    runIdRef.current = null;
+    // The run id is unknown until the stream's metadata frame arrives; the
+    // reducer treats the empty placeholder as unset and lets metadata fill it.
+    dispatchRun({ type: "run-started", runId: "" });
+    let sawFailure = false;
+    try {
+      for await (const event of streamWorkflowRun(workflowId)) {
+        if (event.type === "metadata") {
+          runIdRef.current = event.runId;
+        } else if (event.type === "node-failed" || event.type === "error") {
+          sawFailure = true;
+        }
+        dispatchRun({ type: "stream-event", event });
+      }
+      dispatchRun({
+        type: "run-ended",
+        finalStatus: cancelledRef.current
+          ? "interrupted"
+          : sawFailure
+            ? "error"
+            : "success",
+      });
+    } catch (error) {
+      dispatchRun({
+        type: "run-error",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      runActiveRef.current = false;
+    }
+  }, [workflowId]);
+
+  const cancelRun = useCallback(async () => {
+    const runId = runIdRef.current;
+    if (!runId) {
+      return;
+    }
+    try {
+      await cancelWorkflowRun(workflowId, runId);
+      cancelledRef.current = true;
+    } catch {
+      toast.error(t.workflows.run.cancelFailed);
+    }
+  }, [t, workflowId]);
+
+  const clearRun = useCallback(() => {
+    runIdRef.current = null;
+    cancelledRef.current = false;
+    runActiveRef.current = false;
+    dispatchRun({ type: "reset" });
+  }, []);
+
+  const isRunning = runState.status === "running";
+
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
@@ -219,7 +336,7 @@ export function WorkflowEditorProvider({
 
   const value = useMemo<WorkflowEditorContextValue>(
     () => ({
-      workflowId: record.id,
+      workflowId,
       definition: record.definition,
       nodes,
       edges,
@@ -241,9 +358,14 @@ export function WorkflowEditorProvider({
       updateNodeParams,
       updateNode,
       deleteNode,
+      runState,
+      isRunning,
+      startRun,
+      cancelRun,
+      clearRun,
     }),
     [
-      record.id,
+      workflowId,
       record.definition,
       nodes,
       edges,
@@ -265,6 +387,11 @@ export function WorkflowEditorProvider({
       updateNodeParams,
       updateNode,
       deleteNode,
+      runState,
+      isRunning,
+      startRun,
+      cancelRun,
+      clearRun,
     ],
   );
 

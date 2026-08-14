@@ -414,6 +414,43 @@ export interface Translations {
         agentNotFoundWarning: string;
       };
     };
+    run: {
+      run: string;
+      runDisabled: string;
+      stop: string;
+      running: string;
+      stopping: string;
+      runSuccess: string;
+      runFailed: string;
+      cancelFailed: string;
+      history: string;
+      historyEmpty: string;
+      historyLoadFailed: string;
+      memoryBackendUnavailable: string;
+      runStatus: {
+        pending: string;
+        running: string;
+        success: string;
+        error: string;
+        timeout: string;
+        interrupted: string;
+      };
+      nodeStatus: {
+        idle: string;
+        running: string;
+        completed: string;
+        failed: string;
+      };
+      panel: {
+        title: string;
+        idleHint: string;
+        timeline: string;
+        output: string;
+        noOutput: string;
+        errorDetail: string;
+        terminalStatus: string;
+      };
+    };
     errors: {
       loadFailed: string;
       saveFailed: string;

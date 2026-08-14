@@ -64,6 +64,7 @@ def _seed_rows() -> tuple[list[ThreadMetaRow], list[RunRow]]:
             run_id="r1",
             thread_id="t1",
             user_id="user-a",
+            assistant_id="workflow-a",
             status="success",
             model_name="minimax-m2",
             total_tokens=1200,
@@ -78,6 +79,7 @@ def _seed_rows() -> tuple[list[ThreadMetaRow], list[RunRow]]:
             run_id="r2",
             thread_id="t1",
             user_id="user-a",
+            assistant_id="workflow-a",
             status="running",
             model_name="minimax-m2",
             total_tokens=300,
@@ -92,6 +94,7 @@ def _seed_rows() -> tuple[list[ThreadMetaRow], list[RunRow]]:
             run_id="r3",
             thread_id="t2",
             user_id="user-a",
+            assistant_id="workflow-b",
             status="error",
             model_name="gpt-x",
             error="Boom: provider exploded",
@@ -118,6 +121,7 @@ def _seed_rows() -> tuple[list[ThreadMetaRow], list[RunRow]]:
             run_id="r5",
             thread_id="t3",  # no threads_meta row → exercises the outer join
             user_id="user-b",
+            assistant_id="workflow-a",
             status="success",
             model_name="qwen",
             total_tokens=70,
@@ -214,6 +218,32 @@ class TestConsoleRuns:
         data = resp.json()
         assert [r["run_id"] for r in data["runs"]] == ["r3"]
         assert data["runs"][0]["error"].startswith("Boom")
+
+    def test_no_assistant_id_returns_all(self, client):
+        """Omitting assistant_id must preserve the unfiltered listing."""
+        resp = client.get("/api/console/runs", params={"limit": 50})
+        data = resp.json()
+        assert [r["run_id"] for r in data["runs"]] == ["r2", "r1", "r5", "r3", "r4"]
+
+    def test_assistant_id_filter(self, client):
+        resp = client.get("/api/console/runs", params={"assistant_id": "workflow-a"})
+        data = resp.json()
+        assert [r["run_id"] for r in data["runs"]] == ["r2", "r1", "r5"]
+        assert all(r["assistant_id"] == "workflow-a" for r in data["runs"])
+
+    def test_unknown_assistant_id_returns_empty(self, client):
+        resp = client.get("/api/console/runs", params={"assistant_id": "does-not-exist"})
+        data = resp.json()
+        assert data["runs"] == []
+        assert data["has_more"] is False
+
+    def test_status_and_assistant_id_combined(self, client):
+        resp = client.get(
+            "/api/console/runs",
+            params={"status": "success", "assistant_id": "workflow-a"},
+        )
+        data = resp.json()
+        assert [r["run_id"] for r in data["runs"]] == ["r1", "r5"]
 
 
 class TestConsoleUsage:

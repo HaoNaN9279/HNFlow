@@ -11,6 +11,7 @@ import {
 } from "@/components/ai-elements/node";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import { getNodeCatalogEntry } from "@/core/workflows/canvas/node-catalog";
+import type { NodeRunState } from "@/core/workflows/run-state";
 import type { PortType } from "@/core/workflows/types";
 import { cn } from "@/lib/utils";
 
@@ -39,24 +40,50 @@ const PORT_ROW_GAP = 20;
  * Error state comes from the shared editor context: any backend 422 error that
  * references this node id adds `data-error="true"` and a destructive border,
  * which E2E tests assert on.
+ *
+ * The per-node runtime state (T16) is painted from `runState.nodeStates`:
+ * running gets an amber ring, completed a green border, failed the destructive
+ * colour. A validation error keeps its own `data-error` attribute; when a node
+ * is both invalid and failed the destructive border wins, so the two states
+ * never fight visually.
  */
+
+/** Border/ring tint per per-node runtime state (idle keeps the default). */
+function runStateClasses(
+  state: NodeRunState,
+  hasValidationError: boolean,
+): string | undefined {
+  if (hasValidationError || state === "failed") {
+    return "border-destructive/70";
+  }
+  if (state === "running") {
+    return "border-amber-400 ring-2 ring-amber-400/40";
+  }
+  if (state === "completed") {
+    return "border-emerald-600/70";
+  }
+  return undefined;
+}
+
 export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const workflow = data.workflow;
   const entry = getNodeCatalogEntry(workflow.type);
-  const { errors } = useWorkflowEditor();
+  const { errors, runState } = useWorkflowEditor();
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
+  const runStateOfNode = runState.nodeStates[id] ?? "idle";
 
   return (
     <Node
       handles={{ target: false, source: false }}
       data-node-type={workflow.type}
       data-error={hasError ? "true" : undefined}
+      data-run-state={runStateOfNode}
       className={cn(
         "min-w-44",
         selected && "ring-2 ring-ring",
-        hasError && "border-destructive/70",
+        runStateClasses(runStateOfNode, hasError),
       )}
     >
       <NodeHeader>

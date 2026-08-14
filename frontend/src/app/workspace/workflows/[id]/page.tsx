@@ -1,6 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { useEffect } from "react";
 
 import { WorkflowCanvas } from "@/components/workspace/workflows/workflow-canvas";
 import {
@@ -9,6 +10,7 @@ import {
 } from "@/components/workspace/workflows/workflow-editor-context";
 import { WorkflowPalette } from "@/components/workspace/workflows/workflow-palette";
 import { WorkflowPropertiesPanel } from "@/components/workspace/workflows/workflow-properties-panel";
+import { WorkflowRunPanel } from "@/components/workspace/workflows/workflow-run-panel";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
 import {
   WorkspaceBody,
@@ -45,7 +47,7 @@ export default function WorkflowEditorPage() {
   );
 }
 
-/** Layout shell that wires the shared editor state into the three panes. */
+/** Layout shell that wires the shared editor state into the panes. */
 function WorkflowEditor() {
   const {
     selectedNode,
@@ -53,7 +55,14 @@ function WorkflowEditor() {
     updateNodeParams,
     deleteNode,
     readonly,
+    clearRun,
   } = useWorkflowEditor();
+
+  // T16: run state is editor-session state; leaving the page must not leave a
+  // stale run painted on the next visit.
+  useEffect(() => {
+    return () => clearRun();
+  }, [clearRun]);
 
   return (
     <div className="flex size-full flex-col overflow-hidden">
@@ -68,6 +77,7 @@ function WorkflowEditor() {
           onUpdateNode={updateNode}
           onDeleteNode={deleteNode}
         />
+        <WorkflowRunPanel />
       </div>
     </div>
   );
