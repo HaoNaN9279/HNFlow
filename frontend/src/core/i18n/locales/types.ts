@@ -389,6 +389,30 @@ export interface Translations {
       nodeIdLabel: string;
       nodeTypeLabel: string;
       noSelection: string;
+      ai: {
+        title: string;
+        instructionLabel: string;
+        instructionPlaceholder: string;
+        agentLabel: string;
+        agentNoneOption: string;
+        agentHint: string;
+        capabilityGroupsLabel: string;
+        capabilityGroupsPlaceholder: string;
+      };
+      subworkflow: {
+        title: string;
+        templateLabel: string;
+        templatePlaceholder: string;
+        modeLabel: string;
+        versionLabel: string;
+        noTemplates: string;
+      };
+      validation: {
+        instructionRequired: string;
+        templateRequired: string;
+        invalidAgentName: string;
+        agentNotFoundWarning: string;
+      };
     };
     errors: {
       loadFailed: string;

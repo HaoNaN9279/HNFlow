@@ -46,13 +46,25 @@ export function parseParamValue(text: string): ParseParamValueResult {
   }
 }
 
-/** Build the initial draft rows from a node's params. */
-export function paramsToDraft(params: Record<string, unknown>): ParamDraftRow[] {
-  return Object.entries(params).map(([key, value]) => ({
-    id: key,
-    key,
-    value: serializeParamValue(value),
-  }));
+/**
+ * Build the initial draft rows from a node's params.
+ *
+ * `excludeKeys` hides params owned by a typed node form (e.g. `instruction`
+ * on `ai:llm_agent`, `subworkflow` on `nested:subworkflow`) so the generic
+ * key/value editor never edits a field the typed form already owns.
+ */
+export function paramsToDraft(
+  params: Record<string, unknown>,
+  excludeKeys: readonly string[] = [],
+): ParamDraftRow[] {
+  const excluded = new Set(excludeKeys);
+  return Object.entries(params)
+    .filter(([key]) => !excluded.has(key))
+    .map(([key, value]) => ({
+      id: key,
+      key,
+      value: serializeParamValue(value),
+    }));
 }
 
 /**

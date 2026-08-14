@@ -25,6 +25,7 @@ import {
   type RFEdge,
   type RFNode,
 } from "@/core/workflows/canvas/mapping";
+import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import type { WorkflowValidationError } from "@/core/workflows/errors";
 import type { WorkflowDefinition, WorkflowRecord } from "@/core/workflows/types";
 
@@ -65,6 +66,12 @@ type WorkflowEditorContextValue = {
   markSaved: () => void;
   readonly: boolean;
   updateNodeParams: (nodeId: string, params: Record<string, unknown>) => void;
+  /**
+   * Replace a node's whole definition payload (top-level fields such as
+   * `agent_name`/`capability_groups` plus `params`) — used by the typed node
+   * forms where a params-only write would drop the top-level fields.
+   */
+  updateNode: (nodeId: string, next: WorkflowNode) => void;
   deleteNode: (nodeId: string) => void;
 };
 
@@ -178,6 +185,20 @@ export function WorkflowEditorProvider({
     [markDirty, setNodes],
   );
 
+  const updateNode = useCallback(
+    (nodeId: string, next: WorkflowNode) => {
+      setNodes((current) =>
+        current.map((node) =>
+          node.id === nodeId
+            ? { ...node, data: { workflow: next } }
+            : node,
+        ),
+      );
+      markDirty();
+    },
+    [markDirty, setNodes],
+  );
+
   const deleteNode = useCallback(
     (nodeId: string) => {
       setNodes((current) => current.filter((node) => node.id !== nodeId));
@@ -218,6 +239,7 @@ export function WorkflowEditorProvider({
       markSaved,
       readonly,
       updateNodeParams,
+      updateNode,
       deleteNode,
     }),
     [
@@ -241,6 +263,7 @@ export function WorkflowEditorProvider({
       markSaved,
       readonly,
       updateNodeParams,
+      updateNode,
       deleteNode,
     ],
   );

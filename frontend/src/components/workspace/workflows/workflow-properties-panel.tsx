@@ -7,7 +7,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/core/i18n/hooks";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
+import type { WorkflowNode } from "@/core/workflows/canvas/types";
 
+import { WorkflowNodeForm } from "./workflow-node-form";
 import {
   applyDraftRow,
   applyRemoveRow,
@@ -16,10 +18,20 @@ import {
   type ParamDraftRow,
 } from "./workflow-properties-panel-helpers";
 
+/** Params owned by the typed node forms — hidden from the generic editor. */
+const TYPED_NODE_TYPES = new Set(["ai:llm_agent", "nested:subworkflow"]);
+const TYPED_PARAM_KEYS = ["instruction", "subworkflow"] as const;
+
 type WorkflowPropertiesPanelProps = {
   node: RFNode | null;
   readonly?: boolean;
   onUpdateNodeParams: (nodeId: string, params: Record<string, unknown>) => void;
+  /**
+   * Full-node write-back for the typed node forms (agent_name,
+   * capability_groups and params together). Optional: when absent the typed
+   * form zone is skipped and the panel stays a generic key/value editor.
+   */
+  onUpdateNode?: (nodeId: string, next: WorkflowNode) => void;
   onDeleteNode: (nodeId: string) => void;
 };
 
@@ -32,6 +44,7 @@ export function WorkflowPropertiesPanel({
   node,
   readonly = false,
   onUpdateNodeParams,
+  onUpdateNode,
   onDeleteNode,
 }: WorkflowPropertiesPanelProps) {
   const { t } = useI18n();
@@ -45,7 +58,14 @@ export function WorkflowPropertiesPanel({
   // Re-seed the draft only when the selected node changes, so edits in
   // progress survive parent re-renders (including background refetches).
   useEffect(() => {
-    setDraft(workflow ? paramsToDraft(workflow.params) : []);
+    setDraft(
+      workflow
+        ? paramsToDraft(
+            workflow.params,
+            TYPED_NODE_TYPES.has(workflow.type) ? TYPED_PARAM_KEYS : [],
+          )
+        : [],
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
@@ -158,6 +178,14 @@ export function WorkflowPropertiesPanel({
             </div>
           )}
         </div>
+
+        {onUpdateNode && (
+          <WorkflowNodeForm
+            node={node}
+            readonly={readonly}
+            onChange={(next) => onUpdateNode(node.id, next)}
+          />
+        )}
 
         <div className="flex flex-col gap-2">
           <div className="text-xs font-medium">{labels.paramsTitle}</div>

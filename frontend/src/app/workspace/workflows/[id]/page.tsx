@@ -49,6 +49,7 @@ export default function WorkflowEditorPage() {
 function WorkflowEditor() {
   const {
     selectedNode,
+    updateNode,
     updateNodeParams,
     deleteNode,
     readonly,
@@ -64,6 +65,7 @@ function WorkflowEditor() {
           node={selectedNode}
           readonly={readonly}
           onUpdateNodeParams={updateNodeParams}
+          onUpdateNode={updateNode}
           onDeleteNode={deleteNode}
         />
       </div>

@@ -481,6 +481,32 @@ export const enUS: Translations = {
       nodeIdLabel: "Node ID",
       nodeTypeLabel: "Node type",
       noSelection: "No node selected",
+      ai: {
+        title: "AI Agent",
+        instructionLabel: "Instruction",
+        instructionPlaceholder:
+          "Task template — {inputs} interpolated at runtime",
+        agentLabel: "Agent",
+        agentNoneOption: "Lead agent (default)",
+        agentHint: "^[A-Za-z0-9-]+$ — custom agent name or leave default",
+        capabilityGroupsLabel: "Capability groups (skills)",
+        capabilityGroupsPlaceholder: "Select skills...",
+      },
+      subworkflow: {
+        title: "Subworkflow",
+        templateLabel: "Workflow template",
+        templatePlaceholder: "Select a workflow template...",
+        modeLabel: "Mode",
+        versionLabel: "Version",
+        noTemplates: "No other workflows available",
+      },
+      validation: {
+        instructionRequired: "Instruction is required",
+        templateRequired: "Workflow template is required",
+        invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
+        agentNotFoundWarning:
+          "Agent does not exist yet — it can be referenced before creation",
+      },
     },
     errors: {
       loadFailed: "Failed to load workflows",
