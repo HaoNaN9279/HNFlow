@@ -1,55 +1,28 @@
-# 🦌 [About DeerFlow 2.0](https://github.com/bytedance/deer-flow)
+# HNFlow
 
-> **From Open Source, Back to Open Source**
+**HNFlow** 是图驱动的确定性 AI 工作流编排引擎。它以 DeerFlow harness
+（LangGraph super agent 底座）为内核，在其上叠加「工作流定义/编译层」：
+`WorkflowDefinition` 是纯 JSON（可序列化），经 compiler 编译为 LangGraph
+`StateGraph`（可执行）。断点续跑、人工挂起、取消、SSE 节点级事件全部复用
+LangGraph 原生 run 生命周期，不新写执行循环。
 
-**DeerFlow** (**D**eep **E**xploration and **E**fficient **R**esearch **Flow**) is a community-driven SuperAgent harness that researches, codes, and creates.
-With the help of sandboxes, memories, tools and skills, it handles
-different levels of tasks that could take minutes to hours.
-
----
-
-## 🌟 GitHub Repository
-
-Explore DeerFlow on GitHub: [github.com/bytedance/deer-flow](https://github.com/bytedance/deer-flow)
-
-## 🌐 Official Website
-
-Visit the official website of DeerFlow: [deerflow.tech](https://deerflow.tech/)
-
-## 📧 Support
-
-If you have any questions or need help, please contact us at [support@deerflow.tech](mailto:support@deerflow.tech).
+工作流画布（React Flow 可视化编辑）与 AI 对话（lead agent 自然语言驱动）
+是双入口，控制同一运行生命周期，行为一致。
 
 ---
 
-## 📜 License
+## 仓库
 
-DeerFlow is proudly open source and distributed under the **MIT License**.
+本项目为 **HNFlow 改造分支**：以开源 DeerFlow 为基础，新增工作流子系统并重命名产品。代码包仍为 `deerflow.*`，契约不变。本地部署请参考仓库根目录的 `README.md` 与 `Install.md`。
 
 ---
 
-## 🙌 Acknowledgments
+## License
 
-We extend our heartfelt gratitude to the open source projects and contributors who have made DeerFlow a reality. We truly stand on the shoulders of giants.
+HNFlow 基于 **MIT License** 开源，继承自上游 DeerFlow。
 
-### Core Frameworks
+---
 
-- **[LangChain](https://github.com/langchain-ai/langchain)**: A phenomenal framework that powers our LLM interactions and chains.
-- **[LangGraph](https://github.com/langchain-ai/langgraph)**: Enabling sophisticated multi-agent orchestration.
-- **[Next.js](https://nextjs.org/)**: A cutting-edge framework for building web applications.
+## Acknowledgments
 
-### UI Libraries
-
-- **[Shadcn](https://ui.shadcn.com/)**: Minimalistic components that power our UI.
-- **[SToneX](https://github.com/stonexer)**: For his invaluable contribution to token-by-token visual effects.
-
-These outstanding projects form the backbone of DeerFlow and exemplify the transformative power of open source collaboration.
-
-### Special Thanks
-
-Finally, we want to express our heartfelt gratitude to the core authors of DeerFlow 1.0 and 2.0:
-
-- **[Daniel Walnut](https://github.com/hetaoBackend/)**
-- **[Henry Li](https://github.com/magiccube/)**
-
-Without their vision, passion and dedication, `DeerFlow` would not be what it is today.
+基于上游开源项目构建，向 DeerFlow 及其作者、LangChain、LangGraph 等开源社区致谢。

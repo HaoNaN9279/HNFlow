@@ -197,7 +197,7 @@ Important root entries:
 - `scripts/`
 - `docs/`
 - `README.md`
-- `CONTRIBUTING.md`
+- `AGENTS.md`
 - `Makefile`
 - `config.example.yaml`
 - `extensions_config.example.json`

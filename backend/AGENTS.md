@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
+This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth for this module.
 
 ## Project Overview
 
@@ -80,7 +80,7 @@ deer-flow/
 
 When making code changes, you MUST update the relevant documentation:
 - Update `README.md` for user-facing changes (features, setup, usage instructions)
-- Update `AGENTS.md` for development changes (architecture, commands, workflows, internal systems). `CLAUDE.md` imports it via `@AGENTS.md`, so editing `AGENTS.md` updates both.
+- Update `AGENTS.md` for development changes (architecture, commands, workflows, internal systems).
 - Keep documentation synchronized with the codebase at all times
 - Ensure accuracy and timeliness of all documentation
 

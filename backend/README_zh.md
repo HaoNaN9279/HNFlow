@@ -1,8 +1,8 @@
-# DeerFlow 后端
+# HNFlow 后端
 
 **语言：** [English](README.md) | 简体中文
 
-DeerFlow 是一个基于 LangGraph 的 AI 超级智能体，具备沙箱执行、持久记忆和可扩展工具集成能力。后端使 AI 智能体能够执行代码、浏览网页、管理文件、将任务委派给子智能体，并在多轮对话之间保留上下文——所有操作都在按线程隔离的环境中进行。
+HNFlow 是一个基于 LangGraph 的 AI 超级智能体，具备沙箱执行、持久记忆和可扩展工具集成能力。后端使 AI 智能体能够执行代码、浏览网页、管理文件、将任务委派给子智能体，并在多轮对话之间保留上下文——所有操作都在按线程隔离的环境中进行。
 
 ---
 
@@ -428,7 +428,7 @@ DeerFlow 的应用程序表（`runs`、`threads_meta`、`feedback`、`users`、`
 make migrate-rev MSG="add foo column to runs"
 ```
 
-该目标会调用 `scripts/_autogen_revision.py`。脚本先在一个新的临时 SQLite 数据库上迁移到 `head`，然后将当前模型与其进行比较，因此全新检出的代码不需要预先存在的 `./data/deerflow.db`。提交前请检查生成的文件，并将原始的 `op.add_column` / `op.drop_column` 调用替换为 `migrations/_helpers.py` 中的幂等辅助函数。项目有意不提供 `make migrate` / `make migrate-stamp` 目标——Gateway 启动是唯一的迁移执行路径，从而避免运维误操作。完整设计请参阅 `backend/CLAUDE.md` 中的“Schema Migrations”部分。
+该目标会调用 `scripts/_autogen_revision.py`。脚本先在一个新的临时 SQLite 数据库上迁移到 `head`，然后将当前模型与其进行比较，因此全新检出的代码不需要预先存在的 `./data/deerflow.db`。提交前请检查生成的文件，并将原始的 `op.add_column` / `op.drop_column` 调用替换为 `migrations/_helpers.py` 中的幂等辅助函数。项目有意不提供 `make migrate` / `make migrate-stamp` 目标——Gateway 启动是唯一的迁移执行路径，从而避免运维误操作。完整设计请参阅 `backend/AGENTS.md` 中的“Schema Migrations”部分。
 
 ### 代码风格
 
@@ -485,4 +485,4 @@ make test-live
 
 ## 参与贡献
 
-贡献指南请参阅 [CONTRIBUTING.md](CONTRIBUTING.md)。
+跨切开发约定请参阅仓库根目录的 [AGENTS.md](../AGENTS.md)。

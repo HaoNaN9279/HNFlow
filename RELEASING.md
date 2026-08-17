@@ -2,7 +2,7 @@
 
 DeerFlow releases are **tag-driven**: pushing a `v*` git tag triggers the
 publishing workflows. There is no separate release script that bumps versions —
-the maintainer bumps the version sources, updates the changelog, commits, and
+the maintainer bumps the version sources, commits, and
 tags. The helper scripts below keep the version sources in lockstep, and CI
 gates the release on them agreeing with the tag.
 
@@ -51,14 +51,11 @@ distinguishes it from a release.
    ```bash
    scripts/bump_version.sh 2.1.0
    ```
-2. **Update `CHANGELOG.md`**: rename the `## [Unreleased]` section to
-   `## [2.1.0] — YYYY-MM-DD` (note the em dash `—`), and add a link reference
-   at the bottom of the file:
-   ```
-   [2.1.0]: https://github.com/bytedance/deer-flow/releases/tag/v2.1.0
-   ```
-   Start a fresh `## [Unreleased]` section above it for the next cycle.
-3. **Commit** the version + changelog changes:
+2. **Record release notes**: `CHANGELOG.md` is no longer maintained in this
+   repository; release notes are derived from `git log`. Review the commits
+   since the previous tag and include the highlights in the release commit
+   message (and later in the GitHub Release notes).
+3. **Commit** the version changes:
    ```bash
    git add -A
    git commit -m "release: v2.1.0"
@@ -87,7 +84,8 @@ distinguishes it from a release.
 to publish the same three images plus the chart from unreleased `main`. It is
 **not** gated by the version check (there is no `v*` tag) and it does **not**
 touch the `latest` tag, which stays pinned to the last `v*` release. Every job
-is gated on `github.repository == 'bytedance/deer-flow'`, so it only runs on
+is gated on `github.repository == 'bytedance/deer-flow'` (legacy upstream
+constraint), so it only runs on
 the upstream repo - a scheduled run or manual dispatch on a fork skips all jobs.
 
 Artifacts (under the running repo's owner, where `<date>` is `YYYYMMDD`):
@@ -122,7 +120,8 @@ the upstream `larksuite/cli` version, so they publish independently via
   or by pushing a `lark-cli-v*` tag (the version is read from after the prefix).
 - Builds multi-arch (`linux/amd64,linux/arm64`) and pushes
   `ghcr.io/<owner>/deer-flow-{lark-cli-init,lark-cli-broker}:<lark-cli-version>`.
-- Gated on `github.repository == 'bytedance/deer-flow'`; not tied to the
+- Gated on `github.repository == 'bytedance/deer-flow'` (legacy upstream
+  constraint); not tied to the
   `verify-versions` gate (its version is the lark-cli release, not the DeerFlow
   release), and it never touches `latest`.
 
@@ -153,7 +152,7 @@ the rc version:
 
 ```bash
 scripts/bump_version.sh 2.1.0-rc1
-# update CHANGELOG, commit, tag v2.1.0-rc1, push
+# record release notes in the commit, tag v2.1.0-rc1, push
 ```
 
 ## Recovering from a failed gate
@@ -176,9 +175,9 @@ is safe — no images or chart were pushed to overwrite.
 
 ## Post-release
 
-Optionally draft a **GitHub Release** from the tag, pasting the corresponding
-`CHANGELOG.md` section as the release notes. The changelog link references
-point at these release URLs.
+Optionally draft a **GitHub Release** from the tag. `CHANGELOG.md` is no
+longer maintained in this repository; compose the release notes from `git log`
+between the tag and the previous one.
 
 For the 2.1.0 chart release (the first chart release), pre-`charts/` nightly
 builds remain at the legacy bare `ghcr.io/<owner>/deer-flow` package. That

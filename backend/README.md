@@ -1,8 +1,8 @@
-# DeerFlow Backend
+# HNFlow Backend
 
 **Language:** English | [简体中文](README_zh.md)
 
-DeerFlow is a LangGraph-based AI super agent with sandbox execution, persistent memory, and extensible tool integration. The backend enables AI agents to execute code, browse the web, manage files, delegate tasks to subagents, and retain context across conversations - all in isolated, per-thread environments.
+HNFlow is a LangGraph-based AI super agent with sandbox execution, persistent memory, and extensible tool integration. The backend enables AI agents to execute code, browse the web, manage files, delegate tasks to subagents, and retain context across conversations - all in isolated, per-thread environments.
 
 ---
 
@@ -454,7 +454,7 @@ and switch raw `op.add_column` / `op.drop_column` calls to the idempotent
 helpers in `migrations/_helpers.py` before committing. There is no
 `make migrate` / `make migrate-stamp` target on purpose — Gateway startup is
 the only execution path, which keeps operational mistakes off the table. See
-`backend/CLAUDE.md` (Schema Migrations) for the full design.
+`AGENTS.md` (Schema Migrations) for the full design.
 
 ### Code Style
 
@@ -525,4 +525,5 @@ See the [LICENSE](../LICENSE) file in the project root.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+See the cross-cutting conventions in the repository root's
+[AGENTS.md](../AGENTS.md) for contribution guidelines.

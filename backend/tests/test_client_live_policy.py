@@ -145,10 +145,10 @@ def test_live_marker_is_registered() -> None:
 
 
 def test_documentation_matches_live_test_commands() -> None:
-    contributor_docs = (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    backend_readme = (BACKEND_ROOT / "README.md").read_text(encoding="utf-8")
     backend_agent_docs = (BACKEND_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
-    for docs in (contributor_docs, backend_agent_docs):
+    for docs in (backend_readme, backend_agent_docs):
         assert "make test-live" in docs
         assert LIVE_OPT_IN in docs
         assert "API" in docs

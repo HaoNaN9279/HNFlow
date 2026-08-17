@@ -1,4 +1,4 @@
-# DeerFlow - Unified Development Environment
+# HNFlow - Unified Development Environment
 
 .PHONY: help config config-upgrade check install setup doctor support-bundle detect-thread-boundaries detect-blocking-io dev dev-daemon start start-daemon nginx stop up down clean docker-init docker-start docker-stop docker-logs docker-logs-frontend docker-logs-gateway docker-logs-redis
 
@@ -19,7 +19,7 @@ endif
 FRONTEND_PNPM = $(PYTHON) ../scripts/pnpm.py
 
 help:
-	@echo "DeerFlow Development Commands:"
+	@echo "HNFlow Development Commands:"
 	@echo "  make setup           - Interactive setup wizard (recommended for new users)"
 	@echo "  make doctor          - Check configuration and system requirements"
 	@echo "  make support-bundle  - Create a redacted issue summary, AI draft, and evidence bundle"
