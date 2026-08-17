@@ -64,7 +64,13 @@ type MockConsoleRun = {
   run_id: string;
   thread_id: string;
   assistant_id?: string;
-  status: "pending" | "running" | "success" | "error" | "timeout" | "interrupted";
+  status:
+    | "pending"
+    | "running"
+    | "success"
+    | "error"
+    | "timeout"
+    | "interrupted";
   created_at?: string;
   updated_at?: string;
   duration_seconds?: number;
@@ -169,7 +175,8 @@ function mockWorkflowsAPI(
     }
     if (request.method() === "PUT") {
       savedPutBody = request.postDataJSON() as Record<string, unknown>;
-      const definition = savedPutBody.definition as MockWorkflowRecord["definition"];
+      const definition =
+        savedPutBody.definition as MockWorkflowRecord["definition"];
       const metadata = (savedPutBody.metadata as Record<string, unknown>) ?? {};
       record = {
         ...record,
@@ -306,7 +313,9 @@ async function openEditorWithAiNode(
   await putDone;
   await expect(page.getByText("Workflow saved")).toBeVisible();
 
-  const putBody = api.getSavedPutBody() as { definition: { nodes: MockNode[] } };
+  const putBody = api.getSavedPutBody() as {
+    definition: { nodes: MockNode[] };
+  };
   const aiNode = putBody.definition.nodes.find(
     (node) => node.type === "ai:llm_agent",
   );
@@ -352,7 +361,9 @@ test.describe("Workflow run monitoring", () => {
 
     // Canvas node painted completed (green border).
     await expect(
-      page.locator(`.react-flow__node[data-id="${nodeId}"] [data-run-state="completed"]`),
+      page.locator(
+        `.react-flow__node[data-id="${nodeId}"] [data-run-state="completed"]`,
+      ),
     ).toHaveCount(1);
 
     // Timeline entry for the node with status completed + output JSON visible.
@@ -399,7 +410,9 @@ test.describe("Workflow run monitoring", () => {
 
     // Canvas node painted failed (destructive border).
     await expect(
-      page.locator(`.react-flow__node[data-id="${nodeId}"] [data-run-state="failed"]`),
+      page.locator(
+        `.react-flow__node[data-id="${nodeId}"] [data-run-state="failed"]`,
+      ),
     ).toHaveCount(1);
 
     // Timeline failed entry surfaces the node error text.
@@ -443,7 +456,10 @@ test.describe("Workflow run monitoring", () => {
         "Cache-Control": "no-cache",
       });
       res.write(
-        sseFrame("metadata", { run_id: "run-e2e-cancel", thread_id: "thread-e2e-1" }),
+        sseFrame("metadata", {
+          run_id: "run-e2e-cancel",
+          thread_id: "thread-e2e-1",
+        }),
       );
       res.write(sseFrame("wf:node:started", { node_id: nodeId, step: 0 }));
       stream.res = res;
@@ -462,7 +478,10 @@ test.describe("Workflow run monitoring", () => {
         return route.fulfill({
           status: 202,
           contentType: "application/json",
-          body: JSON.stringify({ run_id: "run-e2e-cancel", status: "interrupted" }),
+          body: JSON.stringify({
+            run_id: "run-e2e-cancel",
+            status: "interrupted",
+          }),
         });
       }
       return route.fallback();
@@ -484,9 +503,10 @@ test.describe("Workflow run monitoring", () => {
           `.react-flow__node[data-id="${nodeId}"] [data-run-state="running"]`,
         ),
       ).toHaveCount(1);
-      await expect(
-        runPanel.getByTestId("workflow-run-badge"),
-      ).toHaveAttribute("data-status", "running");
+      await expect(runPanel.getByTestId("workflow-run-badge")).toHaveAttribute(
+        "data-status",
+        "running",
+      );
 
       // Stop -> POST cancel (202). The stream stays open until the test sends
       // the `end` frame, so the run settles into `interrupted` afterwards.
@@ -504,12 +524,13 @@ test.describe("Workflow run monitoring", () => {
         liveRes.end();
       }
 
-      await expect(
-        runPanel.getByTestId("workflow-run-terminal"),
-      ).toContainText("Interrupted");
-      await expect(
-        runPanel.getByTestId("workflow-run-badge"),
-      ).toHaveAttribute("data-status", "interrupted");
+      await expect(runPanel.getByTestId("workflow-run-terminal")).toContainText(
+        "Interrupted",
+      );
+      await expect(runPanel.getByTestId("workflow-run-badge")).toHaveAttribute(
+        "data-status",
+        "interrupted",
+      );
     } finally {
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));

@@ -60,7 +60,9 @@ export function validateConnection(
     return { ok: false, reason: REASON_PORT_NOT_FOUND };
   }
 
-  const sourcePort = sourceWorkflow.outputs.find((p) => p.name === sourceHandle);
+  const sourcePort = sourceWorkflow.outputs.find(
+    (p) => p.name === sourceHandle,
+  );
   const targetPort = targetWorkflow.inputs.find((p) => p.name === targetHandle);
   if (!sourcePort || !targetPort) {
     return { ok: false, reason: REASON_PORT_NOT_FOUND };
@@ -96,7 +98,9 @@ const err = (
  * edge references existing nodes and ports, and port type compatibility.
  * Cycle detection is backend-owned (a `flow:loop` may intentionally cycle).
  */
-export function validateWorkflow(def: WorkflowDefinition): WorkflowValidationError[] {
+export function validateWorkflow(
+  def: WorkflowDefinition,
+): WorkflowValidationError[] {
   const errors: WorkflowValidationError[] = [];
   const nodeMap = new Map(def.nodes.map((n) => [n.id, n]));
 
@@ -107,34 +111,60 @@ export function validateWorkflow(def: WorkflowDefinition): WorkflowValidationErr
   const outgoingSources = new Set(def.edges.map((e) => e.source));
 
   if (startNodes.length === 0) {
-    errors.push(err("workflows.errors.missingStartNode", "Workflow must contain exactly one flow:start node."));
+    errors.push(
+      err(
+        "workflows.errors.missingStartNode",
+        "Workflow must contain exactly one flow:start node.",
+      ),
+    );
   } else if (startNodes.length > 1) {
     errors.push(
-      err("workflows.errors.multipleStartNodes", `Workflow contains ${startNodes.length} flow:start nodes; exactly one is required.`, {
-        nodeId: startNodes[1]!.id,
-      }),
+      err(
+        "workflows.errors.multipleStartNodes",
+        `Workflow contains ${startNodes.length} flow:start nodes; exactly one is required.`,
+        {
+          nodeId: startNodes[1]!.id,
+        },
+      ),
     );
   } else if (incomingTargets.has(startNodes[0]!.id)) {
     errors.push(
-      err("workflows.errors.startHasIncomingEdge", `flow:start node '${startNodes[0]!.id}' must not have incoming edges.`, {
-        nodeId: startNodes[0]!.id,
-      }),
+      err(
+        "workflows.errors.startHasIncomingEdge",
+        `flow:start node '${startNodes[0]!.id}' must not have incoming edges.`,
+        {
+          nodeId: startNodes[0]!.id,
+        },
+      ),
     );
   }
 
   if (endNodes.length === 0) {
-    errors.push(err("workflows.errors.missingEndNode", "Workflow must contain exactly one flow:end node."));
+    errors.push(
+      err(
+        "workflows.errors.missingEndNode",
+        "Workflow must contain exactly one flow:end node.",
+      ),
+    );
   } else if (endNodes.length > 1) {
     errors.push(
-      err("workflows.errors.multipleEndNodes", `Workflow contains ${endNodes.length} flow:end nodes; exactly one is required.`, {
-        nodeId: endNodes[1]!.id,
-      }),
+      err(
+        "workflows.errors.multipleEndNodes",
+        `Workflow contains ${endNodes.length} flow:end nodes; exactly one is required.`,
+        {
+          nodeId: endNodes[1]!.id,
+        },
+      ),
     );
   } else if (outgoingSources.has(endNodes[0]!.id)) {
     errors.push(
-      err("workflows.errors.endHasOutgoingEdge", `flow:end node '${endNodes[0]!.id}' must not have outgoing edges.`, {
-        nodeId: endNodes[0]!.id,
-      }),
+      err(
+        "workflows.errors.endHasOutgoingEdge",
+        `flow:end node '${endNodes[0]!.id}' must not have outgoing edges.`,
+        {
+          nodeId: endNodes[0]!.id,
+        },
+      ),
     );
   }
 
@@ -143,14 +173,22 @@ export function validateWorkflow(def: WorkflowDefinition): WorkflowValidationErr
     const src = nodeMap.get(edge.source);
     if (!src) {
       errors.push(
-        err("workflows.errors.edgeSourceNotFound", `Edge ${index} references unknown source node '${edge.source}'.`, { edgeIndex: index }),
+        err(
+          "workflows.errors.edgeSourceNotFound",
+          `Edge ${index} references unknown source node '${edge.source}'.`,
+          { edgeIndex: index },
+        ),
       );
       return;
     }
     const dst = nodeMap.get(edge.target);
     if (!dst) {
       errors.push(
-        err("workflows.errors.edgeTargetNotFound", `Edge ${index} references unknown target node '${edge.target}'.`, { edgeIndex: index }),
+        err(
+          "workflows.errors.edgeTargetNotFound",
+          `Edge ${index} references unknown target node '${edge.target}'.`,
+          { edgeIndex: index },
+        ),
       );
       return;
     }
@@ -158,17 +196,25 @@ export function validateWorkflow(def: WorkflowDefinition): WorkflowValidationErr
     const srcPort = src.outputs.find((p) => p.name === edge.source_port);
     if (!srcPort) {
       errors.push(
-        err("workflows.errors.sourcePortNotFound", `Edge ${index} references unknown source port '${edge.source_port}' on '${edge.source}'.`, {
-          edgeIndex: index,
-        }),
+        err(
+          "workflows.errors.sourcePortNotFound",
+          `Edge ${index} references unknown source port '${edge.source_port}' on '${edge.source}'.`,
+          {
+            edgeIndex: index,
+          },
+        ),
       );
     }
     const dstPort = dst.inputs.find((p) => p.name === edge.target_port);
     if (!dstPort) {
       errors.push(
-        err("workflows.errors.targetPortNotFound", `Edge ${index} references unknown target port '${edge.target_port}' on '${edge.target}'.`, {
-          edgeIndex: index,
-        }),
+        err(
+          "workflows.errors.targetPortNotFound",
+          `Edge ${index} references unknown target port '${edge.target_port}' on '${edge.target}'.`,
+          {
+            edgeIndex: index,
+          },
+        ),
       );
     }
     if (srcPort && dstPort && !isPortCompatible(srcPort.type, dstPort.type)) {

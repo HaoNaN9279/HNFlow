@@ -82,12 +82,14 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
       data-run-state={runStateOfNode}
       className={cn(
         "min-w-44",
-        selected && "ring-2 ring-ring",
+        selected && "ring-ring ring-2",
         runStateClasses(runStateOfNode, hasError),
       )}
     >
       <NodeHeader>
-        <NodeTitle className="text-sm">{entry?.label ?? workflow.type}</NodeTitle>
+        <NodeTitle className="text-sm">
+          {entry?.label ?? workflow.type}
+        </NodeTitle>
         {entry?.description && (
           <NodeDescription className="line-clamp-1 text-xs">
             {entry.description}

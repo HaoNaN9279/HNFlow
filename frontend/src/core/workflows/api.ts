@@ -12,7 +12,9 @@ function workflowsUrl(path: string): string {
   return `${getBackendBaseURL()}/api/workflows${path}`;
 }
 
-function isValidationErrorDetail(detail: unknown): detail is { errors: unknown } {
+function isValidationErrorDetail(
+  detail: unknown,
+): detail is { errors: unknown } {
   return (
     typeof detail === "object" &&
     detail !== null &&
@@ -73,9 +75,7 @@ export async function listWorkflows(): Promise<WorkflowRecord[]> {
 }
 
 export async function getWorkflow(id: string): Promise<WorkflowRecord> {
-  const response = await fetch(
-    workflowsUrl(`/${encodeURIComponent(id)}`),
-  );
+  const response = await fetch(workflowsUrl(`/${encodeURIComponent(id)}`));
   if (!response.ok) {
     await throwWorkflowApiError(
       response,
@@ -106,14 +106,11 @@ export async function updateWorkflow(
   id: string,
   payload: UpdateWorkflowPayload,
 ): Promise<WorkflowRecord> {
-  const response = await fetch(
-    workflowsUrl(`/${encodeURIComponent(id)}`),
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  const response = await fetch(workflowsUrl(`/${encodeURIComponent(id)}`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
   if (!response.ok) {
     await throwWorkflowApiError(
       response,
@@ -126,10 +123,9 @@ export async function updateWorkflow(
 export async function deleteWorkflow(
   id: string,
 ): Promise<{ id: string; deleted: boolean }> {
-  const response = await fetch(
-    workflowsUrl(`/${encodeURIComponent(id)}`),
-    { method: "DELETE" },
-  );
+  const response = await fetch(workflowsUrl(`/${encodeURIComponent(id)}`), {
+    method: "DELETE",
+  });
   if (!response.ok) {
     await throwWorkflowApiError(
       response,

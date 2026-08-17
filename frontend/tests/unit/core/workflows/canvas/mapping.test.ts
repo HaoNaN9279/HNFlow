@@ -1,11 +1,23 @@
 import { describe, expect, test } from "@rstest/core";
 
-import { definitionToFlow, edgeIdOf, flowToDefinition, makeEdgeId, makeNodeId, type RFEdge, type RFNode } from "@/core/workflows/canvas/mapping";
+import {
+  definitionToFlow,
+  edgeIdOf,
+  flowToDefinition,
+  makeEdgeId,
+  makeNodeId,
+  type RFEdge,
+  type RFNode,
+} from "@/core/workflows/canvas/mapping";
 import type { NodeType, WorkflowDefinition } from "@/core/workflows/types";
 
 /** Narrow the canvas block out of the untyped metadata index signature. */
 const positionsOf = (def: WorkflowDefinition) =>
-  (def.metadata.canvas as { positions?: Record<string, { x: number; y: number }> } | undefined)?.positions;
+  (
+    def.metadata.canvas as
+      | { positions?: Record<string, { x: number; y: number }> }
+      | undefined
+  )?.positions;
 
 const sampleDefinition = (): WorkflowDefinition => ({
   id: "wf-1",
@@ -51,8 +63,19 @@ const sampleDefinition = (): WorkflowDefinition => ({
     },
   ],
   edges: [
-    { source: "n-start", source_port: "out", target: "n-llm", target_port: "in" },
-    { source: "n-llm", source_port: "out", target: "n-end", target_port: "in", condition: "ok" },
+    {
+      source: "n-start",
+      source_port: "out",
+      target: "n-llm",
+      target_port: "in",
+    },
+    {
+      source: "n-llm",
+      source_port: "out",
+      target: "n-end",
+      target_port: "in",
+      condition: "ok",
+    },
   ],
 });
 
@@ -63,7 +86,11 @@ describe("definitionToFlow", () => {
 
     expect(nodes).toHaveLength(3);
     expect(nodes.map((n) => n.id)).toEqual(["n-start", "n-llm", "n-end"]);
-    expect(nodes.map((n) => n.type)).toEqual(["flow:start", "ai:llm_agent", "flow:end"]);
+    expect(nodes.map((n) => n.type)).toEqual([
+      "flow:start",
+      "ai:llm_agent",
+      "flow:end",
+    ]);
 
     const llm = nodes[1]!;
     expect(llm.data.workflow).toEqual(def.nodes[1]!);
@@ -205,7 +232,10 @@ describe("flowToDefinition", () => {
   test("round-trips positions into metadata.canvas.positions and keeps other keys", () => {
     const def = sampleDefinition();
     const flow = definitionToFlow(def);
-    const { definition, metadata } = flowToDefinition(flow, { def, positions: {} });
+    const { definition, metadata } = flowToDefinition(flow, {
+      def,
+      positions: {},
+    });
 
     expect(metadata.canvas?.positions).toEqual(positionsOf(def));
     expect(definition.metadata).toBe(metadata);
@@ -218,7 +248,10 @@ describe("flowToDefinition", () => {
     flow.nodes[0]!.position = { x: 999, y: 42 };
     const basePositions = { "n-offscreen": { x: 1, y: 2 } };
 
-    const { metadata } = flowToDefinition(flow, { def, positions: basePositions });
+    const { metadata } = flowToDefinition(flow, {
+      def,
+      positions: basePositions,
+    });
 
     expect(metadata.canvas?.positions?.["n-start"]).toEqual({ x: 999, y: 42 });
     expect(metadata.canvas?.positions?.["n-offscreen"]).toEqual({ x: 1, y: 2 });

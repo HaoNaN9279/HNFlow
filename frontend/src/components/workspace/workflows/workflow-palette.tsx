@@ -38,7 +38,9 @@ export function WorkflowPalette() {
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r">
       <div className="flex flex-col gap-2 border-b p-3">
-        <h2 className="text-sm font-medium">{t.workflows.canvas.paletteTitle}</h2>
+        <h2 className="text-sm font-medium">
+          {t.workflows.canvas.paletteTitle}
+        </h2>
         <Input
           value={query}
           onChange={(event) => setQuery(event.target.value)}
@@ -51,8 +53,7 @@ export function WorkflowPalette() {
         <div className="flex flex-col gap-4 p-3">
           {NODE_CATEGORIES.map((category) => {
             const entries = catalog.filter(
-              (entry) =>
-                entry.category === category.id && matchesQuery(entry),
+              (entry) => entry.category === category.id && matchesQuery(entry),
             );
             if (entries.length === 0) {
               return null;

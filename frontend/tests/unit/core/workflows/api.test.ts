@@ -20,7 +20,10 @@ import {
   type UpdateWorkflowPayload,
 } from "@/core/workflows/api";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
-import type { WorkflowDefinition, WorkflowRecord } from "@/core/workflows/types";
+import type {
+  WorkflowDefinition,
+  WorkflowRecord,
+} from "@/core/workflows/types";
 
 const mockedFetch = rs.mocked(fetcher);
 
@@ -138,7 +141,9 @@ describe("listWorkflowRuns", () => {
 
   test("throws the backend detail message on a 503", async () => {
     mockedFetch.mockResolvedValueOnce(
-      jsonResponse(503, { detail: "Run history requires a SQL database backend" }),
+      jsonResponse(503, {
+        detail: "Run history requires a SQL database backend",
+      }),
     );
 
     await expect(listWorkflowRuns("wf-1")).rejects.toThrow(
@@ -249,8 +254,16 @@ describe("error handling", () => {
 
     expect(error).toBeInstanceOf(WorkflowValidationErrors);
     expect((error as WorkflowValidationErrors).errors).toEqual([
-      { type: "edge", id: "3", message: "edge[3]: source node 'missing' not found" },
-      { type: "node", id: "A", message: "node 'A': param 'x' has non-JSON-compatible type set" },
+      {
+        type: "edge",
+        id: "3",
+        message: "edge[3]: source node 'missing' not found",
+      },
+      {
+        type: "node",
+        id: "A",
+        message: "node 'A': param 'x' has non-JSON-compatible type set",
+      },
     ]);
   });
 

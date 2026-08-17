@@ -33,9 +33,7 @@ afterEach(() => {
   cleanup();
 });
 
-function makeNode(
-  overrides: Partial<RFNode> = {},
-): RFNode {
+function makeNode(overrides: Partial<RFNode> = {}): RFNode {
   return {
     id: "n_1",
     type: "flow:if",

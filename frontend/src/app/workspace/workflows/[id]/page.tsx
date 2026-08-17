@@ -34,7 +34,10 @@ export default function WorkflowEditorPage() {
             {t.common.loading}
           </div>
         ) : workflowQuery.isError ? (
-          <div className="text-destructive text-sm" data-testid="workflow-editor-error">
+          <div
+            className="text-destructive text-sm"
+            data-testid="workflow-editor-error"
+          >
             {t.workflows.errors.loadFailed}: {workflowQuery.error.message}
           </div>
         ) : workflowQuery.data ? (

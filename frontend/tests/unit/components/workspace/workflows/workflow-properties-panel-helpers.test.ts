@@ -52,41 +52,53 @@ describe("paramsToDraft", () => {
 describe("applyDraftRow", () => {
   it("updates an existing key", () => {
     expect(
-      applyDraftRow({ threshold: 10, label: "check" }, {
-        id: "threshold",
-        key: "threshold",
-        value: "20",
-      }),
+      applyDraftRow(
+        { threshold: 10, label: "check" },
+        {
+          id: "threshold",
+          key: "threshold",
+          value: "20",
+        },
+      ),
     ).toEqual({ ok: true, params: { threshold: 20, label: "check" } });
   });
 
   it("adds a new key", () => {
     expect(
-      applyDraftRow({ threshold: 10 }, {
-        id: "new-1",
-        key: "label",
-        value: '"x"',
-      }),
+      applyDraftRow(
+        { threshold: 10 },
+        {
+          id: "new-1",
+          key: "label",
+          value: '"x"',
+        },
+      ),
     ).toEqual({ ok: true, params: { threshold: 10, label: "x" } });
   });
 
   it("renames a key when the key text changes", () => {
     expect(
-      applyDraftRow({ threshold: 10 }, {
-        id: "threshold",
-        key: "limit",
-        value: "10",
-      }),
+      applyDraftRow(
+        { threshold: 10 },
+        {
+          id: "threshold",
+          key: "limit",
+          value: "10",
+        },
+      ),
     ).toEqual({ ok: true, params: { limit: 10 } });
   });
 
   it("removes the key when the value text is blank", () => {
     expect(
-      applyDraftRow({ threshold: 10, label: "check" }, {
-        id: "label",
-        key: "label",
-        value: "",
-      }),
+      applyDraftRow(
+        { threshold: 10, label: "check" },
+        {
+          id: "label",
+          key: "label",
+          value: "",
+        },
+      ),
     ).toEqual({ ok: true, params: { threshold: 10 } });
   });
 
@@ -98,11 +110,14 @@ describe("applyDraftRow", () => {
 
   it("rejects invalid JSON", () => {
     expect(
-      applyDraftRow({ threshold: 10 }, {
-        id: "threshold",
-        key: "threshold",
-        value: "not-json",
-      }),
+      applyDraftRow(
+        { threshold: 10 },
+        {
+          id: "threshold",
+          key: "threshold",
+          value: "not-json",
+        },
+      ),
     ).toEqual({ ok: false });
   });
 });

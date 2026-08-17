@@ -40,9 +40,7 @@ rs.mock("@/core/workflows/runs", () => ({
 const mockedStream = rs.mocked(streamWorkflowRun);
 
 let bridgeStart: (() => Promise<void>) | undefined;
-let bridgeSetErrors:
-  | ((errors: WorkflowValidationError[]) => void)
-  | undefined;
+let bridgeSetErrors: ((errors: WorkflowValidationError[]) => void) | undefined;
 
 /** Hands the test the context functions that drive run/node states. */
 function EditorBridge() {
@@ -155,9 +153,9 @@ describe("WorkflowNode run-state painting", () => {
       makeNode("n-c", "flow:wait"),
     ]);
 
-    expect(nodeCard(container, "flow:start").getAttribute("data-run-state")).toBe(
-      "idle",
-    );
+    expect(
+      nodeCard(container, "flow:start").getAttribute("data-run-state"),
+    ).toBe("idle");
     expect(nodeCard(container, "flow:end").getAttribute("data-run-state")).toBe(
       "idle",
     );

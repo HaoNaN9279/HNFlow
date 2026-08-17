@@ -181,7 +181,8 @@ function mockWorkflowsAPI(
           body: JSON.stringify(behavior.body),
         });
       }
-      const definition = savedPutBody.definition as MockWorkflowRecord["definition"];
+      const definition =
+        savedPutBody.definition as MockWorkflowRecord["definition"];
       const metadata = (savedPutBody.metadata as Record<string, unknown>) ?? {};
       record = {
         ...record,
@@ -389,7 +390,9 @@ test.describe("Workflow node forms", () => {
     });
     await expect(templateSelect).toBeVisible();
     await templateSelect.click();
-    await page.getByRole("option", { name: "Report Generator (1.0.0)" }).click();
+    await page
+      .getByRole("option", { name: "Report Generator (1.0.0)" })
+      .click();
     // Note: the version line and the select label only update after a reload
     // because `handleTemplateSelect` commits without updating local state.
 
@@ -473,9 +476,7 @@ test.describe("Workflow node forms", () => {
     // Empty instruction surfaces the inline (non-blocking) required error.
     const instruction = panel.locator('textarea[id$="-instruction"]');
     await expect(instruction).toBeVisible();
-    await expect(
-      panel.getByText("Instruction is required"),
-    ).toBeVisible();
+    await expect(panel.getByText("Instruction is required")).toBeVisible();
 
     // An invalid custom agent name surfaces the pattern error inline too.
     await panel.getByRole("combobox", { name: "Agent" }).click();

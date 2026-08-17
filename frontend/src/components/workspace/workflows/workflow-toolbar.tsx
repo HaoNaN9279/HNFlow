@@ -7,7 +7,10 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
-import { updateWorkflow, type UpdateWorkflowPayload } from "@/core/workflows/api";
+import {
+  updateWorkflow,
+  type UpdateWorkflowPayload,
+} from "@/core/workflows/api";
 import { flowToDefinition } from "@/core/workflows/canvas/mapping";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
 
@@ -48,7 +51,9 @@ export function WorkflowToolbar() {
       updateWorkflow(workflowId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["workflows"] });
-      void queryClient.invalidateQueries({ queryKey: ["workflows", workflowId] });
+      void queryClient.invalidateQueries({
+        queryKey: ["workflows", workflowId],
+      });
       toast.success(t.workflows.errors.saveSuccess);
       setErrors([]);
       markSaved();

@@ -149,9 +149,9 @@ describe("WorkflowList", () => {
 
     await screen.findByText("My workflow");
     await waitFor(() => {
-      expect(
-        queryClient.getQueryState(["workflow-runs", "wf-1"])?.status,
-      ).toBe("success");
+      expect(queryClient.getQueryState(["workflow-runs", "wf-1"])?.status).toBe(
+        "success",
+      );
     });
     expect(screen.queryByTestId("workflow-run-badge")).toBeNull();
   });
@@ -166,9 +166,9 @@ describe("WorkflowList", () => {
 
     await screen.findByText("My workflow");
     await waitFor(() => {
-      expect(
-        queryClient.getQueryState(["workflow-runs", "wf-1"])?.status,
-      ).toBe("error");
+      expect(queryClient.getQueryState(["workflow-runs", "wf-1"])?.status).toBe(
+        "error",
+      );
     });
     // The row still renders, the badge stays hidden, and no toast fires.
     expect(screen.getByTestId("workflow-row-wf-1")).toBeTruthy();

@@ -31,7 +31,14 @@ import type { WorkflowRecord } from "@/core/workflows/types";
  * `definition` — send an empty one.
  */
 function blankDefinition(name: string): WorkflowRecord["definition"] {
-  return { id: "draft", name, version: "0.1.0", nodes: [], edges: [], metadata: {} };
+  return {
+    id: "draft",
+    name,
+    version: "0.1.0",
+    nodes: [],
+    edges: [],
+    metadata: {},
+  };
 }
 
 function formatTimestamp(value: string, locale: string): string {
@@ -135,7 +142,10 @@ export function WorkflowList() {
             {t.common.loading}
           </div>
         ) : workflows.isError ? (
-          <div className="text-destructive text-sm" data-testid="workflow-list-error">
+          <div
+            className="text-destructive text-sm"
+            data-testid="workflow-list-error"
+          >
             {t.workflows.errors.loadFailed}: {workflows.error.message}
           </div>
         ) : (workflows.data ?? []).length === 0 ? (
@@ -201,9 +211,7 @@ export function WorkflowList() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t.workflows.createTitle}</DialogTitle>
-            <DialogDescription>
-              {t.workflows.namePlaceholder}
-            </DialogDescription>
+            <DialogDescription>{t.workflows.namePlaceholder}</DialogDescription>
           </DialogHeader>
           <Input
             value={name}
@@ -247,9 +255,7 @@ export function WorkflowList() {
           <DialogHeader>
             <DialogTitle>{t.workflows.title}</DialogTitle>
             <DialogDescription>
-              {deleteTarget
-                ? t.workflows.deleteConfirm(deleteTarget.name)
-                : ""}
+              {deleteTarget ? t.workflows.deleteConfirm(deleteTarget.name) : ""}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -271,9 +277,7 @@ export function WorkflowList() {
               }}
               disabled={deleteWorkflow.isPending}
             >
-              {deleteWorkflow.isPending
-                ? t.common.loading
-                : t.common.delete}
+              {deleteWorkflow.isPending ? t.common.loading : t.common.delete}
             </Button>
           </DialogFooter>
         </DialogContent>

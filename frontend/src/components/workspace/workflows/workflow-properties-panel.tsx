@@ -129,16 +129,25 @@ export function WorkflowPropertiesPanel({
   };
 
   return (
-    <aside className="w-72 shrink-0 overflow-y-auto border-l" data-testid="workflow-properties-panel">
-      <div className="border-b px-4 py-3 text-sm font-medium">{labels.title}</div>
+    <aside
+      className="w-72 shrink-0 overflow-y-auto border-l"
+      data-testid="workflow-properties-panel"
+    >
+      <div className="border-b px-4 py-3 text-sm font-medium">
+        {labels.title}
+      </div>
       <div className="flex flex-col gap-4 p-4">
         <div className="flex flex-col gap-1">
           <div className="text-xs">
-            <span className="text-muted-foreground">{labels.nodeIdLabel}: </span>
+            <span className="text-muted-foreground">
+              {labels.nodeIdLabel}:{" "}
+            </span>
             <span className="font-mono">{node.id}</span>
           </div>
           <div className="text-xs">
-            <span className="text-muted-foreground">{labels.nodeTypeLabel}: </span>
+            <span className="text-muted-foreground">
+              {labels.nodeTypeLabel}:{" "}
+            </span>
             <span className="font-mono">{workflow.type}</span>
           </div>
         </div>
@@ -195,7 +204,9 @@ export function WorkflowPropertiesPanel({
                 value={row.key}
                 disabled={readonly}
                 aria-label={`${labels.paramKey} ${index + 1}`}
-                onChange={(event) => updateRow(index, { key: event.target.value })}
+                onChange={(event) =>
+                  updateRow(index, { key: event.target.value })
+                }
                 onBlur={() => commitRow(index)}
                 className="h-7 w-20 text-xs"
               />
@@ -203,7 +214,9 @@ export function WorkflowPropertiesPanel({
                 value={row.value}
                 disabled={readonly}
                 aria-label={`${labels.paramValue} ${index + 1}`}
-                onChange={(event) => updateRow(index, { value: event.target.value })}
+                onChange={(event) =>
+                  updateRow(index, { value: event.target.value })
+                }
                 onBlur={() => commitRow(index)}
                 className="h-7 min-w-0 flex-1 font-mono text-xs"
               />

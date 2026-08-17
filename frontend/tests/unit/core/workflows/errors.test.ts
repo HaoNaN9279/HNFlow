@@ -57,7 +57,8 @@ describe("parseWorkflowValidationErrors", () => {
       {
         type: "edge",
         id: "1",
-        message: "定义结构非法: edges.1.condition — Input should be a valid string",
+        message:
+          "定义结构非法: edges.1.condition — Input should be a valid string",
       },
     ]);
   });

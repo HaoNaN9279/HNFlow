@@ -15,7 +15,14 @@
 import type { Edge as RFEdgeBase, Node as RFNodeBase } from "@xyflow/react";
 
 import { getDefaultNode } from "./node-catalog";
-import type { CanvasPositions, NodeType, WorkflowDefinition, WorkflowEdge, WorkflowMetadata, WorkflowNode } from "./types";
+import type {
+  CanvasPositions,
+  NodeType,
+  WorkflowDefinition,
+  WorkflowEdge,
+  WorkflowMetadata,
+  WorkflowNode,
+} from "./types";
 
 export { makeNodeId } from "./node-catalog";
 
@@ -40,13 +47,23 @@ const GRID_X = 280;
 const GRID_Y = 120;
 
 /** Build the deterministic edge id for a port-qualified connection. */
-export function makeEdgeId(source: string, sourcePort: string, target: string, targetPort: string): string {
+export function makeEdgeId(
+  source: string,
+  sourcePort: string,
+  target: string,
+  targetPort: string,
+): string {
   return `${source}::${sourcePort}::${target}::${targetPort}`;
 }
 
 /** Derive the deterministic id of an RF edge from its endpoints/handles. */
 export function edgeIdOf(edge: RFEdge): string {
-  return makeEdgeId(edge.source, edge.sourceHandle ?? "", edge.target, edge.targetHandle ?? "");
+  return makeEdgeId(
+    edge.source,
+    edge.sourceHandle ?? "",
+    edge.target,
+    edge.targetHandle ?? "",
+  );
 }
 
 /**
@@ -57,7 +74,9 @@ export function edgeIdOf(edge: RFEdge): string {
  * map always contains the effective position for every node.
  */
 export function definitionToFlow(def: WorkflowDefinition): FlowResult {
-  const canvas = def.metadata.canvas as { positions?: CanvasPositions } | undefined;
+  const canvas = def.metadata.canvas as
+    | { positions?: CanvasPositions }
+    | undefined;
   const storedPositions = canvas?.positions ?? {};
 
   const nodes: RFNode[] = def.nodes.map((node, index) => {
@@ -75,7 +94,12 @@ export function definitionToFlow(def: WorkflowDefinition): FlowResult {
   });
 
   const edges: RFEdge[] = def.edges.map((edge) => ({
-    id: makeEdgeId(edge.source, edge.source_port, edge.target, edge.target_port),
+    id: makeEdgeId(
+      edge.source,
+      edge.source_port,
+      edge.target,
+      edge.target_port,
+    ),
     source: edge.source,
     sourceHandle: edge.source_port,
     target: edge.target,
@@ -126,7 +150,9 @@ export function flowToDefinition(
   for (const node of nodes) {
     collected[node.id] = { x: node.position.x, y: node.position.y };
   }
-  const baseCanvas = base.def.metadata.canvas as { positions?: CanvasPositions } | undefined;
+  const baseCanvas = base.def.metadata.canvas as
+    | { positions?: CanvasPositions }
+    | undefined;
   const metadata: WorkflowMetadata = {
     ...base.def.metadata,
     canvas: { ...baseCanvas, positions: { ...base.positions, ...collected } },

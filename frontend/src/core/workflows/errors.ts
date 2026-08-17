@@ -41,7 +41,9 @@ const STRUCTURAL_SEPARATOR = "—";
 function parseStructuralError(message: string): WorkflowValidationError {
   const body = message.slice(STRUCTURAL_PREFIX.length);
   const separatorIndex = body.indexOf(STRUCTURAL_SEPARATOR);
-  const loc = (separatorIndex >= 0 ? body.slice(0, separatorIndex) : body).trim();
+  const loc = (
+    separatorIndex >= 0 ? body.slice(0, separatorIndex) : body
+  ).trim();
   const parts = loc.split(".");
   for (let i = 0; i < parts.length - 1; i++) {
     const next = parts[i + 1];
@@ -60,7 +62,9 @@ function parseStructuralError(message: string): WorkflowValidationError {
   return { type: "unknown", message };
 }
 
-function parseWorkflowValidationError(message: string): WorkflowValidationError {
+function parseWorkflowValidationError(
+  message: string,
+): WorkflowValidationError {
   const edgeMatch = EDGE_ERROR_PATTERN.exec(message);
   if (edgeMatch) {
     return { type: "edge", id: edgeMatch[1], message };

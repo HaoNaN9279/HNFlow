@@ -136,9 +136,9 @@ describe("WorkflowRunPanel idle state", () => {
       null,
     );
     expect(container.querySelector("[data-timeline-node]")).toBe(null);
-    expect(container.querySelector('[data-testid="workflow-run-terminal"]')).toBe(
-      null,
-    );
+    expect(
+      container.querySelector('[data-testid="workflow-run-terminal"]'),
+    ).toBe(null);
   });
 });
 

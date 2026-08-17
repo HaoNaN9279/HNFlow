@@ -94,10 +94,7 @@ export function WorkspaceNavChatList() {
             isActive={pathname.startsWith("/workspace/workflows")}
             asChild
           >
-            <Link
-              className="text-muted-foreground"
-              href="/workspace/workflows"
-            >
+            <Link className="text-muted-foreground" href="/workspace/workflows">
               <Workflow />
               <span>{t.workflows.title}</span>
             </Link>

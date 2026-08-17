@@ -17,12 +17,7 @@ import {
   type OnNodesDelete,
   type OnSelectionChangeFunc,
 } from "@xyflow/react";
-import {
-  useCallback,
-  useMemo,
-  useRef,
-  type DragEvent,
-} from "react";
+import { useCallback, useMemo, useRef, type DragEvent } from "react";
 import { toast } from "sonner";
 
 import { Canvas } from "@/components/ai-elements/canvas";
@@ -200,7 +195,8 @@ function CanvasInner() {
       const deletedIds = new Set(deleted.map((node) => node.id));
       setEdges((current) =>
         current.filter(
-          (edge) => !deletedIds.has(edge.source) && !deletedIds.has(edge.target),
+          (edge) =>
+            !deletedIds.has(edge.source) && !deletedIds.has(edge.target),
         ),
       );
       // D1: prune the canvas positions of the deleted nodes so a later save

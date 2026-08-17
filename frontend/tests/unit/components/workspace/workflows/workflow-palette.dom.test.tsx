@@ -76,8 +76,6 @@ describe("WorkflowPalette", () => {
     });
 
     expect(screen.getByTestId("palette-item-tool:bash")).toBeTruthy();
-    expect(
-      screen.queryByTestId("palette-item-flow:start"),
-    ).toBeNull();
+    expect(screen.queryByTestId("palette-item-flow:start")).toBeNull();
   });
 });

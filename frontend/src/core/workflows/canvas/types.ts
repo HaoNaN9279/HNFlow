@@ -19,7 +19,13 @@ export type {
 } from "@/core/workflows/types";
 
 /** Palette grouping for a node catalog entry. */
-export type NodeCategory = "flow" | "data" | "tool" | "ai" | "human" | "subworkflow";
+export type NodeCategory =
+  | "flow"
+  | "data"
+  | "tool"
+  | "ai"
+  | "human"
+  | "subworkflow";
 
 /** NodeId → canvas coordinates, stored at `metadata.canvas.positions`. */
 export type CanvasPositions = Record<string, { x: number; y: number }>;

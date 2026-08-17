@@ -1,10 +1,20 @@
 import { describe, expect, test } from "@rstest/core";
 
 import type { RFNode } from "@/core/workflows/canvas/mapping";
-import { PORT_TYPES, isPortCompatible, validateConnection, validateWorkflow } from "@/core/workflows/canvas/validation";
+import {
+  PORT_TYPES,
+  isPortCompatible,
+  validateConnection,
+  validateWorkflow,
+} from "@/core/workflows/canvas/validation";
 import type { WorkflowDefinition } from "@/core/workflows/types";
 
-const node = (id: string, type: string, inputs: string[], outputs: string[]): RFNode => ({
+const node = (
+  id: string,
+  type: string,
+  inputs: string[],
+  outputs: string[],
+): RFNode => ({
   id,
   type,
   position: { x: 0, y: 0 },
@@ -112,47 +122,127 @@ describe("validateConnection", () => {
   const nodes = fixtureNodes();
 
   test("allows same-type connections", () => {
-    expect(validateConnection({ source: "n-a", sourceHandle: "out", target: "n-d", targetHandle: "in" }, nodes)).toEqual({ ok: true });
-    expect(validateConnection({ source: "n-b", sourceHandle: "fileOut", target: "n-b", targetHandle: "fileIn" }, [nodes[1]!])).toEqual({ ok: false, reason: "workflows.errors.selfConnection" });
+    expect(
+      validateConnection(
+        {
+          source: "n-a",
+          sourceHandle: "out",
+          target: "n-d",
+          targetHandle: "in",
+        },
+        nodes,
+      ),
+    ).toEqual({ ok: true });
+    expect(
+      validateConnection(
+        {
+          source: "n-b",
+          sourceHandle: "fileOut",
+          target: "n-b",
+          targetHandle: "fileIn",
+        },
+        [nodes[1]!],
+      ),
+    ).toEqual({ ok: false, reason: "workflows.errors.selfConnection" });
   });
 
   test("rejects cross-type data↔file", () => {
-    expect(validateConnection({ source: "n-a", sourceHandle: "out", target: "n-b", targetHandle: "fileIn" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-a",
+          sourceHandle: "out",
+          target: "n-b",
+          targetHandle: "fileIn",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.portTypeMismatch",
     });
   });
 
   test("rejects cross-type bool↔enum", () => {
-    expect(validateConnection({ source: "n-c", sourceHandle: "true", target: "n-e", targetHandle: "enumIn" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-c",
+          sourceHandle: "true",
+          target: "n-e",
+          targetHandle: "enumIn",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.portTypeMismatch",
     });
   });
 
   test("rejects self connections even when ports match", () => {
-    expect(validateConnection({ source: "n-a", sourceHandle: "out", target: "n-a", targetHandle: "in" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-a",
+          sourceHandle: "out",
+          target: "n-a",
+          targetHandle: "in",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.selfConnection",
     });
   });
 
   test("rejects missing source ports", () => {
-    expect(validateConnection({ source: "n-a", sourceHandle: "nope", target: "n-d", targetHandle: "in" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-a",
+          sourceHandle: "nope",
+          target: "n-d",
+          targetHandle: "in",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.portNotFound",
     });
   });
 
   test("rejects missing target ports", () => {
-    expect(validateConnection({ source: "n-a", sourceHandle: "out", target: "n-d", targetHandle: "nope" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-a",
+          sourceHandle: "out",
+          target: "n-d",
+          targetHandle: "nope",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.portNotFound",
     });
   });
 
   test("rejects connections to unknown nodes", () => {
-    expect(validateConnection({ source: "n-zzz", sourceHandle: "out", target: "n-d", targetHandle: "in" }, nodes)).toEqual({
+    expect(
+      validateConnection(
+        {
+          source: "n-zzz",
+          sourceHandle: "out",
+          target: "n-d",
+          targetHandle: "in",
+        },
+        nodes,
+      ),
+    ).toEqual({
       ok: false,
       reason: "workflows.errors.portNotFound",
     });
@@ -167,7 +257,9 @@ describe("validateWorkflow", () => {
   test("flags a missing start node", () => {
     const def = validDefinition();
     def.nodes = def.nodes.filter((n) => n.type !== "flow:start");
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.missingStartNode");
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.missingStartNode",
+    );
   });
 
   test("flags multiple start nodes", () => {
@@ -181,19 +273,30 @@ describe("validateWorkflow", () => {
       capability_groups: [],
       agent_name: null,
     });
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.multipleStartNodes");
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.multipleStartNodes",
+    );
   });
 
   test("flags a start node with incoming edges", () => {
     const def = validDefinition();
-    def.edges.push({ source: "n-a", source_port: "out", target: "n-start", target_port: "out" });
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.startHasIncomingEdge");
+    def.edges.push({
+      source: "n-a",
+      source_port: "out",
+      target: "n-start",
+      target_port: "out",
+    });
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.startHasIncomingEdge",
+    );
   });
 
   test("flags a missing end node", () => {
     const def = validDefinition();
     def.nodes = def.nodes.filter((n) => n.type !== "flow:end");
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.missingEndNode");
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.missingEndNode",
+    );
   });
 
   test("flags multiple end nodes", () => {
@@ -207,19 +310,38 @@ describe("validateWorkflow", () => {
       capability_groups: [],
       agent_name: null,
     });
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.multipleEndNodes");
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.multipleEndNodes",
+    );
   });
 
   test("flags an end node with outgoing edges", () => {
     const def = validDefinition();
-    def.edges.push({ source: "n-end", source_port: "in", target: "n-a", target_port: "in" });
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.endHasOutgoingEdge");
+    def.edges.push({
+      source: "n-end",
+      source_port: "in",
+      target: "n-a",
+      target_port: "in",
+    });
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.endHasOutgoingEdge",
+    );
   });
 
   test("flags edges referencing missing nodes", () => {
     const def = validDefinition();
-    def.edges.push({ source: "n-ghost", source_port: "out", target: "n-a", target_port: "in" });
-    def.edges.push({ source: "n-a", source_port: "out", target: "n-ghost", target_port: "in" });
+    def.edges.push({
+      source: "n-ghost",
+      source_port: "out",
+      target: "n-a",
+      target_port: "in",
+    });
+    def.edges.push({
+      source: "n-a",
+      source_port: "out",
+      target: "n-ghost",
+      target_port: "in",
+    });
     const codes = validateWorkflow(def).map((e) => e.code);
     expect(codes).toContain("workflows.errors.edgeSourceNotFound");
     expect(codes).toContain("workflows.errors.edgeTargetNotFound");
@@ -227,8 +349,18 @@ describe("validateWorkflow", () => {
 
   test("flags edges referencing missing ports", () => {
     const def = validDefinition();
-    def.edges.push({ source: "n-start", source_port: "nope", target: "n-a", target_port: "in" });
-    def.edges.push({ source: "n-a", source_port: "out", target: "n-end", target_port: "nope" });
+    def.edges.push({
+      source: "n-start",
+      source_port: "nope",
+      target: "n-a",
+      target_port: "in",
+    });
+    def.edges.push({
+      source: "n-a",
+      source_port: "out",
+      target: "n-end",
+      target_port: "nope",
+    });
     const codes = validateWorkflow(def).map((e) => e.code);
     expect(codes).toContain("workflows.errors.sourcePortNotFound");
     expect(codes).toContain("workflows.errors.targetPortNotFound");
@@ -245,8 +377,15 @@ describe("validateWorkflow", () => {
       capability_groups: [],
       agent_name: null,
     });
-    def.edges.push({ source: "n-a", source_port: "out", target: "n-file", target_port: "in" });
-    expect(validateWorkflow(def).map((e) => e.code)).toContain("workflows.errors.portTypeMismatch");
+    def.edges.push({
+      source: "n-a",
+      source_port: "out",
+      target: "n-file",
+      target_port: "in",
+    });
+    expect(validateWorkflow(def).map((e) => e.code)).toContain(
+      "workflows.errors.portTypeMismatch",
+    );
   });
 
   test("every error carries a code and a readable message", () => {

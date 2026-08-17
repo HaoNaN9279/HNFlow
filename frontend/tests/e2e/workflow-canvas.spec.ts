@@ -151,7 +151,8 @@ function mockWorkflowsAPI(
           body: JSON.stringify(putBehavior.body),
         });
       }
-      const definition = savedPutBody.definition as MockWorkflowRecord["definition"];
+      const definition =
+        savedPutBody.definition as MockWorkflowRecord["definition"];
       const metadata = (savedPutBody.metadata as Record<string, unknown>) ?? {};
       record = {
         ...record,
@@ -386,9 +387,13 @@ test.describe("Workflow canvas", () => {
     const savedEdges = putBody.definition.edges;
     const savedPositions = putBody.metadata.canvas?.positions ?? {};
     expect(savedNodes).toHaveLength(5);
-    expect(
-      savedNodes.map((node) => node.type).sort(),
-    ).toEqual(["ai:llm_agent", "data:assign", "flow:end", "flow:start", "human:task"]);
+    expect(savedNodes.map((node) => node.type).sort()).toEqual([
+      "ai:llm_agent",
+      "data:assign",
+      "flow:end",
+      "flow:start",
+      "human:task",
+    ]);
     // The five dragged nodes must have persisted positions. The two deleted
     // anchor nodes also remain under `metadata.canvas.positions` — the
     // editor does not prune positions when nodes are removed (see T14-5
@@ -471,9 +476,24 @@ test.describe("Workflow canvas", () => {
 
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
     // data:file outputs `file`; data:assign expects `data` on its input.
-    await dropPaletteItem(page, "data:file", canvasBox.x + 60, canvasBox.y + 60);
-    await dropPaletteItem(page, "data:assign", canvasBox.x + 560, canvasBox.y + 60);
-    await dropPaletteItem(page, "flow:start", canvasBox.x + 60, canvasBox.y + 240);
+    await dropPaletteItem(
+      page,
+      "data:file",
+      canvasBox.x + 60,
+      canvasBox.y + 60,
+    );
+    await dropPaletteItem(
+      page,
+      "data:assign",
+      canvasBox.x + 560,
+      canvasBox.y + 60,
+    );
+    await dropPaletteItem(
+      page,
+      "flow:start",
+      canvasBox.x + 60,
+      canvasBox.y + 240,
+    );
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
 
     // Mismatch: file -> data is rejected live (invalid connection line),
@@ -523,7 +543,12 @@ test.describe("Workflow canvas", () => {
       },
     ];
     preset.definition.edges = [
-      { source: "n_start", source_port: "out", target: "n_x", target_port: "in" },
+      {
+        source: "n_start",
+        source_port: "out",
+        target: "n_x",
+        target_port: "in",
+      },
     ];
     preset.definition.metadata = {
       canvas: {
@@ -552,7 +577,12 @@ test.describe("Workflow canvas", () => {
 
     // Make the document dirty so Save is enabled, then save into the 422.
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    await dropPaletteItem(page, "flow:wait", canvasBox.x + 120, canvasBox.y + 360);
+    await dropPaletteItem(
+      page,
+      "flow:wait",
+      canvasBox.x + 120,
+      canvasBox.y + 360,
+    );
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
 
     const saveButton = page.getByRole("button", { name: "保存" });

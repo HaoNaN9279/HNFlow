@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, rs } from "@rstest/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 import {
   WorkflowEditorProvider,
@@ -124,15 +130,13 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
 
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
 
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(false);
     expect(screen.getByText("Unsaved")).toBeTruthy();
   });
@@ -142,14 +146,18 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
 
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-    fireEvent.click(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }));
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }),
+    );
 
     await waitFor(() => {
       expect(apiMock.updateWorkflow).toHaveBeenCalledTimes(1);
     });
     const payload = apiMock.updateWorkflow.mock.calls[0]![1] as {
       definition: { nodes: unknown[]; edges: unknown[] };
-      metadata: { canvas: { positions: Record<string, { x: number; y: number }> } };
+      metadata: {
+        canvas: { positions: Record<string, { x: number; y: number }> };
+      };
     };
     expect(payload.definition.nodes).toHaveLength(1);
     expect(payload.definition.edges).toEqual([]);
@@ -168,7 +176,9 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
 
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-    fireEvent.click(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }));
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }),
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("workflow-error-list")).toBeTruthy();
@@ -185,7 +195,9 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
 
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-    fireEvent.click(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }));
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }),
+    );
 
     await waitFor(() => {
       expect(toastMock.error).toHaveBeenCalledWith(
@@ -200,14 +212,15 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
 
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-    fireEvent.click(screen.getByRole<HTMLButtonElement>("button", { name: "Save" }));
+    fireEvent.click(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }),
+    );
 
     await waitFor(() => {
       expect(toastMock.success).toHaveBeenCalled();
     });
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(true);
     expect(screen.queryByText("Unsaved")).toBeNull();
   });
@@ -247,8 +260,7 @@ describe("WorkflowToolbar", () => {
     renderToolbar();
     // Clean document: Save is disabled, Run is enabled.
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(true);
 
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
@@ -258,16 +270,14 @@ describe("WorkflowToolbar", () => {
     });
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(true);
 
     // Editing while running must keep Save disabled (isRunning wins over
     // dirty), and Run stays hidden for the whole run.
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Save" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
     ).toBe(true);
     expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
 
@@ -278,8 +288,7 @@ describe("WorkflowToolbar", () => {
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     // The run ended but the document is still dirty -> Run stays blocked.
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Run" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Run" }).disabled,
     ).toBe(true);
   });
 
@@ -287,8 +296,7 @@ describe("WorkflowToolbar", () => {
     renderToolbar({ readonly: true });
 
     expect(
-      (screen.getByRole<HTMLButtonElement>("button", { name: "Run" }) )
-        .disabled,
+      screen.getByRole<HTMLButtonElement>("button", { name: "Run" }).disabled,
     ).toBe(true);
   });
 });
