@@ -159,7 +159,7 @@ export const NODE_CATALOG = [
     category: "tool",
     defaultInputs: [{ name: "in", type: "data", required: true }],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
-    description: "Send a user-facing notification (placeholder).",
+    description: "Emit a local user-facing notification for long-running runs.",
   },
   {
     type: "tool:log",
@@ -180,7 +180,8 @@ export const NODE_CATALOG = [
         name: "template_prompt",
         type: "data",
         required: false,
-        description: "Template prompt (future)",
+        description:
+          "Template prompt (reset mode — full re-run from a template)",
       },
       {
         name: "continue_prompt",
@@ -210,7 +211,7 @@ export const NODE_CATALOG = [
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { subworkflow: { type: "template", template_id: "" } },
     description:
-      "Nested workflow reference (placeholder — editing lands later).",
+      "Nested workflow reference — compiled subgraph or runtime delegation.",
   },
 ] as const satisfies readonly NodeCatalogEntry[];
 

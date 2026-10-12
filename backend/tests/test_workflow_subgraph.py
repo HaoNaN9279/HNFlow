@@ -592,6 +592,43 @@ class TestSseNoSubgraphLeak:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 11b. Node lifecycle custom events carry the subgraph depth (C2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeEventDepthTags:
+    """Compiler-emitted ``wf:node:*`` custom events tag top-level depth 0.
+
+    ``run_workflow`` republishes only ``depth == 0`` events, so this tag is what
+    keeps child-subgraph node events out of the parent's node-event stream.
+    """
+
+    @pytest.mark.asyncio
+    async def test_custom_node_events_tag_depth(self) -> None:
+        child = _child_def(assign_value="v")
+        parent_nodes = [
+            _start_node(),
+            _sub_node("sub", definition=child.model_dump(mode="json"), mapping=_roundtrip_mapping()),
+            _end_node(),
+        ]
+        parent_edges = [
+            Edge(source="start", source_port="input", target="sub", target_port="in"),
+            Edge(source="sub", source_port="out", target="end", target_port="in"),
+        ]
+        graph = compile_definition(_make_def(parent_nodes, parent_edges), context=CompileContext(executors={NodeType.DATA_ASSIGN: exec_assign}))
+
+        depths: dict[str, int] = {}
+        async for mode, data in graph.astream({"wf:start:input": "x"}, stream_mode=["updates", "custom"]):
+            if mode == "custom":
+                depths.setdefault(data["node_id"], data["depth"])
+
+        assert depths["sub"] == 0
+        # Child-subgraph nodes (assign + boundary end) are tagged one level deeper.
+        assert depths.get("cassign", 1) >= 1
+        assert depths.get("cend", 1) >= 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 12. Subgraph-input copy-on-write boundary (T9A-1)
 # ═══════════════════════════════════════════════════════════════════════════════
 

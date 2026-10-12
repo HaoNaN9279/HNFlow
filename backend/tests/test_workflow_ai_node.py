@@ -114,6 +114,9 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
     import deerflow.subagents as subagents_pkg
 
     monkeypatch.setattr(subagents_pkg, "SubagentExecutor", FakeExecutor)
+    # Keep these prompt/wiring tests hermetic: capability-group tool resolution
+    # (C1) is covered separately in test_workflow_tool_gateway.py.
+    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: [])
     yield captured
 
 

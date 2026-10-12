@@ -9,12 +9,15 @@ the compiler's ``_resolve_executor`` awaits it like any async executor.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from deerflow.config.agents_config import load_agent_config
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.registry import WorkflowExecutionError
+
+logger = logging.getLogger(__name__)
 
 #: Reserved executor-result key carrying the sub-agent's aggregated token
 #: usage.  ``_make_node_fn`` (workflow/compiler.py) lifts it onto a declared
@@ -45,6 +48,30 @@ def _aggregate_subagent_token_usage(records: list[dict[str, int | str | None]] |
                 # A malformed record field must never break node completion.
                 continue
     return totals
+
+
+def _resolve_node_tools(
+    capability_groups: list[str],
+    *,
+    user_id: str | None,
+    app_config: Any,
+) -> list[Any]:
+    """Resolve the AI node's tool set from its capability groups (C1).
+
+    Delegates to the tool gateway (N1), which maps the groups' ``allowed-tools``
+    union to concrete ``BaseTool`` objects.  Fail-open: a gateway/skill-storage
+    failure degrades to an empty tool set rather than failing the node (the
+    three-layer prompt still executes).
+    """
+    if not capability_groups:
+        return []
+    try:
+        from deerflow.workflow.tool_gateway import resolve_capability_tools
+
+        return resolve_capability_tools(capability_groups, user_id=user_id, app_config=app_config)
+    except Exception:
+        logger.warning("ai:llm_agent failed to resolve capability-group tools; continuing without tools", exc_info=True)
+        return []
 
 
 async def exec_llm_agent(
@@ -146,6 +173,10 @@ async def exec_llm_agent(
     from deerflow.subagents import SubagentExecutor
     from deerflow.subagents.config import SubagentConfig
 
+    # C1: assemble the node's real tool set from its capability groups' union of
+    # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
+    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config)
+
     subagent_config = SubagentConfig(
         name=f"ai:{node_id}" if node_id else "ai:node",
         description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
@@ -158,7 +189,7 @@ async def exec_llm_agent(
 
     executor_kwargs: dict[str, Any] = {
         "config": subagent_config,
-        "tools": [],
+        "tools": node_tools,
         "delegation_depth": delegation_depth,
     }
     if user_id is not None:

@@ -55,12 +55,22 @@ def _validate_agent_name(value: str | None) -> str | None:
 
 
 class PortType(StrEnum):
-    """Data type for a workflow port."""
+    """Data type for a workflow port.
+
+    ``data`` / ``file`` / ``bool`` / ``enum`` are the original scalar-ish
+    contracts; ``number`` / ``array`` / ``record`` extend the set for the
+    richer payloads AI nodes and structured-output contracts produce
+    (numeric values, JSON arrays, and JSON objects respectively).  Port
+    compatibility stays strict same-type matching (``ports_compatible``).
+    """
 
     DATA = "data"
     FILE = "file"
     BOOL = "bool"
     ENUM = "enum"
+    NUMBER = "number"
+    ARRAY = "array"
+    RECORD = "record"
 
 
 class NodeType(StrEnum):
@@ -165,6 +175,9 @@ class WorkflowMetadata(BaseModel):
     # 非幂等/危险节点（如 bash、http）的 id 列表，运行时确认留 T18；
     # None = 无待审核节点。
     pending_review_nodes: list[str] | None = None
+    # 全量能力快照（§5.6）：一次运行的可复现依据。保存时固化，包含能力包
+    # ``guid@v<version>``、模型 id/版本、采样参数等。None = 尚未固化。
+    lockfile: dict[str, Any] | None = None
 
 
 class WorkflowDefinition(BaseModel):
@@ -222,3 +235,28 @@ def collect_resolved_groups(
             raw_entries.append(f"{skill.skill_id}@v{skill.version}")
 
     return list(dict.fromkeys(raw_entries))
+
+
+def validate_capability_groups(
+    definition: WorkflowDefinition,
+    catalog: SkillCatalog,
+) -> list[str]:
+    """Validate that every referenced capability group exists in the catalog.
+
+    Returns one error message per ``(node_id, group_name)`` whose skill is not
+    installed.  Pure function — no IO.
+
+    This is the *static existence* half of §5.4's capability-group validation;
+    version-range checking lives in the dependency graph / lockfile layer.  It
+    is intentionally exposed as a non-raising reporter: callers that need
+    fail-open save behavior (a node may legitimately reference a skill that is
+    installed later) collect and log the result, while callers that need a hard
+    gate inspect a non-empty return value.
+    """
+    errors: list[str] = []
+    known_names = {s.name for s in catalog.skills}
+    for node in definition.nodes:
+        for name in node.capability_groups:
+            if name not in known_names:
+                errors.append(f"node '{node.id}': capability group '{name}' is not installed")
+    return errors

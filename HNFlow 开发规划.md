@@ -65,41 +65,43 @@
 
 ## 三、改造清单（基于旧版本）
 
-| # | 改造项 | 位置 | 说明 |
-|---|---|---|---|
-| C1 | **AI 节点真实工具装配** | `executors/ai.py` | 现 `tools=[]`，capability_groups 只进提示词。需按 `allowed-tools` 并集经工具网关装配工具（依赖 C5）。**核心** |
-| C2 | **流式执行对齐** | `workflow/worker.py` | 方案 §12 为 `astream(stream_mode=["updates","custom"])`；现状 `astream_events(v2)`。统一为方案语义，保留节点级事件。**核心** |
-| C3 | **lockfile 落元数据** | `schema.py`(`WorkflowMetadata`)、保存路径 | 新增 `lockfile` 字段（模型/prompt/tool schema/MCP 版本/采样参数）。**核心** |
-| C4 | **能力组解析→校验→加载** | `schema.collect_resolved_groups` + 新增服务 | `resolved_groups` 目前只收集；补存在性/版本范围校验与执行期加载。 |
-| C5 | **循环正宗版** | `compiler.py`(`_loop_node_fn`) | 由简单计数改为子图展开 + 条件边 + `results`/`last` 聚合输出。 |
-| C6 | **端口类型扩展** | `schema.PortType` | 增 `number`/`array`/`record`，同步 `workflow_io.ports_compatible` 与前端 `types.ts`/校验。 |
-| C7 | **通知执行器补齐** | `executors/tool.py`(`exec_notify`) | 落地本机通知（长期运行需要）。 |
-| C8 | **schema 迁移钩子** | `workflow_io._migrate_schema` | 现抛 `NotImplementedError`；建立 v→v+1 迁移链。 |
-| C9 | **单用户模型收缩** | 定义/持久化/路由 | 去多用户强隔离，保留 `user_id` 弱隔离（§15）。 |
-| C10 | **执行器注册 `idempotent` 修正** | `executors/__init__.py` | `ai:llm_agent`/`human:task`/`nested` 现标 `requires_confirmation=True`，与新语义（AI 有界自主 + 中断）对齐复核。 |
-| C11 | **前端节点目录同步** | `node-catalog.ts`、`types.ts`、`validation.ts` | 与新增/改造节点（app、loop 端口、端口类型）保持一致；移除 `template_prompt`「future」占位语义。 |
+状态图例：✅ 已完成（P0 本轮）｜◐ 部分完成（最小版）｜⬜ 未开始｜⏸ 顺延后续。
+
+| # | 改造项 | 位置 | 说明 | 状态 |
+|---|---|---|---|---|
+| C1 | **AI 节点真实工具装配** | `executors/ai.py` | 现 `tools=[]`，capability_groups 只进提示词。需按 `allowed-tools` 并集经工具网关装配工具（依赖 N1）。**核心** | ✅ 已落地：`tool_gateway.resolve_capability_tools` 装配 |
+| C2 | **流式执行对齐** | `workflow/worker.py` | 方案 §12 为 `astream(stream_mode=["updates","custom"])`；现状 `astream_events(v2)`。统一为方案语义，保留节点级事件。**核心** | ✅ 已落地：compiler 发射节点自定义事件（带 `depth`），worker 消费 |
+| C3 | **lockfile 落元数据** | `schema.py`(`WorkflowMetadata`)、保存路径 | 新增 `lockfile` 字段（模型/prompt/tool schema/MCP 版本/采样参数）。**核心** | ✅ 已落地：保存时固化能力快照 + 默认模型 |
+| C4 | **能力组解析→校验→加载** | `schema.collect_resolved_groups` + 新增服务 | `resolved_groups` 目前只收集；补存在性/版本范围校验与执行期加载。 | ◐ `validate_capability_groups` + 执行期加载已落地；保存仍 fail-open（版本范围校验随 lockfile 后续） |
+| C5 | **循环正宗版** | `compiler.py`(`_loop_node_fn`) | 由简单计数改为子图展开 + 条件边 + `results`/`last` 聚合输出。 | ⏸ 顺延后续（改动编译期语义，需单独设计 + 迁移） |
+| C6 | **端口类型扩展** | `schema.PortType` | 增 `number`/`array`/`record`，同步 `workflow_io.ports_compatible` 与前端 `types.ts`/校验。 | ✅ 已落地（前端 `types.ts`、端口颜色映射已同步） |
+| C7 | **通知执行器补齐** | `executors/tool.py`(`exec_notify`) | 落地本机通知（长期运行需要）。 | ✅ 已落地：`runtime.context["notifier"]` 钩子 + 日志兜底 |
+| C8 | **schema 迁移钩子** | `workflow_io._migrate_schema` | 现抛 `NotImplementedError`；建立 v→v+1 迁移链。 | ✅ 已落地：`register_migration` 逐版本链 |
+| C9 | **单用户模型收缩** | 定义/持久化/路由 | 去多用户强隔离，保留 `user_id` 弱隔离（§15）。 | ⬜ 未开始 |
+| C10 | **执行器注册 `idempotent` 修正** | `executors/__init__.py` | `ai:llm_agent`/`human:task`/`nested` 现标 `requires_confirmation=True`，与新语义（AI 有界自主 + 中断）对齐复核。 | ✅ 已落地：`requires_confirmation` 仅保留 bash/http |
+| C11 | **前端节点目录同步** | `node-catalog.ts`、`types.ts`、`validation.ts` | 与新增/改造节点（app、loop 端口、端口类型）保持一致；移除 `template_prompt`「future」占位语义。 | ✅ 已落地（app 类节点待 P1） |
 
 ---
 
 ## 四、新增清单
 
-| # | 新增项 | 对应方案 | 说明 |
-|---|---|---|---|
-| N1 | 工具网关 | §9 | 统一描述符 + 调用信封 + provider（builtin/skill/sandbox/mcp/app） |
-| N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 |
-| N3 | 能力包契约 | §5.5 | permissions/evals/tool_schema_version/context_budget/required-secrets |
-| N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 |
-| N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` |
-| N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 |
-| N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ |
-| N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 |
-| N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 |
-| N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo |
-| N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范 |
-| N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 |
-| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 |
-| N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） |
+| # | 新增项 | 对应方案 | 说明 | 状态 |
+|---|---|---|---|---|
+| N1 | 工具网关 | §9 | 统一描述符 + 调用信封 + provider（builtin/skill/sandbox/mcp/app） | ◐ 最小版（builtin/sandbox + 描述符/分派）；skill/mcp/app provider 后续 |
+| N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 | ⬜ 未开始（现状经 SubagentExecutor 间接调用，建议渐进抽层） |
+| N3 | 能力包契约 | §5.5 | permissions/evals/tool_schema_version/context_budget/required-secrets | ⬜ 未开始 |
+| N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ⬜ P1 |
+| N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ⬜ P1 |
+| N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ⬜ P1 |
+| N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ | ⬜ P1 |
+| N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 | ⬜ P1 |
+| N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 | ⬜ P1 |
+| N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ⬜ P1 |
+| N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范 | ⬜ P1 |
+| N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ⬜ P2 |
+| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ⬜ P2 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ⬜ P2 |
+| N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
 
@@ -109,14 +111,16 @@
 
 目标：让现有引擎真正跑通方案语义，AI 节点可实际调用工具。
 
-1. **C1 AI 节点工具装配**（依赖 N1 最小版）
+1. **C1 AI 节点工具装配**（依赖 N1 最小版）— ✅ 完成
    - 先落地工具网关最小版（N1：描述符 + builtin/sandbox provider 分派），再让 `exec_llm_agent` 按 `capability_groups` 的 allowed-tools 并集装配 `tools`。
-2. **C2 执行流对齐**：worker 改用 `astream(stream_mode=["updates","custom"])`，节点事件语义与方案一致。
-3. **C3 lockfile + C4 能力组校验/加载**：`WorkflowMetadata.lockfile`；保存时固化、执行时按 lockfile 恢复。
-4. **C5 循环正宗版 + C6 端口类型扩展 + C11 前端同步**。
-5. **C7 通知执行器 + C8 schema 迁移钩子 + C10 幂等标注复核**。
+2. **C2 执行流对齐**：worker 改用 `astream(stream_mode=["updates","custom"])`，节点事件语义与方案一致。— ✅ 完成
+3. **C3 lockfile + C4 能力组校验/加载**：`WorkflowMetadata.lockfile`；保存时固化、执行时按 lockfile 恢复。— ✅ 完成（C4 版本范围校验留待 lockfile 深化）
+4. **C5 循环正宗版 + C6 端口类型扩展 + C11 前端同步**。— C6/C11 ✅；**C5 ⏸ 顺延后续**
+5. **C7 通知执行器 + C8 schema 迁移钩子 + C10 幂等标注复核**。— ✅ 完成
 
 验收：一个含 AI 节点调用工具、含循环聚合、含端口类型校验的端到端工作流可编译、执行、断点、恢复。
+
+> **本轮进度（P0）**：C1/C2/C3/C6/C7/C8/C10/C11 已完成，C4 部分完成，C5 顺延。后端 workflow 套件 504 passed / 1 skipped；前端 lint + typecheck + prettier + 单测（1254 passed）全绿。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -147,15 +151,15 @@
 
 ## 六、里程碑
 
-| 里程碑 | 内容 | 出口标准 |
-|---|---|---|
-| M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 |
-| M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 |
-| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 |
-| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 |
-| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 |
-| M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） |
+| 里程碑 | 内容 | 出口标准 | 状态 |
+|---|---|---|---|
+| M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 | ✅ 达成（C4 版本范围校验顺延） |
+| M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
+| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
+| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ⬜ 未开始 |
+| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ⬜ 未开始 |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
+| M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 
 ---
 

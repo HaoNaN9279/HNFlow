@@ -9,7 +9,15 @@
  * `tests/unit/core/workflows/types.test.ts` pins them by literal assertion.
  */
 
-export const PORT_TYPES = ["data", "file", "bool", "enum"] as const;
+export const PORT_TYPES = [
+  "data",
+  "file",
+  "bool",
+  "enum",
+  "number",
+  "array",
+  "record",
+] as const;
 export type PortType = (typeof PORT_TYPES)[number];
 
 export const NODE_TYPES = [
@@ -80,6 +88,9 @@ export type WorkflowMetadata = {
   resolved_groups?: string[] | null;
   created_at?: string | null;
   updated_at?: string | null;
+  pending_review_nodes?: string[] | null;
+  /** Frozen reproducibility snapshot (§5.6): capability groups + model + sampling. */
+  lockfile?: Record<string, unknown> | null;
   [key: string]: unknown;
 };
 

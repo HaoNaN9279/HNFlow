@@ -547,3 +547,54 @@ class TestAgentNameValidation:
         errors = validate_definition(wf, known_agent_names=set())
         agent_errors = [e for e in errors if "agent_name" in e]
         assert len(agent_errors) == 2
+
+
+# ── 9. schema 迁移钩子链（C8）────────────────────────────────────────────────────
+
+
+class TestSchemaMigrationHook:
+    """``_migrate_schema`` applies registered one-version steps; missing steps raise."""
+
+    def test_unknown_lower_version_raises_not_implemented(self):
+        raw = {"schema_version": -1, "workflow": {}}
+        with pytest.raises(NotImplementedError, match="migration from version -1"):
+            deserialize(json.dumps(raw))
+
+    def test_registered_step_is_applied(self):
+        import deerflow.workflow.workflow_io as workflow_io
+
+        raw_workflow = _make_wf(nodes=[_start_node(), _end_node()], edges=[]).model_dump(mode="json")
+        document = {"schema_version": -1, "workflow": raw_workflow}
+        # A migration step upgrades -1 → 0 (still below SCHEMA_VERSION 1), and a
+        # second step upgrades 0 → 1 by stamping the current version.
+        workflow_io.register_migration(-1, lambda doc: {**doc, "schema_version": 0})
+        workflow_io.register_migration(0, lambda doc: {**doc, "schema_version": 1})
+        try:
+            reloaded = deserialize(json.dumps(document))
+        finally:
+            workflow_io._MIGRATION_STEPS.pop(-1, None)
+            workflow_io._MIGRATION_STEPS.pop(0, None)
+        assert reloaded.id == "test-wf"
+
+    def test_step_that_does_not_advance_version_raises(self):
+        import deerflow.workflow.workflow_io as workflow_io
+
+        workflow_io.register_migration(-1, lambda doc: doc)  # forgets to bump version
+        try:
+            with pytest.raises(ValueError, match="must advance schema_version"):
+                deserialize(json.dumps({"schema_version": -1, "workflow": {}}))
+        finally:
+            workflow_io._MIGRATION_STEPS.pop(-1, None)
+
+    def test_registering_duplicate_or_current_version_rejected(self):
+        import deerflow.workflow.workflow_io as workflow_io
+
+        workflow_io.register_migration(-2, lambda doc: {**doc, "schema_version": -1})
+        try:
+            with pytest.raises(ValueError, match="already registered"):
+                workflow_io.register_migration(-2, lambda doc: doc)
+        finally:
+            workflow_io._MIGRATION_STEPS.pop(-2, None)
+
+        with pytest.raises(ValueError, match=">= current SCHEMA_VERSION"):
+            workflow_io.register_migration(1, lambda doc: doc)

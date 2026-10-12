@@ -249,3 +249,41 @@ class TestAgentNameBinding:
         """Non-string agent_name values raise ValidationError."""
         with pytest.raises(ValidationError):
             Node(id="n", type=NodeType.FLOW_START, agent_name=bad_value)
+
+
+# ── 端口类型扩展（C6）──────────────────────────────────────────────────────────
+
+
+class TestPortTypeExtensions:
+    """PortType gains number / array / record alongside the original four."""
+
+    def test_original_four_present(self):
+        assert {p.value for p in PortType} >= {"data", "file", "bool", "enum"}
+
+    @pytest.mark.parametrize("value", ["number", "array", "record"])
+    def test_new_types_accepted(self, value: str):
+        port = Port(name="p", type=value)
+        assert port.type == PortType(value)
+
+    def test_filter_unknown_type_rejected(self):
+        with pytest.raises(ValidationError):
+            Port(name="p", type="object")
+
+
+# ── lockfile 快照字段（C3）────────────────────────────────────────────────────
+
+
+class TestMetadataLockfile:
+    """WorkflowMetadata carries an optional lockfile snapshot."""
+
+    def test_defaults_to_none(self):
+        assert WorkflowMetadata().lockfile is None
+
+    def test_roundtrips(self):
+        wf = WorkflowDefinition(
+            id="wf-lock",
+            name="Lock",
+            metadata=WorkflowMetadata(lockfile={"workflow": {"id": "wf-lock", "version": "0.1.0"}}),
+        )
+        reloaded = WorkflowDefinition.model_validate(wf.model_dump())
+        assert reloaded.metadata.lockfile == {"workflow": {"id": "wf-lock", "version": "0.1.0"}}

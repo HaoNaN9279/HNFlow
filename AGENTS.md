@@ -67,18 +67,19 @@ HNFlow/
 
 HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`。定义层与执行层解耦：数据模型不引入 LangGraph 依赖，保证纯 JSON 可序列化。
 
-- `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`Port`、`Node`、`Edge`、`WorkflowDefinition`。`Node` 含 `agent_name` 主身份绑定（`None` = 默认 lead 身份）与 `capability_groups`（能力供给组，allowed-tools 并集 + rules 并入 prompt）。`id` 校验为稳定标识（uuid/slug），禁止路径字符。
-- `workflow_io.py` — 定义校验器 + JSON 序列化：`validate_definition`（无环 DFS、单起点单终点、端口类型匹配，报错携带完整环路路径 `A→B→C→A`）、`serialize`/`deserialize`（schema version + 迁移钩子）。纯函数，前端画布复用同一套端口匹配规则。
-- `compiler.py` — `compile_definition(def, context) -> CompiledStateGraph`：节点映射为 LangGraph 节点函数，边映射为普通边/条件边；端口→state 字段绑定（`wf:<node_id>:<port>`）；子图展开（嵌套 StateGraph，边界 `_copy_on_write` 浅复制）；编译产物按 definition 哈希缓存，变更自动失效。
-- `worker.py` — 编排入口：接收 definition id + 输入参数，调 compiler 编译，`graph.astream(..., stream_mode=["updates","custom"])` 执行；复用 run 生命周期（RunRecord、checkpointer、run events、SSE 节点级事件 `wf:node:started|completed|failed`）。
+- `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`Port`、`Node`、`Edge`、`WorkflowDefinition`。`PortType` 含 `data/file/bool/enum/number/array/record`（严格同类型匹配）。`Node` 含 `agent_name` 主身份绑定（`None` = 默认 lead 身份）与 `capability_groups`（能力供给组，allowed-tools 并集 + rules 并入 prompt）。`WorkflowMetadata` 含 `resolved_groups`、`pending_review_nodes` 与 `lockfile`（全量能力快照）。`id` 校验为稳定标识（uuid/slug），禁止路径字符。`collect_resolved_groups`（解析）+ `validate_capability_groups`（存在性校验）为纯函数。
+- `workflow_io.py` — 定义校验器 + JSON 序列化：`validate_definition`（无环 DFS、单起点单终点、端口类型匹配，报错携带完整环路路径 `A→B→C→A`）、`serialize`/`deserialize`（schema version + `register_migration`/`_migrate_schema` 逐版本迁移链）。纯函数，前端画布复用同一套端口匹配规则。
+- `compiler.py` — `compile_definition(def, context) -> CompiledStateGraph`：节点映射为 LangGraph 节点函数，边映射为普通边/条件边；端口→state 字段绑定（`wf:<node_id>:<port>`）；每个节点函数被包一层生命周期事件发射（`wf:node:started|completed|failed` 自定义事件，携带 `depth`，顶层为 0）；子图展开（嵌套 StateGraph，边界 `_copy_on_write` 浅复制）；编译产物按 definition 哈希缓存，变更自动失效。
+- `worker.py` — 编排入口：接收 definition id + 输入参数，调 compiler 编译，`graph.astream(..., stream_mode=["updates","custom"])` 执行；消费 compiler 的节点级自定义事件（仅 `depth == 0`）转 `wf:node:started|completed|failed` 到 SSE bridge + run events，`updates` 分块提供无 checkpointer 路径的 run.end 兜底；复用 run 生命周期（RunRecord、checkpointer、run events）。
 - `executors/` — 节点执行器，统一签名 `executor(runtime, params, inputs) -> outputs`：
   - `flow.py` — if/switch/loop/parallel/wait 流程控制（loop 输出端口补写 `iteration`/`out`）。
   - `data.py` — assign/convert/file/json/regEx 数据操作。
-  - `tool.py` — bash/http/log 工具节点；bash 必须走 sandbox（`Sandbox.execute_command`），禁止直连宿主 shell。
-  - `ai.py` — AI 节点模板模式：三层提示词组装 + 受限 SubagentExecutor，工具集 = 主 agent 工具 + 功能组 allowed-tools 并集；`instruction` 模板必填。
+  - `tool.py` — bash/http/log/notify 工具节点；bash 必须走 sandbox（`Sandbox.execute_command`），禁止直连宿主 shell；notify 经 `runtime.context["notifier"]` 钩子（缺省回落日志）发出本机通知。
+  - `ai.py` — AI 节点模板模式：三层提示词组装 + 受限 SubagentExecutor；工具集 = 关联能力包 `allowed-tools` 并集，经 `tool_gateway.resolve_capability_tools` 装配（有序去重），`instruction` 模板必填。
   - `human.py` — HumanTask 挂起。
+- `tool_gateway.py` — 工具网关最小版：`ToolDescriptor` + `ToolGateway`（provider 优先级分派）+ builtin/sandbox provider，`resolve_capability_tools` 供 AI 节点装配工具；MCP/skill/app provider 为后续增量。
 - `prompts.py` — 三层提示词组装器：身份层（custom agent SOUL）→ 能力层（功能组工具描述 + rules + allowed-tools 并集）→ 任务层（节点 instruction 模板，支持 `{{port}}` 插值）。纯函数。
-- `registry.py` — 节点执行器注册表（type → executor），含幂等标注（`idempotent`）；非幂等节点（bash/http）留 crashConfirm 钩子，重试需人工确认。
+- `registry.py` — 节点执行器注册表（type → executor），含幂等标注（`idempotent`）；`requires_confirmation` 仅 `tool:bash`/`tool:http`（crashConfirm 钩子），AI/人工/嵌套节点非幂等但以 interrupt/有界自主为确认边界。
 - `delegate.py` — 运行期委派：subworkflow 节点的增强版 task_tool 模式，委派子工作流 agent 执行，结果回写端口；子代理 `checkpointer=True`。
 - `dispatch.py` — 对话侧调度：`run_workflow`/`pause_workflow`/`resume_workflow`/`cancel_workflow`/`get_workflow_run`/`list_human_tasks` 等 builtin 工具，经 Gateway 运行单例（`runtime.context[__workflow_runtime]`）与画布共用同一 run 生命周期，非旁路；失败时聚合 `wf:node:*` 事件给出修复信息。
 - `human_task_state.py` — HumanTask 状态模型与状态机（`pending → submitted / skipped / reopened / expired`），提交后按 `output_spec` + `validation_rules` 校验。

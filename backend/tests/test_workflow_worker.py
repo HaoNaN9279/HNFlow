@@ -517,12 +517,12 @@ class TestTemplateResolver:
 
 
 class _ConfigCaptureGraph:
-    """Fake compiled graph that records the config passed to ``astream_events``."""
+    """Fake compiled graph that records the config passed to ``astream``."""
 
     def __init__(self) -> None:
         self.captured_config: dict[str, Any] | None = None
 
-    async def astream_events(self, graph_input: dict[str, Any], config: dict[str, Any], **kwargs: Any) -> Any:
+    async def astream(self, graph_input: dict[str, Any], config: dict[str, Any] | None = None, **kwargs: Any) -> Any:
         self.captured_config = config
         if False:
             yield

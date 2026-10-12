@@ -271,6 +271,49 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
     return schema
 
 
+def _emit_node_event(event_type: str, node_id: str, depth: int, **extra: Any) -> None:
+    """Best-effort workflow node-lifecycle custom event (C2).
+
+    Emitted only when the graph runs under a stream that includes the ``custom``
+    mode (``graph.astream(..., stream_mode=["updates","custom"])``).  Outside such
+    a context LangGraph yields a no-op writer, and a direct node-fn call has no
+    runnable context at all — both are silent no-ops, so this never raises and
+    never perturbs non-streaming execution (``ainvoke`` / ``astream_events``).
+    """
+    try:
+        from langgraph.config import get_stream_writer
+
+        writer = get_stream_writer()
+    except Exception:
+        return
+    payload: dict[str, Any] = {"type": f"wf:node:{event_type}", "node_id": node_id, "depth": depth}
+    payload.update(extra)
+    try:
+        writer(payload)
+    except Exception:
+        return
+
+
+def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap a compiled-graph node fn to emit started / completed / failed events.
+
+    ``depth`` is the subgraph nesting depth baked into this graph's compilation
+    (0 = top-level), so the worker can filter out child-subgraph node events.
+    """
+
+    async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
+        _emit_node_event("started", node_id, depth)
+        try:
+            result = await fn(state)
+        except Exception as exc:
+            _emit_node_event("failed", node_id, depth, error=str(exc), error_type=type(exc).__name__)
+            raise
+        _emit_node_event("completed", node_id, depth, output=result if isinstance(result, dict) else {})
+        return result
+
+    return _wrapped
+
+
 async def _resolve_executor(
     executor: Executor,
     runtime: WorkflowRuntime,
@@ -884,6 +927,15 @@ def _compile_impl(
     # ── 3. Create StateGraph builder ───────────────────────────────────
     builder = StateGraph(state_schema)
 
+    def _register(node_id: str, node_fn: Callable[..., Any]) -> None:
+        """Register a node wrapped with lifecycle custom-event emission (C2).
+
+        ``_compile_impl``'s ``depth`` starts at 1 for the top-level graph, so the
+        event depth is ``depth - 1`` (0 = top level) — the value the worker uses
+        to filter out child-subgraph node events.
+        """
+        builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn))
+
     # Build lookup maps
     node_map: dict[str, Node] = {n.id: n for n in def_.nodes}
     start_node_id: str | None = None
@@ -905,7 +957,7 @@ def _compile_impl(
                 # Subworkflow-boundary end node: it declares output ports, so
                 # register a pass-through node fn to forward inputs to outputs.
                 end_fn = _make_end_node_fn(node, incoming_edges.get(node.id, []))
-                builder.add_node(node.id, end_fn)
+                _register(node.id, end_fn)
             continue  # normal end node → LangGraph END, no add_node
 
         if node.type == NodeType.FLOW_LOOP:
@@ -945,7 +997,7 @@ def _compile_impl(
                 outputs[f"wf:{_lid}:out"] = state.get(in_state_key) if in_state_key is not None else None
                 return outputs
 
-            builder.add_node(node.id, _loop_node_fn)
+            _register(node.id, _loop_node_fn)
             continue
 
         if node.type == NodeType.FLOW_PARALLEL:
@@ -955,7 +1007,7 @@ def _compile_impl(
             async def _parallel_node_fn(state: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
                 return {}
 
-            builder.add_node(node.id, _parallel_node_fn)
+            _register(node.id, _parallel_node_fn)
             continue
 
         if node.type == NodeType.FLOW_SWITCH:
@@ -966,13 +1018,13 @@ def _compile_impl(
             executor = ctx.executors.get(node.type)
             if executor is not None:
                 node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
-                builder.add_node(node.id, node_fn)
+                _register(node.id, node_fn)
             else:
 
                 async def _switch_builtin(state: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
                     return {}
 
-                builder.add_node(node.id, _switch_builtin)
+                _register(node.id, _switch_builtin)
             continue
 
         if node.type == NodeType.FLOW_WAIT:
@@ -991,11 +1043,11 @@ def _compile_impl(
                     # Runtime delegation: bind a delegation node fn that executes
                     # the child through a sub-agent instead of expanding it in-graph.
                     node_fn = _make_delegate_node_fn(node, child_graph, child_def, child_start_id, child_end_id, incoming_edges.get(node.id, []), ctx)
-                    builder.add_node(node.id, node_fn)
+                    _register(node.id, node_fn)
                     continue
                 # Compile-time subgraph expansion (inline/template reference).
                 node_fn = _make_subworkflow_node_fn(node, child_graph, child_start_id, child_end_id, incoming_edges.get(node.id, []))
-                builder.add_node(node.id, node_fn)
+                _register(node.id, node_fn)
                 continue
             # No subworkflow spec → fall through to the legacy executor path.
 
@@ -1005,7 +1057,7 @@ def _compile_impl(
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
 
         node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
-        builder.add_node(node.id, node_fn)
+        _register(node.id, node_fn)
 
     # Determine whether the end node is a registered pass-through (subgraph
     # boundary) — in that case edges must route *into* it rather than to END.

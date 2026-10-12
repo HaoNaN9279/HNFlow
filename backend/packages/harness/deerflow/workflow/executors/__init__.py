@@ -32,10 +32,11 @@ from .tool import exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_
 def build_default_registry() -> ExecutorRegistry:
     """Build a fully-populated executor registry with real implementations.
 
-    Every ``NodeType`` that requires a runtime executor receives its
-    built-in implementation.  Placeholder types (``ai:llm_agent``,
-    ``human:task``, ``tool:notify``, ``nested:subworkflow``) raise
-    ``WorkflowExecutionError`` or ``NotImplementedError`` at call time.
+    Every ``NodeType`` that requires a runtime executor receives its built-in
+    implementation.  ``nested:subworkflow`` falls through to
+    :func:`exec_nested_subworkflow` only when a node carries no
+    ``params.subworkflow`` spec; a spec'd node is handled by the compiler's
+    expansion/delegation path instead.
 
     Returns:
         An :class:`ExecutorRegistry` ready for
@@ -75,24 +76,32 @@ def build_default_registry() -> ExecutorRegistry:
         )
     )
     reg.register(ExecutorRegistration(node_type=NodeType.TOOL_LOG, executor=exec_log, idempotent=True, description="Logging executor"))
-    reg.register(ExecutorRegistration(node_type=NodeType.TOOL_NOTIFY, executor=exec_notify, idempotent=True, description="Notification executor (T10 placeholder)"))
+    reg.register(ExecutorRegistration(node_type=NodeType.TOOL_NOTIFY, executor=exec_notify, idempotent=True, description="User-facing notification executor"))
 
     # ── AI ────────────────────────────────────────────────────────────────
+    # AI nodes are non-idempotent (a re-run consumes tokens and may re-act with
+    # tools) but, unlike bash/http, they are *not* crash-confirm gated: the
+    # bounded autonomous loop plus the interrupt/HumanTask path is the
+    # confirmation boundary (dev plan C10, §7.3 / §12.4).  ``requires_confirmation``
+    # stays False so ``crash_confirm_required`` == {bash, http} is the single
+    # source of truth for the executor-level crash-confirm gate.
     reg.register(
         ExecutorRegistration(
             node_type=NodeType.AI_LLM_AGENT,
             executor=exec_llm_agent,
             idempotent=False,
-            requires_confirmation=True,
-            description="LLM agent executor (T6 placeholder)",
+            requires_confirmation=False,
+            description="LLM agent executor (three-layer prompt + capability tools)",
         )
     )
 
     # ── Human interaction ─────────────────────────────────────────────────
-    reg.register(ExecutorRegistration(node_type=NodeType.HUMAN_TASK, executor=exec_human_task, idempotent=False, description="Human task executor (T10 placeholder)"))
+    # A human task suspends the graph; the interrupt itself is the confirmation
+    # boundary, so no crash-confirm gate is applied.
+    reg.register(ExecutorRegistration(node_type=NodeType.HUMAN_TASK, executor=exec_human_task, idempotent=False, description="Human task executor (interrupt / HumanTask)"))
 
     # ── Composition ───────────────────────────────────────────────────────
-    reg.register(ExecutorRegistration(node_type=NodeType.NESTED_SUBWORKFLOW, executor=exec_nested_subworkflow, idempotent=False, description="Nested subworkflow executor (T10 placeholder)"))
+    reg.register(ExecutorRegistration(node_type=NodeType.NESTED_SUBWORKFLOW, executor=exec_nested_subworkflow, idempotent=False, description="Nested subworkflow executor (compile / delegate expansion)"))
 
     return reg
 

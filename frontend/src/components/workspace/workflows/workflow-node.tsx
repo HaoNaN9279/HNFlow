@@ -25,6 +25,9 @@ const PORT_HANDLE_COLORS: Record<PortType, string> = {
   file: "#d97706",
   bool: "#16a34a",
   enum: "#7c3aed",
+  number: "#0891b2",
+  array: "#db2777",
+  record: "#65a30d",
 };
 
 /** Vertical offset of the first port row inside the node (below the header). */

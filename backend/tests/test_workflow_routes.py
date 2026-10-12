@@ -478,13 +478,16 @@ class TestResolveWorkflowMetadata:
         assert result["key"] == "val"
         assert result["resolved_groups"] == ["550e8400-e29b@v0.2.0"]
 
-    def test_no_capability_groups_returns_unchanged(self):
-        """Metadata is returned unchanged when no node has capability_groups."""
+    def test_no_capability_groups_preserves_keys_and_attaches_lockfile(self):
+        """No capability groups → user keys preserved, no resolved_groups, lockfile attached (C3)."""
         definition = _make_definition([])
         metadata = {"key": "val"}
         result = _resolve_workflow_metadata(definition, metadata)
-        assert result is metadata  # same object, no copy needed
-        assert result == {"key": "val"}
+        assert result is not metadata  # a fresh dict now carries the lockfile
+        assert result["key"] == "val"
+        assert "resolved_groups" not in result
+        assert isinstance(result["lockfile"], dict)
+        assert result["lockfile"]["workflow"] == {"id": "test-wf", "version": "0.1.0"}
 
     def test_unknown_skill_name_yields_none_resolved_groups(self):
         """Unknown capability group name → resolved_groups set to None."""
@@ -500,15 +503,16 @@ class TestResolveWorkflowMetadata:
         assert result["resolved_groups"] is None
 
     def test_storage_error_fail_open(self):
-        """Storage failure → metadata returned unchanged (fail-open)."""
+        """Storage failure → keys preserved, no resolved_groups; lockfile still attached (fail-open)."""
         with patch("deerflow.skills.storage.get_or_new_skill_storage", side_effect=RuntimeError("boom")):
             definition = _make_definition(["data-analysis"])
             metadata = {"existing": "data"}
             result = _resolve_workflow_metadata(definition, metadata)
 
-        # In fail-open mode, original metadata is returned unchanged
-        assert result is metadata
+        # Fail-open: the original keys survive and resolution is skipped.
+        assert result["existing"] == "data"
         assert "resolved_groups" not in result
+        assert isinstance(result["lockfile"], dict)
 
     def test_preserves_existing_metadata_keys(self):
         """Existing metadata keys survive resolution."""
@@ -593,8 +597,8 @@ class TestCreateWorkflowResolvedGroups:
         call_kwargs = mock_repo.create.call_args[1]
         assert call_kwargs["metadata"] is expected_meta
 
-    def test_create_without_capability_groups_passes_metadata_unchanged(self):
-        """When no capability_groups, metadata passes through without resolved_groups."""
+    def test_create_without_capability_groups_preserves_metadata_and_adds_lockfile(self):
+        """No capability_groups → user keys preserved, no resolved_groups, lockfile attached (C3)."""
         mock_repo = MagicMock()
         mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
         mock_repo.list_by_user = AsyncMock(return_value=[])
@@ -607,10 +611,10 @@ class TestCreateWorkflowResolvedGroups:
         response = client.post("/api/workflows", json=payload)
 
         assert response.status_code in (200, 201), f"Got {response.status_code}: {response.text}"
-        call_kwargs = mock_repo.create.call_args[1]
-        # Without capability_groups, _resolve_workflow_metadata returns the same dict
-        assert call_kwargs["metadata"] == user_metadata
-        assert "resolved_groups" not in call_kwargs["metadata"] or call_kwargs["metadata"]["resolved_groups"] is None
+        metadata = mock_repo.create.call_args[1]["metadata"]
+        assert metadata["custom"] == "value"
+        assert "resolved_groups" not in metadata
+        assert isinstance(metadata["lockfile"], dict)
 
 
 # ── Tests: update_workflow integration ─────────────────────────────────────────

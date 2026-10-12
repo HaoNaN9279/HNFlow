@@ -572,12 +572,20 @@ class TestRegistry:
 
 
 class TestPlaceholderExecutors:
-    """notify and nested executors raise their placeholder errors."""
+    """notify delivers a record; nested without a spec raises its guidance error."""
 
-    def test_exec_notify_not_implemented(self) -> None:
+    def test_exec_notify_returns_record(self) -> None:
         rt = _dummy_runtime()
-        with pytest.raises(NotImplementedError, match="tool:notify"):
-            exec_notify(rt, {}, {})
+        result = exec_notify(rt, {"message": "hello"}, {})
+        assert result["out"]["message"] == "hello"
+        assert result["out"]["delivered"] is False  # no notifier hook → log fallback
+
+    def test_exec_notify_falls_back_to_input_and_notifier_hook(self) -> None:
+        delivered: list[dict] = []
+        rt = WorkflowRuntime(context={"notifier": delivered.append})
+        result = exec_notify(rt, {"title": "T"}, {"in": "from-input"})
+        assert result["out"]["delivered"] is True
+        assert delivered == [{"title": "T", "message": "from-input", "level": "info"}]
 
     def test_exec_nested_not_implemented(self) -> None:
         rt = _dummy_runtime()
@@ -618,9 +626,8 @@ class TestDirectExecutorCall:
         # Log
         assert exec_log(rt, {"message": "t"}, {"in": "v"}) == {"out": "v"}
 
-        # Placeholder — raises
-        with pytest.raises(NotImplementedError):
-            exec_notify(rt, {}, {})
+        # Notify — delivers a record (log fallback without a notifier hook)
+        assert exec_notify(rt, {"message": "t"}, {})["out"]["delivered"] is False
         with pytest.raises(WorkflowExecutionError):
             asyncio.run(exec_human_task(rt, {}, {}))
         with pytest.raises(WorkflowExecutionError):

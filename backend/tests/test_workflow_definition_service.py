@@ -256,6 +256,21 @@ async def test_unknown_skill_yields_none_resolved_groups(engine_and_repo) -> Non
 
 
 @asyncio_test
+async def test_save_attaches_lockfile_snapshot(engine_and_repo) -> None:
+    """Saving freezes a lockfile snapshot into metadata (C3)."""
+    create_mock = engine_and_repo
+
+    await save_workflow_definition(definition=_definition_with_capability_groups(), user_id="user-1")
+
+    metadata = create_mock.await_args.kwargs["metadata"]
+    lockfile = metadata["lockfile"]
+    assert lockfile["schema_version"] == 1
+    assert lockfile["workflow"] == {"id": "wf-test-def", "version": "0.1.0"}
+    assert isinstance(lockfile["capability_groups"], list)
+    assert lockfile["created_at"]
+
+
+@asyncio_test
 async def test_skills_storage_failure_fails_open(engine_and_repo) -> None:
     """Skills storage failure is fail-open: save succeeds, no resolved_groups."""
     create_mock = engine_and_repo

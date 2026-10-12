@@ -48,28 +48,37 @@ class WorkflowUpdateRequest(BaseModel):
 
 
 def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[str, Any]) -> dict[str, Any]:
-    """Populate ``metadata["resolved_groups"]`` from the definition's capability groups.
+    """Populate ``metadata["resolved_groups"]`` and freeze the lockfile snapshot.
 
-    Only when any node declares ``capability_groups``; otherwise ``resolved_groups``
-    is left untouched.  Fail-open: a skills-storage failure leaves metadata
-    unchanged rather than rejecting the save.
+    ``resolved_groups`` is resolved from the definition's capability groups when
+    any node declares them; otherwise it is left as provided.  Either way a
+    fresh ``metadata["lockfile"]`` capability snapshot (§5.6) is attached so the
+    saved definition records its reproducibility inputs.  Fail-open: a
+    skills-storage or config-read failure never rejects the save — it degrades
+    to the best snapshot available (mirrors the harness-layer save service).
     """
-    if not any(node.capability_groups for node in definition.nodes):
-        return metadata
+    result = dict(metadata)
+
+    if any(node.capability_groups for node in definition.nodes):
+        try:
+            from deerflow.skills.storage import get_or_new_skill_storage
+
+            storage = get_or_new_skill_storage()
+            skills = storage.load_skills(enabled_only=False)
+            catalog = SkillCatalog(skills=tuple(skills))
+            resolved = collect_resolved_groups(definition, catalog)
+            result["resolved_groups"] = resolved if resolved else None
+        except Exception as e:
+            logger.warning("Failed to resolve workflow capability groups: %s", e)
 
     try:
-        from deerflow.skills.storage import get_or_new_skill_storage
+        from deerflow.persistence.workflow_definitions.service import build_lockfile
 
-        storage = get_or_new_skill_storage()
-        skills = storage.load_skills(enabled_only=False)
-        catalog = SkillCatalog(skills=tuple(skills))
-        resolved = collect_resolved_groups(definition, catalog)
-        result = dict(metadata)
-        result["resolved_groups"] = resolved if resolved else None
-        return result
-    except Exception as e:
-        logger.warning("Failed to resolve workflow capability groups: %s", e)
-        return metadata
+        result["lockfile"] = build_lockfile(definition, result)
+    except Exception as e:  # noqa: BLE001 - fail-open by design
+        logger.warning("Failed to build workflow lockfile: %s", e)
+
+    return result
 
 
 async def _check_workflow_dependency_cycles(

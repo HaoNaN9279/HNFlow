@@ -7,8 +7,16 @@ import {
 } from "@/core/workflows/types";
 
 describe("workflow type constants", () => {
-  test("PORT_TYPES has exactly the 4 backend values", () => {
-    expect(PORT_TYPES).toEqual(["data", "file", "bool", "enum"]);
+  test("PORT_TYPES has exactly the 7 backend values", () => {
+    expect(PORT_TYPES).toEqual([
+      "data",
+      "file",
+      "bool",
+      "enum",
+      "number",
+      "array",
+      "record",
+    ]);
   });
 
   test("NODE_TYPES has exactly the 19 backend values", () => {

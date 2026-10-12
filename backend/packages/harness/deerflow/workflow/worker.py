@@ -230,119 +230,90 @@ async def run_workflow(
 
         abort_task = asyncio.create_task(_wait_for_abort())
 
-        # Use astream_events v2 for node-level visibility.
-        # include_names filters to workflow nodes only (no LLM chains).
-        stream_kwargs: dict[str, Any] = {"version": "v2"}
-        if node_ids:
-            stream_kwargs["include_names"] = node_ids
+        # C2: node-level visibility via ``astream(stream_mode=["updates","custom"])``.
+        # The compiler wraps every node fn to emit ``wf:node:started|completed|failed``
+        # custom events tagged with their subgraph depth; we republish top-level
+        # (depth 0) ones to the SSE bridge + run-event store.  ``updates`` chunks
+        # supply the accumulated-output fallback for the no-checkpointer path.
+        node_id_set = set(node_ids)
+        step_counter = 0
+        pending_steps: dict[str, int] = {}
+
+        async def _persist_node_event(event_type: str, content: dict[str, Any], metadata: dict[str, Any]) -> None:
+            await bridge.publish(run_id, event_type, content)
+            if event_store is None:
+                return
+            try:
+                await event_store.put(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    event_type=event_type,
+                    category="workflow",
+                    content=content,
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to persist %s for run %s node %s (non-fatal)",
+                    event_type,
+                    run_id,
+                    content.get("node_id"),
+                    exc_info=True,
+                )
 
         try:
-            stream_done_coro = graph.astream_events(graph_input, config, **stream_kwargs)
-            async for event in stream_done_coro:
-                _event_type = event.get("event", "")
-                _name = event.get("name", "")
-                _metadata = event.get("metadata", {}) or {}
-                _data = event.get("data", {}) or {}
-                _step = _metadata.get("langgraph_step", 0)
+            stream_done_coro = graph.astream(graph_input, config, stream_mode=["updates", "custom"])
+            async for chunk in stream_done_coro:
+                if not (isinstance(chunk, tuple) and len(chunk) == 2):
+                    continue
+                mode, data = chunk
 
-                if _event_type == "on_chain_start":
-                    # Remember the last-started node so the outer except
-                    # block can emit wf:node:failed for it.
-                    recent_node_id = _name
-                    recent_step = _step
+                if mode == "custom":
+                    if not isinstance(data, dict):
+                        continue
+                    _name = data.get("node_id")
+                    # Filter child-subgraph events (depth > 0) and unknown nodes.
+                    if data.get("depth", 0) != 0 or _name not in node_id_set:
+                        continue
+                    _event_type = data.get("type")
+                    if _event_type == "wf:node:started":
+                        # Remember the last-started node so the outer except
+                        # block can emit wf:node:failed if the custom failed
+                        # event itself never made it out.
+                        step_counter += 1
+                        pending_steps[_name] = step_counter
+                        recent_node_id = _name
+                        recent_step = step_counter
+                        await _persist_node_event(
+                            "wf:node:started",
+                            {"node_id": _name, "step": step_counter},
+                            {"node_id": _name},
+                        )
+                    elif _event_type == "wf:node:completed":
+                        recent_node_id = None
+                        _step = pending_steps.pop(_name, step_counter)
+                        _output = data.get("output")
+                        await _persist_node_event(
+                            "wf:node:completed",
+                            {"node_id": _name, "step": _step, "output": _output if _output is not None else {}},
+                            {"node_id": _name},
+                        )
+                    elif _event_type == "wf:node:failed":
+                        recent_node_id = None
+                        _step = pending_steps.pop(_name, step_counter)
+                        await _persist_node_event(
+                            "wf:node:failed",
+                            {"node_id": _name, "step": _step, "error": data.get("error", "")},
+                            {"node_id": _name, "error_type": data.get("error_type", "Exception")},
+                        )
 
-                    content: dict[str, Any] = {
-                        "node_id": _name,
-                        "step": _step,
-                    }
-                    await bridge.publish(run_id, "wf:node:started", content)
-                    if event_store is not None:
-                        try:
-                            await event_store.put(
-                                thread_id=thread_id,
-                                run_id=run_id,
-                                event_type="wf:node:started",
-                                category="workflow",
-                                content=content,
-                                metadata={"node_id": _name},
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to persist wf:node:started for run %s node %s (non-fatal)",
-                                run_id,
-                                _name,
-                                exc_info=True,
-                            )
+                elif mode == "updates":
+                    if isinstance(data, dict):
+                        for _name, _output in data.items():
+                            if _name in node_id_set and isinstance(_output, dict):
+                                accumulated_output.update(_output)
 
-                elif _event_type == "on_chain_end":
-                    # Node completed successfully — clear the recent-node
-                    # tracker so a later exception does not attribute
-                    # failure to this node.
-                    recent_node_id = None
-
-                    _output = _data.get("output") if isinstance(_data, dict) else None
-                    content = {
-                        "node_id": _name,
-                        "step": _step,
-                        "output": _output if _output is not None else {},
-                    }
-                    # Accumulate for the run.end fallback (no-checkpointer path).
-                    if isinstance(_output, dict):
-                        accumulated_output.update(_output)
-
-                    await bridge.publish(run_id, "wf:node:completed", content)
-                    if event_store is not None:
-                        try:
-                            await event_store.put(
-                                thread_id=thread_id,
-                                run_id=run_id,
-                                event_type="wf:node:completed",
-                                category="workflow",
-                                content=content,
-                                metadata={"node_id": _name},
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to persist wf:node:completed for run %s node %s (non-fatal)",
-                                run_id,
-                                _name,
-                                exc_info=True,
-                            )
-
-                elif _event_type == "on_chain_error":
-                    # In LangGraph 1.2.x astream_events v2 the exception
-                    # usually bubbles out before this branch is reached;
-                    # keep it as defence-in-depth for future versions.
-                    recent_node_id = None
-
-                    _error = _data.get("error") if isinstance(_data, dict) else None
-                    error_str = str(_error) if _error is not None else ""
-                    error_type_name = type(_error).__name__ if _error is not None else "Exception"
-                    content = {
-                        "node_id": _name,
-                        "step": _step,
-                        "error": error_str,
-                    }
-                    await bridge.publish(run_id, "wf:node:failed", content)
-                    if event_store is not None:
-                        try:
-                            await event_store.put(
-                                thread_id=thread_id,
-                                run_id=run_id,
-                                event_type="wf:node:failed",
-                                category="workflow",
-                                content=content,
-                                metadata={"node_id": _name, "error_type": error_type_name},
-                            )
-                        except Exception:
-                            logger.warning(
-                                "Failed to persist wf:node:failed for run %s node %s (non-fatal)",
-                                run_id,
-                                _name,
-                                exc_info=True,
-                            )
-
-                # Check for cancellation after each event
+                # Check for cancellation after each chunk.
                 if record.abort_event.is_set():
                     logger.info("Run %s abort requested — stopping", run_id)
                     break

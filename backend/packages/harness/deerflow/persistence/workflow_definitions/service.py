@@ -70,6 +70,42 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
         return metadata
 
 
+def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, Any]) -> dict[str, Any]:
+    """Freeze a reproducibility snapshot (§5.6) from the definition + resolved groups.
+
+    Captures the capability-group snapshot plus the default model identity so a
+    run can be reasoned about after the fact.  Model fields are read from the
+    active ``AppConfig`` and are fail-open: a config-read failure leaves the
+    capability snapshot intact rather than rejecting the save.
+    """
+    groups = resolved_metadata.get("resolved_groups") or []
+    lockfile: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "workflow": {"id": definition.id, "version": definition.version},
+        "capability_groups": list(groups),
+        "created_at": datetime.now(UTC).isoformat(),
+    }
+    try:
+        config = get_app_config()
+        default_model = config.models[0] if config.models else None
+        if default_model is not None:
+            lockfile["model"] = {
+                "name": default_model.name,
+                "use": getattr(default_model, "use", None),
+                "max_tokens": getattr(default_model, "max_tokens", None),
+            }
+    except Exception as e:  # noqa: BLE001 - fail-open by design
+        logger.warning("Failed to snapshot model config into workflow lockfile: %s", e)
+    return lockfile
+
+
+def _resolve_metadata_with_lockfile(definition: WorkflowDefinition) -> dict[str, Any]:
+    """Resolve capability groups and attach a frozen lockfile to the metadata dict."""
+    metadata = _resolve_workflow_metadata(definition, definition.metadata.model_dump(exclude_none=True))
+    metadata["lockfile"] = build_lockfile(definition, metadata)
+    return metadata
+
+
 async def get_workflow_definition(user_id: str, definition_id: str) -> dict[str, Any] | None:
     """Fetch one workflow definition row owned by *user_id*, or ``None``.
 
@@ -116,7 +152,7 @@ async def update_workflow_definition(
         raise WorkflowDefinitionSaveError("workflow definition persistence requires a SQL database backend (database.backend: sqlite or postgres); the configured backend is 'memory'")
 
     repo = WorkflowDefinitionRepository(session_factory)
-    metadata = _resolve_workflow_metadata(definition, definition.metadata.model_dump(exclude_none=True))
+    metadata = _resolve_metadata_with_lockfile(definition)
     result = await repo.update(
         definition_id,
         user_id=user_id,
@@ -159,7 +195,7 @@ async def save_workflow_definition(
         raise WorkflowDefinitionSaveError("workflow definition persistence requires a SQL database backend (database.backend: sqlite or postgres); the configured backend is 'memory'")
 
     repo = WorkflowDefinitionRepository(session_factory)
-    metadata = _resolve_workflow_metadata(definition, definition.metadata.model_dump(exclude_none=True))
+    metadata = _resolve_metadata_with_lockfile(definition)
     return await repo.create(
         definition_id=f"wf-{uuid.uuid4().hex}",
         user_id=user_id,

@@ -138,8 +138,48 @@ def exec_log(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str,
 
 
 def exec_notify(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
-    """Placeholder — notification executor not yet implemented (planned T10)."""
-    raise NotImplementedError("tool:notify executor not implemented yet — user-facing notifications will be added when the notification subsystem is built (T10)")
+    """Emit a user-facing notification for a long-running workflow (local, C7).
+
+    Prompts never carry a notification transport, so delivery is pluggable:
+
+    - When ``runtime.context`` exposes a ``notifier`` (or ``notify``) callable —
+      the host hook the Gateway / desktop shell / IM bridge injects — it is
+      invoked once with the notification record ``{title, message, level}``.
+    - Otherwise the notification is logged at ``WARNING`` so a headless
+      single-machine deployment still surfaces it in the Gateway log.
+
+    Always returns the record (plus ``delivered``) on the ``out`` port so a
+    downstream node can branch on delivery.  Idempotent: re-emitting on retry
+    is harmless logging/bookkeeping, not a side effect on external state.
+    """
+    message = params.get("message")
+    if message is None:
+        message = inputs.get("in")
+    record: dict[str, Any] = {
+        "title": params.get("title"),
+        "message": "" if message is None else str(message),
+        "level": params.get("level") or "info",
+    }
+
+    notifier = None
+    context = getattr(runtime, "context", None)
+    if isinstance(context, dict):
+        candidate = context.get("notifier") or context.get("notify")
+        if callable(candidate):
+            notifier = candidate
+
+    delivered = False
+    if notifier is not None:
+        try:
+            notifier(dict(record))
+            delivered = True
+        except Exception:
+            logger.warning("tool:notify notifier callable failed; falling back to log", exc_info=True)
+
+    if not delivered:
+        logger.warning("workflow notification [%s]%s: %s", record["level"], f" {record['title']}" if record["title"] else "", record["message"])
+
+    return {"out": {**record, "delivered": delivered}}
 
 
 # ── nested:subworkflow ───────────────────────────────────────────────────────
