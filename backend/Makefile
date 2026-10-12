@@ -5,9 +5,15 @@ BACKEND_SANDBOX_HOME := $(abspath $(CURDIR)/sandbox)
 install:
 	uv sync
 
+# Invoke console tools as ``python -m <tool>`` rather than ``uv run <tool>``.
+# On Windows, ``uv run uvicorn``/``pytest`` resolve a generated ``.exe``
+# trampoline that embeds the venv's absolute python path; if the checkout is
+# moved/renamed after the venv was created, that path goes stale and uv fails
+# with "uv trampoline failed to canonicalize script path".  ``python -m`` uses
+# the interpreter directly and is immune to that.
 dev:
 	mkdir -p "$(DEER_FLOW_HOME)" "$(BACKEND_SANDBOX_HOME)"
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 DEER_FLOW_HOME="$(DEER_FLOW_HOME)" uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 \
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 DEER_FLOW_HOME="$(DEER_FLOW_HOME)" uv run python -m uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 \
 		--reload \
 		--reload-include='*.yaml' \
 		--reload-include='.env' \
@@ -17,16 +23,16 @@ dev:
 		--reload-exclude="$(DEER_FLOW_HOME)"
 
 gateway:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001
 
 test:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m "not live" tests/ -v
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m "not live" tests/ -v
 
 test-live:
-	DEER_FLOW_RUN_LIVE_TESTS=1 PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest -m live tests/ -v -s
+	DEER_FLOW_RUN_LIVE_TESTS=1 PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m live tests/ -v -s
 
 test-blocking-io:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run pytest tests/blocking_io -q --tb=short
+	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest tests/blocking_io -q --tb=short
 
 lint:
 	uv run ruff check .
