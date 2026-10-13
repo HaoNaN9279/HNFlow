@@ -32,6 +32,9 @@ export type NodeFormValues = {
   template_id?: string;
   version?: string;
   mapping?: NodeFormMapping;
+  /** `app:*` nodes — `params.app` (required) and `params.script` (app:script only). */
+  app?: string;
+  script?: string;
 };
 
 /** Normalised template subworkflow spec extracted from `params.subworkflow`. */
@@ -149,6 +152,14 @@ export function parseNodeFormValues(node: WorkflowNode): NodeFormValues {
   if (node.params.mapping !== undefined) {
     values.mapping = parseMapping(node.params.mapping);
   }
+  // `app:*` params are only surfaced when present, so the AI / subworkflow
+  // forms never accidentally require an app name.
+  if (typeof node.params.app === "string") {
+    values.app = node.params.app;
+  }
+  if (typeof node.params.script === "string") {
+    values.script = node.params.script;
+  }
   return values;
 }
 
@@ -195,6 +206,16 @@ export function applyNodeFormValues(
   } else {
     delete params.mapping;
   }
+  if (values.app !== undefined) {
+    params.app = values.app;
+  }
+  if (values.script !== undefined) {
+    if (values.script) {
+      params.script = values.script;
+    } else {
+      delete params.script;
+    }
+  }
   return {
     ...node,
     params,
@@ -225,6 +246,9 @@ export function validateNodeForm(
   }
   if (!(values.template_id ?? "").trim()) {
     errors.template_id = "required";
+  }
+  if (values.app !== undefined && !values.app.trim()) {
+    errors.app = "required";
   }
   const agentName = values.agent_name;
   if (agentName && !AGENT_NAME_PATTERN.test(agentName)) {

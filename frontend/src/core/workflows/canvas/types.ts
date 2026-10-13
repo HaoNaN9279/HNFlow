@@ -24,6 +24,7 @@ export type NodeCategory =
   | "data"
   | "tool"
   | "ai"
+  | "app"
   | "human"
   | "subworkflow";
 

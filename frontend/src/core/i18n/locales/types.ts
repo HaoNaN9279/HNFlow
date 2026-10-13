@@ -361,6 +361,7 @@ export interface Translations {
       ai: string;
       human: string;
       subworkflow: string;
+      app: string;
     };
     properties: {
       title: string;
@@ -400,12 +401,21 @@ export interface Translations {
         outputMappingLabel: string;
         unmappedPlaceholder: string;
       };
+      app: {
+        title: string;
+        appLabel: string;
+        appPlaceholder: string;
+        scriptLabel: string;
+        scriptPlaceholder: string;
+        scriptHint: string;
+      };
       validation: {
         instructionRequired: string;
         templateRequired: string;
         invalidAgentName: string;
         agentNotFoundWarning: string;
         mappingInvalid: string;
+        appRequired: string;
       };
     };
     run: {

@@ -71,6 +71,9 @@ export function WorkflowNodeForm({
       <SubworkflowForm node={node} readonly={readonly} onChange={onChange} />
     );
   }
+  if (workflow.type.startsWith("app:")) {
+    return <AppForm node={node} readonly={readonly} onChange={onChange} />;
+  }
   return null;
 }
 
@@ -305,6 +308,79 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           <p className="text-muted-foreground text-xs">{NO_SKILLS_LABEL}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+function AppForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
+  const { t } = useI18n();
+  const labels = t.workflows.properties;
+  const workflow = node.data.workflow;
+  const [values, setValues] = useState<NodeFormValues>(() =>
+    parseNodeFormValues(workflow),
+  );
+
+  useEffect(() => {
+    setValues(parseNodeFormValues(node.data.workflow));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id]);
+
+  const errors = validateNodeForm(values);
+  const commit = (next: NodeFormValues) => {
+    onChange(applyNodeFormValues(node.data.workflow, next));
+  };
+
+  return (
+    <div className="flex flex-col gap-3 border-b pb-4">
+      <div className="text-xs font-medium">{labels.app.title}</div>
+
+      <div className="flex flex-col gap-1">
+        <label htmlFor={`${node.id}-app`} className="text-xs font-medium">
+          {labels.app.appLabel}
+        </label>
+        <Input
+          id={`${node.id}-app`}
+          value={values.app ?? ""}
+          disabled={readonly}
+          placeholder={labels.app.appPlaceholder}
+          aria-invalid={errors.app ? true : undefined}
+          onChange={(event) =>
+            setValues((current) => ({ ...current, app: event.target.value }))
+          }
+          onBlur={() => commit(values)}
+          className="h-7 text-xs"
+        />
+        {errors.app && (
+          <p className="text-destructive text-xs" role="alert">
+            {labels.validation.appRequired}
+          </p>
+        )}
+      </div>
+
+      {workflow.type === "app:script" && (
+        <div className="flex flex-col gap-1">
+          <label htmlFor={`${node.id}-script`} className="text-xs font-medium">
+            {labels.app.scriptLabel}
+          </label>
+          <Textarea
+            id={`${node.id}-script`}
+            value={values.script ?? ""}
+            disabled={readonly}
+            placeholder={labels.app.scriptPlaceholder}
+            onChange={(event) =>
+              setValues((current) => ({
+                ...current,
+                script: event.target.value,
+              }))
+            }
+            onBlur={() => commit(values)}
+            className="min-h-16 text-xs"
+          />
+          <p className="text-muted-foreground text-[11px]">
+            {labels.app.scriptHint}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

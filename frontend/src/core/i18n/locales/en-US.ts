@@ -452,6 +452,7 @@ export const enUS: Translations = {
       ai: "AI",
       human: "Human",
       subworkflow: "Subworkflow",
+      app: "App",
     },
     properties: {
       title: "Properties",
@@ -493,6 +494,15 @@ export const enUS: Translations = {
         outputMappingLabel: "Output mapping",
         unmappedPlaceholder: "Not mapped",
       },
+      app: {
+        title: "Local application",
+        appLabel: "Application",
+        appPlaceholder: "e.g. blender",
+        scriptLabel: "Script command",
+        scriptPlaceholder: "e.g. render",
+        scriptHint:
+          "Command passed to the application's script interface (app:script only).",
+      },
       validation: {
         instructionRequired: "Instruction is required",
         templateRequired: "Workflow template is required",
@@ -501,6 +511,7 @@ export const enUS: Translations = {
           "Agent does not exist yet — it can be referenced before creation",
         mappingInvalid:
           "Invalid port mapping — output maps to an undeclared parent port",
+        appRequired: "Application name is required",
       },
     },
     run: {

@@ -42,6 +42,11 @@ export const NODE_TYPES = [
   "tool:log",
   // AI
   "ai:llm_agent",
+  // Local professional software
+  "app:launch",
+  "app:script",
+  "app:wait",
+  "app:collect",
   // Human interaction
   "human:task",
   // Composition

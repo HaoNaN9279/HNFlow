@@ -19,7 +19,7 @@ describe("workflow type constants", () => {
     ]);
   });
 
-  test("NODE_TYPES has exactly the 19 backend values", () => {
+  test("NODE_TYPES has exactly the 23 backend values", () => {
     expect(NODE_TYPES).toEqual([
       "flow:start",
       "flow:end",
@@ -38,16 +38,21 @@ describe("workflow type constants", () => {
       "tool:notify",
       "tool:log",
       "ai:llm_agent",
+      "app:launch",
+      "app:script",
+      "app:wait",
+      "app:collect",
       "human:task",
       "nested:subworkflow",
     ]);
   });
 
-  test("NODE_TYPES covers 7 flow / 5 data / 4 tool categories plus AI, human, nested", () => {
-    expect(NODE_TYPES).toHaveLength(19);
+  test("NODE_TYPES covers 7 flow / 5 data / 4 tool / 4 app categories plus AI, human, nested", () => {
+    expect(NODE_TYPES).toHaveLength(23);
     expect(NODE_TYPES.filter((n) => n.startsWith("flow:"))).toHaveLength(7);
     expect(NODE_TYPES.filter((n) => n.startsWith("data:"))).toHaveLength(5);
     expect(NODE_TYPES.filter((n) => n.startsWith("tool:"))).toHaveLength(4);
+    expect(NODE_TYPES.filter((n) => n.startsWith("app:"))).toHaveLength(4);
   });
 
   test("CanvasMetadata holds optional node positions with x/y numbers", () => {

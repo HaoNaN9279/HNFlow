@@ -435,6 +435,7 @@ export const zhCN: Translations = {
       ai: "AI",
       human: "人工",
       subworkflow: "子工作流",
+      app: "本地应用",
     },
     properties: {
       title: "属性",
@@ -475,12 +476,21 @@ export const zhCN: Translations = {
         outputMappingLabel: "输出映射",
         unmappedPlaceholder: "未映射",
       },
+      app: {
+        title: "本地应用",
+        appLabel: "应用",
+        appPlaceholder: "例如 blender",
+        scriptLabel: "脚本命令",
+        scriptPlaceholder: "例如 render",
+        scriptHint: "传给应用脚本接口的命令（仅 app:script 节点）。",
+      },
       validation: {
         instructionRequired: "指令为必填项",
         templateRequired: "工作流模板为必填项",
         invalidAgentName: "智能体名称必须匹配 ^[A-Za-z0-9-]+$",
         agentNotFoundWarning: "智能体尚不存在 — 可在创建前引用",
         mappingInvalid: "端口映射无效 — 输出映射到了未声明的父端口",
+        appRequired: "应用名称必填",
       },
     },
     run: {

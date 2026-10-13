@@ -538,3 +538,49 @@ describe("validateNodeForm — mapping", () => {
     ).toEqual({});
   });
 });
+
+describe("app:* node fields", () => {
+  const appScriptNode = (): WorkflowNode => ({
+    id: "n-app-script",
+    type: "app:script",
+    inputs: [],
+    outputs: [],
+    params: { app: "blender", script: "render", extra: 1 },
+  });
+
+  test("parse surfaces params.app/params.script only when present", () => {
+    const values = parseNodeFormValues(appScriptNode());
+    expect(values.app).toBe("blender");
+    expect(values.script).toBe("render");
+
+    const ai = parseNodeFormValues(aiNode());
+    expect(ai.app).toBeUndefined();
+    expect(ai.script).toBeUndefined();
+  });
+
+  test("apply writes app and empty script removes the key without touching others", () => {
+    const node = appScriptNode();
+    const next = applyNodeFormValues(node, {
+      ...parseNodeFormValues(node),
+      app: "unity",
+      script: "",
+    });
+    expect(next.params.app).toBe("unity");
+    expect("script" in next.params).toBe(false);
+    expect(next.params.extra).toBe(1);
+    // Original untouched.
+    expect(node.params.script).toBe("render");
+  });
+
+  test("validate flags a missing app name", () => {
+    const node = appScriptNode();
+    const errors = validateNodeForm({
+      ...parseNodeFormValues(node),
+      app: "  ",
+    });
+    expect(errors.app).toBe("required");
+    expect(
+      validateNodeForm({ ...parseNodeFormValues(node), app: "blender" }).app,
+    ).toBeUndefined();
+  });
+});

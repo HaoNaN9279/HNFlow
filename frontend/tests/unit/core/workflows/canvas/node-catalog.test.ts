@@ -10,9 +10,9 @@ import {
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
 describe("node catalog", () => {
-  test("covers exactly the 19 backend node types", () => {
+  test("covers exactly the 23 backend node types", () => {
     const catalog = getNodeCatalog();
-    expect(catalog).toHaveLength(19);
+    expect(catalog).toHaveLength(23);
     expect(catalog.map((e) => e.type).sort()).toEqual([...NODE_TYPES].sort());
   });
 
@@ -20,19 +20,26 @@ describe("node catalog", () => {
     for (const entry of getNodeCatalog()) {
       expect(entry.label.length).toBeGreaterThan(0);
       expect(entry.description.length).toBeGreaterThan(0);
-      expect(["flow", "data", "tool", "ai", "human", "subworkflow"]).toContain(
-        entry.category,
-      );
+      expect([
+        "flow",
+        "data",
+        "tool",
+        "ai",
+        "app",
+        "human",
+        "subworkflow",
+      ]).toContain(entry.category);
     }
   });
 
-  test("category counts match the backend split (7 flow / 5 data / 4 tool + singles)", () => {
+  test("category counts match the backend split (7 flow / 5 data / 4 tool / 4 app + singles)", () => {
     const byCategory = (category: string) =>
       getNodeCatalog().filter((e) => e.category === category).length;
     expect(byCategory("flow")).toBe(7);
     expect(byCategory("data")).toBe(5);
     expect(byCategory("tool")).toBe(4);
     expect(byCategory("ai")).toBe(1);
+    expect(byCategory("app")).toBe(4);
     expect(byCategory("human")).toBe(1);
     expect(byCategory("subworkflow")).toBe(1);
   });
@@ -144,19 +151,38 @@ describe("node catalog", () => {
     );
   });
 
-  test("NODE_CATEGORIES lists the 6 categories with labels", () => {
-    expect(NODE_CATEGORIES).toHaveLength(6);
+  test("NODE_CATEGORIES lists the 7 categories with labels", () => {
+    expect(NODE_CATEGORIES).toHaveLength(7);
     expect(NODE_CATEGORIES.map((c) => c.id)).toEqual([
       "flow",
       "data",
       "tool",
       "ai",
+      "app",
       "human",
       "subworkflow",
     ]);
     for (const category of NODE_CATEGORIES) {
       expect(category.label.length).toBeGreaterThan(0);
     }
+  });
+
+  test("app:* entries declare session in/out ports and app params", () => {
+    const launch = getNodeCatalogEntry("app:launch")!;
+    expect(launch.defaultInputs.map((p) => p.name)).toEqual(["in"]);
+    expect(launch.defaultOutputs.map((p) => p.name)).toEqual([
+      "session",
+      "out",
+    ]);
+    expect(launch.defaultParams).toEqual({ app: "", mode: "launch" });
+
+    const script = getNodeCatalogEntry("app:script")!;
+    expect(script.defaultInputs.map((p) => p.name)).toEqual(["session", "in"]);
+    expect(script.defaultParams).toEqual({ app: "", script: "" });
+
+    const collect = getNodeCatalogEntry("app:collect")!;
+    expect(collect.defaultOutputs.map((p) => p.type)).toEqual(["data", "file"]);
+    expect(collect.defaultParams).toEqual({ app: "" });
   });
 
   test("makeNodeId produces n_ + 8 hex chars", () => {

@@ -21,6 +21,7 @@ export const NODE_CATEGORIES = [
   { id: "data", label: "Data" },
   { id: "tool", label: "Tools" },
   { id: "ai", label: "AI" },
+  { id: "app", label: "App" },
   { id: "human", label: "Human" },
   { id: "subworkflow", label: "Subworkflow" },
 ] as const satisfies readonly { id: NodeCategory; label: string }[];
@@ -202,6 +203,64 @@ export const NODE_CATALOG = [
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { description: "" },
     description: "Suspend the workflow for a human approval/input.",
+  },
+  {
+    type: "app:launch",
+    label: "App Launch",
+    category: "app",
+    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultOutputs: [
+      { name: "session", type: "data", required: true },
+      { name: "out", type: "data", required: true },
+    ],
+    defaultParams: { app: "", mode: "launch" },
+    description:
+      "Launch or attach a local application instance and emit its session handle.",
+  },
+  {
+    type: "app:script",
+    label: "App Script",
+    category: "app",
+    defaultInputs: [
+      { name: "session", type: "data", required: true },
+      { name: "in", type: "data", required: true },
+    ],
+    defaultOutputs: [
+      { name: "session", type: "data", required: true },
+      { name: "out", type: "data", required: true },
+    ],
+    defaultParams: { app: "", script: "" },
+    description: "Run a script command in a local application session.",
+  },
+  {
+    type: "app:wait",
+    label: "App Wait",
+    category: "app",
+    defaultInputs: [
+      { name: "session", type: "data", required: true },
+      { name: "in", type: "data", required: true },
+    ],
+    defaultOutputs: [
+      { name: "session", type: "data", required: true },
+      { name: "out", type: "data", required: true },
+    ],
+    defaultParams: { app: "", for: "idle" },
+    description: "Wait for an in-application task (render / compile / idle).",
+  },
+  {
+    type: "app:collect",
+    label: "App Collect",
+    category: "app",
+    defaultInputs: [
+      { name: "session", type: "data", required: true },
+      { name: "in", type: "data", required: true },
+    ],
+    defaultOutputs: [
+      { name: "session", type: "data", required: true },
+      { name: "out", type: "file", required: true },
+    ],
+    defaultParams: { app: "" },
+    description: "Collect files produced by a local application session.",
   },
   {
     type: "nested:subworkflow",
