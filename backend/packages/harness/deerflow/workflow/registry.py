@@ -121,11 +121,15 @@ class ExecutorRegistry:
 
 
 # Node types whose side-effects are inherently non-idempotent.
-# D6 (plan): bash and http are the canonical non-idempotent types.
+# D6 (plan): bash and http are the canonical non-idempotent types; the local
+# application launch/script nodes (N5) join them — they start a process or
+# mutate in-app state.
 _NON_IDEMPOTENT_TYPES: frozenset[NodeType] = frozenset(
     {
         NodeType.TOOL_BASH,
         NodeType.TOOL_HTTP,
+        NodeType.APP_LAUNCH,
+        NodeType.APP_SCRIPT,
     }
 )
 
@@ -194,6 +198,11 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         (NodeType.TOOL_LOG, "Logging executor"),
         # AI
         (NodeType.AI_LLM_AGENT, "LLM agent executor (T6)"),
+        # Local professional software (N5)
+        (NodeType.APP_LAUNCH, "Local application launch / attach executor"),
+        (NodeType.APP_SCRIPT, "Local application script executor"),
+        (NodeType.APP_WAIT, "Local application wait executor"),
+        (NodeType.APP_COLLECT, "Local application artifact collect executor"),
         # Human interaction
         (NodeType.HUMAN_TASK, "Human task executor (T9)"),
         # Composition

@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 #: Provider category labels for a resolved tool.
 PROVIDER_BUILTIN = "builtin"
 PROVIDER_SANDBOX = "sandbox"
+PROVIDER_APP = "app"
 
 
 @dataclass(frozen=True)
@@ -148,13 +149,83 @@ def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, Base
     return {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}
 
 
+def _app_tools(*, app_config: Any) -> dict[str, BaseTool]:
+    """One tool per *available* registered local application (N5).
+
+    Each tool runs one script command against the application's shared session
+    manager (launch/attach → run → collect), returning stdout and artifact
+    paths as JSON.  Unavailable applications (driver cannot construct, command
+    missing) are skipped so the tool list stays truthful — fail-open per app.
+    """
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    from deerflow.apps.registry import AppRegistry
+    from deerflow.config.apps_config import AppsConfig, get_apps_config
+
+    if isinstance(app_config, AppsConfig):
+        apps_config = app_config
+    else:
+        nested = getattr(app_config, "apps", None)
+        apps_config = nested if isinstance(nested, AppsConfig) else get_apps_config()
+    registry = AppRegistry.from_config(apps_config)
+
+    class AppRunInput(BaseModel):
+        script: str = Field(default="", description="Script command to run in the application (may be empty).")
+        args: list[str] = Field(default_factory=list, description="Extra script arguments.")
+
+    def _make_runner(app_name: str):
+        async def _run(script: str = "", args: list[str] | None = None) -> str:
+            import asyncio
+            import json
+
+            from deerflow.apps.session import get_session_manager
+
+            manager = get_session_manager()
+            session = await asyncio.to_thread(manager.launch, app_name)
+            result = await asyncio.to_thread(manager.run_script, session, script=script or None, args=list(args or []))
+            artifacts = await asyncio.to_thread(manager.collect, session)
+            return json.dumps(
+                {
+                    "app": app_name,
+                    "session_id": session.session_id,
+                    "status": result.status,
+                    "exit_code": result.exit_code,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "artifacts": artifacts,
+                },
+                ensure_ascii=False,
+            )
+
+        return _run
+
+    tools: dict[str, BaseTool] = {}
+    for name, definition in registry.entries():
+        try:
+            if not registry.build_driver(name).available(definition):
+                continue
+        except Exception as e:  # noqa: BLE001 - fail-open per app
+            logger.warning("Tool gateway: app %r driver unavailable: %s", name, e)
+            continue
+        tool_name = f"app_{name}"
+        tools[tool_name] = StructuredTool.from_function(
+            coroutine=_make_runner(name),
+            name=tool_name,
+            description=f"Run a script command in the local application '{name}'. {definition.description}".strip(),
+            args_schema=AppRunInput,
+        )
+    return tools
+
+
 def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None) -> ToolGateway:
-    """Build the gateway with the minimal builtin + sandbox providers.
+    """Build the gateway with the minimal builtin + sandbox (+ app) providers.
 
     Fail-open per provider: a provider that cannot be constructed (missing
     config, import error) is skipped with a warning rather than failing the
     node.  Sandbox is registered first so a name present in both sets prefers
-    the sandbox command/file tool.
+    the sandbox command/file tool; the app provider is registered last so a
+    sandbox/builtin tool name always wins a collision.
     """
     gateway = ToolGateway()
 
@@ -167,6 +238,11 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
         gateway.add_provider(StaticToolProvider(PROVIDER_BUILTIN, _builtin_tools(model_name=model_name, app_config=app_config)))
     except Exception as e:  # noqa: BLE001 - fail-open provider
         logger.warning("Tool gateway: builtin provider unavailable: %s", e)
+
+    try:
+        gateway.add_provider(StaticToolProvider(PROVIDER_APP, _app_tools(app_config=app_config)))
+    except Exception as e:  # noqa: BLE001 - fail-open provider
+        logger.warning("Tool gateway: app provider unavailable: %s", e)
 
     return gateway
 
@@ -234,4 +310,5 @@ __all__ = [
     "resolve_capability_tools",
     "PROVIDER_BUILTIN",
     "PROVIDER_SANDBOX",
+    "PROVIDER_APP",
 ]

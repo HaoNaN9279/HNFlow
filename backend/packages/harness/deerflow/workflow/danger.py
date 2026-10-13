@@ -15,12 +15,15 @@ from deerflow.workflow.schema import NodeType, WorkflowDefinition, WorkflowMetad
 
 # Non-idempotent / dangerous node types whose side-effects must be confirmed
 # at runtime before execution.  Mirrors the semantics of
-# ``registry.crash_confirm_required`` (bash and http are the canonical
-# non-idempotent types) without importing the registry.
+# ``registry.crash_confirm_required`` (bash, http and the local-application
+# launch/script nodes are the non-idempotent types) without importing the
+# registry.
 _DANGEROUS_TYPES: frozenset[NodeType] = frozenset(
     {
         NodeType.TOOL_BASH,
         NodeType.TOOL_HTTP,
+        NodeType.APP_LAUNCH,
+        NodeType.APP_SCRIPT,
     }
 )
 
@@ -28,8 +31,9 @@ _DANGEROUS_TYPES: frozenset[NodeType] = frozenset(
 def dangerous_node_types() -> frozenset[NodeType]:
     """Return the node types that require pending-review confirmation.
 
-    Currently ``tool:bash`` and ``tool:http`` — the same set the executor
-    registry treats as non-idempotent (see ``registry.crash_confirm_required``).
+    ``tool:bash``, ``tool:http`` and the ``app:launch`` / ``app:script`` nodes —
+    the same set the executor registry treats as non-idempotent (see
+    ``registry.crash_confirm_required``).
     """
     return _DANGEROUS_TYPES
 

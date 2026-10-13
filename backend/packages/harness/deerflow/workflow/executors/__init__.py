@@ -21,6 +21,7 @@ from deerflow.workflow.schema import NodeType  # noqa: E402
 
 # ── Import public executor functions ─────────────────────────────────────────
 from .ai import exec_llm_agent  # noqa: E402
+from .app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait  # noqa: E402
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex  # noqa: E402
 from .flow import exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
@@ -100,6 +101,14 @@ def build_default_registry() -> ExecutorRegistry:
     # boundary, so no crash-confirm gate is applied.
     reg.register(ExecutorRegistration(node_type=NodeType.HUMAN_TASK, executor=exec_human_task, idempotent=False, description="Human task executor (interrupt / HumanTask)"))
 
+    # ── Local professional software (N5) ──────────────────────────────────
+    # launch/script start a process / mutate in-app state → non-idempotent and
+    # crash-confirm gated (host-side execution, deliberate sandbox exception).
+    reg.register(ExecutorRegistration(node_type=NodeType.APP_LAUNCH, executor=exec_app_launch, idempotent=False, requires_confirmation=True, description="Local application launch / attach executor"))
+    reg.register(ExecutorRegistration(node_type=NodeType.APP_SCRIPT, executor=exec_app_script, idempotent=False, requires_confirmation=True, description="Local application script executor"))
+    reg.register(ExecutorRegistration(node_type=NodeType.APP_WAIT, executor=exec_app_wait, idempotent=True, description="Local application wait executor"))
+    reg.register(ExecutorRegistration(node_type=NodeType.APP_COLLECT, executor=exec_app_collect, idempotent=True, description="Local application artifact collect executor"))
+
     # ── Composition ───────────────────────────────────────────────────────
     reg.register(ExecutorRegistration(node_type=NodeType.NESTED_SUBWORKFLOW, executor=exec_nested_subworkflow, idempotent=False, description="Nested subworkflow executor (compile / delegate expansion)"))
 
@@ -132,4 +141,9 @@ __all__ = [
     "exec_llm_agent",
     # Human
     "exec_human_task",
+    # Local apps (N5)
+    "exec_app_launch",
+    "exec_app_script",
+    "exec_app_wait",
+    "exec_app_collect",
 ]

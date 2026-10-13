@@ -101,6 +101,12 @@ class NodeType(StrEnum):
     # AI
     AI_LLM_AGENT = "ai:llm_agent"
 
+    # Local professional software (N5, plan §6.7 / §17)
+    APP_LAUNCH = "app:launch"
+    APP_SCRIPT = "app:script"
+    APP_WAIT = "app:wait"
+    APP_COLLECT = "app:collect"
+
     # Human interaction
     HUMAN_TASK = "human:task"
 

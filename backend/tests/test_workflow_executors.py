@@ -496,20 +496,24 @@ class TestRegistry:
             NodeType.TOOL_NOTIFY,
             NodeType.TOOL_LOG,
             NodeType.AI_LLM_AGENT,
+            NodeType.APP_LAUNCH,
+            NodeType.APP_SCRIPT,
+            NodeType.APP_WAIT,
+            NodeType.APP_COLLECT,
             NodeType.HUMAN_TASK,
             NodeType.NESTED_SUBWORKFLOW,
         }
     )
 
     def test_default_registry_has_all_types(self) -> None:
-        """build_default_registry() registers all 15 expected NodeType values."""
+        """build_default_registry() registers all 19 expected NodeType values."""
         reg = build_default_registry()
         registered = set(reg.keys())
         assert registered == self._EXPECTED_EXECUTOR_TYPES
 
-    def test_registry_length_is_15(self) -> None:
+    def test_registry_length_is_19(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 15
+        assert len(reg) == 19
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""
