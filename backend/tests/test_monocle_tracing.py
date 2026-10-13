@@ -221,7 +221,7 @@ def test_okahu_exporter_with_api_key_ok(monkeypatch):
 def test_embedded_hint_when_enabled_but_uninitialized(monkeypatch, caplog):
     """``build_tracing_callbacks()`` hints when Monocle is enabled but setup never ran.
 
-    The embedded ``DeerFlowClient`` and the TUI never hit the Gateway lifespan,
+    The embedded ``DeerFlowClient`` never hits the Gateway lifespan,
     so this debug line is the only in-process signal explaining why no Monocle
     traces appear.
     """

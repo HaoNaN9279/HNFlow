@@ -892,8 +892,8 @@ class TestCheckpointerDatabaseConfig:
 
     Regression: ``get_checkpointer`` / ``checkpointer_context`` previously read
     only the legacy ``checkpointer`` section and fell back to ``InMemorySaver``,
-    silently ignoring ``database``. Embedded callers (``DeerFlowClient``) and the
-    TUI then persisted Store rows to sqlite/postgres while checkpoints went to an
+    silently ignoring ``database``. Embedded callers (``DeerFlowClient``)
+    then persisted Store rows to sqlite/postgres while checkpoints went to an
     in-memory saver and were lost on exit.
     """
 

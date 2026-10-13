@@ -75,16 +75,3 @@ def test_support_bundle_thread_id_pattern_matches_canonical() -> None:
     spec.loader.exec_module(module)
 
     assert module.SAFE_THREAD_ID_RE.pattern == THREAD_ID_PATTERN
-
-
-def test_tui_resume_literal_ref_validated() -> None:
-    """The TUI /resume fallback adopts a literal ref as thread id only when
-    it satisfies the canonical contract."""
-    from deerflow.tui.session import Session
-
-    session = Session.__new__(Session)
-    session.client = type("StubClient", (), {"list_threads": lambda self, limit: {"thread_list": []}})()
-
-    assert session.resolve_ref("valid-id_1") == "valid-id_1"
-    with pytest.raises(ValueError, match="not a valid thread id"):
-        session.resolve_ref("bad.thread.id")

@@ -2,7 +2,7 @@
 
 Playwright's async objects (``Browser``/``BrowserContext``/``Page``) are affine
 to the event loop that created them. DeerFlow tools may be awaited on the
-Gateway loop, the TUI loop, or a fresh test loop, and a browser session must
+Gateway loop or a fresh test loop, and a browser session must
 survive across turns of the same thread. To decouple Playwright's loop from the
 caller's loop, every Playwright operation runs on one private daemon event loop
 (same approach the BoxLite provider uses for its loop-affine box handles); async

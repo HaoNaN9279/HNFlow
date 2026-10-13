@@ -646,7 +646,7 @@ class DeerFlowClient:
         Mirrors the Gateway ``TraceMiddleware`` gate: when
         ``logging.enhance.enabled`` is off the embedded client does **not**
         create a fresh request-level trace id, so Langfuse traces from
-        embedded / TUI / CLI callers keep their pre-enhancement schema and
+        embedded / CLI callers keep their pre-enhancement schema and
         do not gain a ``metadata.deerflow_trace_id`` key by default. A
         caller that explicitly binds its own trace via
         :func:`deerflow.trace_context.request_trace_context` still opts in:

@@ -86,7 +86,6 @@ backend/
 │   ├── guardrails/             # Pre-tool-call authorization providers
 │   ├── tracing/                # Tracer factory & trace metadata
 │   ├── uploads/                # Uploads manager
-│   ├── tui/                    # Terminal UI (`deerflow` console script)
 │   ├── community/              # Community tools (tavily/, jina_ai/, firecrawl/, …)
 │   ├── reflection/             # Dynamic module loading
 │   └── utils/                  # Utilities

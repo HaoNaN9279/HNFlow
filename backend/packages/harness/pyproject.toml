@@ -49,12 +49,10 @@ dependencies = [
     "e2b-code-interpreter>=2.8.0",
 ]
 
-[project.scripts]
-deerflow = "deerflow.tui.cli:main"
-
 [project.optional-dependencies]
-# Terminal workbench (TUI). Kept optional so the core harness install stays lean;
-# the `deerflow` console script degrades to headless help when textual is absent.
+# Terminal workbench (TUI) extra. The TUI module is removed from HNFlow, but the
+# extra stays declared so `uv.lock` remains resolvable until it can be
+# regenerated (the tenki-sandbox registry gap blocks `uv lock`).
 tui = ["textual>=0.80"]
 # GroundRoute needs no extra packages (httpx is already a core dependency). This
 # empty extra exists so the documented `uv add 'deerflow-harness[groundroute]'`

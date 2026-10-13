@@ -309,7 +309,7 @@ class LoopDetectionMiddleware(AgentMiddleware[AgentState]):
 
         Keyed by presence, not truthiness: ``SubagentExecutor`` sets
         ``context["run_id"] = self.run_id`` unconditionally (no truthiness
-        guard), so an embedded/TUI-dispatched subagent — whose ``run_id`` is
+        guard), so an embedded-dispatched subagent — whose ``run_id`` is
         never assigned per ``AGENTS.md``'s description of the embedded
         ``DeerFlowClient`` — runs with a context that legitimately carries
         ``run_id=None`` (the key is *present*, not absent). The executor

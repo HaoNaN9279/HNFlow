@@ -211,18 +211,6 @@ make dev
 
 直接访问：Gateway 位于 http://localhost:8001
 
-**终端工作台（TUI）**——基于嵌入式 Harness 的终端原生界面，
-无需运行任何服务：
-
-```bash
-uv pip install 'deerflow-harness[tui]'   # 可选的 textual 依赖
-deerflow                                 # 启动 TUI
-deerflow --print "summarize this repo"   # 无界面的单次运行
-deerflow --recursion-limit 250 --print "run a longer task"
-```
-
-在 TUI 中打开的会话会出现在 Web UI 侧边栏中（它会在本地默认用户下写入共享的 `threads_meta` 存储）。详见 [docs/TUI.md](docs/TUI.md)。
-
 ---
 
 ## 项目结构
@@ -255,7 +243,6 @@ backend/
 │       ├── guardrails/         # 工具调用前的授权提供程序
 │       ├── tracing/            # Tracer 工厂和追踪元数据
 │       ├── uploads/            # 上传管理器
-│       ├── tui/                # 终端 UI（`deerflow` 控制台脚本）
 │       ├── community/          # 社区工具和提供程序
 │       ├── reflection/         # 动态模块加载
 │       └── utils/              # 工具函数

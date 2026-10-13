@@ -92,7 +92,7 @@ class GoalCommand(NamedTuple):
 def parse_goal_command(args: str) -> GoalCommand:
     """Parse the argument string of a ``/goal`` command into an intent.
 
-    Shared by the TUI and IM-channel surfaces so the three-way semantics stay in
+    Shared across surfaces so the three-way semantics stay in
     one place: empty shows the active goal, ``clear``/``reset``/``off`` clears it,
     and anything else sets the goal to that (trimmed) objective. The frontend
     keeps a parallel TypeScript copy in ``input-box-helpers.ts``.

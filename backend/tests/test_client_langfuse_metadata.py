@@ -176,7 +176,7 @@ def test_stream_preserves_caller_metadata_overrides(monkeypatch):
 
 def test_stream_omits_deerflow_trace_id_when_enhance_disabled(monkeypatch):
     """With ``logging.enhance.enabled=false`` the embedded client must not
-    forge a fresh request trace id. Otherwise embedded / TUI callers on the
+    forge a fresh request trace id. Otherwise embedded callers on the
     default config would silently gain a new indexed ``deerflow_trace_id``
     key on every Langfuse trace they emit — the exact schema change the
     enhancement flag exists to opt into.

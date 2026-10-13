@@ -72,7 +72,7 @@ class CheckpointHistoryCache(Protocol):
 
 
 class SyncCheckpointHistoryCache(Protocol):
-    """Sync backend contract (embedded/TUI path). Memory backend only."""
+    """Sync backend contract (embedded path). Memory backend only."""
 
     def get_many(self, keys: list[str]) -> dict[str, dict[str, Any]]: ...
     def set_many(self, entries: dict[str, dict[str, Any]]) -> None: ...

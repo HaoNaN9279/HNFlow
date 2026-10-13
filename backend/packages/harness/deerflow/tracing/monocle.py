@@ -12,7 +12,7 @@ from deerflow.config import (
 
 logger = logging.getLogger(__name__)
 
-# Read by build_tracing_callbacks() to hint embedded/TUI processes that
+# Read by build_tracing_callbacks() to hint embedded processes that
 # enabled MONOCLE_TRACING but never ran the Gateway-lifespan setup.
 _setup_completed = False
 

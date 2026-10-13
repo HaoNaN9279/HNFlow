@@ -165,7 +165,7 @@ def _wrap_sync_if_delta(saver: Checkpointer, app_config: AppConfig) -> Checkpoin
 
     The process-frozen mode wins; ``database.checkpoint_channel_mode`` is the
     fallback when nothing is frozen yet. Only the memory cache backend is
-    supported on the sync path (TUI/embedded) — it is process-local anyway.
+    supported on the sync path (embedded) — it is process-local anyway.
     """
     global _checkpointer_cache, _checkpointer_cache_prefix
     # The ``_checkpointer_cache`` singleton is reassigned here without holding
@@ -179,7 +179,7 @@ def _wrap_sync_if_delta(saver: Checkpointer, app_config: AppConfig) -> Checkpoin
         return saver
     cache_config = app_config.database.checkpoint_cache
     if cache_config.type == "redis":
-        raise ValueError("database.checkpoint_cache.type 'redis' is not supported on the sync checkpointer path (TUI/embedded); use 'memory'.")
+        raise ValueError("database.checkpoint_cache.type 'redis' is not supported on the sync checkpointer path (embedded); use 'memory'.")
     from deerflow.runtime.checkpoint_cache.memory import MemoryCheckpointHistoryCache
     from deerflow.runtime.checkpoint_cache.provider import checkpoint_cache_key_prefix
     from deerflow.runtime.checkpointer.cached_saver import CachedHistorySaver

@@ -49,8 +49,10 @@ dev = [
     # dev group so the stream-bridge tests can always import/exercise the redis
     # bridge without forcing it onto production installs.
     "redis>=5.0.0",
-    # TUI runtime dep (also declared as the deerflow-harness[tui] extra); kept in
-    # the dev group so the terminal workbench can be run and tested locally / in CI.
+    # TUI runtime dep (also declared as the deerflow-harness[tui] extra). The TUI
+    # itself is removed from HNFlow, but the dependency stays pinned here so
+    # `uv.lock` remains resolvable until it can be regenerated (the tenki-sandbox
+    # registry gap blocks `uv lock`).
     "textual>=0.80",
 ]
 

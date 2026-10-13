@@ -212,19 +212,6 @@ make dev
 
 Direct access: Gateway at http://localhost:8001
 
-**Terminal Workbench (TUI)** — a terminal-native UI over the embedded harness,
-no services required:
-
-```bash
-uv pip install 'deerflow-harness[tui]'   # optional 'textual' dependency
-deerflow                                 # launch the TUI
-deerflow --print "summarize this repo"   # headless one-shot
-deerflow --recursion-limit 250 --print "run a longer task"
-```
-
-Sessions opened in the TUI appear in the Web UI sidebar (it writes the shared
-`threads_meta` store under the local default user). See [docs/TUI.md](docs/TUI.md).
-
 ---
 
 ## Project Structure
@@ -257,7 +244,6 @@ backend/
 │       ├── guardrails/         # Pre-tool-call authorization providers
 │       ├── tracing/            # Tracer factory & trace metadata
 │       ├── uploads/            # Uploads manager
-│       ├── tui/                # Terminal UI (`deerflow` console script)
 │       ├── community/          # Community tools & providers
 │       ├── reflection/         # Dynamic module loading
 │       └── utils/              # Utilities
