@@ -17,7 +17,7 @@ from langgraph.types import Overwrite
 
 from deerflow.agents.thread_state import merge_artifacts, merge_message_writes
 from deerflow.runtime.checkpoint_state import CheckpointStateAccessor
-from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
+from deerflow.runtime.context_keys import APP_RUNTIME_CONTEXT_KEY, CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
 from deerflow.runtime.runs.manager import CancelOutcome, ConflictError, RunManager
 from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.runtime.runs.worker import (
@@ -1618,7 +1618,10 @@ def test_agent_factory_supports_app_config_detects_supported_signature():
 
 def test_build_runtime_context_defaults_to_thread_and_run_id():
     ctx = _build_runtime_context("thread-1", "run-1", None)
-    assert ctx == {"thread_id": "thread-1", "run_id": "run-1"}
+    assert ctx["thread_id"] == "thread-1"
+    assert ctx["run_id"] == "run-1"
+    # The app session manager is injected unconditionally (host-internal key).
+    assert APP_RUNTIME_CONTEXT_KEY in ctx
 
 
 def test_build_runtime_context_merges_caller_context():
@@ -1658,7 +1661,9 @@ def test_build_runtime_context_ignores_caller_pre_existing_message_ids():
 
 def test_build_runtime_context_ignores_non_dict_caller_context():
     ctx = _build_runtime_context("thread-1", "run-1", "not-a-dict")
-    assert ctx == {"thread_id": "thread-1", "run_id": "run-1"}
+    assert ctx["thread_id"] == "thread-1"
+    assert ctx["run_id"] == "run-1"
+    assert APP_RUNTIME_CONTEXT_KEY in ctx
 
 
 def test_agent_factory_supports_app_config_returns_false_when_signature_lookup_fails(monkeypatch):

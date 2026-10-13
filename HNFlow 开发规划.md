@@ -79,7 +79,7 @@
 | C8 | **schema 迁移钩子** | `workflow_io._migrate_schema` | 现抛 `NotImplementedError`；建立 v→v+1 迁移链。 | ✅ 已落地：`register_migration` 逐版本链 |
 | C9 | **单用户模型收缩** | 定义/持久化/路由 | 去多用户强隔离，保留 `user_id` 弱隔离（§15）。 | ⬜ 未开始 |
 | C10 | **执行器注册 `idempotent` 修正** | `executors/__init__.py` | `ai:llm_agent`/`human:task`/`nested` 现标 `requires_confirmation=True`，与新语义（AI 有界自主 + 中断）对齐复核。 | ✅ 已落地：`requires_confirmation` 仅保留 bash/http |
-| C11 | **前端节点目录同步** | `node-catalog.ts`、`types.ts`、`validation.ts` | 与新增/改造节点（app、loop 端口、端口类型）保持一致；移除 `template_prompt`「future」占位语义。 | ✅ 已落地（app 类节点待 P1） |
+| C11 | **前端节点目录同步** | `node-catalog.ts`、`types.ts`、`validation.ts` | 与新增/改造节点（app、loop 端口、端口类型）保持一致；移除 `template_prompt`「future」占位语义。 | ✅ 已落地（app 类节点 P1 切片 1 已同步） |
 
 ---
 
@@ -90,8 +90,8 @@
 | N1 | 工具网关 | §9 | 统一描述符 + 调用信封 + provider（builtin/skill/sandbox/mcp/app） | ◐ 最小版（builtin/sandbox + 描述符/分派）；skill/mcp/app provider 后续 |
 | N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 | ⬜ 未开始（现状经 SubagentExecutor 间接调用，建议渐进抽层） |
 | N3 | 能力包契约 | §5.5 | permissions/evals/tool_schema_version/context_budget/required-secrets | ⬜ 未开始 |
-| N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ⬜ P1 |
-| N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ⬜ P1 |
+| N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ◐ P1 切片 1：注册表/会话/驱动（cli/mock）已落地；驱动矩阵扩展、共享/抢占、DB 持久化随后续切片 |
+| N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ✅ P1 切片 1 已落地（+ 工具网关 `app` provider） |
 | N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ⬜ P1 |
 | N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ | ⬜ P1 |
 | N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 | ⬜ P1 |
@@ -126,13 +126,15 @@
 
 ### P1 — 定位核心（本地专业软件 + 长期运行）
 
-1. **N4 本地软件接入层**（应用注册表 / 实例会话 / 驱动矩阵 / 共享）。
-2. **N5 `app` 类节点**（launch/script/wait/collect）+ tool 网关 `app` provider。
-3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。
-4. **N8 本地资源治理**（GPU/内存/磁盘、License 并发、独占锁）。
-5. **N9 文件/资产 + 跨软件契约**。
-6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。
-7. **N11 环境探测 / 数据目录 / 备份迁移**。
+> **进度（切片 1：N4+N5 已落地）**：`deerflow/apps/`（应用注册表 `registry.py` + 驱动协议 `driver.py` + 会话管理 `session.py` + `drivers/{cli,mock}.py`）、`config.yaml apps:` 段（重启生效，`config_version 34`）、4 个 `app:*` 节点与执行器（launch/script 非幂等 + 危险节点，wait/collect 幂等）、工具网关 `app` provider、Gateway `GET /api/apps`+`/api/apps/sessions`、运行期会话管理器注入、前端节点目录/表单/校验/i18n 全部落地。**app 驱动运行在宿主**——「命令必须走 sandbox」的显式例外（GUI/长驻进程无法进容器沙箱）。Unity 驱动经决定本切片跳过；会话暂为进程内内存态（DB 持久化随 N6）。切片 2+（N6–N11）各自独立计划。
+
+1. **N4 本地软件接入层**（应用注册表 / 实例会话 / 驱动矩阵 / 共享）。— ◐ 切片 1 完成主体
+2. **N5 `app` 类节点**（launch/script/wait/collect）+ tool 网关 `app` provider。— ✅ 切片 1
+3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。— ⬜
+4. **N8 本地资源治理**（GPU/内存/磁盘、License 并发、独占锁）。— ⬜
+5. **N9 文件/资产 + 跨软件契约**。— ⬜
+6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。— ⬜
+7. **N11 环境探测 / 数据目录 / 备份迁移**。— ⬜
 
 验收：Blender/Unity/PS 等本地软件可被注册、拉起/附加、脚本驱动、产物回收；长时任务可由事件触发并跨重启恢复。
 
@@ -156,7 +158,7 @@
 | M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 | ✅ 达成（C4 版本范围校验顺延） |
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
-| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ⬜ 未开始 |
+| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 完成；N6/N7/N8 待做 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ⬜ 未开始 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |

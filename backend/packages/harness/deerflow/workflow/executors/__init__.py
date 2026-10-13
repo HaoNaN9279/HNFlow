@@ -21,10 +21,10 @@ from deerflow.workflow.schema import NodeType  # noqa: E402
 
 # ── Import public executor functions ─────────────────────────────────────────
 from .ai import exec_llm_agent  # noqa: E402
-from .app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait  # noqa: E402
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex  # noqa: E402
 from .flow import exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
+from .local_app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait  # noqa: E402
 from .tool import exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify  # noqa: E402
 
 # ── Default registry assembly ────────────────────────────────────────────────

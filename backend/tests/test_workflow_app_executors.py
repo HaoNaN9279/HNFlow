@@ -15,7 +15,7 @@ from deerflow.runtime.context_keys import APP_RUNTIME_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.danger import dangerous_node_types
 from deerflow.workflow.executors import build_default_registry
-from deerflow.workflow.executors.app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait
+from deerflow.workflow.executors.local_app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait
 from deerflow.workflow.registry import crash_confirm_required
 from deerflow.workflow.schema import NodeType
 

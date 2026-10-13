@@ -15,12 +15,13 @@ HNFlow 是**图驱动的确定性编排引擎**。它以 DeerFlow harness（Lang
 
 ### 工作流执行模型
 
-工作流图由节点与边构成，节点按类型分五类：
+工作流图由节点与边构成，节点按类型分六类：
 
 - **流程控制**（`flow`）：start / end / if / switch / loop / parallel / wait。
 - **数据操作**（`data`）：assign / convert / file / json / regEx。
 - **工具调用**（`tool`）：bash / http / notify / log——bash 必须走 sandbox，禁止直连宿主 shell。
 - **AI 节点**（`ai`）：llm_agent，三层提示词组装 + 受限 SubagentExecutor，非自由 ReAct loop。
+- **本地应用**（`app`）：launch / script / wait / collect——经应用接入层（`deerflow/apps/`）驱动本机专业软件，**运行在宿主**（GUI/长驻进程无法进沙箱），是「命令必须走 sandbox」的显式例外。
 - **人工与嵌套**（`human` / `nested`）：human_task 挂起、subworkflow 子图/委派。
 
 端口数据经 state 字段流转（命名 `wf:<node_id>:<port>`），由 compiler 绑定，节点执行函数与 state 解耦。断点续跑、人工挂起、取消、SSE 节点级事件全部复用 LangGraph/DeerFlow 既有 run 生命周期，不新写执行循环。
@@ -75,8 +76,10 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
   - `data.py` — assign/convert/file/json/regEx 数据操作。
   - `tool.py` — bash/http/log/notify 工具节点；bash 必须走 sandbox（`Sandbox.execute_command`），禁止直连宿主 shell；notify 经 `runtime.context["notifier"]` 钩子（缺省回落日志）发出本机通知。
   - `ai.py` — AI 节点模板模式：三层提示词组装 + 受限 SubagentExecutor；工具集 = 关联能力包 `allowed-tools` 并集，经 `tool_gateway.resolve_capability_tools` 装配（有序去重），`instruction` 模板必填。
+  - `local_app.py` — 本地应用节点（N4/N5）：`app:launch`/`app:script`/`app:wait`/`app:collect`，经 `deerflow/apps/` 接入层驱动本机专业软件；launch/script 非幂等且 crash-confirm 门，wait/collect 幂等；驱动调用经 `asyncio.to_thread` 离事件循环。
   - `human.py` — HumanTask 挂起。
-- `tool_gateway.py` — 工具网关最小版：`ToolDescriptor` + `ToolGateway`（provider 优先级分派）+ builtin/sandbox provider，`resolve_capability_tools` 供 AI 节点装配工具；MCP/skill/app provider 为后续增量。
+- `tool_gateway.py` — 工具网关最小版：`ToolDescriptor` + `ToolGateway`（provider 优先级分派）+ builtin/sandbox/app provider，`resolve_capability_tools` 供 AI 节点装配工具；MCP/skill provider 为后续增量。
+- `../apps/`（`deerflow/apps/`）——本地专业软件接入层（N4）：`registry.py`（应用注册表，源自 `config.yaml apps:`）、`driver.py`（`AppDriver` 协议）、`session.py`（进程内实例/会话管理，`app:launch` 等共享）、`drivers/{cli,mock}.py`。**运行在宿主**，是「命令必须走 sandbox」的显式例外；Gateway `GET /api/apps`+`/api/apps/sessions` 暴露只读视图。
 - `prompts.py` — 三层提示词组装器：身份层（custom agent SOUL）→ 能力层（功能组工具描述 + rules + allowed-tools 并集）→ 任务层（节点 instruction 模板，支持 `{{port}}` 插值）。纯函数。
 - `registry.py` — 节点执行器注册表（type → executor），含幂等标注（`idempotent`）；`requires_confirmation` 仅 `tool:bash`/`tool:http`（crashConfirm 钩子），AI/人工/嵌套节点非幂等但以 interrupt/有界自主为确认边界。
 - `delegate.py` — 运行期委派：subworkflow 节点的增强版 task_tool 模式，委派子工作流 agent 执行，结果回写端口；子代理 `checkpointer=True`。
