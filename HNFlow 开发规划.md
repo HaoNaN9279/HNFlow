@@ -4,7 +4,7 @@
 >
 > **排序原则**：核心运行逻辑优先；安全等非核心项置于最低优先级。
 >
-> 标记：**[改造]** = 修改现有代码；**[新增]** = 全新模块；**[补齐]** = 现有占位实现落地。
+> 标记：**[改造]** = 修改现有代码；**[新增]** = 全新模块；**[补齐]** = 现有占位实现落地；**[裁剪]** = 删除/隔离上游 deerflow 能力（见第八节）。
 
 ---
 
@@ -59,7 +59,7 @@
 - **B. 架构层缺失（新增）**：工具网关、LLM 中间层、能力包契约。
 - **C. 定位核心缺失（新增）**：本地软件接入、长期实例/调度、资源治理、文件资产、共享工作区。
 - **D. Agent 能力补强（新增，可分批）**：§24 各项。
-- **E. 低优先级/可删**：安全（注入防御/威胁模型/供应链）、SaaS 类（多租户/评审流/环境晋升）。
+- **E. 低优先级/可删**：安全（注入防御/威胁模型/供应链）、SaaS 类（多租户/评审流/环境晋升）。**上游 deerflow 继承来的同类能力（多用户鉴权/RBAC、IM 渠道、多 worker、TUI、运营类）的移除/隔离见第八节「deerflow 上游裁剪规划」。**
 
 ---
 
@@ -173,9 +173,149 @@
 
 ---
 
-## 八、结论
+## 八、deerflow 上游裁剪规划
+
+> 定位依据：《开发方案》§1.2（单机本地 + 双入口）、§15（单用户）、§18（单机不依赖 IM，通知走 `tool:notify`）、§13.2（单机不引入 K8s provisioner）、§24.13/§24.16（供应链安全、多环境晋升已裁撤）、§24.15（IM 为可选）。
+>
+> 目标：把 deerflow 上游面向「云端 SaaS / 多租户 / IM 集成 / 多节点」的能力从 HNFlow 主干移除或隔离，降低维护面与依赖面，让仓库只剩「单机工作流编排」所需底座。
+>
+> 标记：**[删除]** = 物理移除代码 / 配置 / 迁移 / 测试；**[隔离]** = 保留代码但默认禁用、移出主路径；**[保留改造]** = 复用为 HNFlow 能力，不裁。
+
+### 8.1 裁剪判据
+
+进 [删除] 需**同时**满足三条；满足两条的先进 [隔离]，待验证后再删：
+
+1. **与定位冲突**：多用户 / 多租户 / RBAC / SaaS 协作 / IM 集成 / 分布式。
+2. **上游默认关闭**：`config.example.yaml` 中该段 `enabled: false` 或整段注释（裁剪不改变默认行为）。
+3. **HNFlow 主路径零依赖**：`workflow/` 及 Gateway 工作流路由不引用。已核实 `workflow/`（含 `executors/`）**不 import** `authz` / `guardrails` / `channels` / `community` / `integrations` / `scheduler` / `tui`——裁剪这些对工作流引擎无破坏。
+
+### 8.2 [删除] 清单
+
+**A1. 多用户鉴权与授权（SaaS 强隔离）**
+
+| 位置 | 说明 |
+|---|---|
+| `app/gateway/auth/`（18 文件） | OIDC / JWT / session / password / 用户开通 / RBAC 仓储 |
+| `app/gateway/`（`auth_middleware.py`、`authz.py`、`internal_auth.py`、`langgraph_auth.py`、`auth_disabled.py`）、`routers/auth.py` | 网关鉴权链与路由 |
+| `harness/authz/`（8 文件） | RBAC provider / principal / tool_filter / enforcement |
+| `harness/guardrails/`（4 文件）+ `agents/middlewares` 中授权/guardrail 环节 | 外部审查、工具调用前裁决 |
+| `config.example.yaml`：`authorization` 段、`guardrails` 段 | 默认关闭 |
+| 前端 `src/app/(auth)/`、`src/core/auth/`、`remember-login` | 登录/注册/回调页 |
+| 依赖 extra / RFC 文档（`docs/plans/*authorization*`） | 随功能一并移除 |
+
+依据：§15 单用户；本规划第五节 P3「SaaS 类不做」。**同步保留 `user_id` 弱隔离**（即 C9），不重造鉴权。
+
+**A2. IM 渠道集成**
+
+| 位置 | 说明 |
+|---|---|
+| `app/channels/`（23 文件） | Feishu / Slack / Telegram / Discord / DingTalk / WeChat / WeCom / Buzz |
+| `app/gateway/github/`（8 文件）+ `routers/github_webhooks.py` | GitHub 事件驱动 agent |
+| `routers/channels.py`、`routers/channel_connections.py` | 渠道 API 与用户绑定 |
+| `harness/integrations/`（lark broker / cli） | 飞书托管集成 |
+| `persistence` 的 `channel_*` 表与仓储、`app/gateway` 内渠道启动钩子 | 生命周期与存储 |
+| `config.example.yaml`：`channels` 段、`channel_connections` 段 | 默认注释 / 关闭 |
+| 前端 `src/core/channels/`、`src/core/integrations/` | 渠道连接 UI |
+| 依赖 extra：`discord` / `buzz` 等 | 随功能移除 |
+
+依据：§18「单机场景不依赖 IM」、§24.15「IM 为可选，非默认需要」。本机通知由 `tool:notify`（C7 已落地）+ Web 待办承担。
+
+**A3. 多 worker / 分布式**
+
+| 位置 | 说明 |
+|---|---|
+| `run_ownership`（lease / heartbeat / 跨进程回收） | 仅 `GATEWAY_WORKERS > 1` 需要，默认 `heartbeat_enabled: false` |
+| `runtime/stream_bridge` 的 Redis provider | 单机保留 memory bridge；Redis 面多 worker 实时转发 |
+| `docker/` 中 Redis 服务、多副本 compose 配置、`docker/provisioner` + K8s provisioner | §13.2 单机不引入 provisioner |
+
+**A4. 运营 / SaaS 类**
+
+| 位置 | 说明 |
+|---|---|
+| `feedback` 表 + `routers/feedback.py` + 前端反馈 UI | 产品运营向，单机自用不需要 |
+| `routers/suggestions.py`、`routers/input_polish.py` + 前端 `core/suggestions`、`core/input-polish` | 输入辅助 / 联想，非核心 |
+| 前端 `src/app/showcase/`、`src/app/blog/`、`core/blog/` | 公开只读 demo 与博客，偏离单机定位 |
+
+**A5. TUI**
+
+| 位置 | 说明 |
+|---|---|
+| `harness/tui/`（15 文件）、`docs/tui/` | 终端工作台；方案技术栈为「Next.js + React Flow 双入口」，未纳入 |
+
+**A6. 多用户 memory 隔离（收缩，与 C9 合并）**
+
+| 位置 | 说明 |
+|---|---|
+| `agents/memory` per-user 目录布局、`memory.strict_user_scope`、`scripts/migrate_user_isolation.py` | 收缩为单机单用户；保留弱隔离常量 `DEFAULT_USER_ID` |
+
+依据：§15。⚠ 本项与 C9「单用户模型收缩」是同一改动，**必须同批落地**，否则留下半套隔离。
+
+### 8.3 [隔离] 清单（保留代码，默认禁用 / 移出主路径）
+
+| 模块 | 位置 | 处理 |
+|---|---|---|
+| MCP 长期任务 | `app/mcp_tasks/`、`routers` 相关、`mcp_tasks` 配置 | 默认 `enabled: false`，暂留；N1 工具网关收编 MCP 后评估删除 |
+| 技能自进化 + 安全扫描 | `skill_evolution` 配置、技能写入路径 | 默认 `enabled: false`；§24.13 供应链已裁撤，随能力包落定后删 |
+| 自定义 Agent HTTP 管理 | `agents_api` 配置、`routers/agents.py` 管理面 | 默认 `enabled: false`，存在多用户信任边界，单机可隔离或删 |
+| 远程沙箱 provider | `community/e2b_sandbox`、`community/aio_sandbox`（remote）、`boxlite`、`tenki` | 单机只保留本地 sandbox（§13.2） |
+| 云端搜索 / 抓取工具 | `community/{brave,exa,tavily,serper,jina_ai,ddg_search,crawl4ai,firecrawl,browserless,image_search,infoquest,groundroute,searxng,fastcrw}` | 按「本地优先、隐私优先」（§24.10）默认不启用；去重后保留最小检索集，其余移出 |
+| 浏览器控制 | `harness/community/browser_automation`、`routers/browser.py`、前端 browser 面板 | 可选能力，默认关闭 |
+| 语音输入 / 侧车 | 前端 `core/voice-input`、`core/sidecar` | 可选，默认关闭 |
+
+> 隔离项的共性：与定位不冲突但非必需，先「默认关闭 + 不进主路径」，避免一次性大删带来的回归面；待 P1 定位主线稳定后再逐个转 [删除]。
+
+### 8.4 [保留改造] 清单（不裁，明确归属）
+
+| 模块 | 归属 | 说明 |
+|---|---|---|
+| `harness/scheduler` + `app/scheduler` + `routers/scheduled_tasks.py` + 前端 `workspace/scheduled-tasks` | **N7 触发与调度**（§18） | 上游定时任务默认关闭，复用为本地触发调度基础（cron / 文件监视 / 应用事件 / 空闲），**不另起执行栈** |
+| `agents/memory`（逻辑层） | **§24.1 记忆体系**（P1） | 保留能力，收缩作用域到单用户 |
+| `harness/tracing` | **§24.9 端到端可观测**（P0） | 保留 trace 传播与成本归因 |
+| `harness/models` | **N2 LLM 中间层**（§8） | 作为中间层的厂商适配底座，渐进抽层不推倒 |
+| `harness/mcp` | **N1 工具网关 provider**（§9） | MCP 作 provider 收编 |
+| `harness/sandbox`（本地 provider） | **§13.2 Sandbox** | 命令类节点强制走本地沙箱 |
+| `persistence`：`runs` / `threads_meta` / `run_events` / `workflow_definitions` / `human_tasks` | 基础设施 | 移除 `channel_*` / `users` / `feedback` 后的保留集 |
+| `harness/{agents,subagents,tools,skills,config,extensions,reflection,uploads,workspace_changes,utils,runtime}`、`workflow*` | 核心底座 | HNFlow 依赖，全部保留 |
+
+### 8.5 执行顺序与前置
+
+1. **A2 IM 渠道**（与核心最解耦，先删）→ 清理 `channels`/`channel_connections` 配置与 `channel_*` 表引用。
+2. **A1 鉴权 / 授权 / guardrails** → 拆 `AuthMiddleware` / CSRF 依赖，剥离中间件链第 9 步（授权/guardrail）。
+3. **A6 多用户 memory 收缩**（与 C9 同批）→ 统一 `DEFAULT_USER_ID`。
+4. **A3 分布式** → 删 `run_ownership` / Redis bridge / provisioner；compose 收敛为单节点。
+5. **A4 运营类 + A5 TUI** → 前端路由与后端路由同步删。
+6. **[隔离] 项** → 配置默认关闭 + 主路径摘除；P1 完成后复查转删。
+
+**每批配套动作（缺一遗留悬挂引用）**：
+- 后端：代码 + 路由挂载（`app.py`）+ 配置段（`config.example.yaml`）+ 持久化迁移 + 测试；
+- 持久化：**已发布的 alembic 迁移不直接删**，改以新迁移 drop 表（避免 `alembic_version` 断裂）；未发布的可直接删；
+- 边界测试：更新 `tests/test_harness_boundary.py`、`tests/test_compose_default_bind_host.py`；
+- 前端：路由 + `core/*` + i18n 词条；
+- 文档：同步 `AGENTS.md`（根 / backend / frontend）、`README`、部署 compose。
+
+### 8.6 风险
+
+- **删鉴权牵连网关中间件链**：`AuthMiddleware` / CSRF / `internal_auth` 与「渠道内部鉴权」耦合，须与 A2 联动，避免残留半套。
+- **删 guardrails 影响 middleware 顺序**：授权/guardrail 在 agent 中间件链第 9 位，删除后需复核 ordering 测试。
+- **迁移表断裂**：`channel_*` / `users` / `feedback` 已被 alembic 纳管，drop 须走新迁移。
+- **frontend features 能力发现**：`/api/features` 与渠道/browser 开关耦合，删后需同步前端 gating（否则死控件）。
+- **裁剪与 P0/P1 主线竞争**：建议**每批小步、独立提交**，不进 P1 功能分支；裁剪不改变运行语义，验收以「测试全绿 + 无悬挂 import」为准。
+
+### 8.7 与阶段的对应
+
+| 阶段 | 裁剪动作 |
+|---|---|
+| **P0（已完成）** | 不裁剪；仅确认 workflow 对上游零依赖（判据 3 已核实） |
+| **P1 起步前** | A2 / A1 / A6 / A3 四批（与 C9 同批）；A4 / A5 可并行 |
+| **P1 期间** | [隔离] 项保持默认关闭；`scheduler` 改造接入 N7 |
+| **P2 及以后** | 复查 [隔离] 项，逐项转 [删除]；能力包 / MCP provider 落定后清 `mcp_tasks` / `skill_evolution` |
+
+---
+
+## 九、结论
 
 - **P0 的实质是「补现有引擎的致命缺口」**：AI 节点不装配工具、执行流语义不符、缺 lockfile、能力组只收不校——这些不改，后续能力都建在沙地上。
 - **N1/N2 是地基**，建议以最小版并入 P0，避免「先造完整网关再干活」的阻塞。
 - **定位核心（P1）** 是区别于 n8n/Coze 的关键，但必须在 P0 引擎可信之后启动。
 - **安全与 SaaS 类沉底**，仅保留与 P1 强绑定的「不可逆操作确认」。
+- **上游裁剪与 P1 同步起步**：deerflow 的 IM 渠道、多用户鉴权/RBAC、多 worker 分布式、TUI、运营类能力按第八节分批**移除/隔离**——先删「默认关闭 + 主路径零依赖」的模块，[隔离] 项待 P1 稳定后转删。裁剪服务定位、不改运行语义。
