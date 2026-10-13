@@ -21,7 +21,7 @@
 - [ ] Add metrics and monitoring
 - [ ] Support for more document formats in upload
 - [ ] Skill marketplace / remote skill installation
-- [ ] Optimize async concurrency in agent hot path (IM channels multi-task scenario)
+- [ ] Optimize async concurrency in agent hot path (concurrent run scenario)
 - [ ] Replace `subprocess.run()` with `asyncio.create_subprocess_shell()` in `packages/harness/deerflow/sandbox/local/local_sandbox.py`
   - Replace sync `requests` with `httpx.AsyncClient` in community tools (tavily, jina_ai, firecrawl, infoquest, image_search)
   - [x] Replace sync `model.invoke()` with async `model.ainvoke()` in title_middleware and memory updater

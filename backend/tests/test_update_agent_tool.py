@@ -65,7 +65,6 @@ def _seed_agent(
     description: str = "old desc",
     soul: str = "old soul",
     skills: list[str] | None = None,
-    github: dict | None = None,
     user_id: str = DEFAULT_USER,
 ) -> Path:
     """Create a baseline agent dir with config.yaml and SOUL.md for tests to mutate."""
@@ -74,8 +73,6 @@ def _seed_agent(
     cfg: dict = {"name": name, "description": description}
     if skills is not None:
         cfg["skills"] = skills
-    if github is not None:
-        cfg["github"] = github
     (agent_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
     (agent_dir / "SOUL.md").write_text(soul, encoding="utf-8")
     return agent_dir
@@ -307,41 +304,6 @@ def test_update_agent_updates_description_only(tmp_path, patched_paths):
     assert "description" in result.update["messages"][0].content
 
 
-def test_update_agent_preserves_github_block_on_description_change(tmp_path, patched_paths):
-    """Hand-authored github: bindings must survive a description/model/etc update.
-
-    Regression: the tool used to rebuild config.yaml from a hardcoded
-    allowlist of fields (name/description/model/tool_groups/skills), so
-    any other top-level field on AgentConfig — most importantly the
-    ``github:`` block that wires the agent into webhook fan-out — was
-    silently stripped whenever the agent called update_agent.
-    """
-    github_block = {
-        "installation_id": 140594274,
-        "bot_login": "my-app-bot",
-        "bindings": [
-            {
-                "repo": "owner/repo",
-                "triggers": {
-                    "pull_request": {"actions": ["opened"]},
-                    "issue_comment": {
-                        "require_mention": True,
-                        "mention_login": "my-app-bot",
-                    },
-                },
-            }
-        ],
-    }
-    agent_dir = _seed_agent(tmp_path, description="old desc", github=github_block)
-
-    update_agent.func(runtime=_runtime(), description="refined desc")
-
-    cfg = yaml.safe_load((agent_dir / "config.yaml").read_text())
-    assert cfg["description"] == "refined desc"
-    # The github block must round-trip unchanged.
-    assert cfg["github"] == github_block
-
-
 def test_update_agent_preserves_model_behavior_on_description_change(tmp_path, patched_paths):
     """UI/API-owned model behavior must survive agent self-edits.
 
@@ -528,7 +490,7 @@ def test_update_agent_refuses_on_webhook_channel(tmp_path, patched_paths):
     The tool MUST NOT touch the filesystem in this branch — we assert
     the agent's existing config remains exactly as we seeded it.
     """
-    seeded = _seed_agent(tmp_path, description="seeded", soul="seeded soul", github={"installation_id": 12345})
+    seeded = _seed_agent(tmp_path, description="seeded", soul="seeded soul")
 
     runtime = SimpleNamespace(
         context={"agent_name": "test-agent", "channel_name": "github"},
@@ -549,7 +511,6 @@ def test_update_agent_refuses_on_webhook_channel(tmp_path, patched_paths):
     # Filesystem must be untouched.
     cfg = yaml.safe_load((seeded / "config.yaml").read_text())
     assert cfg["description"] == "seeded"
-    assert cfg["github"] == {"installation_id": 12345}
     assert (seeded / "SOUL.md").read_text() == "seeded soul"
 
 

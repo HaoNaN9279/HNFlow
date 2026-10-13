@@ -14,10 +14,8 @@ from deerflow.config.agent_storage_config import AgentStorageConfig
 from deerflow.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
 from deerflow.config.auth_config import AuthAppConfig
 from deerflow.config.authorization_config import AuthorizationConfig, load_authorization_config_from_dict
-from deerflow.config.channel_connections_config import ChannelConnectionsConfig
 from deerflow.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
-from deerflow.config.dedupe_storage_config import DedupeStorageConfig
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.file_signature import ConfigSignature as _ConfigSignature
 from deerflow.config.file_signature import get_config_signature as _get_config_signature
@@ -250,13 +248,6 @@ class AppConfig(BaseModel):
     suggestions: SuggestionsConfig = Field(default_factory=SuggestionsConfig, description="Follow-up suggestions configuration.")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
     llm_call: LlmCallConfig = Field(default_factory=LlmCallConfig, description="LLM call execution configuration (concurrency / rate shaping)")
-    channel_connections: ChannelConnectionsConfig = Field(
-        default_factory=ChannelConnectionsConfig,
-        description=format_field_description(
-            "channel_connections",
-            field_doc="User-facing IM channel connection configuration.",
-        ),
-    )
     loop_detection: LoopDetectionConfig = Field(default_factory=LoopDetectionConfig, description="Loop detection middleware configuration")
     tool_progress: ToolProgressConfig = Field(default_factory=ToolProgressConfig, description="Tool progress state machine middleware configuration")
     read_before_write: ReadBeforeWriteConfig = Field(default_factory=ReadBeforeWriteConfig, description="Read-before-write file gate middleware configuration")
@@ -317,13 +308,6 @@ class AppConfig(BaseModel):
         description=format_field_description(
             "run_ownership",
             field_doc="Run ownership and lease configuration for multi-worker deployments.",
-        ),
-    )
-    dedupe_storage: DedupeStorageConfig = Field(
-        default_factory=DedupeStorageConfig,
-        description=format_field_description(
-            "dedupe_storage",
-            field_doc="Inbound webhook dedupe storage backend (memory / postgres / auto) for cross-pod redelivery dedup. See issue #4120.",
         ),
     )
 

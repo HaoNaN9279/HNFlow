@@ -6,12 +6,11 @@ from types import SimpleNamespace
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from app.channels.commands import KNOWN_CHANNEL_COMMANDS
 from deerflow.agents.middlewares import skill_activation_middleware as middleware_module
 from deerflow.agents.middlewares.skill_activation_middleware import SkillActivationMiddleware, is_slash_skill_activation_reminder
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.paths import Paths
-from deerflow.skills.slash import RESERVED_SLASH_SKILL_NAMES, parse_slash_skill_reference, resolve_slash_skill
+from deerflow.skills.slash import parse_slash_skill_reference, resolve_slash_skill
 from deerflow.skills.storage.user_scoped_skill_storage import UserScopedSkillStorage
 from deerflow.skills.types import Skill, SkillCategory
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
@@ -92,10 +91,6 @@ def test_resolve_slash_skill_ignores_reserved_control_commands(tmp_path):
         skill = _make_skill(tmp_path, command)
 
         assert resolve_slash_skill(f"/{command} create an agent", [skill]) is None
-
-
-def test_reserved_slash_skill_names_match_channel_commands():
-    assert RESERVED_SLASH_SKILL_NAMES == {command.removeprefix("/") for command in KNOWN_CHANNEL_COMMANDS}
 
 
 def test_resolve_slash_skill_respects_available_skill_whitelist(tmp_path):

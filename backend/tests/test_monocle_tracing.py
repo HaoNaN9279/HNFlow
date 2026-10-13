@@ -327,12 +327,6 @@ def test_gateway_lifespan_initializes_monocle():
         yield
 
     startup_config = SimpleNamespace(log_level="INFO", memory=SimpleNamespace(token_counting="char"))
-    fake_service = MagicMock()
-    fake_service.get_status = MagicMock(return_value={})
-
-    async def fake_start(_startup_config, **_kwargs):
-        return fake_service
-
     setup_spy = MagicMock(return_value=False)
 
     with (
@@ -342,8 +336,6 @@ def test_gateway_lifespan_initializes_monocle():
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
         patch("app.gateway.app.setup_monocle_tracing_if_enabled", setup_spy),
         patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
-        patch("app.channels.service.start_channel_service", side_effect=fake_start),
-        patch("app.channels.service.stop_channel_service", AsyncMock()),
     ):
 
         async def drive() -> None:
@@ -370,12 +362,6 @@ def test_gateway_lifespan_survives_monocle_setup_failure(caplog):
         yield
 
     startup_config = SimpleNamespace(log_level="INFO", memory=SimpleNamespace(token_counting="char"))
-    fake_service = MagicMock()
-    fake_service.get_status = MagicMock(return_value={})
-
-    async def fake_start(_startup_config, **_kwargs):
-        return fake_service
-
     setup_spy = MagicMock(side_effect=ValueError("MONOCLE_EXPORTERS has unknown exporter(s): fle."))
 
     with (
@@ -385,8 +371,6 @@ def test_gateway_lifespan_survives_monocle_setup_failure(caplog):
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
         patch("app.gateway.app.setup_monocle_tracing_if_enabled", setup_spy),
         patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
-        patch("app.channels.service.start_channel_service", side_effect=fake_start),
-        patch("app.channels.service.stop_channel_service", AsyncMock()),
     ):
 
         async def drive() -> None:

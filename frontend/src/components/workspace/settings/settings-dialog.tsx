@@ -2,11 +2,9 @@
 
 import {
   BellIcon,
-  CableIcon,
   InfoIcon,
   BrainIcon,
   PaletteIcon,
-  PlugZapIcon,
   SparklesIcon,
   UserIcon,
   WrenchIcon,
@@ -46,20 +44,6 @@ const AppearanceSettingsPage = dynamic(
     ),
   { loading: SettingsPageLoading },
 );
-const ChannelsSettingsPage = dynamic(
-  () =>
-    import("./channels-settings-page").then(
-      (module) => module.ChannelsSettingsPage,
-    ),
-  { loading: SettingsPageLoading },
-);
-const IntegrationsSettingsPage = dynamic(
-  () =>
-    import("./integrations-settings-page").then(
-      (module) => module.IntegrationsSettingsPage,
-    ),
-  { loading: SettingsPageLoading },
-);
 const MemorySettingsPage = dynamic(
   () =>
     import("./memory-settings-page").then(
@@ -93,8 +77,6 @@ const AboutSettingsPage = dynamic(
 export type SettingsSection =
   | "account"
   | "appearance"
-  | "channels"
-  | "integrations"
   | "memory"
   | "tools"
   | "skills"
@@ -137,16 +119,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
         icon: BellIcon,
       },
       {
-        id: "channels",
-        label: t.settings.sections.channels,
-        icon: CableIcon,
-      },
-      {
-        id: "integrations",
-        label: t.settings.sections.integrations,
-        icon: PlugZapIcon,
-      },
-      {
         id: "memory",
         label: t.settings.sections.memory,
         icon: BrainIcon,
@@ -158,8 +130,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
     [
       t.settings.sections.account,
       t.settings.sections.appearance,
-      t.settings.sections.channels,
-      t.settings.sections.integrations,
       t.settings.sections.memory,
       t.settings.sections.tools,
       t.settings.sections.skills,
@@ -219,8 +189,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 />
               )}
               {activeSection === "notification" && <NotificationSettingsPage />}
-              {activeSection === "channels" && <ChannelsSettingsPage />}
-              {activeSection === "integrations" && <IntegrationsSettingsPage />}
               {activeSection === "about" && <AboutSettingsPage />}
             </div>
           </ScrollArea>

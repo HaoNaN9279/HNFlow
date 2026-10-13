@@ -112,10 +112,6 @@ ALLOWED_EXTRA_MOUNT_PATHS = {
     "/mnt/acp-workspace",
     "/mnt/skills/custom",
     "/mnt/skills/integrations",
-    "/mnt/integrations/lark-cli/config",
-    "/mnt/integrations/lark-cli/config/locks",
-    "/mnt/integrations/lark-cli/data",
-    "/mnt/integrations/lark-cli/runtime",
 }
 
 # Path to the kubeconfig *inside* the provisioner container.

@@ -3,7 +3,6 @@ import { expect, test } from "@rstest/core";
 
 import type { AgentThread } from "@/core/threads/types";
 import {
-  channelSourceOfThread,
   isThreadPinned,
   pathOfThread,
   sortPinnedThreads,
@@ -113,60 +112,6 @@ test("sortPinnedThreads keeps pinned threads first without reordering groups", (
     "recent-1",
     "recent-2",
   ]);
-});
-
-test("reads IM channel source metadata", () => {
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "im_channel",
-          provider: "feishu",
-          chat_id: "oc_123",
-        },
-      },
-    }),
-  ).toEqual({
-    type: "im_channel",
-    provider: "feishu",
-    label: "Feishu",
-  });
-});
-
-test("formats the Buzz channel source label", () => {
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "im_channel",
-          provider: "buzz",
-        },
-      },
-    }),
-  ).toEqual({
-    type: "im_channel",
-    provider: "buzz",
-    label: "Buzz",
-  });
-});
-
-test("ignores threads without valid IM channel source metadata", () => {
-  expect(channelSourceOfThread({ metadata: {} })).toBeNull();
-  expect(
-    channelSourceOfThread({
-      metadata: { channel_source: { provider: "" } },
-    }),
-  ).toBeNull();
-  expect(
-    channelSourceOfThread({
-      metadata: {
-        channel_source: {
-          type: "other",
-          provider: "feishu",
-        },
-      },
-    }),
-  ).toBeNull();
 });
 
 test("textOfMessage concatenates object and bare-string content parts", () => {

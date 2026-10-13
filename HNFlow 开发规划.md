@@ -310,6 +310,10 @@
 | **P1 期间** | [隔离] 项保持默认关闭；`scheduler` 改造接入 N7 |
 | **P2 及以后** | 复查 [隔离] 项，逐项转 [删除]；能力包 / MCP provider 落定后清 `mcp_tasks` / `skill_evolution` |
 
+> **进度（A2）**：IM 渠道批次已完成——物理移除 `app/channels/`、`app/gateway/github/`、routers（channels / channel_connections / github_webhooks / integrations）、`harness/integrations/`（Lark CLI）、`persistence/{channel_connections,webhook_delivery}`、相关前端（`core/channels`、`core/integrations`、`settings`/侧栏入口）与测试；持久化以新迁移 `0014_drop_im_channel_tables` drop `channel_*` / `webhook_deliveries`（未删已发布迁移）；清理 `channel_connections` / `dedupe_storage` 配置、setup wizard 渠道步骤、remote_backend 的 lark 通道与 provisioner 白名单。后端全量套件失败项均为 Windows 平台既有失败（路径分隔符 / POSIX shell / symlink 权限），工作流套件 518 passed。
+>
+> 注：`backend/pyproject.toml` 的渠道依赖（lark-oapi / slack-sdk / python-telegram-bot / discord / buzz 等）暂未移除——`uv lock` 因 `tenki-sandbox` 不在 registry 无法重解析，强行改依赖会破坏 `uv.lock` 同步；待 lock 可重生成时随 A3/B1 一并清理。
+
 ---
 
 ## 九、结论

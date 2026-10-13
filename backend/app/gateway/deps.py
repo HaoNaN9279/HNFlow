@@ -758,8 +758,8 @@ async def require_admin_user(request: Request, *, detail: str) -> None:
     Centralising this here means a future change to the admin definition (e.g.
     allowing an internal system role, adding audit logging, or switching to a
     permission-based check) lands in one place instead of drifting across the
-    per-router copies that previously existed in ``mcp``, ``channel_connections``
-    and ``channels``.
+    per-router copies that previously existed in ``mcp`` and ``channel``
+    routers.
     """
     user = getattr(request.state, "user", None)
     if user is None:

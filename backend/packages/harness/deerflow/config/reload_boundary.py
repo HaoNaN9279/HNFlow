@@ -17,7 +17,7 @@ The registry covers two kinds of entries:
   ``Field(description=...)`` carries, so the boundary surfaces in IDE
   hover next to the field itself.
 - Top-level ``config.yaml`` sections that are not part of the
-  ``AppConfig`` schema (``channels``). These cannot be standardised at
+  ``AppConfig`` schema. These cannot be standardised at
   the schema level, so the registry is their only canonical location.
 
 Any future "needs restart" scanner — operator tooling, lint hooks, doc
@@ -58,14 +58,6 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "and TraceMiddleware captures logging.enhance.enabled once at startup so response X-Trace-Id headers, log trace_id fields, and Langfuse "
         "deerflow_trace_id stay coherent. A freshly reloaded AppConfig does not retrigger any of this."
     ),
-    # Not part of the AppConfig Pydantic schema — channel credentials are
-    # consumed directly by ``start_channel_service()`` once at lifespan
-    # startup and the live channel clients are not rebuilt on
-    # config.yaml edits.
-    "channels": ("start_channel_service() is invoked once during startup; the live IM channel clients (Feishu, Slack, Telegram, DingTalk) are not rebuilt when channels.* changes."),
-    "channel_connections": (
-        "start_channel_service() wires the connection repository and channel workers once at startup, and the channel-connections router caches the merged provider config on app.state; channel_connections.* edits need a restart."
-    ),
     "scheduler": (
         "ScheduledTaskService is constructed and started once during Gateway lifespan startup; enabled, poll_interval_seconds, lease_seconds, "
         "and max_concurrent_runs are captured into the service instance and the background poller task is not rebuilt on config.yaml edits."
@@ -77,10 +69,6 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
     "run_ownership": (
         "RunOwnershipConfig is captured once into RunManager at langgraph_runtime() startup; the lease heartbeat background task is created and "
         "started there, and heartbeat_enabled / lease_seconds / grace_seconds are not re-read on config.yaml edits."
-    ),
-    "dedupe_storage": (
-        "make_inbound_dedupe_store() resolves the inbound dedupe store once when ChannelService is constructed at startup; the store "
-        "(in-process memory or shared Postgres) is captured onto ChannelManager and is not rebuilt on config.yaml edits."
     ),
 }
 

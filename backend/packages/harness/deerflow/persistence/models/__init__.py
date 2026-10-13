@@ -15,12 +15,6 @@ there is no matching entity directory.
 """
 
 from deerflow.persistence.agents.model import AgentRow
-from deerflow.persistence.channel_connections.model import (
-    ChannelConnectionRow,
-    ChannelConversationRow,
-    ChannelCredentialRow,
-    ChannelOAuthStateRow,
-)
 from deerflow.persistence.feedback.model import FeedbackRow
 from deerflow.persistence.human_tasks.model import HumanTaskRow
 from deerflow.persistence.mcp_tasks.model import McpTaskRow
@@ -30,15 +24,10 @@ from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.user.model import UserRow
-from deerflow.persistence.webhook_delivery.model import WebhookDeliveryRow
 from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
 
 __all__ = [
     "AgentRow",
-    "ChannelConnectionRow",
-    "ChannelConversationRow",
-    "ChannelCredentialRow",
-    "ChannelOAuthStateRow",
     "FeedbackRow",
     "HumanTaskRow",
     "McpTaskRow",
@@ -48,6 +37,5 @@ __all__ = [
     "ScheduledTaskRunRow",
     "ThreadMetaRow",
     "UserRow",
-    "WebhookDeliveryRow",
     "WorkflowDefinitionRow",
 ]

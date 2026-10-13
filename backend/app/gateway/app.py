@@ -18,15 +18,11 @@ from app.gateway.routers import (
     assistants_compat,
     auth,
     browser,
-    channel_connections,
-    channels,
     console,
     features,
     feedback,
-    github_webhooks,
     human_task_routes,
     input_polish,
-    integrations,
     mcp,
     memory,
     models,
@@ -291,27 +287,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # Must run AFTER langgraph_runtime so app.state.store is available for thread migration
         await _ensure_admin_user(app)
 
-        # Start IM channel service if any channels are configured
-        try:
-            from app.channels.service import start_channel_service
-
-            # Closure over `app` (mirrors ScheduledTaskService's `launch_run`
-            # below) rather than resolving `app.state.stream_bridge` here
-            # directly: `stream_bridge` is a STARTUP_ONLY_FIELDS singleton set
-            # once, above, by `langgraph_runtime(app, startup_config)`, so
-            # either shape is safe by construction — the closure is just the
-            # more defensive/consistent-with-precedent form, and it is what
-            # ChannelManager's follow-up-drain watcher (issue #4121 Slice 2)
-            # uses to reach the same StreamBridge every other run consumer
-            # goes through `get_stream_bridge(request)` for.
-            channel_service = await start_channel_service(
-                startup_config,
-                get_stream_bridge=lambda: getattr(app.state, "stream_bridge", None),
-            )
-            logger.info("Channel service started: %s", channel_service.get_status())
-        except Exception:
-            logger.exception("No IM channels configured or channel service failed to start")
-
         try:
             from app.gateway.services import launch_scheduled_thread_run
             from app.scheduler import ScheduledTaskService
@@ -357,22 +332,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             await auth.close_oidc_service()
         except Exception:
             logger.exception("Failed to close OIDC service")
-
-        # Stop channel service on shutdown (bounded to prevent worker hang)
-        try:
-            from app.channels.service import stop_channel_service
-
-            await asyncio.wait_for(
-                stop_channel_service(),
-                timeout=_SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-            )
-        except TimeoutError:
-            logger.warning(
-                "Channel service shutdown exceeded %.1fs; proceeding with worker exit.",
-                _SHUTDOWN_HOOK_TIMEOUT_SECONDS,
-            )
-        except Exception:
-            logger.exception("Failed to stop channel service")
 
         if getattr(app.state, "scheduled_task_service", None) is not None:
             try:
@@ -558,10 +517,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Polish composer draft input before sending",
             },
             {
-                "name": "channels",
-                "description": "Manage IM channel integrations (Feishu, Slack, Telegram)",
-            },
-            {
                 "name": "assistants-compat",
                 "description": "LangGraph Platform-compatible assistants API (stub)",
             },
@@ -665,9 +620,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)
 
-    # First-party integrations API is mounted at /api/integrations
-    app.include_router(integrations.router)
-
     # Artifacts API is mounted at /api/threads/{thread_id}/artifacts
     app.include_router(artifacts.router)
 
@@ -703,12 +655,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Input polishing API is mounted at /api/input-polish
     app.include_router(input_polish.router)
 
-    # User-facing IM channel connection API is mounted at /api/channels
-    app.include_router(channel_connections.router)
-
-    # Channels API is mounted at /api/channels
-    app.include_router(channels.router)
-
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)
 
@@ -723,24 +669,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Stateless Runs API (stream/wait without a pre-existing thread)
     app.include_router(runs.router)
-
-    # GitHub webhooks API is mounted at /api/webhooks/github
-    # Exempt from auth and CSRF middleware (see auth_middleware._PUBLIC_PATH_PREFIXES
-    # and csrf_middleware.should_check_csrf); authenticity is enforced via the
-    # X-Hub-Signature-256 HMAC against GITHUB_WEBHOOK_SECRET.
-    # Including this router transitively imports app.gateway.github, which
-    # registers the GitHub channel's ChannelRunPolicy as an import side-effect.
-    #
-    # Fail-closed: only mount the route when a webhook secret is configured
-    # (or when the explicit DEER_FLOW_ALLOW_UNVERIFIED_GITHUB_WEBHOOKS=1
-    # dev opt-in is set). A misconfigured deployment without a secret cannot
-    # serve forged deliveries because the URL responds 404 — there is no
-    # handler to reach.
-    if github_webhooks.is_route_enabled():
-        app.include_router(github_webhooks.router)
-        logger.info("GitHub webhooks route mounted at /api/webhooks/github")
-    else:
-        logger.warning("GitHub webhooks route NOT mounted: GITHUB_WEBHOOK_SECRET unset and DEER_FLOW_ALLOW_UNVERIFIED_GITHUB_WEBHOOKS not set. /api/webhooks/github will respond 404. Configure either env var to enable the route.")
 
     @app.get("/health", tags=["health"])
     async def health_check() -> dict[str, str]:

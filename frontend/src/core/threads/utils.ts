@@ -8,12 +8,6 @@ import type { AgentThread, AgentThreadContext } from "./types";
 // the E2E mock-api constant.
 export const THREAD_PINNED_METADATA_KEY = "deerflow_pinned";
 
-export type ChannelThreadSource = {
-  type: "im_channel";
-  provider: string;
-  label: string;
-};
-
 type ThreadRouteTarget =
   | string
   | {
@@ -82,44 +76,4 @@ export function sortPinnedThreads<T extends Pick<AgentThread, "metadata">>(
       return pinnedDiff || left.index - right.index;
     })
     .map(({ thread }) => thread);
-}
-
-const CHANNEL_PROVIDER_LABELS: Record<string, string> = {
-  buzz: "Buzz",
-  dingtalk: "DingTalk",
-  discord: "Discord",
-  feishu: "Feishu",
-  slack: "Slack",
-  telegram: "Telegram",
-  wechat: "WeChat",
-  wecom: "WeCom",
-};
-
-function labelOfChannelProvider(provider: string) {
-  return CHANNEL_PROVIDER_LABELS[provider] ?? provider;
-}
-
-export function channelSourceOfThread(
-  thread: Pick<AgentThread, "metadata">,
-): ChannelThreadSource | null {
-  const source = thread.metadata?.channel_source;
-  if (!source || typeof source !== "object" || Array.isArray(source)) {
-    return null;
-  }
-
-  if (Reflect.get(source, "type") !== "im_channel") {
-    return null;
-  }
-
-  const provider = Reflect.get(source, "provider");
-  if (typeof provider !== "string" || provider.trim().length === 0) {
-    return null;
-  }
-
-  const normalizedProvider = provider.trim().toLowerCase();
-  return {
-    type: "im_channel",
-    provider: normalizedProvider,
-    label: labelOfChannelProvider(normalizedProvider),
-  };
 }

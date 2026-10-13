@@ -226,7 +226,6 @@ export interface Translations {
     agents: string;
     scheduledTasks: string;
     agentsDisabledTooltip: string;
-    channels: string;
   };
 
   // Scheduled tasks
@@ -596,30 +595,6 @@ export interface Translations {
     selectionCrossesMessages: string;
   };
 
-  // Channels
-  channels: {
-    title: string;
-    connect: string;
-    modify: string;
-    reconnect: string;
-    disconnect: string;
-    connected: string;
-    notConnected: string;
-    pending: string;
-    revoked: string;
-    disabled: string;
-    unconfigured: string;
-    unavailable: string;
-    unavailableShort: string;
-    setupTitle: (name: string) => string;
-    setupEditTitle: (name: string) => string;
-    setupDescription: string;
-    saveAndConnect: string;
-    saveChanges: string;
-    descriptions: Record<string, string>;
-    connectedAs: (name: string) => string;
-  };
-
   // Page titles (document title)
   pages: {
     appName: string;
@@ -754,8 +729,6 @@ export interface Translations {
     sections: {
       account: string;
       appearance: string;
-      channels: string;
-      integrations: string;
       memory: string;
       tools: string;
       skills: string;
@@ -852,122 +825,6 @@ export interface Translations {
       description: string;
       adminRequired: string;
       empty: string;
-    };
-    channels: {
-      title: string;
-      description: string;
-      disabled: string;
-    };
-    integrations: {
-      title: string;
-      description: string;
-      refresh: string;
-      install: string;
-      reinstall: string;
-      installing: string;
-      ready: string;
-      pending: string;
-      available: string;
-      unavailable: string;
-      connected: string;
-      loadFailed: string;
-      adminRequired: string;
-      lark: {
-        title: string;
-        description: string;
-        skillPack: string;
-        gatewayCli: string;
-        auth: string;
-        sandboxRuntime: string;
-        sandboxRuntimeInitContainer: string;
-        sandboxRuntimeBroker: string;
-        sandboxRuntimeGatewayDownload: string;
-        sandboxRuntimeNotReady: string;
-        notInstalled: string;
-        skillsInstalled: (installed: number, expected: number) => string;
-        installedVersion: (version: string) => string;
-        updateAvailable: (version: string) => string;
-        runtimeVersionMismatch: string;
-        authNotConfigured: string;
-        authConfigured: string;
-        authConfiguredFor: (user: string) => string;
-        connect: string;
-        authStarting: string;
-        checkingConnection: string;
-        connectedAction: string;
-        requestPermissions: string;
-        alreadyConnected: string;
-        changeAppButton: string;
-        changeAppTitle: string;
-        changeAppDescription: string;
-        changeAppIdLabel: string;
-        changeAppSecretLabel: string;
-        changeAppAuthResetNote: string;
-        changeAppSubmit: string;
-        changeAppReRegister: string;
-        changeAppSwitched: string;
-        brandFeishu: string;
-        brandLark: string;
-        connectionStarted: string;
-        connectionReady: string;
-        authStarted: string;
-        authorizationStillPending: string;
-        permissionTitle: string;
-        permissionDescription: string;
-        authDomains: Record<
-          | "approval"
-          | "apps"
-          | "attendance"
-          | "base"
-          | "calendar"
-          | "contact"
-          | "docs"
-          | "drive"
-          | "event"
-          | "im"
-          | "mail"
-          | "markdown"
-          | "mindnotes"
-          | "minutes"
-          | "note"
-          | "okr"
-          | "sheets"
-          | "slides"
-          | "task"
-          | "vc"
-          | "wiki"
-          | "all",
-          { label: string; description: string }
-        >;
-        customScopeLabel: string;
-        customScopePlaceholder: string;
-        customScopeDescription: string;
-        openConnectionLinkTitle: string;
-        openConnectionLinkDescription: string;
-        openAuthLinkTitle: string;
-        openAuthLinkDescription: string;
-        waitingAuthTitle: string;
-        waitingAuthDescription: string;
-        openAuthLink: string;
-        copyAuthLink: string;
-        completeAuth: string;
-        continueAuth: string;
-        preparingAuthorization: string;
-        completingAuth: string;
-        authExpiresIn: (seconds: number) => string;
-        installingTitle: string;
-        installingDescription: string;
-        installNextTitle: string;
-        installNextDescription: string;
-        cliNextTitle: string;
-        cliNextDescription: string;
-        configuredTitle: string;
-        configuredDescription: string;
-        connectedTitle: string;
-        connectedDescription: string;
-        authNextTitle: string;
-        authNextDescription: string;
-      };
     };
     skills: {
       title: string;

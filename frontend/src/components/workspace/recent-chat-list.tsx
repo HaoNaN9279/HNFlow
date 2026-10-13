@@ -58,7 +58,6 @@ import {
 import { buildThreadListModel } from "@/core/threads/thread-list-model";
 import type { AgentThread, AgentThreadState } from "@/core/threads/types";
 import {
-  channelSourceOfThread,
   isThreadPinned,
   pathOfThread,
   titleOfThread,
@@ -66,7 +65,6 @@ import {
 import { env } from "@/env";
 import { isIMEComposing } from "@/lib/ime";
 
-import { ThreadChannelIcon } from "./thread-channel-source";
 import { VirtualThreadList } from "./thread-list-virtualizer";
 
 export function RecentChatList() {
@@ -295,7 +293,6 @@ export function RecentChatList() {
                 scrollParentSelector='[data-sidebar="content"]'
                 renderItem={(thread) => {
                   const isActive = pathOfThread(thread) === pathname;
-                  const channelSource = channelSourceOfThread(thread);
                   const pinned = isThreadPinned(thread);
                   return (
                     <SidebarMenuItem
@@ -307,7 +304,6 @@ export function RecentChatList() {
                           className="text-muted-foreground min-w-0 whitespace-nowrap group-hover/side-menu-item:overflow-hidden"
                           href={pathOfThread(thread)}
                         >
-                          <ThreadChannelIcon source={channelSource} />
                           {pinned && (
                             <Pin
                               aria-hidden="true"
@@ -317,16 +313,6 @@ export function RecentChatList() {
                           <span className="min-w-0 truncate">
                             {titleOfThread(thread)}
                           </span>
-                          {channelSource && (
-                            <span
-                              className="bg-muted text-muted-foreground ml-auto inline-flex h-5 max-w-14 shrink-0 items-center rounded-md px-1.5 text-[10px] font-medium"
-                              title={`${channelSource.label} channel`}
-                            >
-                              <span className="truncate">
-                                {channelSource.label}
-                              </span>
-                            </span>
-                          )}
                         </Link>
                       </SidebarMenuButton>
                       {env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY !== "true" && (

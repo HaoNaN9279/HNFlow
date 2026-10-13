@@ -51,7 +51,7 @@ HNFlow/
 │   ├── Makefile                    # 后端模块命令（dev、gateway、test、lint、format、migrate-rev）
 │   ├── packages/extension-api/     # deerflow-extension-api 包（import: deerflow_extension_api.*）——公共扩展契约
 │   ├── packages/harness/           # deerflow-harness 包（import: deerflow.*）——agent 框架
-│   └── app/                        # FastAPI Gateway + IM 渠道（import: app.*）
+│   └── app/                        # FastAPI Gateway（import: app.*）
 ├── frontend/                       # Next.js 前端（pnpm）——见 frontend/AGENTS.md
 ├── docker/                         # docker-compose 文件、nginx 配置、provisioner
 ├── skills/                         # Agent skills：public/（已提交）、custom/（gitignored）

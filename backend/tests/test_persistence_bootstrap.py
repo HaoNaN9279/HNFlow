@@ -12,11 +12,9 @@ Each test seeds a temp SQLite to the relevant pre-state, runs
 ``bootstrap_schema``, and asserts both the resulting schema and the
 ``alembic_version`` row.
 
-The legacy branch is exercised across three scenarios: token-usage column
-missing, token-usage column already present, and a baseline-era table
-missing entirely (the ``channel_*`` backfill case). The first two prove the
-column-level idempotent helpers handle both sub-cases; the third proves the
-table-level backfill works.
+The legacy branch is exercised across two scenarios: token-usage column
+missing and token-usage column already present. Both prove the column-level
+idempotent helpers handle either sub-case.
 """
 
 from __future__ import annotations
@@ -48,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0013_human_tasks"
+HEAD = "0014_drop_im_channel_tables"
 BASELINE = "0001_baseline"
 
 
@@ -101,27 +99,6 @@ async def _seed_legacy_with_column(engine) -> None:
         await conn.run_sync(Base.metadata.create_all)
 
 
-async def _seed_legacy_missing_channel_tables(engine) -> None:
-    """Build a pre-#1930 schema: baseline tables exist but ``channel_*`` do not.
-
-    Models the worst-case legacy DB the bootstrap layer has to repair -- a
-    user who upgraded across multiple releases and never had the channel_*
-    tables provisioned in the first place. We achieve it by running the full
-    ``create_all`` and then dropping the channel_* tables in FK-dependency
-    order (credentials/conversations reference channel_connections).
-    """
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    async with engine.begin() as conn:
-        for table in (
-            "channel_credentials",
-            "channel_conversations",
-            "channel_oauth_states",
-            "channel_connections",
-        ):
-            await conn.execute(sa.text(f"DROP TABLE IF EXISTS {table}"))
-
-
 # ---------------------------------------------------------------------------
 # Branch 1: empty DB
 # ---------------------------------------------------------------------------
@@ -139,10 +116,6 @@ async def test_empty_branch_creates_all_and_stamps_head(tmp_path: Path) -> None:
             "feedback",
             "users",
             "run_events",
-            "channel_connections",
-            "channel_credentials",
-            "channel_conversations",
-            "channel_oauth_states",
             "alembic_version",
         }:
             assert required in tables, f"missing table: {required}"
@@ -178,49 +151,6 @@ async def test_legacy_without_column_branch_upgrades(tmp_path: Path) -> None:
         await bootstrap_schema(engine, backend="sqlite")
 
         assert "token_usage_by_model" in await _runs_columns(engine)
-        assert await _alembic_version(engine) == HEAD
-    finally:
-        await engine.dispose()
-
-
-# ---------------------------------------------------------------------------
-# Legacy backfill: a DB that pre-dates a later-added baseline table (e.g. the
-# ``channel_*`` tables from PR #1930) must end up with all baseline tables
-# after bootstrap, otherwise the channels API 500s with ``no such table``.
-# The fix runs ``create_all`` (idempotent) before ``stamp 0001_baseline`` so
-# missing baseline tables are backfilled with their current ORM schema.
-# ---------------------------------------------------------------------------
-
-
-@asyncio_test
-async def test_legacy_missing_channel_tables_get_backfilled(tmp_path: Path) -> None:
-    engine = create_async_engine(_url(tmp_path))
-    try:
-        await _seed_legacy_missing_channel_tables(engine)
-        tables = await _table_names(engine)
-        # Sanity-check the seeded pre-state: ``runs`` triggers the legacy
-        # branch (has_deerflow_tables=True, no alembic_version) while the
-        # channel_* tables are absent.
-        assert "runs" in tables
-        assert "alembic_version" not in tables
-        for missing in {
-            "channel_connections",
-            "channel_credentials",
-            "channel_conversations",
-            "channel_oauth_states",
-        }:
-            assert missing not in tables, f"seed should not have {missing}"
-
-        await bootstrap_schema(engine, backend="sqlite")
-
-        tables = await _table_names(engine)
-        for required in {
-            "channel_connections",
-            "channel_credentials",
-            "channel_conversations",
-            "channel_oauth_states",
-        }:
-            assert required in tables, f"legacy backfill missed: {required}"
         assert await _alembic_version(engine) == HEAD
     finally:
         await engine.dispose()
@@ -618,7 +548,7 @@ async def test_legacy_backfill_skips_non_baseline_tables(tmp_path: Path) -> None
             assert phantom_name not in tables, f"legacy backfill leaked {phantom_name!r}; a future ``op.create_table({phantom_name!r})`` revision would now collide"
             # Sanity: baseline tables ARE created by the backfill helper.
             assert "runs" in tables
-            assert "channel_connections" in tables
+            assert "threads_meta" in tables
         finally:
             await engine.dispose()
     finally:
@@ -636,35 +566,34 @@ async def test_legacy_backfill_skips_non_baseline_tables(tmp_path: Path) -> None
 # ---------------------------------------------------------------------------
 
 
-async def _channel_connections_index_names(engine) -> set[str]:
+async def _threads_meta_index_names(engine) -> set[str]:
     async with engine.connect() as conn:
-        return await conn.run_sync(lambda c: {ix["name"] for ix in sa.inspect(c).get_indexes("channel_connections")})
+        return await conn.run_sync(lambda c: {ix["name"] for ix in sa.inspect(c).get_indexes("threads_meta")})
 
 
 @asyncio_test
 async def test_legacy_backfill_creates_missing_index_on_existing_table(tmp_path: Path) -> None:
     engine = create_async_engine(_url(tmp_path))
     try:
-        # Simulate a legacy DB where ``channel_connections`` was provisioned
-        # before the ``uq_channel_connection_active_identity`` partial unique
-        # index was added to the model -- create everything, then drop just
-        # that index.
+        # Simulate a legacy DB where ``threads_meta`` was provisioned before
+        # the ``ix_threads_meta_user_id`` index was added to the model --
+        # create everything, then drop just that index.
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with engine.begin() as conn:
-            await conn.execute(sa.text("DROP INDEX IF EXISTS uq_channel_connection_active_identity"))
+            await conn.execute(sa.text("DROP INDEX IF EXISTS ix_threads_meta_user_id"))
 
         # Confirm the index is gone.
-        indexes_before = await _channel_connections_index_names(engine)
-        assert "uq_channel_connection_active_identity" not in indexes_before, indexes_before
+        indexes_before = await _threads_meta_index_names(engine)
+        assert "ix_threads_meta_user_id" not in indexes_before, indexes_before
 
         # Run the backfill helper -- this is what the legacy branch calls.
         async with engine.begin() as conn:
             await conn.run_sync(_run_baseline_create_all_sync)
 
         # The index must now exist.
-        indexes_after = await _channel_connections_index_names(engine)
-        assert "uq_channel_connection_active_identity" in indexes_after, indexes_after
+        indexes_after = await _threads_meta_index_names(engine)
+        assert "ix_threads_meta_user_id" in indexes_after, indexes_after
     finally:
         await engine.dispose()
 
@@ -677,15 +606,15 @@ async def test_legacy_backfill_idempotent_when_index_already_exists(tmp_path: Pa
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
 
-        indexes_before = await _channel_connections_index_names(engine)
-        assert "uq_channel_connection_active_identity" in indexes_before
+        indexes_before = await _threads_meta_index_names(engine)
+        assert "ix_threads_meta_user_id" in indexes_before
 
         # Running the backfill helper over an already-correct DB must succeed.
         async with engine.begin() as conn:
             await conn.run_sync(_run_baseline_create_all_sync)
 
-        indexes_after = await _channel_connections_index_names(engine)
-        assert "uq_channel_connection_active_identity" in indexes_after
+        indexes_after = await _threads_meta_index_names(engine)
+        assert "ix_threads_meta_user_id" in indexes_after
     finally:
         await engine.dispose()
 
@@ -753,65 +682,6 @@ async def test_legacy_backfill_rejects_post_baseline_indexes(tmp_path: Path) -> 
             # 0004's dedup cancels all-but-one active run per thread.
             remaining = (await conn.execute(sa.text("SELECT COUNT(*) FROM runs WHERE thread_id='thread-1' AND status='pending'"))).scalar()
             assert remaining == 1, f"Expected 1 pending run after 0004 dedup, got {remaining}"
-    finally:
-        await engine.dispose()
-
-
-@asyncio_test
-async def test_legacy_backfill_duplicate_channel_connections_does_not_crash(
-    tmp_path: Path,
-) -> None:
-    """The target index ``uq_channel_connection_active_identity`` is a baseline
-    partial UNIQUE. Seeding duplicate non-revoked channel connections must
-    NOT crash the backfill with ``IntegrityError``, since no revision dedupes
-    channel connections (unlike runs). A crash would brick bootstrap with no
-    self-heal path.
-
-    The backfill catches the creation error and logs a warning; the operator
-    must fix the duplicate data and re-run.
-    """
-    engine = create_async_engine(_url(tmp_path))
-    try:
-        cfg = _get_alembic_config(engine)
-        await asyncio.to_thread(_upgrade, cfg, "0001_baseline")
-
-        # Drop the index so the backfill has work to do.
-        async with engine.begin() as conn:
-            await conn.execute(sa.text("DROP INDEX IF EXISTS uq_channel_connection_active_identity"))
-
-        # Seed duplicate non-revoked connections with the same identity.
-        async with engine.begin() as conn:
-            for i in range(2):
-                await conn.execute(
-                    sa.text(
-                        "INSERT INTO channel_connections "
-                        "(id, owner_user_id, provider, status, external_account_id, "
-                        "workspace_id, scopes_json, capabilities_json, metadata_json, "
-                        "created_at, updated_at) "
-                        "VALUES (:cid, :owner, 'slack', 'active', 'ext-1', 'ws-1', "
-                        "'[]', '{}', '{}', :created_at, :updated_at)"
-                    ),
-                    {
-                        "cid": f"cc-{i}",
-                        # The baseline owner+identity unique constraint requires
-                        # distinct owners; the partial active-identity index does not.
-                        "owner": f"u{i}",
-                        "created_at": "2026-01-01T00:00:00",
-                        "updated_at": "2026-01-01T00:00:00",
-                    },
-                )
-
-        # Backfill must not crash even with duplicate data.
-        async with engine.begin() as conn:
-            await conn.run_sync(_run_baseline_create_all_sync)
-
-        # The index won't exist (duplicate data prevents creation), but
-        # bootstrap must have survived -- the operator can fix data and retry.
-        async with engine.connect() as conn:
-            indexes = await conn.run_sync(lambda c: {ix["name"] for ix in sa.inspect(c).get_indexes("channel_connections")})
-        # Index missing is expected when data violates the constraint.
-        # The backfill logged a warning instead of crashing.
-        assert "uq_channel_connection_active_identity" not in indexes
     finally:
         await engine.dispose()
 

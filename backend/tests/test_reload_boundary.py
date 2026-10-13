@@ -91,7 +91,6 @@ def test_appconfig_descriptions_retain_original_field_documentation():
         "run_events": "memory for dev",
         "checkpointer": "state-persistence checkpointer",
         "stream_bridge": "Stream bridge",
-        "channel_connections": "IM channel connection",
     }
     for field_name, expected_substring in descriptions.items():
         description = AppConfig.model_fields[field_name].description or ""
@@ -107,9 +106,9 @@ def test_appconfig_schema_marks_registered_fields_with_prefix():
     schema_fields = AppConfig.model_fields
     for field_path in STARTUP_ONLY_FIELDS:
         if field_path not in schema_fields:
-            # Some entries (e.g. ``channels``) live outside the AppConfig
-            # schema. The registry still owns them, but the schema-prefix
-            # assertion does not apply.
+            # Some registry entries live outside the AppConfig schema (e.g.
+            # config.yaml-only sections). The registry still owns them, but the
+            # schema-prefix assertion does not apply.
             continue
         description = schema_fields[field_path].description or ""
         assert description.startswith(STARTUP_ONLY_PREFIX), f"AppConfig.{field_path} should have Field(description=) starting with {STARTUP_ONLY_PREFIX!r}, got {description!r}"

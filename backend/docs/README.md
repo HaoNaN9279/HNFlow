@@ -10,7 +10,6 @@ This directory contains detailed documentation for the DeerFlow backend.
 | [API.md](API.md) | Complete API reference |
 | [AUTH_DESIGN.md](AUTH_DESIGN.md) | User authentication, CSRF, platform-trust (IM / Internal Auth), and per-user isolation |
 | [SSO.md](SSO.md) | OIDC / SSO single sign-on |
-| [IM_CHANNEL_CONNECTIONS.md](IM_CHANNEL_CONNECTIONS.md) | IM channel user binding (`channel_connections`) |
 | [CONFIGURATION.md](CONFIGURATION.md) | Configuration options |
 | [SETUP.md](SETUP.md) | Quick setup guide |
 
