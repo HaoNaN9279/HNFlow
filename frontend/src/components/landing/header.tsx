@@ -44,12 +44,6 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
         >
           {t.home.docs}
         </Link>
-        <Link
-          href="/blog/posts"
-          className="text-secondary-foreground hover:text-foreground transition-colors"
-        >
-          {t.home.blog}
-        </Link>
       </nav>
       <div className="relative">
         <div
@@ -77,12 +71,7 @@ export async function Header({ className, homeURL, locale }: HeaderProps) {
           </a>
         </Button>
       </div>
-      <MobileNav
-        links={[
-          { href: `/${lang}/docs`, label: t.home.docs },
-          { href: "/blog/posts", label: t.home.blog },
-        ]}
-      />
+      <MobileNav links={[{ href: `/${lang}/docs`, label: t.home.docs }]} />
       <hr className="from-border/0 via-border/70 to-border/0 absolute top-16 right-0 left-0 z-10 m-0 h-px w-full border-none bg-linear-to-r" />
     </header>
   );

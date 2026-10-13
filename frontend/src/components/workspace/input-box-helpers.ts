@@ -1,8 +1,29 @@
 import { RESERVED_SLASH_SKILL_NAMES, type Skill } from "@/core/skills";
-export {
-  SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN,
-  findSuggestionTemplatePlaceholder,
-} from "@/core/suggestions/placeholders";
+
+// Known placeholder tokens used in the welcome-mode quick-action prompt
+// templates defined in the i18n locale files (e.g. zh-CN.ts, en-US.ts). Update
+// this pattern whenever new placeholder tokens are added to templates.
+export const SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN =
+  /\[(?:主题|来源|topic|source)\]/i;
+
+/**
+ * Locates an unreplaced suggestion template placeholder in the given text.
+ *
+ * Returns the start/end character indices of the placeholder if found,
+ * or `null` if the text contains no known placeholder tokens.
+ */
+export function findSuggestionTemplatePlaceholder(
+  text: string,
+): { start: number; end: number } | null {
+  const match = SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN.exec(text);
+  if (!match) {
+    return null;
+  }
+  return {
+    start: match.index,
+    end: match.index + match[0].length,
+  };
+}
 
 export const MAX_SKILL_SUGGESTIONS = 6;
 
@@ -239,17 +260,6 @@ export function parseGoalCommand(value: string): GoalCommand | null {
 
 export function parseCompactCommand(value: string): boolean {
   return /^\/(?:compact|context\s+compact)\s*$/i.test(value.trim());
-}
-
-export function canPolishInput(value: string): boolean {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  // Reserved builtin command lines are routed to their own handlers, not the
-  // LLM, so they must not be rewritten. Reuse the same parsers the composer
-  // uses to dispatch them instead of maintaining a third parallel list.
-  return parseGoalCommand(trimmed) === null && !parseCompactCommand(trimmed);
 }
 
 export function getInputSubmitAction({

@@ -4,8 +4,6 @@ import {
   FileIcon,
   Loader2Icon,
   PencilIcon,
-  ThumbsDownIcon,
-  ThumbsUpIcon,
   XIcon,
 } from "lucide-react";
 import {
@@ -31,11 +29,6 @@ import { Task, TaskTrigger } from "@/components/ai-elements/task";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  deleteFeedback,
-  upsertFeedback,
-  type FeedbackData,
-} from "@/core/api/feedback";
 import {
   resolveArtifactURL,
   resolveMessageImageURL,
@@ -69,78 +62,10 @@ import { Tooltip } from "../tooltip";
 import { MarkdownContent } from "./markdown-content";
 import { createMarkdownLinkComponent } from "./markdown-link";
 
-function FeedbackButtons({
-  threadId,
-  runId,
-  initialFeedback,
-}: {
-  threadId: string;
-  runId: string;
-  initialFeedback: FeedbackData | null;
-}) {
-  const [feedback, setFeedback] = useState<FeedbackData | null>(
-    initialFeedback,
-  );
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const handleClick = useCallback(
-    async (rating: number) => {
-      if (isSubmitting) return;
-      setIsSubmitting(true);
-      try {
-        if (feedback?.rating === rating) {
-          await deleteFeedback(threadId, runId);
-          setFeedback(null);
-        } else {
-          const result = await upsertFeedback(threadId, runId, rating);
-          setFeedback(result);
-        }
-      } catch {
-        // Revert on error — feedback state unchanged on catch
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [threadId, runId, feedback, isSubmitting],
-  );
-
-  return (
-    <div className="flex gap-1">
-      <button
-        type="button"
-        className={cn(
-          "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
-          feedback?.rating === 1 && "text-foreground",
-        )}
-        onClick={() => handleClick(1)}
-        disabled={isSubmitting}
-      >
-        <ThumbsUpIcon
-          className={cn("size-4", feedback?.rating === 1 && "fill-current")}
-        />
-      </button>
-      <button
-        type="button"
-        className={cn(
-          "text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors",
-          feedback?.rating === -1 && "text-foreground",
-        )}
-        onClick={() => handleClick(-1)}
-        disabled={isSubmitting}
-      >
-        <ThumbsDownIcon
-          className={cn("size-4", feedback?.rating === -1 && "fill-current")}
-        />
-      </button>
-    </div>
-  );
-}
-
 export function MessageListItem({
   className,
   message,
   isLoading,
-  feedback,
   runId,
   threadId,
   artifactPaths = [],
@@ -155,7 +80,6 @@ export function MessageListItem({
   isLoading?: boolean;
   threadId: string;
   artifactPaths?: readonly string[];
-  feedback?: FeedbackData | null;
   runId?: string;
   showCopyButton?: boolean;
   showWorkspaceChanges?: boolean;
@@ -253,13 +177,6 @@ export function MessageListItem({
                   <PencilIcon className="size-3" />
                 </Button>
               </Tooltip>
-            )}
-            {feedback !== undefined && runId && threadId && (
-              <FeedbackButtons
-                threadId={threadId}
-                runId={runId}
-                initialFeedback={feedback}
-              />
             )}
           </div>
         </MessageToolbar>

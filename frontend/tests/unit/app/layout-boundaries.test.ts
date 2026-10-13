@@ -27,9 +27,6 @@ describe("layout performance boundaries", () => {
     expect(source("src/app/[lang]/docs/layout.tsx")).toContain(
       'import "katex/dist/katex.min.css"',
     );
-    expect(source("src/app/blog/layout.tsx")).toContain(
-      'import "katex/dist/katex.min.css"',
-    );
   });
 
   it("passes only serializable locale state through server layouts", () => {

@@ -78,7 +78,6 @@ export const zhCN: Translations = {
   // Home
   home: {
     docs: "文档",
-    blog: "博客",
   },
 
   // Welcome
@@ -160,12 +159,6 @@ export const zhCN: Translations = {
     createSkillPrompt:
       "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
     addAttachments: "添加附件",
-    inputPolish: "优化输入",
-    inputPolishing: "正在优化输入...",
-    inputPolishNoChanges: "当前输入已经足够清晰。",
-    inputPolishFailed: "优化输入失败。",
-    inputPolishUndo: "撤销优化",
-    inputPolishCancel: "取消优化",
     voiceInputStartLabel: "语音输入",
     voiceInputStopLabel: "停止语音输入",
     voiceInputStart:
@@ -202,11 +195,6 @@ export const zhCN: Translations = {
     searchModels: "搜索模型...",
     surpriseMe: "小惊喜",
     surpriseMePrompt: "给我一个小惊喜吧",
-    followupLoading: "正在生成可能的后续问题...",
-    followupConfirmTitle: "发送建议问题？",
-    followupConfirmDescription: "当前输入框已有内容，选择发送方式。",
-    followupConfirmAppend: "追加并发送",
-    followupConfirmReplace: "替换并发送",
     suggestionPlaceholderRequired: "发送前请先填写建议模板中的占位内容。",
     goalCommandDescription: "设置、查看或清除当前目标",
     compactCommandDescription: "压缩早期上下文，保留完整聊天记录",

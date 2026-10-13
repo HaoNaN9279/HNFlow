@@ -412,17 +412,6 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
     return route.fallback();
   });
 
-  void page.route("**/api/suggestions/config", (route) => {
-    if (route.request().method() === "GET") {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ enabled: false }),
-      });
-    }
-    return route.fallback();
-  });
-
   void page.route("**/api/scheduled-tasks", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
@@ -1356,18 +1345,6 @@ export function mockLangGraphAPI(page: Page, options?: MockAPIOptions) {
           message: "Lark/Feishu authorization completed.",
           status: larkIntegrationStatus,
         }),
-      });
-    }
-    return route.fallback();
-  });
-
-  // Follow-up suggestions — input box auto-suggest after AI response
-  void page.route("**/api/threads/*/suggestions", (route) => {
-    if (route.request().method() === "POST") {
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ suggestions: [] }),
       });
     }
     return route.fallback();

@@ -65,7 +65,6 @@ export interface Translations {
 
   home: {
     docs: string;
-    blog: string;
   };
 
   // Welcome
@@ -139,12 +138,6 @@ export interface Translations {
     disclaimer: string;
     createSkillPrompt: string;
     addAttachments: string;
-    inputPolish: string;
-    inputPolishing: string;
-    inputPolishNoChanges: string;
-    inputPolishFailed: string;
-    inputPolishUndo: string;
-    inputPolishCancel: string;
     voiceInputStartLabel: string;
     voiceInputStopLabel: string;
     voiceInputStart: string;
@@ -178,11 +171,6 @@ export interface Translations {
     searchModels: string;
     surpriseMe: string;
     surpriseMePrompt: string;
-    followupLoading: string;
-    followupConfirmTitle: string;
-    followupConfirmDescription: string;
-    followupConfirmAppend: string;
-    followupConfirmReplace: string;
     suggestionPlaceholderRequired: string;
     goalCommandDescription: string;
     compactCommandDescription: string;

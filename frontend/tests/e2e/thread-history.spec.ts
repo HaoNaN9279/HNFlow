@@ -18,7 +18,6 @@ const THREADS = [
     updated_at: "2025-06-02T12:00:00Z",
   },
 ];
-const DEMO_THREAD_ID = "7cfa5f8f-a2f8-47ad-acbd-da7137baf990";
 const SVG_PROMPT_THREAD_ID = "00000000-0000-0000-0000-000000000777";
 const SVG_PROMPT_MARKER = "LEAK-STRICT-SVG-PROMPT-SHOULD-DISAPPEAR";
 const OPTIMISTIC_PROMPT_MARKER = "LEAK-OPTIMISTIC-SVG-PROMPT-SHOULD-DISAPPEAR";
@@ -659,90 +658,6 @@ test.describe("Thread history", () => {
     await page.waitForURL("**/workspace/chats/new");
     await expect(page.getByText("Hello from DeerFlow!")).toHaveCount(0);
     await expect(page.getByPlaceholder(/how can i assist you/i)).toBeVisible();
-  });
-
-  test("mock thread does not load real backend run history", async ({
-    page,
-  }) => {
-    mockLangGraphAPI(page, {
-      threads: [
-        {
-          thread_id: DEMO_THREAD_ID,
-          title: "Forecasting 2026 Trends and Opportunities",
-          updated_at: "2025-06-01T12:00:00Z",
-          messages: [
-            {
-              type: "human",
-              id: `run-human-${DEMO_THREAD_ID}`,
-              content: [
-                {
-                  type: "text",
-                  text: "This run-message endpoint should not be called.",
-                },
-              ],
-            },
-          ],
-        },
-      ],
-    });
-    const backendRunHistoryUrls: string[] = [];
-    await page.route(
-      /\/api\/langgraph\/threads\/[^/]+\/runs(?:\?|$)/,
-      (route) => {
-        if (
-          route.request().method() === "GET" &&
-          route
-            .request()
-            .url()
-            .includes(`/api/langgraph/threads/${DEMO_THREAD_ID}/runs`)
-        ) {
-          backendRunHistoryUrls.push(route.request().url());
-          return route.fulfill({
-            status: 500,
-            contentType: "application/json",
-            body: JSON.stringify({
-              error: "mock=true must not load real runs",
-            }),
-          });
-        }
-        return route.fallback();
-      },
-    );
-    await page.route(
-      /\/api\/threads\/[^/]+\/runs\/[^/]+\/messages(?:\?|$)/,
-      (route) => {
-        if (
-          route.request().method() === "GET" &&
-          route.request().url().includes(`/api/threads/${DEMO_THREAD_ID}/runs/`)
-        ) {
-          backendRunHistoryUrls.push(route.request().url());
-          return route.fulfill({
-            status: 500,
-            contentType: "application/json",
-            body: JSON.stringify({
-              error: "mock=true must not load real run messages",
-            }),
-          });
-        }
-        return route.fallback();
-      },
-    );
-
-    await page.goto(`/showcase/${DEMO_THREAD_ID}`);
-
-    await expect(
-      page.getByText("What might be the trends and opportunities in 2026?"),
-    ).toBeVisible({ timeout: 15_000 });
-    await expect(
-      page.getByText("I've created a modern, minimalist website"),
-    ).toBeVisible();
-    expect(backendRunHistoryUrls).toEqual([]);
-  });
-
-  test("public showcase rejects unknown thread IDs", async ({ page }) => {
-    const response = await page.goto("/showcase/not-a-bundled-demo");
-
-    expect(response?.status()).toBe(404);
   });
 
   test("chats list page shows all threads", async ({ page }) => {

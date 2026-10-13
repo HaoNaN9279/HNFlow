@@ -48,14 +48,14 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 ### Source Layout (`src/`)
 
-- **`app/`** — Next.js App Router. Routes include `/` (landing), `/showcase/[thread_id]` (allowlisted public read-only demos), `/workspace/chats/[thread_id]` (chat), `/workspace/agents/[agent_name]` and `/workspace/agents/new` (custom agents), `/blog/…`, `/[lang]/docs/…`, and `/api/…` route handlers (e.g. `/api/memory`).
+- **`app/`** — Next.js App Router. Routes include `/` (landing), `/workspace/chats/[thread_id]` (chat), `/workspace/agents/[agent_name]` and `/workspace/agents/new` (custom agents), `/[lang]/docs/…`, and `/api/…` route handlers (e.g. `/api/memory`).
 - **`components/`** — React components:
   - `ui/` — Shadcn UI primitives (auto-generated, ESLint-ignored)
   - `ai-elements/` — Vercel AI SDK elements (auto-generated, ESLint-ignored)
   - `workspace/` — Chat page components (messages, artifacts, settings)
   - `landing/` — Landing page sections
   - `docs/` — Docs / MDX rendering components
-- **`core/`** — Business logic, the heart of the app. Domains include `threads/` (creation, streaming, state), `api/` (LangGraph client singleton), `agents/` (custom agents), `auth/` (single-user identity shim — `AuthProvider` exposes the static default user; there is no login/session), `artifacts/`, `i18n/` (en-US, zh-CN), `settings/`, `memory/`, `skills/`, `messages/`, `mcp/`, `models/`, `input-polish/` (pre-send draft rewrite API), `voice-input/` (browser speech-recognition helpers), `suggestions/`, `tasks/`, `todos/`, `tools/`, `workspace-changes/` (run-scoped changed-file summaries and diff fetching), `config/`, `notification/`, `blog/`, plus rendering helpers (`rehype/`, `streamdown/`) and `utils/`.
+- **`core/`** — Business logic, the heart of the app. Domains include `threads/` (creation, streaming, state), `api/` (LangGraph client singleton), `agents/` (custom agents), `auth/` (single-user identity shim — `AuthProvider` exposes the static default user; there is no login/session), `artifacts/`, `i18n/` (en-US, zh-CN), `settings/`, `memory/`, `skills/`, `messages/`, `mcp/`, `models/`, `voice-input/` (browser speech-recognition helpers), `tasks/`, `todos/`, `tools/`, `workspace-changes/` (run-scoped changed-file summaries and diff fetching), `config/`, `notification/`, plus rendering helpers (`rehype/`, `streamdown/`) and `utils/`.
 - **`hooks/`** — Shared React hooks
 - **`lib/`** — Utilities (`cn()` from clsx + tailwind-merge)
 - **`content/`** — MDX content (blog posts, docs) rendered by the app
@@ -65,7 +65,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 ### Data Flow
 
-1. Optional composer helpers such as `core/input-polish` can rewrite the local draft before submission, and `core/voice-input` can transcribe browser microphone input into that same local draft; confirmed user input then flows to thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming
+1. Optional composer helpers such as `core/voice-input` can transcribe browser microphone input into the local draft; confirmed user input then flows to thread hooks (`core/threads/hooks.ts`) → LangGraph SDK streaming
 2. Stream events update thread state (messages, artifacts, todos, goal). The main thread stream uses the LangGraph SDK's `throttle: true` mode so updates received in the same macrotask coalesce before React is notified; do not replace it with a numeric delay without validating the SDK's trailing-debounce behavior on a continuous stream.
    File-tool artifact auto-open work must run in an effect with timer cleanup; never schedule timers while rendering streamed `write_file` or `str_replace` updates.
    `ThreadState.artifacts` remains the authoritative artifact list. The artifacts provider persists only thread-scoped panel UI state (`open`, selected path, and a refresh bootstrap cache) in session storage; an initial empty stream value must not overwrite that restored state before history finishes loading.

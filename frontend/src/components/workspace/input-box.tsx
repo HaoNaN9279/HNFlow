@@ -7,7 +7,6 @@ import {
   CheckIcon,
   GraduationCapIcon,
   LightbulbIcon,
-  Loader2Icon,
   MicIcon,
   PaperclipIcon,
   PlusIcon,
@@ -15,8 +14,6 @@ import {
   SparklesIcon,
   SquareIcon,
   TargetIcon,
-  Undo2Icon,
-  XIcon,
   ZapIcon,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -53,16 +50,7 @@ import {
   usePromptInputController,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import { Button } from "@/components/ui/button";
 import { ConfettiButton } from "@/components/ui/confetti-button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   DropdownMenuGroup,
   DropdownMenuLabel,
@@ -72,16 +60,12 @@ import { fetch } from "@/core/api/fetcher";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { getBackendBaseURL } from "@/core/config";
 import { useI18n } from "@/core/i18n/hooks";
-import { polishInputDraft } from "@/core/input-polish/api";
-import { isHiddenFromUIMessage } from "@/core/messages/utils";
 import { useModels } from "@/core/models/hooks";
 import {
   buildReferenceMessageMetadata,
   type SidecarContext,
 } from "@/core/sidecar";
 import { useSkills } from "@/core/skills/hooks";
-import { DEFAULT_MAX_SUGGESTIONS } from "@/core/suggestions/api";
-import { useSuggestionsConfig } from "@/core/suggestions/hooks";
 import type { AgentThreadContext, GoalState } from "@/core/threads";
 import { compactThreadContext } from "@/core/threads/api";
 import {
@@ -136,7 +120,6 @@ import {
 import {
   abortGoalRequest,
   beginGoalRequest,
-  canPolishInput,
   createGoalRequestState,
   findSuggestionTemplatePlaceholder,
   finishGoalRequest,
@@ -295,7 +278,6 @@ export function InputBox({
   defaultModelName,
   initialValue,
   onContextChange,
-  onFollowupsVisibilityChange,
   onGoalChange,
   onSubmit,
   onStop,
@@ -315,7 +297,7 @@ export function InputBox({
   /**
    * Whether to render the input in welcome layout (vertically centered,
    * with hero + quick action suggestions).  This is purely a visual flag,
-   * decoupled from "the backend has created the thread" — see issue #2746.
+   * decoupled from "the backend has created the thread" —see issue #2746.
    */
   isWelcomeMode?: boolean;
   threadId: string;
@@ -325,7 +307,7 @@ export function InputBox({
    * The active custom agent's configured default model, if any. Used as the
    * auto-selection fallback so an agent chat honors the agent's own default
    * model instead of silently snapping to the first configured model
-   * (issue #4336). ``null`` / undefined = no agent default → use models[0].
+   * (issue #4336). ``null`` / undefined = no agent default —use models[0].
    */
   defaultModelName?: string | null;
   initialValue?: string;
@@ -338,7 +320,6 @@ export function InputBox({
       reasoning_effort?: "minimal" | "low" | "medium" | "high";
     },
   ) => void;
-  onFollowupsVisibilityChange?: (visible: boolean) => void;
   onGoalChange?: (goal: GoalState | null) => void;
   onSubmit?: (
     message: PromptInputMessage,
@@ -352,7 +333,7 @@ export function InputBox({
   const [modelDialogOpen, setModelDialogOpen] = useState(false);
   const { models } = useModels();
   const { user } = useAuth();
-  const { thread, isMock } = useThread();
+  const { thread } = useThread();
   const { attachments, textInput } = usePromptInputController();
   const setTextInput = textInput.setInput;
   const sidecar = useMaybeSidecar();
@@ -366,13 +347,6 @@ export function InputBox({
   const inlineSkillComposingRef = useRef(false);
   const goalRequestStateRef = useRef(createGoalRequestState());
   const compactRequestStateRef = useRef(createGoalRequestState());
-  const inputPolishRequestRef = useRef<{
-    controller: AbortController | null;
-    sequence: number;
-  }>({
-    controller: null,
-    sequence: 0,
-  });
   const voiceRecognitionRef = useRef<BrowserSpeechRecognition | null>(null);
   const voiceBaseTextRef = useRef("");
   const voiceLatestTextRef = useRef("");
@@ -394,20 +368,7 @@ export function InputBox({
   const draftSaveTimerRef = useRef<number | null>(null);
   const draftSaveGenerationRef = useRef(0);
 
-  const [followups, setFollowups] = useState<string[]>([]);
-  const { data: suggestionsConfig } = useSuggestionsConfig();
-  const suggestionsConfigLoaded = suggestionsConfig !== undefined;
-  const suggestionsEnabled = suggestionsConfig?.enabled;
-  const maxFollowupSuggestions =
-    suggestionsConfig?.max_suggestions ?? DEFAULT_MAX_SUGGESTIONS;
-  const [followupsHidden, setFollowupsHidden] = useState(false);
-  const [followupsLoading, setFollowupsLoading] = useState(false);
-  const [polishingInput, setPolishingInput] = useState(false);
   const [voiceListening, setVoiceListening] = useState(false);
-  const [inputPolishUndo, setInputPolishUndo] = useState<{
-    originalText: string;
-    rewrittenText: string;
-  } | null>(null);
   const [textareaFocused, setTextareaFocused] = useState(false);
   const [skillSuggestionIndex, setSkillSuggestionIndex] = useState(0);
   const [selectedSlashSkill, setSelectedSlashSkill] =
@@ -415,12 +376,6 @@ export function InputBox({
   const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
   const [dismissedSkillSuggestionValue, setDismissedSkillSuggestionValue] =
     useState<string | null>(null);
-  const lastGeneratedForAiIdRef = useRef<string | null>(null);
-  const wasStreamingRef = useRef(false);
-  // Set when the user stops a streaming turn. Such a turn ends on a
-  // half-finished response, so we must NOT generate follow-up suggestions for it.
-  const stoppedByUserRef = useRef(false);
-  const messagesRef = useRef(thread.messages);
 
   const clearVoiceRestartTimer = useCallback(() => {
     if (voiceRestartTimerRef.current === null) {
@@ -474,10 +429,6 @@ export function InputBox({
     }
   }, [cleanupVoiceRecognition]);
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
-  const [pendingSuggestion, setPendingSuggestion] = useState<string | null>(
-    null,
-  );
   const builtinSlashCommands = useMemo<SlashSuggestion[]>(
     () => [
       {
@@ -707,7 +658,6 @@ export function InputBox({
     promptHistoryDraftRef.current = "";
     setTextInput("");
     setSelectedSlashSkill(null);
-    setInputPolishUndo(null);
     setHydratedDraftKey(null);
     pendingDraftSubmissionKeyRef.current = null;
     latestDraftRef.current = null;
@@ -803,17 +753,6 @@ export function InputBox({
     };
   }, [threadId]);
 
-  const abortInputPolishRequest = useCallback(() => {
-    inputPolishRequestRef.current.controller?.abort();
-    inputPolishRequestRef.current.controller = null;
-    inputPolishRequestRef.current.sequence += 1;
-    setPolishingInput(false);
-  }, []);
-
-  useEffect(() => {
-    return () => abortInputPolishRequest();
-  }, [abortInputPolishRequest, threadId]);
-
   useEffect(() => {
     const currentIndex = promptHistoryIndexRef.current;
     if (currentIndex !== null && currentIndex >= promptHistory.length) {
@@ -824,7 +763,7 @@ export function InputBox({
 
   const handleModelSelect = useCallback(
     (model_name: string) => {
-      if (disabled || polishingInput) {
+      if (disabled) {
         return;
       }
       const model = models.find((m) => m.name === model_name);
@@ -839,12 +778,12 @@ export function InputBox({
       });
       setModelDialogOpen(false);
     },
-    [disabled, onContextChange, context, models, polishingInput],
+    [disabled, onContextChange, context, models],
   );
 
   const handleModeSelect = useCallback(
     (mode: InputMode) => {
-      if (disabled || polishingInput) {
+      if (disabled) {
         return;
       }
       onContextChange?.({
@@ -860,12 +799,12 @@ export function InputBox({
                 : "minimal",
       });
     },
-    [disabled, onContextChange, context, polishingInput, supportThinking],
+    [disabled, onContextChange, context, supportThinking],
   );
 
   const handleReasoningEffortSelect = useCallback(
     (effort: "minimal" | "low" | "medium" | "high") => {
-      if (disabled || polishingInput) {
+      if (disabled) {
         return;
       }
       onContextChange?.({
@@ -873,7 +812,7 @@ export function InputBox({
         reasoning_effort: effort,
       });
     },
-    [disabled, onContextChange, context, polishingInput],
+    [disabled, onContextChange, context],
   );
 
   const handleGoalCommand = useCallback(
@@ -1017,9 +956,6 @@ export function InputBox({
       textInput.setInput("");
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
-      setFollowups([]);
-      setFollowupsHidden(false);
-      setFollowupsLoading(false);
 
       void queryClient.invalidateQueries({ queryKey: ["thread", threadId] });
       void queryClient.invalidateQueries({
@@ -1083,10 +1019,6 @@ export function InputBox({
       }
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
-      setInputPolishUndo(null);
-      setFollowups([]);
-      setFollowupsHidden(false);
-      setFollowupsLoading(false);
       const quotes = sidecar?.conversationQuotes ?? [];
       const quoteIds = quotes.map((quote) => quote.id);
       const quoteContexts = quotes.map((quote) => quote.context);
@@ -1152,12 +1084,6 @@ export function InputBox({
   );
 
   const handleStopStreaming = useCallback(() => {
-    // Mark the in-progress turn as user-interrupted so the next
-    // streaming->ready transition does not suggest follow-ups for it.
-    stoppedByUserRef.current = true;
-    setFollowups([]);
-    setFollowupsHidden(true);
-    setFollowupsLoading(false);
     onStop?.();
   }, [onStop]);
 
@@ -1195,9 +1121,6 @@ export function InputBox({
         }
         promptHistoryIndexRef.current = null;
         promptHistoryDraftRef.current = "";
-        setFollowups([]);
-        setFollowupsHidden(false);
-        setFollowupsLoading(false);
         const saved = await handleGoalCommand(submitAction.command);
         // Only start a run when a goal was actually saved; status/clear never run.
         if (saved && submitAction.command.kind === "set") {
@@ -1237,57 +1160,6 @@ export function InputBox({
     ],
   );
 
-  const requestFormSubmit = useCallback(() => {
-    const form = promptRootRef.current?.querySelector("form");
-    form?.requestSubmit();
-  }, []);
-
-  const handleFollowupClick = useCallback(
-    (suggestion: string) => {
-      if (status === "streaming") {
-        return;
-      }
-      const current = (textInput.value ?? "").trim();
-      if (current) {
-        setPendingSuggestion(suggestion);
-        setConfirmOpen(true);
-        return;
-      }
-      textInput.setInput(suggestion);
-      setFollowupsHidden(true);
-      setTimeout(() => requestFormSubmit(), 0);
-    },
-    [requestFormSubmit, status, textInput],
-  );
-
-  const confirmReplaceAndSend = useCallback(() => {
-    if (!pendingSuggestion) {
-      setConfirmOpen(false);
-      return;
-    }
-    textInput.setInput(pendingSuggestion);
-    setFollowupsHidden(true);
-    setConfirmOpen(false);
-    setPendingSuggestion(null);
-    setTimeout(() => requestFormSubmit(), 0);
-  }, [pendingSuggestion, requestFormSubmit, textInput]);
-
-  const confirmAppendAndSend = useCallback(() => {
-    if (!pendingSuggestion) {
-      setConfirmOpen(false);
-      return;
-    }
-    const current = (textInput.value ?? "").trim();
-    const next = current
-      ? `${current}\n${pendingSuggestion}`
-      : pendingSuggestion;
-    textInput.setInput(next);
-    setFollowupsHidden(true);
-    setConfirmOpen(false);
-    setPendingSuggestion(null);
-    setTimeout(() => requestFormSubmit(), 0);
-  }, [pendingSuggestion, requestFormSubmit, textInput]);
-
   const slashSkillQuery = useMemo(
     () => getLeadingSlashSkillQuery(textInput.value ?? ""),
     [textInput.value],
@@ -1309,7 +1181,7 @@ export function InputBox({
     // with a skill activation: `/goal` behind a selected skill would submit as
     // chat text instead of running the command. Drop them from the result
     // rather than withholding them from the helper, which needs the list to
-    // reserve their names — a skill named after a builtin is unusable for the
+    // reserve their names —a skill named after a builtin is unusable for the
     // mirrored reason, its submitted text runs the command, not the skill.
     return selectedSlashSkill
       ? matches.filter(({ kind }) => kind === "skill")
@@ -1324,20 +1196,7 @@ export function InputBox({
     skillSuggestions.length > 0 &&
     dismissedSkillSuggestionValue !== textInput.value;
   const isComposerDisabled = disabled === true;
-  const isMockThread = isMock === true;
-  const composerLocked = isComposerDisabled || polishingInput;
-  const inputPolishUndoAvailable =
-    !polishingInput &&
-    inputPolishUndo !== null &&
-    (textInput.value ?? "") === inputPolishUndo.rewrittenText;
-  const inputPolishDisabled =
-    isComposerDisabled ||
-    isMockThread ||
-    polishingInput ||
-    (!inputPolishUndoAvailable &&
-      (status === "streaming" ||
-        slashSkillQuery !== null ||
-        !canPolishInput(textInput.value ?? "")));
+  const composerLocked = isComposerDisabled;
   const speechRecognitionConstructor = useMemo(
     () =>
       typeof window === "undefined"
@@ -1497,8 +1356,6 @@ export function InputBox({
       return;
     }
 
-    abortInputPolishRequest();
-    setInputPolishUndo(null);
     promptHistoryIndexRef.current = null;
     promptHistoryDraftRef.current = "";
     voiceStopRequestedRef.current = false;
@@ -1506,7 +1363,6 @@ export function InputBox({
     voiceLatestTextRef.current = voiceBaseTextRef.current;
     startVoiceRecognition({ focusAfterStart: true });
   }, [
-    abortInputPolishRequest,
     composerLocked,
     speechRecognitionConstructor,
     startVoiceRecognition,
@@ -1621,94 +1477,6 @@ export function InputBox({
     [textInput],
   );
 
-  const handlePolishInput = useCallback(async () => {
-    if (inputPolishDisabled) {
-      return;
-    }
-
-    const originalText = textInput.value ?? "";
-    const controller = new AbortController();
-    inputPolishRequestRef.current.controller?.abort();
-    const sequence = inputPolishRequestRef.current.sequence + 1;
-    inputPolishRequestRef.current = {
-      controller,
-      sequence,
-    };
-    setPolishingInput(true);
-
-    try {
-      const result = await polishInputDraft(
-        {
-          text: originalText,
-          locale,
-          thread_id: threadId,
-        },
-        { signal: controller.signal },
-      );
-
-      const isCurrentRequest =
-        inputPolishRequestRef.current.controller === controller &&
-        inputPolishRequestRef.current.sequence === sequence &&
-        !controller.signal.aborted;
-      if (!isCurrentRequest || (textInput.value ?? "") !== originalText) {
-        return;
-      }
-
-      const rewrittenText = result.rewritten_text.trim();
-      if (!rewrittenText || !result.changed) {
-        toast.info(t.inputBox.inputPolishNoChanges);
-        return;
-      }
-
-      // Applying the rewrite replaces the draft outside the textarea change
-      // handler, so clear any in-progress history browse state; otherwise a
-      // stale index would let the next ArrowDown overwrite the rewrite.
-      promptHistoryIndexRef.current = null;
-      promptHistoryDraftRef.current = "";
-      setPromptHistoryValue(rewrittenText);
-      setInputPolishUndo({
-        originalText,
-        rewrittenText,
-      });
-    } catch (error) {
-      const isCurrentRequest =
-        inputPolishRequestRef.current.controller === controller &&
-        inputPolishRequestRef.current.sequence === sequence;
-      if (isAbortError(error) || !isCurrentRequest) {
-        return;
-      }
-      toast.error(
-        error instanceof Error ? error.message : t.inputBox.inputPolishFailed,
-      );
-    } finally {
-      if (
-        inputPolishRequestRef.current.controller === controller &&
-        inputPolishRequestRef.current.sequence === sequence
-      ) {
-        inputPolishRequestRef.current.controller = null;
-        setPolishingInput(false);
-      }
-    }
-  }, [
-    inputPolishDisabled,
-    locale,
-    setPromptHistoryValue,
-    t.inputBox.inputPolishFailed,
-    t.inputBox.inputPolishNoChanges,
-    textInput,
-    threadId,
-  ]);
-
-  const handleUndoInputPolish = useCallback(() => {
-    if (!inputPolishUndoAvailable || inputPolishUndo === null) {
-      return;
-    }
-    promptHistoryIndexRef.current = null;
-    promptHistoryDraftRef.current = "";
-    setPromptHistoryValue(inputPolishUndo.originalText);
-    setInputPolishUndo(null);
-  }, [inputPolishUndo, inputPolishUndoAvailable, setPromptHistoryValue]);
-
   const handlePromptHistoryKeyDown = useCallback(
     (event: KeyboardEvent<HTMLElement>) => {
       if (
@@ -1808,8 +1576,6 @@ export function InputBox({
       if (voiceListening) {
         abortVoiceInput();
       }
-      abortInputPolishRequest();
-      setInputPolishUndo(null);
       promptHistoryIndexRef.current = null;
       promptHistoryDraftRef.current = "";
       scheduleDraftSave({
@@ -1818,13 +1584,7 @@ export function InputBox({
           selectedSlashSkill?.kind === "skill" ? selectedSlashSkill.name : null,
       });
     },
-    [
-      abortInputPolishRequest,
-      abortVoiceInput,
-      scheduleDraftSave,
-      selectedSlashSkill,
-      voiceListening,
-    ],
+    [abortVoiceInput, scheduleDraftSave, selectedSlashSkill, voiceListening],
   );
 
   const updateInlineSkillTextInput = useCallback(
@@ -1953,128 +1713,6 @@ export function InputBox({
     });
   }, []);
 
-  const showFollowups =
-    !disabled &&
-    !isWelcomeMode &&
-    !showSkillSuggestions &&
-    !selectedSlashSkill &&
-    !followupsHidden &&
-    // Never show stale follow-up chips while a turn is streaming: a message
-    // sent before the previous response finished would otherwise leave the
-    // old chips (and the lone close button) overlapping the input box.
-    status !== "streaming" &&
-    (followupsLoading || followups.length > 0);
-
-  useEffect(() => {
-    onFollowupsVisibilityChange?.(showFollowups);
-  }, [onFollowupsVisibilityChange, showFollowups]);
-
-  useEffect(() => {
-    return () => onFollowupsVisibilityChange?.(false);
-  }, [onFollowupsVisibilityChange]);
-
-  useEffect(() => {
-    messagesRef.current = thread.messages;
-  }, [thread.messages]);
-
-  useEffect(() => {
-    const streaming = status === "streaming";
-    const wasStreaming = wasStreamingRef.current;
-    wasStreamingRef.current = streaming;
-    if (!wasStreaming || streaming) {
-      return;
-    }
-
-    // The turn was interrupted by the user, so skip generating follow-ups for
-    // this half-finished response.
-    if (stoppedByUserRef.current) {
-      stoppedByUserRef.current = false;
-      return;
-    }
-
-    if (disabled || isMock) {
-      return;
-    }
-
-    const lastAi = [...messagesRef.current]
-      .reverse()
-      .find((m) => m.type === "ai");
-    const lastAiId = lastAi?.id ?? null;
-    if (!lastAiId || lastAiId === lastGeneratedForAiIdRef.current) {
-      return;
-    }
-    if (!suggestionsConfigLoaded) {
-      return;
-    }
-    lastGeneratedForAiIdRef.current = lastAiId;
-
-    const recent = messagesRef.current
-      .filter((m) => m.type === "human" || m.type === "ai")
-      .filter((m) => !isHiddenFromUIMessage(m))
-      .map((m) => {
-        const role = m.type === "human" ? "user" : "assistant";
-        const content = textOfMessage(m) ?? "";
-        return { role, content };
-      })
-      .filter((m) => m.content.trim().length > 0)
-      .slice(-6);
-
-    if (recent.length === 0) {
-      return;
-    }
-
-    if (!suggestionsEnabled) {
-      setFollowups([]);
-      return;
-    }
-
-    const controller = new AbortController();
-    setFollowupsHidden(false);
-    setFollowupsLoading(true);
-    setFollowups([]);
-
-    fetch(`${getBackendBaseURL()}/api/threads/${threadId}/suggestions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messages: recent,
-        n: maxFollowupSuggestions,
-        model_name: context.model_name ?? undefined,
-      }),
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          return { suggestions: [] as string[] };
-        }
-        return (await res.json()) as { suggestions?: string[] };
-      })
-      .then((data) => {
-        const suggestions = (data.suggestions ?? [])
-          .map((s) => (typeof s === "string" ? s.trim() : ""))
-          .filter((s) => s.length > 0)
-          .slice(0, maxFollowupSuggestions);
-        setFollowups(suggestions);
-      })
-      .catch(() => {
-        setFollowups([]);
-      })
-      .finally(() => {
-        setFollowupsLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [
-    context.model_name,
-    disabled,
-    isMock,
-    maxFollowupSuggestions,
-    status,
-    suggestionsConfigLoaded,
-    suggestionsEnabled,
-    threadId,
-  ]);
-
   const onSelectPlaceholder = useCallback((newText: string) => {
     const placeholder = findSuggestionTemplatePlaceholder(newText);
     if (placeholder) {
@@ -2095,38 +1733,6 @@ export function InputBox({
         isWelcomeMode ? "gap-4" : "gap-2",
       )}
     >
-      {showFollowups && (
-        <div className="flex items-center justify-center pb-1">
-          <div className="flex items-center gap-2">
-            {followupsLoading ? (
-              <div className="text-muted-foreground bg-background/80 rounded-full border px-4 py-1.5 text-xs backdrop-blur-sm">
-                {t.inputBox.followupLoading}
-              </div>
-            ) : (
-              <Suggestions className="w-fit items-center">
-                {followups.map((s) => (
-                  <Suggestion
-                    key={s}
-                    className="py-1.5"
-                    suggestion={s}
-                    onClick={() => handleFollowupClick(s)}
-                  />
-                ))}
-                <Button
-                  aria-label={t.common.close}
-                  className="text-muted-foreground h-auto cursor-pointer rounded-full px-2.5 py-1.5 text-xs font-normal"
-                  variant="outline"
-                  size="sm"
-                  type="button"
-                  onClick={() => setFollowupsHidden(true)}
-                >
-                  <XIcon className="size-4" />
-                </Button>
-              </Suggestions>
-            )}
-          </div>
-        </div>
-      )}
       {showSkillSuggestions && (
         <div className="absolute right-0 bottom-full left-0 z-40 mb-2 px-1">
           <div
@@ -2176,8 +1782,6 @@ export function InputBox({
       <PromptInput
         className={cn(
           "bg-background/85 relative z-10 rounded-2xl backdrop-blur-sm transition-all duration-300 ease-out *:data-[slot='input-group']:rounded-2xl",
-          polishingInput &&
-            "shadow-primary/10 ring-primary/25 shadow-lg ring-1",
           className,
         )}
         disabled={composerLocked}
@@ -2186,12 +1790,6 @@ export function InputBox({
         onSubmit={handleSubmit}
         {...props}
       >
-        {polishingInput && (
-          <div
-            aria-hidden="true"
-            className="border-primary/30 bg-primary/5 pointer-events-auto absolute inset-0 z-20 animate-pulse cursor-wait rounded-2xl border opacity-80"
-          />
-        )}
         {extraHeader && (
           <div className="absolute top-0 right-0 left-0 z-10">
             <div className="absolute right-0 bottom-0 left-0 flex items-center justify-center">
@@ -2207,25 +1805,6 @@ export function InputBox({
               </div>
             )}
           </PromptInputAttachments>
-          {polishingInput && (
-            <div
-              aria-live="polite"
-              className="text-primary bg-primary/10 border-primary/20 relative z-30 flex h-7 items-center gap-1.5 rounded-full border py-0 pr-1 pl-2.5 text-xs font-medium"
-              role="status"
-            >
-              <Loader2Icon className="size-3 animate-spin" />
-              {t.inputBox.inputPolishing}
-              <button
-                aria-label={t.inputBox.inputPolishCancel}
-                className="hover:bg-primary/20 focus-visible:ring-primary/40 -mr-0.5 ml-0.5 flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-full transition-colors focus-visible:ring-2 focus-visible:outline-none"
-                data-testid="cancel-polish-input-button"
-                onClick={abortInputPolishRequest}
-                type="button"
-              >
-                <XIcon className="size-3" />
-              </button>
-            </div>
-          )}
           {sidecar && sidecar.conversationQuotes.length > 0 && (
             <ReferenceAttachmentSummary
               references={sidecar.conversationQuotes}
@@ -2317,39 +1896,6 @@ export function InputBox({
               supported={voiceInputSupported}
               onToggle={toggleVoiceInput}
             />
-            <Tooltip
-              content={
-                polishingInput
-                  ? t.inputBox.inputPolishing
-                  : inputPolishUndoAvailable
-                    ? t.inputBox.inputPolishUndo
-                    : t.inputBox.inputPolish
-              }
-            >
-              <PromptInputButton
-                aria-label={
-                  inputPolishUndoAvailable
-                    ? t.inputBox.inputPolishUndo
-                    : t.inputBox.inputPolish
-                }
-                className="px-2!"
-                data-testid="polish-input-button"
-                disabled={inputPolishDisabled}
-                onClick={
-                  inputPolishUndoAvailable
-                    ? handleUndoInputPolish
-                    : handlePolishInput
-                }
-              >
-                {polishingInput ? (
-                  <Loader2Icon className="size-3 animate-spin" />
-                ) : inputPolishUndoAvailable ? (
-                  <Undo2Icon className="size-3" />
-                ) : (
-                  <SparklesIcon className="size-3" />
-                )}
-              </PromptInputButton>
-            </Tooltip>
             <PromptInputActionMenu>
               <ModeHoverGuide
                 mode={
@@ -2741,28 +2287,6 @@ export function InputBox({
       >
         {t.inputBox.disclaimer}
       </p>
-
-      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t.inputBox.followupConfirmTitle}</DialogTitle>
-            <DialogDescription>
-              {t.inputBox.followupConfirmDescription}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmOpen(false)}>
-              {t.common.cancel}
-            </Button>
-            <Button variant="secondary" onClick={confirmAppendAndSend}>
-              {t.inputBox.followupConfirmAppend}
-            </Button>
-            <Button onClick={confirmReplaceAndSend}>
-              {t.inputBox.followupConfirmReplace}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

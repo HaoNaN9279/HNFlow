@@ -79,7 +79,6 @@ export const enUS: Translations = {
   // Home
   home: {
     docs: "Docs",
-    blog: "Blog",
   },
 
   // Welcome
@@ -164,12 +163,6 @@ export const enUS: Translations = {
     createSkillPrompt:
       "We're going to build a new skill step by step with `skill-creator`. To start, what do you want this skill to do?",
     addAttachments: "Add attachments",
-    inputPolish: "Polish input",
-    inputPolishing: "Polishing input...",
-    inputPolishNoChanges: "This input is already clear.",
-    inputPolishFailed: "Failed to polish input.",
-    inputPolishUndo: "Undo polish",
-    inputPolishCancel: "Cancel polishing",
     voiceInputStartLabel: "Dictate with voice",
     voiceInputStopLabel: "Stop voice input",
     voiceInputStart:
@@ -214,12 +207,6 @@ export const enUS: Translations = {
     searchModels: "Search models...",
     surpriseMe: "Surprise",
     surpriseMePrompt: "Surprise me",
-    followupLoading: "Generating follow-up questions...",
-    followupConfirmTitle: "Send suggestion?",
-    followupConfirmDescription:
-      "You already have text in the input. Choose how to send it.",
-    followupConfirmAppend: "Append & send",
-    followupConfirmReplace: "Replace & send",
     suggestionPlaceholderRequired:
       "Replace the suggestion placeholder before sending.",
     goalCommandDescription: "Set, show, or clear an active goal",
