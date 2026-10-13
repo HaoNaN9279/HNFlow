@@ -979,10 +979,9 @@ Lets a caller pass per-request, short-lived end-user credentials (e.g. an ERP to
 - Per-agent facts at `{base_dir}/users/{user_id}/agents/{agent_name}/facts/{sha256-prefix}/{fact-id}.md`, where the prefix is the first two hexadecimal characters of `SHA-256(fact_id)`; there is no per-agent `memory.json`
 - Custom agent definitions (`SOUL.md` + `config.yaml`) are also per-user at `{base_dir}/users/{user_id}/agents/{agent_name}/`. The legacy shared layout `{base_dir}/agents/{agent_name}/` remains read-only fallback for unmigrated installations
 - Middleware mode captures `user_id` via `resolve_runtime_user_id(runtime)` at enqueue time; tool mode resolves `user_id` and `agent_name` from `ToolRuntime.context` via the same helper so both Gateway and standalone LangGraph Server runs stay scoped to the authenticated user and active custom agent
-- The `/api/memory*` endpoints resolve the owner through `_resolve_memory_user_id(request)`: trusted internal callers carrying the `X-DeerFlow-Owner-User-Id` header act for that owner; browser/API callers fall back to `get_effective_user_id()`. The header is only honored after `AuthMiddleware` validated the internal token, mirroring `get_trusted_internal_owner_user_id` used by the threads router
+- The `/api/memory*` endpoints resolve the owner through `_resolve_memory_user_id(request)`, which returns `get_effective_user_id()` (`default` in the single-user build; there is no trusted-owner header)
 - In no-auth mode, `user_id` defaults to `"default"` (constant `DEFAULT_USER_ID`)
-- Absolute `storage_path` in config opts out of per-user isolation
-- **Migration**: Run `PYTHONPATH=. python scripts/migrate_user_isolation.py` to move legacy `memory.json`, `threads/`, and `agents/` into per-user layout. Supports `--dry-run` (preview changes) and `--user-id USER_ID` (assign unowned legacy data to a user, defaults to `default`).
+- `storage_path` is the DeerMem root; memory always nests under the weak-isolation bucket (`{storage_path}/users/{uid}/memory.json`). There is no unscoped root layout — an omitted `user_id` resolves to the `default` bucket.
 
 **Data Structure**:
 - **User Context**: `workContext`, `personalContext`, `topOfMind` (1-3 sentence summaries)
@@ -1047,7 +1046,6 @@ Focused regression coverage for the updater lives in `backend/tests/test_memory_
 - `mode` - Operation mode: `middleware` (default passive background extraction) or `tool` (experimental model-driven memory tools). Modes are mutually exclusive.
 - `storage_path` - DeerMem storage root; one global summary JSON lives under each user and Markdown facts remain under agent buckets
 - `storage_class` - `file` or a dotted `MemoryStorage` class; invalid persistent backends fail fast
-- `strict_user_scope` - Require `user_id` for all storage access (default `false` for no-auth/legacy compatibility)
 - `manifest_filename` - User-global summary JSON filename (kept for configuration compatibility)
 - `file_lock_timeout_seconds` - Scope-lock wait; Markdown facts and the recovery journal are required storage invariants rather than configurable modes
 - `retrieval_adapter` - `fts5` by default, empty to disable, or a dotted factory receiving `DeerMemConfig` and returning a retrieval-port implementation

@@ -54,10 +54,6 @@ class DeerMemConfig(BaseModel):
         default="",
         description="Dotted class path for an alternative storage provider; empty (default) = FileMemoryStorage (no importlib, portable).",
     )
-    strict_user_scope: bool = Field(
-        default=False,
-        description="Require user_id for every storage scope. False preserves no-auth and legacy callers.",
-    )
     manifest_filename: str = Field(
         default="memory.json",
         description="User-global summary JSON filename. Kept under this name for config compatibility; must be a plain .json filename.",

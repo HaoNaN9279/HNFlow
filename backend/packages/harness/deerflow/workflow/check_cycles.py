@@ -23,12 +23,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
+from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.skills.storage import get_or_new_skill_storage
 from deerflow.skills.types import Skill
 from deerflow.workflow.dependency_graph import find_dependency_cycles
 from deerflow.workflow.schema import WorkflowDefinition
-
-DEFAULT_USER_ID = "default"
 
 
 async def _run_checks(

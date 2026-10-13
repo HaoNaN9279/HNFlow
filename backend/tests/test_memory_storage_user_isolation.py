@@ -55,24 +55,24 @@ class TestUserIsolatedStorage:
         loaded_a = s.load(user_id="alice")
         assert loaded_a["user"]["workContext"]["summary"] == "A"
 
-    def test_no_user_id_uses_legacy_path(self, base_dir: Path):
+    def test_no_user_id_uses_default_bucket(self, base_dir: Path):
         s = FileMemoryStorage(DeerMemConfig())
         s.save(create_empty_memory(), user_id=None)
-        assert (base_dir / "memory.json").exists()
+        assert (base_dir / "users" / "default" / "memory.json").exists()
 
-    def test_user_and_legacy_do_not_interfere(self, base_dir: Path):
-        """user_id=None (legacy) and user_id='alice' must use different files and caches."""
+    def test_user_and_default_do_not_interfere(self, base_dir: Path):
+        """user_id=None (default bucket) and user_id='alice' must use different files and caches."""
         s = FileMemoryStorage(DeerMemConfig())
 
-        legacy_mem = create_empty_memory()
-        legacy_mem["user"]["workContext"]["summary"] = "legacy"
-        s.save(legacy_mem, user_id=None)
+        default_mem = create_empty_memory()
+        default_mem["user"]["workContext"]["summary"] = "default-bucket"
+        s.save(default_mem, user_id=None)
 
         user_mem = create_empty_memory()
         user_mem["user"]["workContext"]["summary"] = "alice"
         s.save(user_mem, user_id="alice")
 
-        assert s.load(user_id=None)["user"]["workContext"]["summary"] == "legacy"
+        assert s.load(user_id=None)["user"]["workContext"]["summary"] == "default-bucket"
         assert s.load(user_id="alice")["user"]["workContext"]["summary"] == "alice"
 
     def test_user_agent_memory_file_location(self, base_dir: Path):

@@ -318,6 +318,8 @@
 >
 > 注：前端 `tests/e2e-real-backend/*` 与 `tests/e2e/utils/mock-api.ts` 仍含 `/api/v1/auth/register|me` 流程，未在本次单元门禁内运行；后续按单用户重写（去除注册步骤）。
 
+> **进度（A6 + C9）**：多用户 memory 收缩已完成——删除一次性迁移脚本 `scripts/migrate_user_isolation.py` 及其测试（HNFlow 为全新单机产品，无 legacy 多用户升级路径）；移除 `memory.strict_user_scope`（`DeerMemConfig` 字段、`paths.py` 校验、`config.example.yaml`、`backend/AGENTS.md` 配置表）；DeerMem `memory_file_path` 去掉不可达的「无 user_id → 存储根」分支，省略 `user_id` 时恒回落弱隔离桶 `default`（新增 `data_root()` 供索引重建遍历全部桶，修正原 `memory_file_path().parent` 逻辑）；`workflow/check_cycles.py` 的 `DEFAULT_USER_ID` 改从 `runtime.user_context` 引入（provisioner 独立镜像保留自有常量，归 A3）。清理对已删脚本的悬挂引用（`routers/agents.py`、`update_agent_tool.py` 错误文案、`agents_config.py`/`paths.py`/`migrate_agents_to_db.py` docstring、`AGENTS.md`、`docker/provisioner/README.md`）。**明确保留** `users/{user_id}/` 目录布局与持久化 `user_id` 列（弱隔离，C9），不动 `make_safe_user_id`/`test_paths_user_isolation.py`。后端目标套件与 ruff 全绿。
+
 ---
 
 ## 九、结论

@@ -394,7 +394,7 @@ async def update_agent(name: str, request: AgentUpdateRequest) -> AgentResponse:
     if await asyncio.to_thread(_is_legacy_only_layout):
         raise HTTPException(
             status_code=409,
-            detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Run scripts/migrate_user_isolation.py to move legacy agents into the per-user layout before updating."),
+            detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Create a per-user copy before updating."),
         )
 
     if "model" in request.model_fields_set:
@@ -561,7 +561,7 @@ async def delete_agent(name: str) -> None:
     if outcome == "legacy":
         raise HTTPException(
             status_code=409,
-            detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Run scripts/migrate_user_isolation.py to move legacy agents into the per-user layout before deleting."),
+            detail=(f"Agent '{name}' only exists in the legacy shared layout and is not scoped to a user. Create a per-user copy before deleting."),
         )
     if outcome == "missing":
         raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")

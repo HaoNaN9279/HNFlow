@@ -385,12 +385,13 @@ def test_search_facts_declares_and_uses_substring_fallback(storage: FileMemorySt
     assert "substring-fallback" in storage.capabilities()
 
 
-def test_strict_scope_and_custom_manifest_filename(tmp_path: Path) -> None:
-    strict = FileMemoryStorage(DeerMemConfig(storage_path=str(tmp_path), strict_user_scope=True, manifest_filename="index.json"))
-    with pytest.raises(ValueError, match="user_id"):
-        strict.load()
+def test_custom_manifest_filename_and_default_user_bucket(tmp_path: Path) -> None:
+    storage = FileMemoryStorage(DeerMemConfig(storage_path=str(tmp_path), manifest_filename="index.json"))
 
-    strict.upsert_fact(_memory_with_fact()["facts"][0], user_id="alice", agent_name="agent-a", expected_manifest_revision=0)
+    # A missing user_id resolves to the weak-isolation default bucket, never the root.
+    assert storage._get_memory_file_path(user_id=None) == tmp_path / "users" / "default" / "index.json"
+
+    storage.upsert_fact(_memory_with_fact()["facts"][0], user_id="alice", agent_name="agent-a", expected_manifest_revision=0)
     assert (tmp_path / "users" / "alice" / "index.json").exists()
 
 

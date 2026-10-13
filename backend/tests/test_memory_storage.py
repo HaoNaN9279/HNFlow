@@ -49,17 +49,17 @@ class TestFileMemoryStorage:
     """Test FileMemoryStorage implementation (DI: constructed with a config)."""
 
     def test_get_memory_file_path_global(self, tmp_path, monkeypatch):
-        """DEERMEM_DATA_DIR as root + empty storage_path => global legacy path."""
+        """DEERMEM_DATA_DIR as root + omitted user_id => weak-isolation default bucket."""
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
         storage = FileMemoryStorage(DeerMemConfig())
-        assert storage._get_memory_file_path(None) == tmp_path / "memory.json"
+        assert storage._get_memory_file_path(None) == tmp_path / "users" / "default" / "memory.json"
 
     def test_get_memory_file_path_agent(self, tmp_path, monkeypatch):
         """Agent facts share the user's global summary JSON path."""
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
         storage = FileMemoryStorage(DeerMemConfig())
         path = storage._get_memory_file_path("test-agent")
-        assert path == tmp_path / "memory.json"
+        assert path == tmp_path / "users" / "default" / "memory.json"
 
     @pytest.mark.parametrize("invalid_name", ["", "../etc/passwd", "agent/name", "agent\\name", "agent name", "agent@123", "agent_name"])
     def test_validate_agent_name_invalid(self, invalid_name):
@@ -76,7 +76,7 @@ class TestFileMemoryStorage:
 
     def test_save_writes_to_file(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
-        memory_file = tmp_path / "memory.json"
+        memory_file = tmp_path / "users" / "default" / "memory.json"
         storage = FileMemoryStorage(DeerMemConfig())
         result = storage.save({"version": "1.0", "facts": []})
         assert result is True
@@ -95,7 +95,7 @@ class TestFileMemoryStorage:
     def test_cache_not_corrupted_when_save_fails(self, tmp_path, monkeypatch):
         """Cache must remain clean when save() raises OSError."""
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
-        memory_file = tmp_path / "memory.json"
+        memory_file = tmp_path / "users" / "default" / "memory.json"
         memory_file.parent.mkdir(parents=True, exist_ok=True)
         import json as _json
 
@@ -114,7 +114,7 @@ class TestFileMemoryStorage:
 
     def test_cache_thread_safety(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
-        memory_file = tmp_path / "memory.json"
+        memory_file = tmp_path / "users" / "default" / "memory.json"
         memory_file.parent.mkdir(parents=True, exist_ok=True)
         import json as _json
 
@@ -138,7 +138,7 @@ class TestFileMemoryStorage:
 
     def test_reload_forces_cache_invalidation(self, tmp_path, monkeypatch):
         monkeypatch.setenv("DEERMEM_DATA_DIR", str(tmp_path))
-        memory_file = tmp_path / "memory.json"
+        memory_file = tmp_path / "users" / "default" / "memory.json"
         memory_file.parent.mkdir(parents=True, exist_ok=True)
         memory_file.write_text('{"version": "2.0", "user": {"workContext": {"summary": "initial"}}, "history": {}}')
         storage = FileMemoryStorage(DeerMemConfig())

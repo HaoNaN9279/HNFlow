@@ -7,7 +7,7 @@ every agent from the on-disk layout (both the per-user
 ``{base_dir}/agents/``, with the same shadowing rule the file store uses) and
 writes each as a row in the shared ``agents`` table.
 
-Design (mirrors ``scripts/migrate_user_isolation.py``):
+Design (mirrors the other operator-run migration scripts in this directory):
 - Explicit, operator-run. Nothing auto-imports on boot.
 - Idempotent: an agent already present in the db is skipped, so re-running is safe.
 - Non-destructive: the on-disk files are left untouched, so unsetting

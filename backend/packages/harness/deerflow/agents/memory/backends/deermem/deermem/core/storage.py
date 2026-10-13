@@ -31,7 +31,7 @@ from typing import Any, Protocol
 import yaml
 
 from ..config import DeerMemConfig
-from .paths import DEFAULT_AGENT_BUCKET, agent_facts_directory, fact_file_path, memory_file_path, safe_user_id, validate_agent_name
+from .paths import DEFAULT_AGENT_BUCKET, agent_facts_directory, data_root, fact_file_path, memory_file_path, safe_user_id, validate_agent_name
 
 logger = logging.getLogger(__name__)
 
@@ -1441,7 +1441,7 @@ class FileMemoryStorage(MemoryStorage):
         indexed = 0
         failed = 0
         if scopes is None:
-            root = Path(self._config.storage_path) if self._config.storage_path else memory_file_path(self._config).parent
+            root = data_root(self._config)
             candidates = root.glob("**/facts/**/*.md")
             for path in candidates:
                 try:

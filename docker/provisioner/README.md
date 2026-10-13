@@ -198,15 +198,9 @@ Gateway can surface a sandbox-runtime readiness signal in
 
 Older provisioner versions mounted PVC user-data from `threads/{thread_id}/user-data`. The user-scoped layout mounts from `deer-flow/users/{user_id}/threads/{thread_id}/user-data`.
 
-If an existing deployment already has PVC-backed user-data under the legacy layout, migrate the DeerFlow data directory before relying on the new PVC subPath. Mount the same PVC path that the gateway uses as its DeerFlow base directory, then run the existing user-isolation migration script:
+If an existing deployment already has PVC-backed user-data under the legacy layout, relocate the data into `users/<target-user-id>/threads/{thread_id}/user-data` before relying on the new PVC subPath. Mount the same PVC path that the gateway uses as its DeerFlow base directory, move the directories, then confirm the layout. Use `default` as the target user only when the legacy data should remain in the default no-auth user namespace. Run the move while no gateway or sandbox Pods are writing to those paths.
 
-```bash
-cd backend
-PYTHONPATH=. python scripts/migrate_user_isolation.py --dry-run
-PYTHONPATH=. python scripts/migrate_user_isolation.py --user-id <target-user-id>
-```
-
-This moves legacy `threads/{thread_id}/user-data` data under `users/<target-user-id>/threads/{thread_id}/user-data`, which matches the new provisioner PVC subPath when the gateway base directory is mounted at `deer-flow/` on the PVC. Use `default` as the target user only when the legacy data should remain in the default no-auth user namespace. Run the migration while no gateway or sandbox Pods are writing to those paths.
+This moves legacy `threads/{thread_id}/user-data` data under `users/<target-user-id>/threads/{thread_id}/user-data`, which matches the new provisioner PVC subPath when the gateway base directory is mounted at `deer-flow/` on the PVC. The one-shot user-isolation migration script was removed in the single-user build; the layout it produced is still what the provisioner expects.
 
 In hostPath mode, the gateway materializes enabled-only views under `skills_view/public` and `users/{user_id}/skills_view/{custom,legacy}` beneath `DEER_FLOW_HOST_BASE_DIR`; the provisioner mounts those stable directories. When skills are materialized per thread on the same PVC, set `SKILLS_PVC_NAME` to that PVC and configure `SKILLS_PVC_SUBPATH_TEMPLATE=deer-flow/users/{user_id}/threads/{thread_id}/skills`. Leaving the template empty preserves the legacy behavior of mounting the skills PVC root at `/mnt/skills`. The gateway does not yet populate that PVC layout dynamically, so PVC-backed skills do not receive hostPath projection updates.
 

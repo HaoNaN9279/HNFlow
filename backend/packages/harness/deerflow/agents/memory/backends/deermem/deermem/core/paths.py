@@ -35,6 +35,11 @@ AGENT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 # it outside the public custom-agent namespace accepted by AGENT_NAME_PATTERN.
 DEFAULT_AGENT_BUCKET = "__default__"
 
+# Weak-isolation bucket used when a caller omits ``user_id``. DeerMem stays
+# host-agnostic (no ``deerflow`` import), so it mirrors the host's
+# ``DEFAULT_USER_ID`` value (``"default"``) locally rather than importing it.
+_DEFAULT_USER_ID = "default"
+
 
 def safe_user_id(raw: str) -> str:
     """Normalize an external identity into the user-id charset (``[A-Za-z0-9_-]``).
@@ -69,6 +74,16 @@ def _default_root() -> Path:
     return Path.home() / ".deermem"
 
 
+def data_root(config: DeerMemConfig) -> Path:
+    """Return DeerMem's data root: ``config.storage_path`` or the default root.
+
+    The root holds the ``users/`` buckets and the derived ``.retrieval/`` index.
+    Callers that need to walk every bucket (index rebuild, warm-up) must use this
+    rather than :func:`memory_file_path`'s parent, which is a per-user bucket.
+    """
+    return Path(config.storage_path) if config.storage_path else _default_root()
+
+
 def memory_file_path(
     config: DeerMemConfig,
     agent_name: str | None = None,
@@ -81,25 +96,21 @@ def memory_file_path(
     (``$DEERMEM_DATA_DIR`` / ``~/.deermem/``). The host (deer-flow factory)
     injects an absolute base_dir as ``storage_path`` so memory lands at
     ``{base_dir}/users/{user_id}/memory.json`` (CWD-independent).
+
+    Single-user deployments always resolve a concrete bucket: an omitted
+    ``user_id`` falls back to :data:`_DEFAULT_USER_ID` (``"default"``) rather
+    than writing to the storage root, so ``user_id`` stays a weak-isolation
+    key and never a required argument.
     """
-    root = Path(config.storage_path) if config.storage_path else _default_root()
-    if config.strict_user_scope and user_id is None:
-        raise ValueError("user_id is required when strict_user_scope is enabled.")
+    root = data_root(config)
     manifest_filename = config.manifest_filename
     if Path(manifest_filename).name != manifest_filename or not manifest_filename.endswith(".json"):
         raise ValueError("manifest_filename must be a plain .json filename.")
 
-    if user_id is not None:
-        uid = safe_user_id(user_id)
-        if agent_name is not None:
-            validate_agent_name(agent_name)
-        bucket = root / "users" / uid
-        return bucket / manifest_filename
-    # Legacy: no user_id
+    uid = safe_user_id(user_id or _DEFAULT_USER_ID)
     if agent_name is not None:
         validate_agent_name(agent_name)
-    bucket = root
-    return bucket / manifest_filename
+    return root / "users" / uid / manifest_filename
 
 
 def agent_facts_directory(memory_path: Path, agent_name: str) -> Path:
