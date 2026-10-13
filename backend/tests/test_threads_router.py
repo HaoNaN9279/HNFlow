@@ -82,15 +82,15 @@ def _build_thread_app() -> tuple[FastAPI, InMemoryStore, InMemorySaver]:
     return app, store, checkpointer
 
 
-def test_compact_rejects_run_owned_by_another_worker(monkeypatch) -> None:
+def test_compact_rejects_in_flight_run_from_shared_store(monkeypatch) -> None:
     """The HTTP guard must consult the shared store, not only local run memory."""
     from deerflow.runtime import RunManager, RunStatus
     from deerflow.runtime.runs.store.memory import MemoryRunStore
 
     app, _store, _checkpointer = _build_thread_app()
     run_store = MemoryRunStore()
-    owner = RunManager(store=run_store, worker_id="worker-a")
-    non_owner = RunManager(store=run_store, worker_id="worker-b")
+    owner = RunManager(store=run_store)
+    non_owner = RunManager(store=run_store)
     app.state.run_manager = non_owner
     monkeypatch.setattr(
         threads,
@@ -113,15 +113,15 @@ def test_compact_rejects_run_owned_by_another_worker(monkeypatch) -> None:
     assert response.json()["detail"] == "Thread has a run in flight. Compact after the run finishes."
 
 
-def test_update_state_rejects_run_owned_by_another_worker(monkeypatch) -> None:
+def test_update_state_rejects_in_flight_run_from_shared_store(monkeypatch) -> None:
     """All out-of-run writes share the same durable thread-operation admission."""
     from deerflow.runtime import RunManager, RunStatus
     from deerflow.runtime.runs.store.memory import MemoryRunStore
 
     app, _store, _checkpointer = _build_thread_app()
     run_store = MemoryRunStore()
-    owner = RunManager(store=run_store, worker_id="worker-a")
-    app.state.run_manager = RunManager(store=run_store, worker_id="worker-b")
+    owner = RunManager(store=run_store)
+    app.state.run_manager = RunManager(store=run_store)
     accessor = SimpleNamespace(
         graph=None,
         aupdate=AsyncMock(side_effect=AssertionError("state write must not run")),
@@ -690,15 +690,15 @@ def test_goal_status_and_clear_round_trip() -> None:
     assert "goal" not in state_response.json()["values"]
 
 
-def test_goal_mutations_reject_run_owned_by_another_worker() -> None:
+def test_goal_mutations_reject_in_flight_run_from_shared_store() -> None:
     """PUT and DELETE goal writes share the durable thread-operation boundary."""
     from deerflow.runtime import RunManager, RunStatus
     from deerflow.runtime.runs.store.memory import MemoryRunStore
 
     app, _store, _checkpointer = _build_thread_app()
     run_store = MemoryRunStore()
-    owner = RunManager(store=run_store, worker_id="worker-a")
-    app.state.run_manager = RunManager(store=run_store, worker_id="worker-b")
+    owner = RunManager(store=run_store)
+    app.state.run_manager = RunManager(store=run_store)
     thread_id = "thread-goal-race"
 
     async def _seed_active_run() -> None:

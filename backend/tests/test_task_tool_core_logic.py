@@ -346,7 +346,7 @@ def test_task_tool_rejects_bash_subagent_when_host_bash_disabled(monkeypatch):
 
 
 def test_task_tool_threads_runtime_app_config_to_subagent_dependencies(monkeypatch):
-    app_config = object()
+    app_config = SimpleNamespace(subagents=SimpleNamespace(max_delegation_depth=3))
     config = _make_subagent_config(name="bash")
     runtime = _make_runtime(app_config=app_config)
     events = []
@@ -796,7 +796,10 @@ def test_task_tool_runtime_none_passes_groups_none(monkeypatch):
     monkeypatch.setattr(task_tool_module, "get_stream_writer", lambda: events.append)
     monkeypatch.setattr(task_tool_module.asyncio, "sleep", _no_sleep)
     monkeypatch.setattr("deerflow.tools.get_available_tools", get_available_tools)
-    fallback_app_config = SimpleNamespace(models=[SimpleNamespace(name="default-model")])
+    fallback_app_config = SimpleNamespace(
+        models=[SimpleNamespace(name="default-model")],
+        subagents=SimpleNamespace(max_delegation_depth=3),
+    )
     monkeypatch.setattr(task_tool_module, "get_app_config", lambda: fallback_app_config)
 
     output = _run_task_tool(

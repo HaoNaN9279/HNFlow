@@ -157,11 +157,16 @@ def test_sandbox_mkdir_precedes_uvicorn_launch(name):
 
     ``_mkdir_dirs`` only proves the mkdir is present somewhere; this pins script
     order so a future edit can't move (or guard) the mkdir below the launch and
-    silently reintroduce the #3454 crash on a fresh checkout. ``uv run uvicorn``
-    matches the launch but not serve.sh's ``stop_all`` kill line.
+    silently reintroduce the #3454 crash on a fresh checkout. The launch is
+    ``uv run uvicorn`` or the Windows-trampoline-safe ``uv run python -m
+    uvicorn``; comment lines that merely name the tool are ignored so they never
+    count as the launch.
     """
     lines = LAUNCHERS[name].read_text(encoding="utf-8").splitlines()
-    launch_idx = next((i for i, ln in enumerate(lines) if "uv run uvicorn" in ln), None)
+    launch_idx = next(
+        (i for i, ln in enumerate(lines) if not ln.lstrip().startswith("#") and re.search(r"uv run (?:python -m )?uvicorn", ln)),
+        None,
+    )
     mkdir_idx = next((i for i, ln in enumerate(lines) if re.search(r"\bmkdir\b", ln) and "sandbox" in ln.lower()), None)
 
     assert launch_idx is not None, f"{name}: could not locate the 'uv run uvicorn' launch line"

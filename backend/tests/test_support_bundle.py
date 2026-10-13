@@ -587,7 +587,7 @@ def test_create_support_bundle_writes_ai_triage_entrypoints(tmp_path, monkeypatc
     assert "### Steps to reproduce" in issue_draft
     assert "### Relevant logs" in issue_draft
     assert "DeerFlow Health Check" in issue_draft
-    assert "### How are you running DeerFlow?" in issue_draft
+    assert "### How are you running HNFlow?" in issue_draft
     assert "<REQUIRED: choose Local, Docker, CI, or Other>" in issue_draft
     assert "### Operating system" in issue_draft
     assert "macOS" in issue_draft

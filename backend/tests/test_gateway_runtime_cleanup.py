@@ -105,7 +105,7 @@ def test_backend_make_dev_gateway_reload_excludes_runtime_state_with_absolute_di
     assert "DEER_FLOW_HOME := $(abspath $(DEER_FLOW_HOME))" in makefile
     assert "BACKEND_SANDBOX_HOME := $(abspath $(CURDIR)/sandbox)" in makefile
     assert 'mkdir -p "$(DEER_FLOW_HOME)" "$(BACKEND_SANDBOX_HOME)"' in makefile
-    assert 'DEER_FLOW_HOME="$(DEER_FLOW_HOME)" uv run uvicorn' in makefile
+    assert 'DEER_FLOW_HOME="$(DEER_FLOW_HOME)" uv run python -m uvicorn' in makefile
     assert '--reload-exclude="$(DEER_FLOW_HOME)"' in makefile
     assert '--reload-exclude="$(BACKEND_SANDBOX_HOME)"' in makefile
 
