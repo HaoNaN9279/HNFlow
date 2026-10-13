@@ -6,11 +6,10 @@ import { expect, test } from "@playwright/test";
  * RECORD driver (Plan A): drive the real frontend through the write/read-file
  * scenario against the real-model gateway. The gateway captures every model
  * call to DEERFLOW_RECORD_OUT; this just needs to drive the flow and wait until
- * the captures stop arriving (main turns + follow-up suggestions all fired;
- * the default auto-title is local state). It asserts nothing about content —
- * it produces the fixture, it doesn't verify it.
+ * the captures stop arriving (the main agent turns all fired; the default
+ * auto-title is local state). It asserts nothing about content — it produces
+ * the fixture, it doesn't verify it.
  */
-const APP = "http://localhost:3000";
 const SCENARIO = "write_read_file";
 const MODE = "ultra";
 const PROMPT =
@@ -57,7 +56,6 @@ test.describe.configure({ timeout: 220_000 });
 
 test("record write/read-file run through the real frontend", async ({
   page,
-  context,
 }) => {
   const out = process.env.DEERFLOW_RECORD_OUT;
   expect(out, "DEERFLOW_RECORD_OUT must be set").toBeTruthy();
@@ -83,14 +81,6 @@ test("record write/read-file run through the real frontend", async ({
     "utf-8",
   );
 
-  const reg = await context.request.post(`${APP}/api/v1/auth/register`, {
-    data: {
-      email: `rec-${Date.now()}@example.com`,
-      password: "very-strong-password-123",
-    },
-  });
-  expect(reg.status(), await reg.text()).toBe(201);
-
   await page.addInitScript(() => {
     window.localStorage.setItem(
       "deerflow.local-settings",
@@ -103,16 +93,6 @@ test("record write/read-file run through the real frontend", async ({
   await expect(textarea).toBeVisible({ timeout: 30_000 });
   await textarea.fill(PROMPT);
   await textarea.press("Enter");
-
-  // Suggestions fire only AFTER the run completes (input-box.tsx POSTs
-  // /suggestions). Wait for that response so its model call lands in the capture
-  // before we check for stability — otherwise the stability window can return
-  // first and the recorded fixture would be missing the suggestions turn.
-  await page
-    .waitForResponse((r) => r.url().includes("/suggestions"), {
-      timeout: 90_000,
-    })
-    .catch(() => undefined);
 
   const captured = await waitForCaptureStable(out!);
   console.log(

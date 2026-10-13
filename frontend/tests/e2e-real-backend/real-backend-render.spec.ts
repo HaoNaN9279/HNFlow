@@ -14,12 +14,6 @@ const here = dirname(fileURLToPath(import.meta.url));
  * hash matches and the recorded model turns reproduce deterministically. The
  * default auto-title is local fallback state, not a replayed model turn.
  */
-// Register through the frontend origin (same-origin proxy) so the auth cookies
-// are stored for and sent to the browser origin — the gateway is reached via the
-// next.config rewrite, never cross-origin from the browser.
-const APP =
-  process.env.E2E_APP_URL ??
-  `http://localhost:${process.env.E2E_FRONTEND_PORT ?? "3000"}`;
 const fixture = JSON.parse(
   readFileSync(
     join(
@@ -42,40 +36,23 @@ function fallbackTitle(userMsg: string): string {
   return `${userMsg.slice(0, FALLBACK_TITLE_MAX_CHARS).trimEnd()}...`;
 }
 
-// Suggestions still come from the recorded model fixture. The default title no
-// longer does: TitleMiddleware uses a local fallback when title.model_name is
-// unset, so derive that expected title from the prompt.
+// The default title no longer comes from the recorded fixture: TitleMiddleware
+// uses a local fallback when title.model_name is unset, so derive that expected
+// title from the prompt. The replayed model output that proves a real backend
+// turn reached the browser is the final assistant answer in the fixture.
 const textTurns = fixture.turns
   .map((t) => t.output?.data?.content)
   .filter((c): c is string => typeof c === "string" && c.trim().length > 0);
-const suggestionsRaw = textTurns.find((c) => c.trim().startsWith("["));
-// Guarded parse: a bracket-prefixed turn that isn't a valid JSON string array
-// falls back to "" so the `not.toBe("")` assertion below fails with a clear
-// message instead of a generic JSON.parse throw.
-const EXPECTED_SUGGESTION = ((): string => {
-  if (!suggestionsRaw) return "";
-  try {
-    const arr: unknown = JSON.parse(suggestionsRaw);
-    return Array.isArray(arr) && typeof arr[0] === "string" ? arr[0] : "";
-  } catch {
-    return "";
-  }
-})();
+// Follow-up suggestion turns (bracket-prefixed JSON arrays) are no longer
+// requested by the frontend — the suggestions feature was removed — so skip
+// them and assert the assistant answer instead.
+const answerTurns = textTurns.filter((c) => !c.trim().startsWith("["));
+const EXPECTED_ANSWER =
+  answerTurns.length > 0 ? answerTurns[answerTurns.length - 1]!.trim() : "";
 const EXPECTED_TITLE = fallbackTitle(PROMPT);
 
 test.describe("real backend render (replay, no API key)", () => {
-  test.beforeEach(async ({ context }) => {
-    // Throwaway test account: register sets access_token + csrf_token cookies in
-    // the browser context (host-scoped to localhost, shared across ports), so
-    // the frontend's SDK (credentials:include + X-CSRF-Token) authenticates.
-    const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@example.com`;
-    const resp = await context.request.post(`${APP}/api/v1/auth/register`, {
-      data: { email, password: "very-strong-password-123" },
-    });
-    expect(resp.status(), await resp.text()).toBe(201);
-  });
-
-  test("renders the local auto-title + replayed suggestions from a real backend", async ({
+  test("renders the local auto-title + replayed assistant answer from a real backend", async ({
     page,
   }) => {
     // ultra mode so the context the frontend sends (is_plan_mode + subagent_enabled)
@@ -94,23 +71,22 @@ test.describe("real backend render (replay, no API key)", () => {
     await textarea.fill(PROMPT);
     await textarea.press("Enter");
 
-    // The title is the default local fallback, while the suggestion is a
-    // replayed model output absent from the prompt. Together they prove the
-    // backend state update and the replayed post-answer model call both render
-    // through the real frontend.
+    // The title is the default local fallback, while the assistant answer is a
+    // replayed model output. Together they prove the backend state update and
+    // the replayed model turn both render through the real frontend.
     expect(
       EXPECTED_TITLE,
       "default local fallback title should be derived from the prompt",
     ).not.toBe("");
     expect(
-      EXPECTED_SUGGESTION,
-      "fixture should contain a suggestions turn (re-record; the record spec waits for /suggestions)",
+      EXPECTED_ANSWER,
+      "fixture should contain an assistant answer turn",
     ).not.toBe("");
     const chat = page.locator("#chat");
     await expect(chat.getByText(EXPECTED_TITLE)).toBeVisible({
       timeout: 60_000,
     });
-    await expect(chat.getByText(EXPECTED_SUGGESTION)).toBeVisible({
+    await expect(chat.getByText(EXPECTED_ANSWER)).toBeVisible({
       timeout: 30_000,
     });
 
