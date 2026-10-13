@@ -336,7 +336,9 @@
 
 > **进度（A1 鉴权遗留清理）**：A1 删除鉴权后仍有悬挂引用，逐一收敛。**后端**：删 `config/auth_config.py`（OIDC/本地登录模型）与 `AppConfig.auth` 字段（无消费方，`extra="allow"` 移除安全）、`config.example.yaml` 的 SSO/OIDC 与本地登录配置段、`aio_sandbox/backend.py` 中已删的 `RemoteSandboxBackend` 提及；`tests/_replay_fixture.py` 去 `auth/register`+CSRF（否则 replay-e2e Layer 1 golden 失败）、`tests/test_gateway_lifespan_shutdown.py` 去 `app.gateway.app.auth.close_oidc_service` 补丁（该模块已删，此前 **10 个用例因 AttributeError 失败，被误判为平台失败**）。**前端**：删 `gateway-offline-banner`/`gateway-offline-fallback`（探针指向已删的 `/api/v1/auth/me`，fallback 无引用、`gatewayUnavailable` 恒 false，属死代码）、`WorkspaceContent` 的 `gatewayUnavailable` prop、i18n `logout`/`gatewayUnavailable*`。另清理 `docker/nginx/*.conf` 的登录/CSRF/auth 注释与 `.agent/skills/smoke-test/frontend_check.sh` 的整套登录/注册/initialize/session 死流程（`authenticate()` 简化为可达性检查）。**已知残留（无害，未清）**：前端 `core/api/{api-client,fetcher}.ts` 的 CSRF 注入管道仍在（`csrf_token` cookie 永不再下发，注入为空操作），可随后续前端整理一并移除。验证：后端 ruff 干净、收集 9961 无 import 错误、config/reload/lifespan/replay 用例通过（仅剩既有 Windows 环境失败）；前端 typecheck/lint/prettier/单测全绿。
 
-> 说明：A4（运营类）/ A5（TUI）/ [隔离] 审计 / e2e 悬挂引用清理 / A1 鉴权遗留清理已完成，裁剪规划（§8.2 [删除] 清单 + §8.3 [隔离] 默认关闭）全部落地。
+> **进度（全量后端套件甄别）**：跑 `pytest -m "not live" tests/`（9962 项）逐条甄别 104 个失败，其中 **28 个是本仓库真实陈旧测试**（此前被笼统归为「平台失败」）并已修复：`test_lead_agent_model_resolution`（`build_lead_runtime_middlewares` 假实现补 `deferred_setup`；去 A1 已删的 `authorization_provider`；server-auth 身份用例改为单用户 runtime-user 贯通、configurable 身份不可信）、`test_threads_router`（A3a 去 `worker_id`，改共享 store in-flight 断言）、`test_sandbox_orphan_reconciliation`（删 A3b 已移除的 stream_bridge→redis ownership 推断两用例）、`test_durable_context_middleware`（`deferred_setup` 形参）、`test_task_tool_core_logic`（app_config 提供 `subagents.max_delegation_depth`）、`test_support_bundle`（草稿标题 DeerFlow→HNFlow）、`test_gateway_runtime_cleanup`+`test_uvicorn_reload_exclude`（适配 `uv run python -m uvicorn` 启动形式、跳过注释行误匹配）。**剩余 75 项**均为 Windows/POSIX 平台或既有 flake（路径分隔符、symlink/chmod、POSIX shell、时钟粒度、剥离环境子进程、macOS 检测、`test_run_manager` 时序）。修复后相关套件与 ruff/format 全绿。
+
+> 说明：A4（运营类）/ A5（TUI）/ [隔离] 审计 / e2e 悬挂引用清理 / A1 鉴权遗留清理 / 全量失败甄别已完成，裁剪规划（§8.2 [删除] 清单 + §8.3 [隔离] 默认关闭）全部落地。
 
 ---
 
