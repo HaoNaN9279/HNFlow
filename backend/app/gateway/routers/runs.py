@@ -12,7 +12,7 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.gateway.deps import get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
+from app.gateway.deps import get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
 from app.gateway.permissions import require_permission
 from app.gateway.run_models import RunCreateRequest
@@ -132,12 +132,3 @@ async def run_messages(
     )
     data, has_more = trim_run_message_page(rows, limit=limit, after_seq=after_seq)
     return {"data": data, "has_more": has_more}
-
-
-@router.get("/{run_id}/feedback")
-@require_permission("runs", "read")
-async def run_feedback(run_id: str, request: Request) -> list[dict]:
-    """Return all feedback for a run."""
-    run = await _resolve_run(run_id, request)
-    feedback_repo = get_feedback_repo(request)
-    return await feedback_repo.list_by_run(run["thread_id"], run_id)

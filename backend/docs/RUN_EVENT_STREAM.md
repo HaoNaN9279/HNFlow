@@ -159,11 +159,9 @@ tests in the same change.
 
 `ai_message` is a read-only legacy alias for `llm.ai.response`. Current
 producers never emit it. Category-based message projections and store queries
-for the last visible AI message recognize previously persisted alias rows, so
-the `/messages/page` endpoint also attaches feedback correctly. The legacy
-`/messages` endpoint still returns those rows but only enriches feedback for the
-canonical name. Legacy aliases live outside the canonical catalog and must not
-be used by new producers.
+for the last visible AI message recognize previously persisted alias rows so
+legacy history stays visible. Legacy aliases live outside the canonical catalog
+and must not be used by new producers.
 
 ## Known Gaps
 

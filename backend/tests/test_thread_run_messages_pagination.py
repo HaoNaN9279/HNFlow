@@ -376,11 +376,7 @@ def test_list_thread_messages_injects_turn_duration_once_per_run():
     run_manager = AsyncMock()
     run_manager.list_by_thread = AsyncMock(return_value=[_run("run-1", 5), _run("run-2", 9)])
 
-    feedback_repo = MagicMock()
-    feedback_repo.list_by_thread_grouped = AsyncMock(return_value={})
-
     app = _make_app(event_store=event_store, run_manager=run_manager)
-    app.state.feedback_repo = feedback_repo
 
     with TestClient(app) as client:
         response = client.get("/api/threads/thread-1/messages")
@@ -425,11 +421,7 @@ def test_list_thread_messages_turn_duration_skips_middleware_tail():
     run_manager = AsyncMock()
     run_manager.list_by_thread = AsyncMock(return_value=[mock_run])
 
-    feedback_repo = MagicMock()
-    feedback_repo.list_by_thread_grouped = AsyncMock(return_value={})
-
     app = _make_app(event_store=event_store, run_manager=run_manager)
-    app.state.feedback_repo = feedback_repo
 
     with TestClient(app) as client:
         response = client.get("/api/threads/thread-1/messages")

@@ -75,18 +75,6 @@ async def test_run_repository_emits_tz_aware_timestamps(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_feedback_repository_emits_tz_aware_timestamps(tmp_path):
-    from deerflow.persistence.feedback import FeedbackRepository
-
-    repo = FeedbackRepository(await _init_sqlite(tmp_path))
-    try:
-        record = await repo.create(run_id="r-tz", thread_id="t-tz", rating=1, user_id="u1")
-        _assert_tz_aware(record["created_at"], context="feedback.create.created_at")
-    finally:
-        await _cleanup()
-
-
-@pytest.mark.anyio
 async def test_run_event_store_emits_tz_aware_timestamps(tmp_path):
     from deerflow.runtime.events.store.db import DbRunEventStore
 

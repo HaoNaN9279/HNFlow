@@ -72,7 +72,6 @@ def _collect_thread_id_routes():
     from app.gateway.routers import (
         artifacts,
         browser,
-        feedback,
         runs,
         scheduled_tasks,
         skills,
@@ -82,7 +81,7 @@ def _collect_thread_id_routes():
         uploads,
     )
 
-    routers = [artifacts, browser, feedback, runs, scheduled_tasks, skills, suggestions, thread_runs, threads, uploads]
+    routers = [artifacts, browser, runs, scheduled_tasks, skills, suggestions, thread_runs, threads, uploads]
     cases = []
     for module in routers:
         for route in module.router.routes:

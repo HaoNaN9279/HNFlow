@@ -17,7 +17,6 @@ from app.gateway.routers import (
     browser,
     console,
     features,
-    feedback,
     human_task_routes,
     input_polish,
     mcp,
@@ -528,9 +527,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)
-
-    # Feedback API is mounted at /api/threads/{thread_id}/runs/{run_id}/feedback
-    app.include_router(feedback.router)
 
     # Thread Runs API (LangGraph Platform-compatible runs lifecycle)
     app.include_router(thread_runs.router)

@@ -46,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0015_drop_users_table"
+HEAD = "0016_drop_feedback_table"
 BASELINE = "0001_baseline"
 
 
@@ -113,13 +113,13 @@ async def test_empty_branch_creates_all_and_stamps_head(tmp_path: Path) -> None:
         for required in {
             "runs",
             "threads_meta",
-            "feedback",
             "run_events",
             "alembic_version",
         }:
             assert required in tables, f"missing table: {required}"
-        # The multi-user ``users`` table is gone (single-user deployment).
+        # Removed upstream tables are gone (single-user local engine).
         assert "users" not in tables
+        assert "feedback" not in tables
         assert "token_usage_by_model" in await _runs_columns(engine)
         assert "cancel_action" in await _runs_columns(engine)
         assert "cancel_requested_at" in await _runs_columns(engine)

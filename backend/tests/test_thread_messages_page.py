@@ -24,7 +24,6 @@ def _make_app(
     superseded: set[str] | None = None,
     edit_visibility: EditReplayVisibility | None = None,
     records=None,
-    feedback=None,
 ):
     app = make_authed_test_app()
     app.include_router(thread_runs.router)
@@ -34,10 +33,6 @@ def _make_app(
     run_manager.list_edit_replay_visibility.return_value = edit_visibility or EditReplayVisibility()
     run_manager.get_many_by_thread.return_value = records or {}
     app.state.run_manager = run_manager
-    feedback_repo = AsyncMock()
-    feedback_repo.list_by_run_ids.return_value = feedback or {}
-    feedback_repo.list_by_thread_grouped.return_value = feedback or {}
-    app.state.feedback_repo = feedback_repo
     return app
 
 
@@ -337,7 +332,7 @@ def test_thread_page_logs_when_scan_cursor_does_not_advance(caplog):
     assert "row_count=1" in caplog.text
 
 
-def test_thread_page_feedback_only_attaches_to_global_last_ai_row():
+def test_thread_page_does_not_attach_feedback():
     store = MemoryRunEventStore()
 
     async def seed():
@@ -346,38 +341,24 @@ def test_thread_page_feedback_only_attaches_to_global_last_ai_row():
         await _put_message(store, "run-1", "ai", "final")
 
     asyncio.run(seed())
-    original_list_messages = store.list_messages
-    original_get_last_visible_ai_seq_by_run = store.get_last_visible_ai_seq_by_run
-    store.list_messages = AsyncMock(wraps=original_list_messages)
-    store.get_last_visible_ai_seq_by_run = AsyncMock(wraps=original_get_last_visible_ai_seq_by_run)
-    feedback = {"run-1": {"feedback_id": "fb-1", "rating": 1, "comment": "good"}}
-    app = _make_app(store, feedback=feedback)
+    app = _make_app(store)
     with TestClient(app) as client:
         response = client.get("/api/threads/thread-1/messages/page?limit=3")
 
     data = response.json()["data"]
-    assert data[0]["feedback"] is None
-    assert data[1]["feedback"] is None
-    assert data[2]["feedback"] == {"feedback_id": "fb-1", "rating": 1, "comment": "good"}
-    scan_user_id = store.list_messages.await_args.kwargs["user_id"]
-    enrichment_user_id = store.get_last_visible_ai_seq_by_run.await_args.kwargs["user_id"]
-    assert enrichment_user_id == scan_user_id
-    feedback_repo = app.state.feedback_repo
-    feedback_repo.list_by_run_ids.assert_awaited_once_with("thread-1", {"run-1"}, user_id=scan_user_id)
-    feedback_repo.list_by_thread_grouped.assert_not_awaited()
+    for row in data:
+        assert "feedback" not in row
 
 
 def test_thread_page_helpers_forward_explicit_user_without_request_context():
     event_store = AsyncMock()
     event_store.list_messages.return_value = []
-    event_store.get_last_visible_ai_seq_by_run.return_value = {}
     run_manager = AsyncMock()
     run_manager.list_successful_regenerate_sources.return_value = set()
     run_manager.get_many_by_thread.return_value = {}
     request = MagicMock()
     request.app.state.run_event_store = event_store
     request.app.state.run_manager = run_manager
-    request.app.state.feedback_repo = AsyncMock()
 
     async def exercise_helpers():
         await thread_runs._scan_thread_message_page(
@@ -397,7 +378,6 @@ def test_thread_page_helpers_forward_explicit_user_without_request_context():
     asyncio.run(exercise_helpers())
 
     assert event_store.list_messages.await_args.kwargs["user_id"] == "background-user"
-    assert event_store.get_last_visible_ai_seq_by_run.await_args.kwargs["user_id"] == "background-user"
 
 
 def test_thread_page_scan_rejects_any_row_without_sequence():

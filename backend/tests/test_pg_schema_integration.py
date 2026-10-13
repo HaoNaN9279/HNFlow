@@ -57,7 +57,7 @@ async def test_postgres_schema_places_orm_checkpointer_and_store_tables_together
             ).all()
 
         by_schema = {(row.table_schema, row.table_name) for row in rows}
-        orm_tables = {"runs", "run_events", "threads_meta", "feedback", "users"}
+        orm_tables = {"runs", "run_events", "threads_meta"}
         assert {("public", table) for table in orm_tables}.isdisjoint(by_schema)
         assert {(schema, table) for table in orm_tables}.issubset(by_schema)
         assert any(table_schema == schema and "checkpoint" in table_name for table_schema, table_name in by_schema)

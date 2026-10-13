@@ -87,7 +87,7 @@ async def test_upgrade_creates_table_and_index(tmp_path: Path) -> None:
 
         with sqlite3.connect(db_path) as raw:
             version_row = raw.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version_row[0] == "0015_drop_users_table", f"Expected head 0015_drop_users_table, got {version_row[0]}"
+        assert version_row[0] == "0016_drop_feedback_table", f"Expected head 0016_drop_feedback_table, got {version_row[0]}"
     finally:
         await close_engine()
 

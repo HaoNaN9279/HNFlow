@@ -432,8 +432,8 @@ restart the Gateway during an active run.
 
 ### Schema Migrations
 
-DeerFlow's application tables (`runs`, `threads_meta`, `feedback`, `users`,
-`run_events`, and the `channel_*` tables) are owned by alembic. The Gateway
+DeerFlow's application tables (`runs`, `threads_meta`, `run_events`) are owned
+by alembic. The Gateway
 runs `alembic upgrade head` automatically on startup via
 `bootstrap_schema(engine, backend=...)`, so operators do not run `alembic`
 manually in production. Bootstrap is concurrency-safe (Postgres advisory lock

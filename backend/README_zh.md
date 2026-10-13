@@ -420,7 +420,7 @@ make migrate-rev MSG="..."  # 根据当前 ORM 模型自动生成新的 Alembic 
 
 ### 数据库结构迁移
 
-DeerFlow 的应用程序表（`runs`、`threads_meta`、`feedback`、`users`、`run_events` 和 `channel_*` 表）由 Alembic 管理。Gateway 启动时会通过 `bootstrap_schema(engine, backend=...)` 自动运行 `alembic upgrade head`，因此运维人员不需要在生产环境中手动运行 `alembic`。初始化过程支持并发安全（跨进程使用 PostgreSQL advisory lock；单个 SQLite 进程内按引擎使用 `asyncio.Lock`），并能针对已有数据库结构（空数据库、旧版数据库或已带版本的数据库）保持幂等。
+DeerFlow 的应用程序表（`runs`、`threads_meta`、`run_events`）由 Alembic 管理。Gateway 启动时会通过 `bootstrap_schema(engine, backend=...)` 自动运行 `alembic upgrade head`，因此运维人员不需要在生产环境中手动运行 `alembic`。初始化过程支持并发安全（跨进程使用 PostgreSQL advisory lock；单个 SQLite 进程内按引擎使用 `asyncio.Lock`），并能针对已有数据库结构（空数据库、旧版数据库或已带版本的数据库）保持幂等。
 
 添加或修改 ORM 模型时，请在 `packages/harness/deerflow/persistence/migrations/versions/` 下提交新的迁移版本：
 

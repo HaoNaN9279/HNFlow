@@ -32,7 +32,7 @@ from app.gateway.checkpoint_lineage import (
     is_duration_only_checkpoint,
 )
 from app.gateway.context_usage import build_context_usage
-from app.gateway.deps import get_current_user, get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
+from app.gateway.deps import get_current_user, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
 from app.gateway.permissions import require_permission
 from app.gateway.run_models import RunCreateRequest
@@ -999,8 +999,8 @@ async def list_thread_messages(
     before_seq: int | None = Query(default=None, ge=1),
     after_seq: int | None = Query(default=None, ge=1),
 ) -> list[dict]:
-    """Return displayable messages for a thread (across all runs), with feedback attached."""
-    # Resolve the caller once; it is needed both to scope the feedback query
+    """Return displayable messages for a thread (across all runs)."""
+    # Resolve the caller once; it is needed both to scope the run lookup
     # below and to list the thread's runs for turn-duration injection.
     user_id = await get_current_user(request)
     run_mgr = get_run_manager(request)
@@ -1017,39 +1017,6 @@ async def list_thread_messages(
         include_extra=False,
         batch_size=THREAD_MESSAGE_LEGACY_SCAN_BATCH,
     )
-
-    # Find the last AI message per run_id. AI messages are persisted by
-    # RunJournal with event_type "llm.ai.response" (see runtime/journal.py);
-    # the event store returns that value verbatim, so match on it here.
-    last_ai_per_run: dict[str, int] = {}  # run_id -> index in messages list
-    for i, msg in enumerate(messages):
-        if msg.get("event_type") == "llm.ai.response":
-            last_ai_per_run[msg["run_id"]] = i
-
-    # Attach feedback to the last AI message of each run. Only query when there
-    # is an AI message to attach it to — threads with no completed AI turn yet
-    # would otherwise pay for a grouped feedback lookup whose result is unused.
-    feedback_map: dict[str, dict] = {}
-    if last_ai_per_run:
-        feedback_repo = get_feedback_repo(request)
-        feedback_map = await feedback_repo.list_by_thread_grouped(thread_id, user_id=user_id)
-
-    last_ai_indices = set(last_ai_per_run.values())
-    for i, msg in enumerate(messages):
-        if i in last_ai_indices:
-            run_id = msg["run_id"]
-            fb = feedback_map.get(run_id)
-            msg["feedback"] = (
-                {
-                    "feedback_id": fb["feedback_id"],
-                    "rating": fb["rating"],
-                    "comment": fb.get("comment"),
-                }
-                if fb
-                else None
-            )
-        else:
-            msg["feedback"] = None
 
     runs = await run_mgr.list_by_thread(thread_id, user_id=user_id)
     run_durations = compute_run_durations(runs)
@@ -1208,7 +1175,7 @@ async def _enrich_thread_message_page(
     request: Request,
     user_id: str | None,
 ) -> list[dict[str, Any]]:
-    """Attach run-scoped duration and feedback without mutating store rows."""
+    """Attach run-scoped duration without mutating store rows."""
     data = deepcopy(rows)
     if not data:
         return data
@@ -1217,26 +1184,6 @@ async def _enrich_thread_message_page(
     run_mgr = get_run_manager(request)
     records = await run_mgr.get_many_by_thread(thread_id, run_ids, user_id=user_id)
     run_durations = compute_run_durations(records.values())
-
-    event_store = get_run_event_store(request)
-    last_ai_seq_by_run = await event_store.get_last_visible_ai_seq_by_run(thread_id, run_ids, user_id=user_id)
-    feedback_map: dict[str, dict] = {}
-    feedback_run_ids = {run_id for row in data if isinstance((run_id := row.get("run_id")), str) and row.get("seq") == last_ai_seq_by_run.get(run_id)}
-    if feedback_run_ids:
-        feedback_repo = get_feedback_repo(request)
-        feedback_map = await feedback_repo.list_by_run_ids(thread_id, feedback_run_ids, user_id=user_id)
-
-    for row in data:
-        run_id = row.get("run_id")
-        row["feedback"] = None
-        if row.get("seq") == last_ai_seq_by_run.get(run_id):
-            feedback = feedback_map.get(run_id)
-            if feedback:
-                row["feedback"] = {
-                    "feedback_id": feedback["feedback_id"],
-                    "rating": feedback["rating"],
-                    "comment": feedback.get("comment"),
-                }
 
     # ``turn_duration`` is the run's wall-clock lifetime, not model thinking
     # time — stamp it on the run's LAST visible AI message only so the UI does
