@@ -334,7 +334,9 @@
 
 > **进度（e2e 悬挂引用清理，A1/A2/A4 收尾）**：单用户 + 裁剪后，e2e 配置/用例仍引用已删能力，属 §8.5「缺一遗留悬挂引用」。删 `frontend/playwright.auth.config.ts` 与 `e2e-tests.yml` 的 auth 步骤（指向已删 `tests/e2e-auth`，CI 会因 testDir 缺失失败）；`e2e-real-backend/{multi-run-order,real-backend-render}.spec.ts` 去 `auth/register`+CSRF、直接同源 seed，render 断言由「建议」改为「助手回答」；`e2e-record/record-write-read-file.spec.ts` 去注册与 `/suggestions` 等待；`e2e/utils/mock-api.ts` 删 auth/channels 路由桩与 `MOCK_AUTH_USER`。前端 typecheck/lint/prettier/单测全绿。并一并删除 `mock-api.ts` 中 A2 遗留的 Lark/integrations 路由死桩与 `larkIntegrationStatus`（`config`/`auth`/`install` 等，无 spec 引用）。
 
-> 说明：A4（运营类）/ A5（TUI）/ [隔离] 审计 / e2e 悬挂引用清理已完成，裁剪规划（§8.2 [删除] 清单 + §8.3 [隔离] 默认关闭）全部落地。
+> **进度（A1 鉴权遗留清理）**：A1 删除鉴权后仍有悬挂引用，逐一收敛。**后端**：删 `config/auth_config.py`（OIDC/本地登录模型）与 `AppConfig.auth` 字段（无消费方，`extra="allow"` 移除安全）、`config.example.yaml` 的 SSO/OIDC 与本地登录配置段、`aio_sandbox/backend.py` 中已删的 `RemoteSandboxBackend` 提及；`tests/_replay_fixture.py` 去 `auth/register`+CSRF（否则 replay-e2e Layer 1 golden 失败）、`tests/test_gateway_lifespan_shutdown.py` 去 `app.gateway.app.auth.close_oidc_service` 补丁（该模块已删，此前 **10 个用例因 AttributeError 失败，被误判为平台失败**）。**前端**：删 `gateway-offline-banner`/`gateway-offline-fallback`（探针指向已删的 `/api/v1/auth/me`，fallback 无引用、`gatewayUnavailable` 恒 false，属死代码）、`WorkspaceContent` 的 `gatewayUnavailable` prop、i18n `logout`/`gatewayUnavailable*`。验证：后端 ruff 干净、收集 9961 无 import 错误、config/reload/lifespan/replay 用例通过（仅剩既有 Windows 环境失败）；前端 typecheck/lint/prettier/单测全绿。
+
+> 说明：A4（运营类）/ A5（TUI）/ [隔离] 审计 / e2e 悬挂引用清理 / A1 鉴权遗留清理已完成，裁剪规划（§8.2 [删除] 清单 + §8.3 [隔离] 默认关闭）全部落地。
 
 ---
 
