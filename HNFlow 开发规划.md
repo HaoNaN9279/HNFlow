@@ -314,6 +314,10 @@
 >
 > 注：`backend/pyproject.toml` 的渠道依赖（lark-oapi / slack-sdk / python-telegram-bot / discord / buzz 等）暂未移除——`uv lock` 因 `tenki-sandbox` 不在 registry 无法重解析，强行改依赖会破坏 `uv.lock` 同步；待 lock 可重生成时随 A3/B1 一并清理。
 
+> **进度（A1）**：多用户鉴权批次已完成——物理移除网关 `auth/`（OIDC/JWT/session/password/用户开通）、`auth_middleware`、`authz`、`auth_disabled`、`internal_auth`、`langgraph_auth`、`routers/auth.py`、`csrf_middleware.py`，harness `authz/`、`guardrails/` 与 `config/{authorization,guardrails}_config.py`，持久化 `persistence/user/`；新增迁移 `0015_drop_users_table`。中间件链移除第 9 步（授权/guardrail）与 Layer 1 tool_filter；`authorization` / `guardrails` 配置段删除。收敛为**单用户**：请求身份固定 `DEFAULT_USER_ID="default"`，`user_id` 弱隔离列保留（C9）；`resolve_user_id(AUTO)` 无上下文时回落默认用户；路由权限门（`require_permission`）与管理员门（`require_admin_user`）变为放行（保留声明供将来复用），模型/工具授权过滤移除；CORS 常量迁移至 `app/gateway/cors.py`；`get_trusted_internal_owner_user_id` 可信头移除。前端删除 `(auth)/{login,setup,auth/callback}`、登录/注册辅助（next-path / remember-login / setup / gateway-config / proxy-policy）、`remember-session-option`；`core/auth` 收缩为静态单用户 shim（`AuthProvider` / `getServerSideUser` / `types` / `static-user`），workspace 直接进入、无登录门；`fetcher` 去掉 401→/login 重定向；账号设置去掉改密/登出。测试：删除纯鉴权/授权/guardrail 测试与用户隔离 e2e；更新持久化 HEAD→0015、路由/服务/客户端测试；后端全量剩余失败 130 项与 17 项新增失败均已复核为既有平台问题（Windows 路径/时序/symlink/POSIX shell）。前端 typecheck/lint/format/单测（1194）全绿。
+>
+> 注：前端 `tests/e2e-real-backend/*` 与 `tests/e2e/utils/mock-api.ts` 仍含 `/api/v1/auth/register|me` 流程，未在本次单元门禁内运行；后续按单用户重写（去除注册步骤）。
+
 ---
 
 ## 九、结论

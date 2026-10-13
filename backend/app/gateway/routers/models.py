@@ -3,13 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import (
-    _AuthorizationUnavailable,
-    _is_internal_caller,
-    resolve_model_authorization,
-)
-from app.gateway.deps import get_config, get_optional_user_from_request
-from deerflow.authz.provider import AuthzDecision, AuthzRequest
+from app.gateway.deps import get_config
 from deerflow.config.app_config import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -56,10 +50,6 @@ async def list_models(
     Returns model information suitable for frontend display,
     excluding sensitive fields like API keys and internal configuration.
 
-    When ``authorization.enabled`` is true, only models the caller's role may
-    ``list`` are returned (filtered via ``provider.filter_resources``). A
-    provider error yields an empty list (fail-closed) or all models (fail-open).
-
     Returns:
         A list of all configured models with their metadata and token usage display settings.
 
@@ -90,28 +80,6 @@ async def list_models(
         }
         ```
     """
-    visible_models = config.models
-    fail_closed = config.authorization.fail_closed
-
-    user = await get_optional_user_from_request(request)
-    if user is not None:
-        try:
-            provider, principal = resolve_model_authorization(user, is_internal=_is_internal_caller(request, user))
-        except _AuthorizationUnavailable as exc:
-            if exc.fail_closed:
-                visible_models = []
-        else:
-            if provider is not None and principal is not None:
-                try:
-                    allowed_names = provider.filter_resources(principal, "model", [m.name for m in config.models])
-                    if not isinstance(allowed_names, list) or any(not isinstance(n, str) for n in allowed_names):
-                        raise TypeError("AuthorizationProvider.filter_resources must return list[str]")
-                    allowed_set = set(allowed_names)
-                    visible_models = [m for m in config.models if m.name in allowed_set]
-                except Exception:
-                    logger.warning("Authorization provider failed while filtering models", exc_info=True)
-                    visible_models = [] if fail_closed else config.models
-
     models = [
         ModelResponse(
             name=model.name,
@@ -121,7 +89,7 @@ async def list_models(
             supports_thinking=model.supports_thinking,
             supports_reasoning_effort=model.supports_reasoning_effort,
         )
-        for model in visible_models
+        for model in config.models
     ]
     return ModelsListResponse(
         models=models,
@@ -149,10 +117,7 @@ async def get_model(
         Model information if found.
 
     Raises:
-        HTTPException: 404 if model not found; 403 if the caller's role may not
-        ``use`` the model (only when ``authorization.enabled`` is true). A
-        provider resolution error yields 403 (fail-closed) or allows the request
-        (fail-open), mirroring ``list_models``'s provider-error semantics.
+        HTTPException: 404 if model not found.
 
     Example Response:
         ```json
@@ -167,33 +132,6 @@ async def get_model(
     model = config.get_model_config(model_name)
     if model is None:
         raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found")
-
-    # Phase 3: enforce model:use authorization (deny → 403, not 404, since the
-    # model exists but the role lacks permission to use it).
-    fail_closed = config.authorization.fail_closed
-    user = await get_optional_user_from_request(request)
-    if user is not None:
-        try:
-            provider, principal = resolve_model_authorization(user, is_internal=_is_internal_caller(request, user))
-        except _AuthorizationUnavailable:
-            if fail_closed:
-                raise HTTPException(status_code=403, detail=f"Model '{model_name}' is not available for your role")
-        else:
-            if provider is not None and principal is not None:
-                try:
-                    decision = provider.authorize(AuthzRequest(principal=principal, resource="model", action="use", target=model_name))
-                    if not isinstance(decision, AuthzDecision):
-                        raise TypeError("AuthorizationProvider.authorize must return AuthzDecision")
-                    allowed = decision.allow
-                except Exception:
-                    logger.warning(
-                        "Authorization provider failed while checking model:use for %s",
-                        model_name,
-                        exc_info=True,
-                    )
-                    allowed = not fail_closed
-                if not allowed:
-                    raise HTTPException(status_code=403, detail=f"Model '{model_name}' is not available for your role")
 
     return ModelResponse(
         name=model.name,

@@ -1,7 +1,9 @@
-"""Cross-user isolation tests — non-negotiable safety gate.
+"""Storage-layer user bucket tests.
 
-Mirrors TC-API-17..20 from backend/docs/AUTH_TEST_PLAN.md. A failure
-here means users can see each other's data; PR must not merge.
+Exercises the repository ``user_id`` filter directly by switching the
+``user_context`` contextvar. In the single-user deployment the effective user
+is ``default``, but the storage layer still honours an explicit bucket, which
+these tests pin.
 
 Architecture note
 -----------------
@@ -416,8 +418,8 @@ async def test_feedback_cross_user_delete_denied(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.no_auto_user
-async def test_repository_without_context_raises(tmp_path):
-    """Defense-in-depth: calling repo methods without a user context errors."""
+async def test_repository_without_context_defaults_to_default_user(tmp_path):
+    """Single-user: an unset context falls back to the default user bucket."""
     from deerflow.persistence.engine import get_session_factory
     from deerflow.persistence.thread_meta import ThreadMetaRepository
 
@@ -425,8 +427,7 @@ async def test_repository_without_context_raises(tmp_path):
     try:
         repo = ThreadMetaRepository(get_session_factory())
         # Contextvar is explicitly unset under @pytest.mark.no_auto_user.
-        with pytest.raises(RuntimeError, match="no user context is set"):
-            await repo.get("anything")
+        assert await repo.get("anything") is None
     finally:
         await cleanup()
 

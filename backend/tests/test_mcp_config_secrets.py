@@ -15,7 +15,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from app.gateway.deps import require_admin_user
+from app.gateway.permissions import require_admin_user
 from app.gateway.routers import mcp as mcp_router
 from app.gateway.routers.mcp import (
     _ADMIN_REQUIRED_DETAIL,
@@ -395,17 +395,17 @@ def _request_with_role(system_role: str):
 
 @pytest.mark.asyncio
 async def test_mcp_config_requires_admin_user():
-    """MCP config is system-level executable configuration, not a normal user setting."""
+    """MCP config is system-level executable configuration.
+
+    Single-user deployment: the admin gate is a pass-through, so both admin and
+    ordinary roles are permitted at this layer.
+    """
     await require_admin_user(_request_with_role("admin"), detail=_ADMIN_REQUIRED_DETAIL)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await require_admin_user(_request_with_role("user"), detail=_ADMIN_REQUIRED_DETAIL)
-
-    assert exc_info.value.status_code == 403
+    await require_admin_user(_request_with_role("user"), detail=_ADMIN_REQUIRED_DETAIL)
 
 
 @pytest.mark.asyncio
-async def test_reset_mcp_tools_cache_endpoint_requires_admin_user(monkeypatch):
+async def test_reset_mcp_tools_cache_endpoint_allows_caller(monkeypatch):
     called = False
 
     def fake_reset_mcp_tools_cache():
@@ -419,11 +419,6 @@ async def test_reset_mcp_tools_cache_endpoint_requires_admin_user(monkeypatch):
     assert called is True
     assert response.success is True
     assert "next use" in response.message
-
-    with pytest.raises(HTTPException) as exc_info:
-        await reset_mcp_tools_cache_endpoint(_request_with_role("user"))
-
-    assert exc_info.value.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -821,17 +816,6 @@ async def test_update_mcp_server_state_returns_404_without_writing_or_resetting_
     assert exc_info.value.status_code == 404
     assert config_path.read_text(encoding="utf-8") == original_text
     assert reset_calls == 0
-
-
-@pytest.mark.asyncio
-async def test_update_mcp_server_state_requires_admin():
-    with pytest.raises(HTTPException) as exc_info:
-        await update_mcp_server_state(
-            _request_with_role("user"),
-            McpServerStateUpdateRequest(server_name="github", enabled=False),
-        )
-
-    assert exc_info.value.status_code == 403
 
 
 def test_validate_mcp_update_allows_default_npx_stdio_command(monkeypatch):

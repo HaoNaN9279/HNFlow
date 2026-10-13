@@ -14,7 +14,6 @@ from deerflow.config.agents_api_config import get_agents_api_config, load_agents
 from deerflow.config.app_config import AppConfig, get_app_config, reset_app_config
 from deerflow.config.checkpointer_config import get_checkpointer_config, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
-from deerflow.config.guardrails_config import get_guardrails_config, load_guardrails_config_from_dict
 from deerflow.config.memory_config import get_memory_config, load_memory_config_from_dict
 from deerflow.config.stream_bridge_config import get_stream_bridge_config, load_stream_bridge_config_from_dict
 from deerflow.config.subagents_config import get_subagents_app_config, load_subagents_config_from_dict
@@ -32,7 +31,6 @@ def _reset_config_singletons() -> None:
     load_agents_api_config_from_dict({})
     load_subagents_config_from_dict({})
     load_tool_search_config_from_dict({})
-    load_guardrails_config_from_dict({})
     load_checkpointer_config_from_dict(None)
     load_stream_bridge_config_from_dict(None)
     load_acp_config_from_dict({})
@@ -346,7 +344,6 @@ def test_app_config_coerces_commented_out_object_sections(tmp_path, monkeypatch)
                 "sandbox": {"use": "deerflow.sandbox.local:LocalSandboxProvider"},
                 "memory": None,
                 "summarization": None,
-                "guardrails": None,
                 "tool_output": None,
                 "run_events": None,
             }
@@ -361,7 +358,6 @@ def test_app_config_coerces_commented_out_object_sections(tmp_path, monkeypatch)
     # object of the expected type (not merely non-None).
     assert type(config.memory).__name__ == "MemoryConfig"
     assert type(config.summarization).__name__ == "SummarizationConfig"
-    assert type(config.guardrails).__name__ == "GuardrailsConfig"
     assert type(config.tool_output).__name__ == "ToolOutputConfig"
     assert type(config.run_events).__name__ == "RunEventsConfig"
 
@@ -539,7 +535,6 @@ def test_get_app_config_resets_singleton_configs_when_sections_removed(tmp_path,
             "memory": {"enabled": False, "max_facts": 50},
             "subagents": {"timeout_seconds": 42, "agents": {"reviewer": {"max_turns": 2}}},
             "tool_search": {"enabled": True},
-            "guardrails": {"enabled": True, "fail_closed": False},
             "checkpointer": {"type": "memory"},
             "stream_bridge": {"type": "memory", "queue_maxsize": 12},
         },
@@ -556,7 +551,6 @@ def test_get_app_config_resets_singleton_configs_when_sections_removed(tmp_path,
         assert get_memory_config().enabled is False
         assert get_subagents_app_config().timeout_seconds == 42
         assert get_tool_search_config().enabled is True
-        assert get_guardrails_config().enabled is True
         assert get_checkpointer_config() is not None
         assert get_stream_bridge_config() is not None
 
@@ -570,7 +564,6 @@ def test_get_app_config_resets_singleton_configs_when_sections_removed(tmp_path,
         assert get_memory_config().enabled is True
         assert get_subagents_app_config().timeout_seconds == 1800
         assert get_tool_search_config().enabled is False
-        assert get_guardrails_config().enabled is False
         assert get_checkpointer_config() is None
         assert get_stream_bridge_config() is None
     finally:

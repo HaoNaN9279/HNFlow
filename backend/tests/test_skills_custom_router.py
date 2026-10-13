@@ -10,7 +10,6 @@ from _router_auth_helpers import make_authed_test_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.gateway.auth.models import User
 from app.gateway.deps import get_config
 from app.gateway.routers import skills as skills_router
 from app.gateway.routers import uploads as uploads_router
@@ -19,10 +18,10 @@ from deerflow.skills.storage.user_scoped_skill_storage import UserScopedSkillSto
 from deerflow.skills.types import Skill
 
 
-def _make_admin_user() -> User:
+def _make_admin_user() -> SimpleNamespace:
     from uuid import uuid4
 
-    return User(email="admin-test@example.com", password_hash="x", system_role="admin", id=uuid4())
+    return SimpleNamespace(id=str(uuid4()), system_role="admin")
 
 
 def _skill_content(name: str, description: str = "Demo skill") -> str:

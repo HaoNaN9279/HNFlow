@@ -9,7 +9,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from app.gateway.auth.models import User
 from app.gateway.routers import browser as browser_router
 from app.gateway.routers.browser import (
     _negotiate_browser_frame_format,
@@ -110,7 +109,7 @@ def test_browser_stream_closes_4501_when_browser_runtime_unavailable():
 
 
 def test_browser_navigate_rejects_legacy_null_owner_thread():
-    user = User(email="browser@example.com", password_hash="x", system_role="user")
+    user = SimpleNamespace(id="browser-user", system_role="user")
     app = make_authed_test_app(user_factory=lambda: user)
     app.include_router(browser_router.router)
     app.state.thread_store.get = AsyncMock(return_value={"thread_id": "thread-1", "user_id": None})
@@ -125,7 +124,9 @@ def test_browser_navigate_rejects_legacy_null_owner_thread():
         )
 
     assert response.status_code == 404
-    app.state.thread_store.get.assert_awaited_once_with("thread-1", user_id=str(user.id))
+    from deerflow.runtime.user_context import get_effective_user_id
+
+    app.state.thread_store.get.assert_awaited_once_with("thread-1", user_id=get_effective_user_id())
 
 
 def test_browser_tools_disabled_when_cdp_risk_not_explicitly_accepted():
@@ -156,10 +157,12 @@ def test_browser_tools_enabled_when_cdp_risk_explicitly_accepted():
 
 
 def test_browser_navigate_redacts_failure_url_from_logs_and_response(caplog):
-    user = User(email="browser@example.com", password_hash="x", system_role="user")
+    user = SimpleNamespace(id="browser-user", system_role="user")
     app = make_authed_test_app(user_factory=lambda: user)
     app.include_router(browser_router.router)
-    app.state.thread_store.get = AsyncMock(return_value={"thread_id": "thread-1", "user_id": str(user.id)})
+    from deerflow.runtime.user_context import get_effective_user_id
+
+    app.state.thread_store.get = AsyncMock(return_value={"thread_id": "thread-1", "user_id": get_effective_user_id()})
     failing_url = "https://example.com/callback?code=secret#fragment"
 
     caplog.set_level(logging.ERROR, logger="app.gateway.routers.browser")

@@ -479,31 +479,26 @@ def _combined_digest(digests: list[str]) -> str:
 
 
 def _make_gateway_app(saver: Any, mode: str, store: Any) -> Any:
-    """Minimal authed gateway app, mirroring tests/_router_auth_helpers.py.
+    """Minimal gateway app for the benchmark.
 
     Reimplemented inline: benchmark scripts must not import from tests/.
     """
+    from types import SimpleNamespace
     from unittest.mock import MagicMock
-    from uuid import uuid4
 
     from fastapi import FastAPI, Request, Response
     from starlette.middleware.base import BaseHTTPMiddleware
 
-    from app.gateway.auth.models import User
-    from app.gateway.authz import AuthContext, Permissions
     from app.gateway.routers import threads
     from deerflow.persistence.thread_meta.memory import MemoryThreadMetaStore
-    from deerflow.runtime.user_context import reset_current_user, set_current_user
-
-    permissions = [Permissions.THREADS_READ, Permissions.THREADS_WRITE, Permissions.THREADS_DELETE]
+    from deerflow.runtime.user_context import DEFAULT_USER_ID, reset_current_user, set_current_user
 
     class _StubAuthMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next: Any) -> Response:
-            user = User(email="bench@example.com", password_hash="x", system_role="user", id=uuid4())
+            user = SimpleNamespace(id=DEFAULT_USER_ID, system_role="user")
             request.state.user = user
-            request.state.auth = AuthContext(user=user, permissions=list(permissions))
-            # Mirror the production AuthMiddleware: the user contextvar must be
-            # set or thread-meta lookups hit user_id=AUTO and raise per request.
+            # Mirror the production request path: a user is always in context
+            # so thread-meta lookups resolve to a concrete bucket.
             token = set_current_user(user)
             try:
                 return await call_next(request)

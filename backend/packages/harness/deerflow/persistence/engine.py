@@ -145,7 +145,7 @@ async def init_engine(
         # per-connection, so we wire the listener instead of running PRAGMA
         # once at startup. WAL gives concurrent reads + writers without
         # blocking and is the standard recommendation for any production
-        # SQLite deployment (TC-UPG-06 in AUTH_TEST_PLAN.md). The companion
+        # SQLite deployment. The companion
         # ``synchronous=NORMAL`` is the safe-and-fast pairing — fsync only
         # at WAL checkpoint boundaries instead of every commit.
         # We also widen ``busy_timeout`` to 30s here. Python's sqlite3 driver

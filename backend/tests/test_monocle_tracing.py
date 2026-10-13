@@ -15,7 +15,7 @@ import sys
 import textwrap
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -335,7 +335,6 @@ def test_gateway_lifespan_initializes_monocle():
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
         patch("app.gateway.app.setup_monocle_tracing_if_enabled", setup_spy),
-        patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
     ):
 
         async def drive() -> None:
@@ -370,7 +369,6 @@ def test_gateway_lifespan_survives_monocle_setup_failure(caplog):
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
         patch("app.gateway.app.setup_monocle_tracing_if_enabled", setup_spy),
-        patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
     ):
 
         async def drive() -> None:

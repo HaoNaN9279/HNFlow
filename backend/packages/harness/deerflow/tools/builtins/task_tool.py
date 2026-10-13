@@ -12,7 +12,6 @@ from langchain_core.messages import ToolMessage
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
-from deerflow.authz.principal import normalize_authz_attributes
 from deerflow.config import get_app_config
 from deerflow.extensions import resolve_run_extensions
 from deerflow.runtime.user_context import resolve_runtime_user_id
@@ -317,27 +316,11 @@ async def task_tool(
     # Get user_id for tracing (uses standard resolution order)
     user_id = resolve_runtime_user_id(runtime)
 
-    # Propagate the authenticated runtime context so delegated tool calls are
-    # evaluated by GuardrailMiddleware with the same identity/attribution as
-    # the lead agent. Sourced from the server-side context written by
-    # inject_authenticated_user_context (and run_id by the run worker); stays
-    # None when absent (e.g. internal-auth runs) so guardrail behavior is
-    # unchanged. Without this, role-aware policy silently mis-attributes any
-    # tool call delegated to a subagent (user_role=None).
+    # The parent run context, sourced from the server-side context written by
+    # the run worker. ``run_id`` attributes delegated tracing to the lead run.
     parent_context = runtime.context if runtime is not None else None
     parent_context = parent_context if isinstance(parent_context, dict) else {}
-    user_role = parent_context.get("user_role")
-    oauth_provider = parent_context.get("oauth_provider")
-    oauth_id = parent_context.get("oauth_id")
     run_id = parent_context.get("run_id")
-    # IM-channel sender identity: group chats share one thread across senders,
-    # so delegated bash commands need the dispatching turn's channel_user_id.
-    channel_user_id = parent_context.get("channel_user_id")
-    # Propagate authorization identity: is_internal (strict bool) and
-    # authz_attributes (validated Mapping, copied). These follow the same
-    # server-side provenance as user_role/oauth — see inject_authenticated_user_context.
-    is_internal = parent_context.get("is_internal") is True
-    authz_attributes = normalize_authz_attributes(parent_context.get("authz_attributes"))
     # The run's immutable extension snapshot, published by the run worker. Stays
     # None outside that path (embedded client, standalone LangGraph Server), where
     # the executor keeps its process-singleton fallback.
@@ -409,13 +392,7 @@ async def task_tool(
         "thread_id": thread_id,
         "trace_id": trace_id,
         "user_id": user_id,
-        "user_role": user_role,
-        "oauth_provider": oauth_provider,
-        "oauth_id": oauth_id,
         "run_id": run_id,
-        "channel_user_id": channel_user_id,
-        "is_internal": is_internal,
-        "authz_attributes": authz_attributes,
         "deerflow_trace_id": deerflow_trace_id,
     }
     if resolved_app_config is not None:

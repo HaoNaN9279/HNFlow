@@ -179,8 +179,6 @@ class FakeRunManager:
 
 
 def _request(checkpointer, event_store, *, run_manager=None, user_id="user-1"):
-    from app.gateway.auth_disabled import AUTH_SOURCE_SESSION
-
     return SimpleNamespace(
         app=SimpleNamespace(
             state=SimpleNamespace(
@@ -189,7 +187,7 @@ def _request(checkpointer, event_store, *, run_manager=None, user_id="user-1"):
                 run_manager=run_manager or FakeRunManager([]),
             )
         ),
-        state=SimpleNamespace(user=SimpleNamespace(id=user_id), auth_source=AUTH_SOURCE_SESSION),
+        state=SimpleNamespace(user=SimpleNamespace(id=user_id), auth_source="session"),
     )
 
 
@@ -251,7 +249,7 @@ def test_run_wait_readers_return_materialized_final_values() -> None:
                 return_value=(accessor, snapshot.config),
             ),
         ):
-            thread_result = await thread_runs.wait_run.__wrapped__("thread-1", body, request)
+            thread_result = await thread_runs.wait_run("thread-1", body, request)
             stateless_result = await runs.stateless_wait(body, request)
         return thread_result, stateless_result
 
@@ -303,7 +301,7 @@ def test_run_wait_readers_preserve_terminal_error_without_checkpoint() -> None:
                 return_value=(accessor, snapshot.config),
             ),
         ):
-            thread_result = await thread_runs.wait_run.__wrapped__("thread-1", body, request)
+            thread_result = await thread_runs.wait_run("thread-1", body, request)
             stateless_result = await runs.stateless_wait(body, request)
         return thread_result, stateless_result
 
@@ -340,7 +338,7 @@ def test_run_wait_readers_preserve_terminal_error_when_accessor_builder_fails(ro
                     side_effect=RuntimeError("graph construction failed"),
                 ),
             ):
-                return await thread_runs.wait_run.__wrapped__("thread-1", body, request)
+                return await thread_runs.wait_run("thread-1", body, request)
 
         with (
             patch.object(runs, "get_stream_bridge", return_value=object()),

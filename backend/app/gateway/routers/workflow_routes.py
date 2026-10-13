@@ -14,8 +14,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo
+from app.gateway.permissions import require_permission
 from deerflow.skills.catalog import SkillCatalog
 from deerflow.skills.types import Skill
 from deerflow.workflow.dependency_graph import find_dependency_cycles

@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import FastAPI, Request, Response
@@ -19,49 +20,35 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from app.gateway.routers import workflow_routes
 from deerflow.skills.types import DependencySpec, Skill, SkillCategory
 
 # ── Auth stub (mirrors test_workflow_routes.py) ───────────────────────────────
 
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
+_STUB_PERMISSIONS: list[str] = []
 
 
 class _WorkflowTestAuthMiddleware(BaseHTTPMiddleware):
-    """Stamp a fake user / AuthContext / auth_source onto every request."""
+    """Stamp a fake user onto every request."""
 
-    def __init__(self, app: ASGIApp, user_factory: Callable[[], User]) -> None:
+    def __init__(self, app: ASGIApp, user_factory: Callable[[], SimpleNamespace]) -> None:
         super().__init__(app)
         self._user_factory = user_factory
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        user = self._user_factory()
-        request.state.user = user
-        request.state.auth_source = "session"
-        request.state.auth = AuthContext(user=user, permissions=list(_STUB_PERMISSIONS))
+        request.state.user = self._user_factory()
         return await call_next(request)
 
 
-def _make_stub_user() -> User:
-    return User(
-        email="test@example.com",
-        password_hash="x",
+def _make_stub_user() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
         system_role="user",
-        id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
     )
 
 
-def _make_authed_workflow_app(repo, user_factory: Callable[[], User] | None = None):
-    """Build a FastAPI test app with stub auth + workflow repo on app.state."""
+def _make_authed_workflow_app(repo, user_factory: Callable[[], SimpleNamespace] | None = None):
+    """Build a FastAPI test app with stub identity + workflow repo on app.state."""
     factory = user_factory or _make_stub_user
     app = FastAPI()
     app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=factory)
@@ -272,16 +259,12 @@ def test_update_name_only_skips_cycle_check():
 
 def test_user_scope_isolation():
     """A cycle in user_a's definitions does not block user_b's unrelated save."""
-    user_a = User(
-        id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-        email="alice@test.com",
-        password_hash="x",
+    user_a = SimpleNamespace(
+        id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         system_role="user",
     )
-    user_b = User(
-        id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
-        email="bob@test.com",
-        password_hash="x",
+    user_b = SimpleNamespace(
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         system_role="user",
     )
 

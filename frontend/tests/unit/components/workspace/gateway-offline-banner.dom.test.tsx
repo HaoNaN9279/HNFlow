@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, rs } from "@rstest/core";
-import {
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 
 import { GatewayOfflineBanner } from "@/components/workspace/gateway-offline-banner";
 import { AuthProvider } from "@/core/auth/AuthProvider";
@@ -93,39 +87,15 @@ function renderBanner() {
   );
 }
 
-describe("GatewayOfflineBanner logout recovery (#3001)", () => {
-  it("renders a <button> (not a GET-style link) as the logout affordance", async () => {
+describe("GatewayOfflineBanner recovery affordance", () => {
+  it("renders a <button> (not a GET-style link) as the recovery affordance", async () => {
     installFetch();
     renderBanner();
 
     // The recovery control must be a <button>, not an <a>/<Link> whose
-    // browser navigation would turn into a GET against the POST-only
-    // /auth/logout endpoint — the exact 405 reported in #3001.
+    // browser navigation would turn into a GET — the exact 405 reported in #3001.
     const logout = await screen.findByRole("button", { name: /log out/i });
     expect(logout.tagName).toBe("BUTTON");
     expect(logout.hasAttribute("href")).toBe(false);
-  });
-
-  it("issues a POST (never a GET) to /api/v1/auth/logout when clicked", async () => {
-    const calls = installFetch();
-    renderBanner();
-
-    fireEvent.click(await screen.findByRole("button", { name: /log out/i }));
-
-    const logoutCall = await waitFor(() => {
-      const logoutCalls = calls.filter((c) => c.url.includes("/auth/logout"));
-      expect(logoutCalls).toHaveLength(1);
-      const call = logoutCalls[0];
-      if (!call) {
-        throw new Error("expected exactly one /auth/logout call");
-      }
-      return call;
-    });
-
-    expect(logoutCall.url).toBe("/api/v1/auth/logout");
-    expect(logoutCall.method).toBe("POST");
-    // Lock down the regression documented in #3001: a GET against this
-    // POST-only endpoint returns 405 and fails to clear the session.
-    expect(logoutCall.method).not.toBe("GET");
   });
 });

@@ -20,8 +20,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_current_user
+from app.gateway.permissions import require_permission
 from deerflow.config import get_app_config
 from deerflow.config.agents_config import list_custom_agents
 from deerflow.persistence.engine import get_session_factory

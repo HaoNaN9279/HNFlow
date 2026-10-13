@@ -735,57 +735,18 @@ All APIs return errors in a consistent format:
 
 ## Authentication
 
-DeerFlow supports four HTTP identity sources. They share the same thread/run isolation rules but differ in whether a row is created in `users` and how external identities are mapped. See [AUTH_DESIGN.md](AUTH_DESIGN.md) for the full design.
+HNFlow is a **single-user, local** deployment. There is no login, session cookie,
+CSRF token, OIDC/SSO, or internal-token auth. Every request is served for the
+default user (`DEFAULT_USER_ID = "default"`).
 
-| Model | Entry | `users` table | Isolation key |
-|---|---|---|---|
-| Browser session | `access_token` cookie after login/register | Yes | `users.id` |
-| OIDC / SSO | OAuth callback → cookie | Yes | `users.id` (see [SSO.md](SSO.md)) |
-| **Internal Auth** | `X-DeerFlow-Internal-Token` + `X-DeerFlow-Owner-User-Id` | **No** | Owner string on `threads_meta.user_id` |
+- No `/api/v1/auth/*` routes exist.
+- Thread/run/memory data is still stored under the `default` user bucket for
+  filesystem layout compatibility, but there is no cross-user isolation to enforce.
+- `request.state.auth_source`, the `X-DeerFlow-Owner-User-Id` header, and the
+  `X-DeerFlow-Internal-Token` header are gone.
 
-**Internal Auth** is a *platform-trust* integration: DeerFlow trusts the internal platform to authenticate the owner. Internal Auth lets a platform call the Gateway API directly with a deployment-shared token and a per-request owner header—no `users` row, but thread/run/checkpoint isolation works the same way.
-
-### Browser session (default)
-
-DeerFlow enforces authentication for all non-public HTTP routes. Public routes are limited to health/docs metadata and these public auth endpoints:
-
-- `POST /api/v1/auth/initialize` creates the first admin account when no admin exists.
-- `POST /api/v1/auth/login/local` logs in with email/password and sets an HttpOnly `access_token` cookie.
-- `POST /api/v1/auth/register` creates a regular `user` account and sets the session cookie.
-- `POST /api/v1/auth/logout` clears the session cookie.
-- `GET /api/v1/auth/setup-status` reports whether the first admin still needs to be created.
-
-The authenticated auth endpoints are:
-
-- `GET /api/v1/auth/me` returns the current user.
-- `POST /api/v1/auth/change-password` changes password, optionally changes email during setup, increments `token_version`, and reissues the cookie.
-
-Protected state-changing requests also require the CSRF double-submit token: send the `csrf_token` cookie value as the `X-CSRF-Token` header. Login/register/initialize/logout are bootstrap auth endpoints: they are exempt from the double-submit token but still reject hostile browser `Origin` headers.
-
-User isolation is enforced from the authenticated user context:
-
-- Thread metadata is scoped by `threads_meta.user_id`; search/read/write/delete APIs only expose the current user's threads.
-- Thread files live under `{base_dir}/users/{user_id}/threads/{thread_id}/user-data/` and are exposed inside the sandbox as `/mnt/user-data/`.
-- Memory and custom agents are stored under `{base_dir}/users/{user_id}/...`.
-
-Note: MCP outbound connections can still use OAuth for configured HTTP/SSE MCP servers; that is separate from DeerFlow API authentication.
-
-### Internal Auth (platform HTTP integration)
-
-For server-to-server integrations (e.g. a Feishu or WeCom/Enterprise WeChat bot backend), configure:
-
-```bash
-export DEER_FLOW_INTERNAL_AUTH_TOKEN="<long-random-secret>"
-```
-
-| Header | Required | Description |
-|---|---|---|
-| `X-DeerFlow-Internal-Token` | Yes | Must match `DEER_FLOW_INTERNAL_AUTH_TOKEN`; missing/invalid → `401` |
-| `X-DeerFlow-Owner-User-Id` | Yes for per-user isolation | Platform user id (e.g. `feishu_ou_alice`, `wecom_user_bob`); omit → `default` bucket |
-
-Does **not** use browser cookies or CSRF tokens. Does **not** insert into `users`; sets `threads_meta.user_id` / `runs.user_id` from the owner header. DeerFlow validates only the platform token—not whether the owner id represents a real end user; user validity is entirely the platform's responsibility. See [AUTH_DESIGN.md — Internal Auth](AUTH_DESIGN.md#internal-auth-direct-http) for trust boundaries, persistence, and security notes.
-
-Use the standard Gateway thread/run endpoints (`POST /api/threads`, `POST /api/threads/{thread_id}/runs/stream`, etc.) with the headers above on every request.
+Note: MCP outbound connections can still use OAuth for configured HTTP/SSE MCP
+servers; that is separate from the (removed) DeerFlow API authentication.
 
 ---
 

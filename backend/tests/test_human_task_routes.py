@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI, Request, Response
@@ -11,45 +11,29 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from app.gateway.routers import human_task_routes
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
-_STUB_USER_ID = "11111111-1111-1111-1111-111111111111"
-
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
+_STUB_USER_ID = "default"
 
 
-def _make_stub_user() -> User:
-    return User(
-        email="test@example.com",
-        password_hash="x",
+def _make_stub_user() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=_STUB_USER_ID,
         system_role="user",
-        id=uuid.UUID(_STUB_USER_ID),
     )
 
 
 class _HumanTaskTestAuthMiddleware(BaseHTTPMiddleware):
-    """Stamp a fake user / AuthContext / auth_source onto every request."""
+    """Stamp a fake user onto every request."""
 
-    def __init__(self, app: ASGIApp, user_factory: Callable[[], User]) -> None:
+    def __init__(self, app: ASGIApp, user_factory: Callable[[], SimpleNamespace]) -> None:
         super().__init__(app)
         self._user_factory = user_factory
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        user = self._user_factory()
-        request.state.user = user
-        request.state.auth_source = "session"
-        request.state.auth = AuthContext(user=user, permissions=list(_STUB_PERMISSIONS))
+        request.state.user = self._user_factory()
         return await call_next(request)
 
 
@@ -77,14 +61,6 @@ _BOOL_SPEC = {"ports": [{"name": "approval", "type": "bool", "required": True}]}
 
 
 # ── GET / ─────────────────────────────────────────────────────────────────────
-
-
-def test_list_unauthenticated_returns_401():
-    app = FastAPI()
-    app.include_router(human_task_routes.router)
-    client = TestClient(app)
-    response = client.get("/api/human-tasks")
-    assert response.status_code == 401
 
 
 def test_list_success_passes_user_id_to_repo():
@@ -123,14 +99,6 @@ def test_list_valid_status_is_passed_through():
 
 
 # ── POST /{task_id}/submit ────────────────────────────────────────────────────
-
-
-def test_submit_unauthenticated_returns_401():
-    app = FastAPI()
-    app.include_router(human_task_routes.router)
-    client = TestClient(app)
-    response = client.post("/api/human-tasks/ht-abc/submit", json={"values": {}})
-    assert response.status_code == 401
 
 
 def test_submit_task_not_found_returns_404():

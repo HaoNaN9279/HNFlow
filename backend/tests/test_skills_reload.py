@@ -11,7 +11,6 @@ from _router_auth_helpers import make_authed_test_app
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.gateway.auth.models import User
 from app.gateway.deps import get_config
 from app.gateway.routers import skills as skills_router
 from deerflow.agents.lead_agent import prompt as prompt_module
@@ -30,11 +29,9 @@ def _make_app(*, system_role: str) -> FastAPI:
         skill_evolution=SimpleNamespace(enabled=True, moderation_model_name=None),
     )
     app = make_authed_test_app(
-        user_factory=lambda: User(
-            email=f"{system_role}-reload-test@example.com",
-            password_hash="x",
+        user_factory=lambda: SimpleNamespace(
+            id=str(uuid4()),
             system_role=system_role,
-            id=uuid4(),
         )
     )
     app.state.config = config

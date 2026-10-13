@@ -30,8 +30,6 @@ from langgraph.types import Command
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from app.gateway.routers import human_task_routes
 from app.gateway.services import start_workflow_run
 from deerflow.runtime.runs.manager import RunManager
@@ -40,15 +38,6 @@ from deerflow.workflow.schema import WorkflowDefinition
 # ── Shared test data ──────────────────────────────────────────────────────────
 
 _STUB_USER_ID = "11111111-1111-1111-1111-111111111111"
-
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
 
 _BOOL_SPEC = {"ports": [{"name": "approval", "type": "bool", "required": True}]}
 
@@ -65,27 +54,22 @@ _VALID_DEFINITION_DICT = {
 }
 
 
-def _make_stub_user() -> User:
-    return User(
-        email="test@example.com",
-        password_hash="x",
+def _make_stub_user() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=_STUB_USER_ID,
         system_role="user",
-        id=uuid.UUID(_STUB_USER_ID),
     )
 
 
 class _ResumeTestAuthMiddleware(BaseHTTPMiddleware):
-    """Stamp a fake user / AuthContext / auth_source onto every request."""
+    """Stamp a fake user onto every request."""
 
-    def __init__(self, app: ASGIApp, user_factory: Callable[[], User]) -> None:
+    def __init__(self, app: ASGIApp, user_factory: Callable[[], SimpleNamespace]) -> None:
         super().__init__(app)
         self._user_factory = user_factory
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        user = self._user_factory()
-        request.state.user = user
-        request.state.auth_source = "session"
-        request.state.auth = AuthContext(user=user, permissions=list(_STUB_PERMISSIONS))
+        request.state.user = self._user_factory()
         return await call_next(request)
 
 

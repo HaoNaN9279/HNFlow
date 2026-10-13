@@ -134,10 +134,9 @@ async def test_delete_denied(store):
 
 @pytest.mark.anyio
 @pytest.mark.no_auto_user
-async def test_no_context_raises(store):
-    """Calling methods without user context raises RuntimeError."""
-    with pytest.raises(RuntimeError, match="no user context is set"):
-        await store.search()
+async def test_no_context_defaults_to_default_user(store):
+    """Single-user: an unset context falls back to the default user bucket."""
+    assert await store.search() == []
 
 
 @pytest.mark.anyio

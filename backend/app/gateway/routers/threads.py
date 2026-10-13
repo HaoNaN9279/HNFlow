@@ -24,7 +24,6 @@ from langgraph.types import Overwrite
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
-from app.gateway.authz import require_permission
 from app.gateway.checkpoint_lineage import (
     CheckpointLineageError,
     CheckpointParentMissingError,
@@ -33,7 +32,7 @@ from app.gateway.checkpoint_lineage import (
     is_duration_only_checkpoint,
 )
 from app.gateway.deps import get_checkpointer, get_run_event_store
-from app.gateway.internal_auth import get_trusted_internal_owner_user_id
+from app.gateway.permissions import require_permission
 from app.gateway.services import (
     build_checkpoint_state_accessor,
     build_checkpoint_state_mutation_accessor,
@@ -588,16 +587,9 @@ async def _ensure_thread_for_goal(thread_id: str, request: Request) -> None:
 
     thread_store = get_thread_store(request)
     checkpointer = get_checkpointer(request)
-    thread_owner_user_id = get_trusted_internal_owner_user_id(request)
-    thread_owner_kwargs = {"user_id": thread_owner_user_id} if thread_owner_user_id else {}
+    thread_owner_kwargs = {"user_id": get_effective_user_id()}
 
     record = await thread_store.get(thread_id, **thread_owner_kwargs)
-    if record is None and thread_owner_user_id:
-        unscoped_record = await thread_store.get(thread_id, user_id=None)
-        if unscoped_record is not None:
-            if unscoped_record.get("user_id") != thread_owner_user_id:
-                await thread_store.update_owner(thread_id, thread_owner_user_id, user_id=None)
-            record = await thread_store.get(thread_id, **thread_owner_kwargs)
     if record is None:
         try:
             await thread_store.create(thread_id, metadata={}, **thread_owner_kwargs)
@@ -720,8 +712,8 @@ async def create_thread(body: ThreadCreateRequest, request: Request) -> ThreadRe
     thread_store = get_thread_store(request)
     thread_id = resolve_thread_id(body.thread_id)
     now = now_iso()
-    thread_owner_user_id = get_trusted_internal_owner_user_id(request)
-    thread_owner_kwargs = {"user_id": thread_owner_user_id} if thread_owner_user_id else {}
+    thread_owner_user_id = get_effective_user_id()
+    thread_owner_kwargs = {"user_id": thread_owner_user_id}
     # ``body.metadata`` is already stripped of server-reserved keys by
     # ``ThreadCreateRequest._strip_reserved`` — see the model definition.
 
@@ -841,8 +833,8 @@ async def branch_thread(thread_id: ThreadId, body: ThreadBranchRequest, request:
         source_record.get("display_name"),
         source_is_branch=source_metadata.get(_BRANCH_METADATA_KEY) is True,
     )
-    thread_owner_user_id = get_trusted_internal_owner_user_id(request)
-    thread_owner_kwargs = {"user_id": thread_owner_user_id} if thread_owner_user_id else {}
+    thread_owner_user_id = get_effective_user_id()
+    thread_owner_kwargs = {"user_id": thread_owner_user_id}
 
     # Copy materialized values with replace semantics: reducer channels must
     # not re-merge an already-aggregated value, so every copied reducer value

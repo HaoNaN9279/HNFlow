@@ -15,7 +15,6 @@ from typing import Any
 import pytest
 
 from deerflow.client import DeerFlowClient
-from deerflow.config.authorization_config import AuthorizationConfig
 from deerflow.trace_context import DEERFLOW_TRACE_METADATA_KEY, request_trace_context
 
 
@@ -71,7 +70,6 @@ def _make_client(_monkeypatch, *, enhance_enabled: bool = True) -> DeerFlowClien
     fake_app_config = SimpleNamespace(
         models=[SimpleNamespace(name="stub-model")],
         logging=SimpleNamespace(enhance=SimpleNamespace(enabled=enhance_enabled)),
-        authorization=AuthorizationConfig(enabled=False),
     )
     client = DeerFlowClient.__new__(DeerFlowClient)
     client._app_config = fake_app_config

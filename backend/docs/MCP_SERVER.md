@@ -54,19 +54,9 @@ MCP initialization and discovery flow, prefixes the discovered names with
 For capability parity with other official OpenViking harnesses, DeerFlow exposes
 the native `forget` tool with the other discovered tools. `forget` permanently
 deletes a `viking://` URI and should be called only after explicit user
-confirmation; DeerFlow does not enforce that confirmation.
-
-Operators who do not want agents to call `forget` can block its default visible
-name with DeerFlow's existing guardrail configuration:
-
-```yaml
-guardrails:
-  enabled: true
-  provider:
-    use: deerflow.guardrails.builtin:AllowlistProvider
-    config:
-      denied_tools: ["openviking_forget"]
-```
+confirmation; DeerFlow does not enforce that confirmation. Operators who do not
+want agents to call `forget` should disable or omit that MCP server (the
+guardrail configuration layer was removed in the single-user build).
 
 If `tool_name_prefix` is disabled for the OpenViking server, block `forget`
 instead.

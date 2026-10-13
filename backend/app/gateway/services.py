@@ -21,14 +21,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.messages.utils import convert_to_messages
 from langgraph.types import Command
 
-from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL
-from app.gateway.deps import get_checkpointer, get_local_provider, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
-from app.gateway.internal_auth import (
-    INTERNAL_OWNER_USER_ID_HEADER_NAME,
-    INTERNAL_SYSTEM_ROLE,
-    get_internal_user,
-    get_trusted_internal_owner_user_id,
-)
+from app.gateway.deps import get_checkpointer, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
 from app.gateway.run_models import RunCreateRequest
 from app.gateway.utils import sanitize_log_param
 from deerflow.agents.middlewares.dynamic_context_middleware import _DYNAMIC_CONTEXT_REMINDER_KEY, _REMINDER_DATE_KEY
@@ -69,7 +62,7 @@ from deerflow.runtime.secret_context import (
     validate_run_metadata_secrets,
 )
 from deerflow.runtime.stream_modes import normalize_stream_modes
-from deerflow.runtime.user_context import reset_current_user, set_current_user
+from deerflow.runtime.user_context import DEFAULT_USER_ID, reset_current_user
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
 from deerflow.utils.thread_id import validate_thread_id
 from deerflow.workflow.compiler import WorkflowCompileError, parse_subworkflow_spec
@@ -170,18 +163,20 @@ async def _ensure_thread_metadata(
 ) -> None:
     """Ensure an admitted run's thread exists without delaying task attachment."""
     thread_store = run_ctx.thread_store
-    existing = await thread_store.get(record.thread_id)
-    if existing is None and owner_user_id:
+    user_id = owner_user_id or DEFAULT_USER_ID
+    existing = await thread_store.get(record.thread_id, user_id=user_id)
+    if existing is None:
         unscoped = await thread_store.get(record.thread_id, user_id=None)
         if unscoped is not None:
-            if unscoped.get("user_id") != owner_user_id:
-                await thread_store.update_owner(record.thread_id, owner_user_id, user_id=None)
-            existing = await thread_store.get(record.thread_id)
+            if unscoped.get("user_id") != user_id:
+                await thread_store.update_owner(record.thread_id, user_id, user_id=None)
+            existing = await thread_store.get(record.thread_id, user_id=user_id)
     if existing is None:
         await thread_store.create(
             record.thread_id,
             assistant_id=record.assistant_id,
             metadata=record.metadata,
+            user_id=user_id,
         )
 
 
@@ -311,19 +306,22 @@ _CONTEXT_CONFIGURABLE_KEYS: frozenset[str] = frozenset(
 # arbitrary HTTP/IM clients must not be able to force autonomous execution.
 _CONTEXT_INTERNAL_CALLER_KEYS: frozenset[str] = frozenset({"non_interactive"})
 
-# Server-owned authorization identity fields. These must never be accepted from
+# Server-owned identity fields. These must never be accepted from
 # client-supplied ``body.config.context`` or ``body.config.configurable``. They
-# are either produced by Gateway auth state, admitted from a separately
-# authenticated internal request channel, or reserved for LangGraph Server.
-#   ``is_internal``             — derived from ``request.state.auth_source``
-#   ``authz_attributes``        — Phase 1A has no Gateway-side producer; cleared.
-#   ``channel_user_id``         — accepted only from trusted internal context.
+# are either produced by Gateway state or reserved for LangGraph Server.
+#   ``is_internal``             — server-derived provenance
+#   ``authz_attributes``        — no Gateway-side producer; cleared.
+#   ``channel_user_id``         — server-owned request channel identity.
+#   ``user_role``/``oauth_*``   — server-owned identity attribution.
 #   ``langgraph_auth_user*``    — populated only by LangGraph Server auth.
 _SERVER_OWNED_AUTHZ_CONTEXT_KEYS: frozenset[str] = frozenset(
     {
         "is_internal",
         "authz_attributes",
         "channel_user_id",
+        "user_role",
+        "oauth_provider",
+        "oauth_id",
         "langgraph_auth_user",
         "langgraph_auth_user_id",
     }
@@ -404,21 +402,6 @@ def merge_run_context_overrides(config: dict[str, Any], context: Mapping[str, An
         runtime_context.setdefault("user_id", context["user_id"])
 
 
-async def resolve_trusted_internal_owner_for_attribution(request: Request, owner_user_id: str | None) -> Any | None:
-    """Resolve the DeerFlow user used only for trusted internal attribution."""
-
-    if not owner_user_id:
-        return None
-    user = getattr(request.state, "user", None)
-    if getattr(user, "system_role", None) != INTERNAL_SYSTEM_ROLE:
-        return None
-    try:
-        return await get_local_provider().get_user(owner_user_id)
-    except Exception:
-        logger.exception("Failed to resolve trusted internal owner %s", sanitize_log_param(owner_user_id))
-        return None
-
-
 def inject_authenticated_user_context(
     config: dict[str, Any],
     request: Request,
@@ -426,21 +409,15 @@ def inject_authenticated_user_context(
     internal_owner_user: Any | None = None,
     request_context: Mapping[str, Any] | None = None,
 ) -> None:
-    """Stamp the authenticated user into the run context for background tools.
+    """Stamp the effective user into the run context for background tools.
 
     Tool execution may happen after the request handler has returned, so tools
     that persist user-scoped files should not rely only on ambient ContextVars.
-    The value comes from server-side auth state, never from client context.
+    Single-user deployment: identity is always ``DEFAULT_USER_ID``.
 
-    ``request_context.channel_user_id`` is the sole exception: it is honored
-    only after ``request.state.auth_source`` proves the caller is internal.
-    Values copied through the free-form RunnableConfig are always cleared.
+    Server-owned identity keys are cleared first so a client cannot forge
+    provenance through the free-form RunnableConfig.
     """
-
-    # --- Server-owned authorization identity fields ---
-    # Clear any client-forged values from both config sections, then write the
-    # authoritative is_internal. This runs before ALL early returns so that
-    # even user_id-is-None paths get a defined is_internal value.
     runtime_context = config.setdefault("context", {})
     if not isinstance(runtime_context, dict):
         raise TypeError("run context must be a mapping")
@@ -450,41 +427,7 @@ def inject_authenticated_user_context(
     if isinstance(configurable, dict):
         for key in _SERVER_OWNED_AUTHZ_CONTEXT_KEYS:
             configurable.pop(key, None)
-    auth_source = getattr(getattr(request, "state", None), "auth_source", None)
-    runtime_context["is_internal"] = auth_source == AUTH_SOURCE_INTERNAL
-    if auth_source == AUTH_SOURCE_INTERNAL and request_context is not None:
-        channel_user_id = request_context.get("channel_user_id")
-        if channel_user_id is not None:
-            runtime_context["channel_user_id"] = channel_user_id
-
-    user = getattr(request.state, "user", None)
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        return
-
-    if getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
-        runtime_context = config.setdefault("context", {})
-        if not isinstance(runtime_context, dict):
-            return
-        if internal_owner_user is None:
-            runtime_context.pop("user_role", None)
-            runtime_context.pop("oauth_provider", None)
-            runtime_context.pop("oauth_id", None)
-            return
-        owner_user_id = getattr(internal_owner_user, "id", None)
-        if owner_user_id is not None:
-            runtime_context["user_id"] = str(owner_user_id)
-        runtime_context["user_role"] = getattr(internal_owner_user, "system_role", None)
-        runtime_context["oauth_provider"] = getattr(internal_owner_user, "oauth_provider", None)
-        runtime_context["oauth_id"] = getattr(internal_owner_user, "oauth_id", None)
-        return
-
-    runtime_context = config.setdefault("context", {})
-    if isinstance(runtime_context, dict):
-        runtime_context["user_id"] = str(user_id)
-        runtime_context["user_role"] = getattr(user, "system_role", None)
-        runtime_context["oauth_provider"] = getattr(user, "oauth_provider", None)
-        runtime_context["oauth_id"] = getattr(user, "oauth_id", None)
+    runtime_context["user_id"] = DEFAULT_USER_ID
 
 
 def resolve_agent_factory(assistant_id: str | None):
@@ -1102,34 +1045,10 @@ async def start_run(
                 detail=f"Model {model_name!r} is not in the configured model allowlist",
             )
 
-    owner_user_id = get_trusted_internal_owner_user_id(request)
-    # Stateless run endpoints carry thread_id in the request *body*, so the
-    # @require_permission(owner_check=True) decorator -- which resolves ownership
-    # from the path param -- cannot protect them. Enforce thread ownership here,
-    # before any run is created, so one user cannot start runs on (or read /wait
-    # checkpoint state from) another user's thread. Missing rows (auto-created
-    # temp threads) and NULL-owner rows (shared / pre-auth data) stay accessible
-    # via check_access; only a thread already owned by another user is rejected
-    # with 404, matching thread_runs.py's anti-enumeration behaviour. Internal
-    # channel runs act on behalf of the connection owner carried in
-    # X-DeerFlow-Owner-User-Id, so they are scoped to that owner instead of
-    # bypassing the check -- a leaked internal token must not grant cross-user
-    # thread access.
-    user = getattr(request.state, "user", None)
-    if user is not None:
-        allowed = await run_ctx.thread_store.check_access(thread_id, str(user.id))
-        if not allowed and owner_user_id and getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
-            # Channel workers may also act for the connection owner named in
-            # the trusted header (e.g. claiming a legacy default-owned channel
-            # thread for its real owner).
-            allowed = await run_ctx.thread_store.check_access(thread_id, owner_user_id)
-        if not allowed:
-            raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
-
-    owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
+    owner_context_token = None
     try:
         agent_factory = resolve_agent_factory(body.assistant_id)
-        is_internal_caller = getattr(getattr(request, "state", None), "auth_source", None) == AUTH_SOURCE_INTERNAL
+        is_internal_caller = False
         command = getattr(body, "command", None)
         if command and command.get("resume") is not None:
             graph_input = Command(resume=command["resume"])
@@ -1143,24 +1062,17 @@ async def start_run(
         # that carries agent configuration (model_name, thinking_enabled, etc.).
         # Only agent-relevant keys are forwarded; unknown keys (e.g. thread_id) are ignored.
         merge_run_context_overrides(config, getattr(body, "context", None), internal=is_internal_caller)
-        if not is_internal_caller:
-            # ``body.config`` is free-form and copied verbatim by
-            # ``build_run_config``; scrub internal-only keys smuggled there.
-            strip_internal_context_keys(config)
-        internal_owner_user = await resolve_trusted_internal_owner_for_attribution(request, owner_user_id)
-        inject_authenticated_user_context(
-            config,
-            request,
-            internal_owner_user=internal_owner_user,
-            request_context=getattr(body, "context", None),
-        )
+        # ``body.config`` is free-form and copied verbatim by ``build_run_config``;
+        # scrub internal-only keys smuggled there.
+        strip_internal_context_keys(config)
+        inject_authenticated_user_context(config, request)
 
         async def run_after_metadata(record: RunRecord) -> None:
             metadata_task = asyncio.create_task(
                 _ensure_thread_metadata(
                     run_ctx,
                     record,
-                    owner_user_id=owner_user_id,
+                    owner_user_id=DEFAULT_USER_ID,
                 )
             )
             abort_task = asyncio.create_task(record.abort_event.wait())
@@ -1240,7 +1152,7 @@ async def start_run(
                     kwargs={"input": body.input, "config": redact_config_secrets(body.config)},
                     multitask_strategy=body.multitask_strategy,
                     model_name=model_name,
-                    user_id=owner_user_id,
+                    user_id=DEFAULT_USER_ID,
                 )
 
                 worker = run_after_metadata(record)
@@ -1441,18 +1353,9 @@ async def start_workflow_run(
 
     disconnect = DisconnectMode.cancel if on_disconnect == "cancel" else DisconnectMode.continue_
 
-    owner_user_id = get_trusted_internal_owner_user_id(request)
-    user = getattr(request.state, "user", None)
-    if user is not None:
-        allowed = await run_ctx.thread_store.check_access(thread_id, str(user.id))
-        if not allowed and owner_user_id and getattr(user, "system_role", None) == INTERNAL_SYSTEM_ROLE:
-            allowed = await run_ctx.thread_store.check_access(thread_id, owner_user_id)
-        if not allowed:
-            raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
-
-    owner_context_token = set_current_user(SimpleNamespace(id=owner_user_id)) if owner_user_id else None
+    owner_context_token = None
     try:
-        prefetch_user_id: str | None = str(user.id) if user is not None else owner_user_id
+        prefetch_user_id: str | None = DEFAULT_USER_ID
         definition_resolver = await _build_workflow_template_resolver(
             definition,
             request,
@@ -1466,7 +1369,7 @@ async def start_workflow_run(
                     on_disconnect=disconnect,
                     metadata=metadata or {},
                     kwargs={"params": params, "definition_id": definition_id},
-                    user_id=owner_user_id,
+                    user_id=DEFAULT_USER_ID,
                 )
 
                 async def worker() -> None:
@@ -1520,11 +1423,8 @@ async def launch_scheduled_thread_run(
             raise ValueError("launch_scheduled_thread_run requires request or app")
         request = SimpleNamespace(
             app=app,
-            headers=({INTERNAL_OWNER_USER_ID_HEADER_NAME: owner_user_id} if owner_user_id else {}),
-            state=SimpleNamespace(
-                user=get_internal_user(),
-                auth_source=AUTH_SOURCE_INTERNAL,
-            ),
+            headers={},
+            state=SimpleNamespace(),
             cookies={},
         )
     body = RunCreateRequest(
@@ -1533,11 +1433,9 @@ async def launch_scheduled_thread_run(
         command=None,
         metadata=metadata or {},
         config=None,
-        # ``user_id`` mirrors what IM channels put in ``body.context`` so
-        # runtime-context consumers without a ContextVar fallback (e.g.
-        # user-scoped GuardrailMiddleware providers) see the owning user;
-        # ``inject_authenticated_user_context`` skips the internal user.
-        context=({"non_interactive": True, "user_id": owner_user_id} if owner_user_id else {"non_interactive": True}),
+        # ``non_interactive`` strips ``ask_clarification`` from the lead-agent
+        # toolset so a scheduled run does not stall on human confirmation.
+        context={"non_interactive": True},
         webhook=None,
         checkpoint_id=None,
         checkpoint=None,

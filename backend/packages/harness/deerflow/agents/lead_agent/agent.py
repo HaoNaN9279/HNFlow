@@ -26,8 +26,6 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Mapping
-from typing import Any
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
@@ -49,10 +47,6 @@ from deerflow.agents.middlewares.token_usage_middleware import TokenUsageMiddlew
 from deerflow.agents.middlewares.tool_error_handling_middleware import build_lead_runtime_middlewares
 from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from deerflow.agents.thread_state import get_thread_state_schema, normalize_middleware_state_schemas
-from deerflow.authz.principal import build_principal_from_context
-from deerflow.authz.provider import AuthzDecision, AuthzRequest
-from deerflow.authz.runtime import resolve_authorization_provider
-from deerflow.authz.tool_filter import apply_tool_authorization
 from deerflow.config.agents_config import load_agent_config, validate_agent_name
 from deerflow.config.app_config import AppConfig, get_app_config
 from deerflow.config.memory_config import should_use_memory_tools
@@ -138,101 +132,6 @@ def _resolve_model_name(requested_model_name: str | None = None, *, app_config: 
     if requested_model_name and requested_model_name != default_model_name:
         logger.warning(f"Model '{requested_model_name}' not found in config; fallback to default model '{default_model_name}'.")
     return default_model_name
-
-
-def _authorize_model_name(
-    model_name: str,
-    *,
-    context: Mapping[str, Any],
-    app_config: AppConfig,
-) -> str:
-    """Enforce ``model:use`` authorization on the resolved model name.
-
-    When ``authorization.enabled`` is false this is a no-op (returns
-    *model_name* unchanged). When enabled, the resolved model is checked
-    against the provider's policy via ``authorize("model", "use")`` so the
-    runtime path and the Gateway ``get_model`` route enforce the same
-    action-scoped contract (matters for custom providers that distinguish
-    ``list`` from ``use``). On deny, a graceful fallback to the first
-    ``filter_resources``-allowed model is attempted (RFC §9: "fall back to an
-    allowed default, not error, to avoid breaking runs"). If no model is
-    allowed and ``fail_closed`` is true, ``ValueError`` is raised (matching
-    the existing "no models configured" contract); fail-open returns the
-    original name.
-
-    Mirrors the Principal/provider pattern of ``apply_tool_authorization`` so
-    the tool path and the model path share one identity source.
-    """
-    authz_config = app_config.authorization
-    if authz_config.enabled is not True:
-        return model_name
-
-    provider = resolve_authorization_provider(authz_config)
-    if provider is None:
-        return model_name
-
-    principal = build_principal_from_context(context, default_role=authz_config.default_role)
-    all_names = [m.name for m in app_config.models]
-
-    # Check the resolved model against the action-scoped ``model:use`` policy.
-    # This aligns with the Gateway ``get_model`` route, which also checks
-    # ``authorize("model", "use")``. For the built-in RBAC provider (which
-    # ignores ``action``) this is equivalent to a membership check; for a
-    # custom provider that distinguishes ``list`` from ``use``, it prevents
-    # a model visible via ``filter_resources`` but denied for ``use`` from
-    # being silently selected at runtime.
-    try:
-        decision = provider.authorize(AuthzRequest(principal=principal, resource="model", action="use", target=model_name))
-        if not isinstance(decision, AuthzDecision):
-            raise TypeError("AuthorizationProvider.authorize must return AuthzDecision")
-        if decision.allow:
-            return model_name
-    except Exception:
-        logger.warning("Authorization provider failed while checking model:use for '%s'", model_name, exc_info=True)
-        if authz_config.fail_closed:
-            raise ValueError("No models are authorized for the current role (authorization provider error).")
-        return model_name
-
-    # Denied — graceful fallback: pick the first model that ``filter_resources``
-    # says is visible AND that also passes ``authorize("model", "use")``. For the
-    # built-in RBAC provider (which ignores ``action``) this is equivalent to
-    # picking the first visible name; for a custom provider that distinguishes
-    # ``list`` from ``use``, it ensures the fallback is actually usable.
-    try:
-        allowed_names = provider.filter_resources(principal, "model", all_names)
-        if not isinstance(allowed_names, list) or any(not isinstance(n, str) for n in allowed_names):
-            raise TypeError("AuthorizationProvider.filter_resources must return list[str]")
-    except Exception:
-        logger.warning("Authorization provider failed while resolving allowed models", exc_info=True)
-        if authz_config.fail_closed:
-            raise ValueError("No models are authorized for the current role (authorization provider error).")
-        return model_name
-
-    for candidate in allowed_names:
-        if candidate == model_name:
-            continue  # already denied above
-        try:
-            cb_decision = provider.authorize(AuthzRequest(principal=principal, resource="model", action="use", target=candidate))
-            if isinstance(cb_decision, AuthzDecision) and cb_decision.allow:
-                logger.warning(
-                    "Model '%s' is not authorized for the current role; fallback to '%s'.",
-                    model_name,
-                    candidate,
-                )
-                return candidate
-        except Exception:
-            logger.warning(
-                "Authorization provider failed while checking model:use fallback for '%s'",
-                candidate,
-                exc_info=True,
-            )
-            if authz_config.fail_closed:
-                raise ValueError("No models are authorized for the current role (authorization provider error).")
-            return model_name
-    if authz_config.fail_closed:
-        raise ValueError("No models are authorized for the current role.")
-    logger.warning("No models are authorized for the current role; fail_open allows '%s'.", model_name)
-    return model_name
 
 
 def _create_summarization_middleware(
@@ -390,7 +289,6 @@ def build_middlewares(
     deferred_setup=None,
     mcp_routing_middleware: AgentMiddleware | None = None,
     user_id: str | None = None,
-    authorization_provider=None,
     extensions=None,
 ):
     """Build the lead-agent middleware chain based on runtime configuration.
@@ -412,8 +310,6 @@ def build_middlewares(
             deferred MCP schemas before the deferred filter runs.
         user_id: Effective user ID for user-scoped skill loading. Passed through
             to ``SkillActivationMiddleware`` so it can resolve per-user custom skills.
-        authorization_provider: Provider already resolved for assembly-time
-            filtering. Reused by the execution-time authorization middleware.
         extensions: Loaded extensions whose middleware contributions are merged
             into the final stack. Defaults to the process-wide set.
 
@@ -424,15 +320,11 @@ def build_middlewares(
     from deerflow.extensions import get_agent_build_extensions
 
     resolved_extensions = extensions if extensions is not None else get_agent_build_extensions()
-    runtime_middleware_kwargs = {
-        "app_config": resolved_app_config,
-        "lazy_init": True,
-    }
-    if authorization_provider is not None:
-        runtime_middleware_kwargs["authorization_provider"] = authorization_provider
-    if authorization_provider is not None and deferred_setup is not None:
-        runtime_middleware_kwargs["deferred_setup"] = deferred_setup
-    middlewares = build_lead_runtime_middlewares(**runtime_middleware_kwargs)
+    middlewares = build_lead_runtime_middlewares(
+        app_config=resolved_app_config,
+        lazy_init=True,
+        deferred_setup=deferred_setup,
+    )
 
     # Always inject current date (and optionally memory) as <system-reminder> into the
     # first HumanMessage to keep the system prompt fully static for prefix-cache reuse.
@@ -737,10 +629,6 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     # Final model name resolution: request → agent config → global default, with fallback for unknown names
     model_name = _resolve_model_name(requested_model_name or agent_model_name, app_config=resolved_app_config)
 
-    # Phase 3: enforce model:use authorization. On deny, fall back to the first
-    # allowed model (graceful) rather than crashing the run (RFC §9).
-    model_name = _authorize_model_name(model_name, context=cfg, app_config=resolved_app_config)
-
     model_config = resolved_app_config.get_model_config(model_name)
 
     if model_config is None:
@@ -814,19 +702,16 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         configured_tools = raw_tools
         if non_interactive:
             configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
-        authorization_candidates = [*configured_tools]
-        if skill_setup.describe_skill_tool:
-            authorization_candidates.append(skill_setup.describe_skill_tool)
-        if should_use_memory_tools(resolved_app_config.memory):
-            _append_memory_tools_without_name_conflicts(authorization_candidates)
         configured_tool_ids = {id(tool) for tool in configured_tools}
-        authorized_tools, _authz_provider = apply_tool_authorization(
-            authorization_candidates,
-            context=cfg,
-            app_config=resolved_app_config,
-        )
-        configured_tools = [tool for tool in authorized_tools if id(tool) in configured_tool_ids]
-        late_tools = [tool for tool in authorized_tools if id(tool) not in configured_tool_ids]
+        late_tools: list = []
+        if skill_setup.describe_skill_tool:
+            late_tools.append(skill_setup.describe_skill_tool)
+        if should_use_memory_tools(resolved_app_config.memory):
+            # Deduplicate against configured tools by name, then keep only the
+            # newly-appended ones as late tools.
+            candidates = [*configured_tools, *late_tools]
+            _append_memory_tools_without_name_conflicts(candidates)
+            late_tools = [tool for tool in candidates if id(tool) not in configured_tool_ids]
         final_tools, setup = assemble_deferred_tools(configured_tools, enabled=resolved_app_config.tool_search.enabled)
         final_tools.extend(late_tools)
         mcp_routing_middleware = build_mcp_routing_middleware(
@@ -846,7 +731,6 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                     deferred_setup=setup,
                     mcp_routing_middleware=mcp_routing_middleware,
                     user_id=resolved_user_id,
-                    authorization_provider=_authz_provider,
                 ),
                 mode,
             ),
@@ -894,19 +778,16 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     configured_tools = raw_tools + extra_tools
     if non_interactive:
         configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
-    authorization_candidates = [*configured_tools]
-    if skill_setup.describe_skill_tool:
-        authorization_candidates.append(skill_setup.describe_skill_tool)
-    if should_use_memory_tools(resolved_app_config.memory):
-        _append_memory_tools_without_name_conflicts(authorization_candidates)
     configured_tool_ids = {id(tool) for tool in configured_tools}
-    authorized_tools, _authz_provider = apply_tool_authorization(
-        authorization_candidates,
-        context=cfg,
-        app_config=resolved_app_config,
-    )
-    configured_tools = [tool for tool in authorized_tools if id(tool) in configured_tool_ids]
-    late_tools = [tool for tool in authorized_tools if id(tool) not in configured_tool_ids]
+    late_tools: list = []
+    if skill_setup.describe_skill_tool:
+        late_tools.append(skill_setup.describe_skill_tool)
+    if should_use_memory_tools(resolved_app_config.memory):
+        # Deduplicate against configured tools by name, then keep only the
+        # newly-appended ones as late tools.
+        candidates = [*configured_tools, *late_tools]
+        _append_memory_tools_without_name_conflicts(candidates)
+        late_tools = [tool for tool in candidates if id(tool) not in configured_tool_ids]
     final_tools, setup = assemble_deferred_tools(configured_tools, enabled=resolved_app_config.tool_search.enabled)
     final_tools.extend(late_tools)
     mcp_routing_middleware = build_mcp_routing_middleware(
@@ -914,7 +795,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
         setup,
         top_k=resolved_app_config.tool_search.auto_promote_top_k,
     )
-    mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(authorized_tools, deferred_names=setup.deferred_names)
+    mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(final_tools, deferred_names=setup.deferred_names)
     return create_agent(
         model=create_chat_model(name=model_name, thinking_enabled=thinking_enabled, reasoning_effort=reasoning_effort, app_config=resolved_app_config, attach_tracing=False, model_overrides=agent_model_overrides),
         tools=final_tools,
@@ -928,7 +809,6 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
                 deferred_setup=setup,
                 mcp_routing_middleware=mcp_routing_middleware,
                 user_id=resolved_user_id,
-                authorization_provider=_authz_provider,
             ),
             mode,
         ),

@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 import deerflow.utils.llm_text as llm_text
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_config
+from app.gateway.permissions import require_permission
 from deerflow.config.app_config import AppConfig
 from deerflow.config.suggestions_config import DEFAULT_MAX_SUGGESTIONS, MAX_SUGGESTIONS_LIMIT
 from deerflow.utils.oneshot_llm import run_oneshot_llm

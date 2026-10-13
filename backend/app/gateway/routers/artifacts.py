@@ -15,11 +15,9 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_run_manager
-from app.gateway.internal_auth import get_trusted_internal_owner_user_id
 from app.gateway.path_utils import resolve_thread_virtual_path
-from deerflow.config.paths import make_safe_user_id
+from app.gateway.permissions import require_permission
 from deerflow.runtime import ConflictError, ThreadOperationKind
 from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.sandbox.sandbox_provider import get_sandbox_provider
@@ -347,15 +345,9 @@ async def get_artifact(thread_id: ThreadId, path: str, request: Request, downloa
         - Download file: `/api/threads/abc123/artifacts/mnt/user-data/outputs/data.csv?download=true`
         - Active web content such as `.html`, `.xhtml`, and `.svg` artifacts is always downloaded
     """
-    # Trusted internal callers may act on behalf of a thread's owner via the
-    # owner-user-id header (honored only after the internal token validates).
-    # The header carries the raw platform owner id, while runs store files
-    # under the make_safe_user_id bucket (the same normalization the channel
-    # file pipeline and the memory router apply), so resolution uses the
-    # normalized id. Browser/API callers get None here and fall back to the
-    # effective user.
-    raw_owner_user_id = get_trusted_internal_owner_user_id(request)
-    owner_user_id = make_safe_user_id(raw_owner_user_id) if raw_owner_user_id else None
+    # Runs store files under the effective user bucket; single-user deployment
+    # resolves to the ``default`` bucket.
+    owner_user_id = None
 
     # Check if this is a request for a file inside a .skill archive (e.g., xxx.skill/SKILL.md)
     if ".skill/" in path:
@@ -440,8 +432,7 @@ async def update_artifact(
 ) -> ArtifactUpdateResponse:
     """Update an existing text artifact while the thread has no active run."""
     virtual_path = _normalize_editable_artifact_path(path)
-    raw_owner_user_id = get_trusted_internal_owner_user_id(request)
-    effective_user_id = make_safe_user_id(raw_owner_user_id) if raw_owner_user_id else get_effective_user_id()
+    effective_user_id = get_effective_user_id()
 
     sandbox_provider = None
     sandbox_id: str | None = None

@@ -23,7 +23,6 @@ from app.gateway.routers.uploads import UploadResponse
 from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddleware
 from deerflow.agents.thread_state import DeltaThreadState, ThreadState
 from deerflow.client import DeerFlowClient
-from deerflow.config.authorization_config import AuthorizationConfig, AuthorizationProviderConfig
 from deerflow.config.extensions_config import ExtensionsConfig, McpServerConfig
 from deerflow.config.paths import Paths
 from deerflow.skills.types import SkillCategory
@@ -53,7 +52,6 @@ def mock_app_config():
     config.tool_search.enabled = False
     config.database.checkpoint_channel_mode = "full"
     config.database.checkpoint_delta.snapshot_frequency = 10
-    config.authorization = AuthorizationConfig(enabled=False)
     return config
 
 
@@ -1087,111 +1085,7 @@ class TestExtractText:
 
 
 class TestEnsureAgent:
-    def test_authorization_filters_framework_tools_and_reuses_provider(self, client, mock_app_config):
-        from deerflow.authz.provider import AuthzDecision, AuthzReason
-
-        class Provider:
-            name = "test"
-
-            def filter_resources(self, principal, resource_type, candidates):
-                return [name for name in candidates if name == "safe_tool"]
-
-            def authorize(self, request):
-                # Phase 3: model:use is now checked during assembly; allow it so
-                # the model name passes through. Tool-level authorize is still
-                # not invoked here (filter_resources drives tool assembly).
-                return AuthzDecision(allow=True, reasons=[AuthzReason(code="authz.allowed")])
-
-            async def aauthorize(self, request):
-                return self.authorize(request)
-
-        provider = Provider()
-        mock_app_config.authorization = AuthorizationConfig(
-            enabled=True,
-            provider=AuthorizationProviderConfig(use="unused:Provider"),
-        )
-        mock_app_config.skills.deferred_discovery = True
-        client._app_config = mock_app_config
-
-        safe_tool = StructuredTool.from_function(lambda: "safe", name="safe_tool", description="safe")
-        denied_tool = StructuredTool.from_function(lambda: "denied", name="denied_tool", description="denied")
-        describe_tool = StructuredTool.from_function(lambda: "describe", name="describe_skill", description="describe")
-
-        with (
-            patch("deerflow.client.create_chat_model"),
-            patch("deerflow.client.create_agent", return_value=MagicMock()) as mock_create_agent,
-            patch("deerflow.client.build_middlewares", return_value=[]) as mock_build_middlewares,
-            patch("deerflow.client.apply_prompt_template", return_value="prompt"),
-            patch("deerflow.client.get_enabled_skills_for_config", return_value=[MagicMock()]),
-            patch("deerflow.client.build_skill_search_setup", return_value=SimpleNamespace(describe_skill_tool=describe_tool, skill_names=frozenset({"example"}))),
-            patch.object(client, "_get_tools", return_value=[safe_tool, denied_tool]),
-            patch("deerflow.authz.tool_filter.resolve_authorization_provider", return_value=provider),
-            patch("deerflow.agents.lead_agent.agent.resolve_authorization_provider", return_value=provider),
-            patch("deerflow.runtime.checkpointer.get_checkpointer", return_value=None),
-        ):
-            client._ensure_agent(client._get_runnable_config("t1"), context={"user_role": "user"})
-
-        assert [tool.name for tool in mock_create_agent.call_args.kwargs["tools"]] == ["safe_tool"]
-        assert mock_build_middlewares.call_args.kwargs["authorization_provider"] is provider
-
-    def test_authorization_cache_key_uses_complete_principal(self, client, mock_app_config):
-        mock_app_config.authorization = AuthorizationConfig(
-            enabled=True,
-            provider=AuthorizationProviderConfig(
-                use="deerflow.authz.rbac:RbacAuthorizationProvider",
-                config={"roles": {"user": {"tools": {"allow": "*"}}}},
-            ),
-        )
-        client._app_config = mock_app_config
-
-        with (
-            patch("deerflow.client.create_chat_model"),
-            patch("deerflow.client.create_agent", side_effect=[MagicMock(), MagicMock()]) as mock_create_agent,
-            patch("deerflow.client.build_middlewares", return_value=[]),
-            patch("deerflow.client.apply_prompt_template", return_value="prompt"),
-            patch("deerflow.client.get_enabled_skills_for_config", return_value=[]),
-            patch.object(client, "_get_tools", return_value=[]),
-            patch("deerflow.runtime.checkpointer.get_checkpointer", return_value=None),
-        ):
-            config = client._get_runnable_config("t1")
-            client._ensure_agent(config, context={"user_id": "u1", "user_role": "user", "authz_attributes": {"department": "eng"}})
-            client._ensure_agent(config, context={"user_id": "u2", "user_role": "user", "authz_attributes": {"department": "eng"}})
-
-        assert mock_create_agent.call_count == 2
-
-    def test_authorization_cache_key_snapshots_nested_attributes(self, client, mock_app_config):
-        mock_app_config.authorization = AuthorizationConfig(
-            enabled=True,
-            provider=AuthorizationProviderConfig(
-                use="deerflow.authz.rbac:RbacAuthorizationProvider",
-                config={"roles": {"user": {"tools": {"allow": "*"}}}},
-            ),
-        )
-        client._app_config = mock_app_config
-        attributes = {"groups": ["reader"]}
-
-        with (
-            patch("deerflow.client.create_chat_model"),
-            patch("deerflow.client.create_agent", side_effect=[MagicMock(), MagicMock()]) as mock_create_agent,
-            patch("deerflow.client.build_middlewares", return_value=[]),
-            patch("deerflow.client.apply_prompt_template", return_value="prompt"),
-            patch("deerflow.client.get_enabled_skills_for_config", return_value=[]),
-            patch.object(client, "_get_tools", return_value=[]),
-            patch("deerflow.runtime.checkpointer.get_checkpointer", return_value=None),
-        ):
-            config = client._get_runnable_config("t1")
-            context = {
-                "user_role": "user",
-                "authz_attributes": attributes,
-            }
-            client._ensure_agent(config, context=context)
-            attributes["groups"].append("admin")
-            client._ensure_agent(config, context=context)
-
-        assert mock_create_agent.call_count == 2
-
-    def test_disabled_authorization_preserves_framework_tool_order(self, client, mock_app_config):
-        mock_app_config.authorization = AuthorizationConfig(enabled=False)
+    def test_framework_tool_order_with_deferred_discovery(self, client, mock_app_config):
         mock_app_config.tool_search.enabled = True
         mock_app_config.skills.deferred_discovery = True
         client._app_config = mock_app_config
@@ -2773,38 +2667,7 @@ class TestScenarioAgentRecreation:
         assert len(agents_created) == 2
         assert agents_created[0] != agents_created[1]
 
-    def test_stream_propagates_trusted_authorization_context(self, client):
-        ai = AIMessage(content="ok", id="ai-1")
-        agent = _make_agent_mock([{"messages": [ai]}])
-        captured: dict = {}
-
-        def fake_ensure(config, *, context):
-            captured.update(context)
-            client._agent = agent
-
-        with patch.object(client, "_ensure_agent", side_effect=fake_ensure):
-            list(
-                client.stream(
-                    "hi",
-                    thread_id="t1",
-                    user_id="u1",
-                    user_role="guest",
-                    is_internal=True,
-                    authz_attributes={"department": "eng"},
-                )
-            )
-
-        assert captured["user_id"] == "u1"
-        assert captured["user_role"] == "guest"
-        assert captured["is_internal"] is True
-        assert captured["authz_attributes"] == {"department": "eng"}
-        assert agent.stream.call_args.kwargs["context"]["user_role"] == "guest"
-
-    def test_stream_uses_effective_user_for_authorization_context(self, client, mock_app_config):
-        mock_app_config.authorization = AuthorizationConfig(
-            enabled=True,
-            provider=AuthorizationProviderConfig(use="unused:Provider"),
-        )
+    def test_stream_uses_effective_user_for_context(self, client, mock_app_config):
         client._app_config = mock_app_config
         agent = _make_agent_mock([{"messages": [AIMessage(content="ok", id="ai-1")]}])
         captured: dict = {}

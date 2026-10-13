@@ -622,63 +622,6 @@ def test_create_thread_returns_existing_when_insert_loses_race() -> None:
     assert body["metadata"] == {"k": "v"}
 
 
-def test_insert_race_recovery_claims_unscoped_row_for_trusted_owner() -> None:
-    """The insert-race recovery mirrors the fast path's owner reconciliation.
-
-    When a competing request commits a legacy unscoped (``user_id=None``) row
-    between our idempotency read and our insert, and our insert then loses the
-    duplicate-key race, a trusted internal owner must still claim the row rather
-    than return it unowned — otherwise ownership of the same thread would depend
-    on whether the fast path or the recovery path resolved it.
-    """
-    import asyncio
-
-    from sqlalchemy.exc import IntegrityError
-
-    from app.gateway.internal_auth import INTERNAL_OWNER_USER_ID_HEADER_NAME, INTERNAL_SYSTEM_ROLE
-
-    store = InMemoryStore()
-    checkpointer = InMemorySaver()
-
-    class _RacingOwnerStore(MemoryThreadMetaStore):
-        """Our insert loses to a competing create that already wrote an
-        unscoped row, exactly the interleaving the recovery path exists for."""
-
-        async def create(self, thread_id, *, assistant_id=None, user_id=None, display_name=None, metadata=None):  # type: ignore[override]
-            # The competing request commits its (owner-less) row here, then our
-            # insert loses the primary-key race.
-            await super().create(thread_id, user_id=None, metadata=metadata)
-            raise IntegrityError(
-                "INSERT INTO threads_meta",
-                {},
-                Exception("UNIQUE constraint failed: threads_meta.thread_id"),
-            )
-
-    thread_store = _RacingOwnerStore(store)
-    request = SimpleNamespace(
-        headers={INTERNAL_OWNER_USER_ID_HEADER_NAME: "owner-1"},
-        state=SimpleNamespace(user=SimpleNamespace(id="default", system_role=INTERNAL_SYSTEM_ROLE)),
-        app=SimpleNamespace(state=SimpleNamespace(checkpointer=checkpointer, thread_store=thread_store)),
-    )
-
-    async def _scenario():
-        response = await threads.create_thread(
-            threads.ThreadCreateRequest(thread_id="channel-thread", metadata={"k": "v"}),
-            request,
-        )
-        owner_row = await thread_store.get("channel-thread", user_id="owner-1")
-        unscoped_lookup = await thread_store.get("channel-thread", user_id=None)
-        return response, owner_row, unscoped_lookup
-
-    response, owner_row, unscoped_lookup = asyncio.run(_scenario())
-
-    assert response.thread_id == "channel-thread"
-    # Recovery claimed the legacy row for the trusted owner, same as the fast path.
-    assert owner_row is not None
-    assert owner_row["user_id"] == "owner-1"
-    assert unscoped_lookup["user_id"] == "owner-1"
-
-
 def test_create_thread_does_not_swallow_non_integrity_errors() -> None:
     """A non-race insert failure must surface as 500, even when a row now exists.
 
@@ -783,66 +726,6 @@ def test_goal_mutations_reject_run_owned_by_another_worker() -> None:
     assert delete_response.status_code == 409, delete_response.text
     assert goal_response.status_code == 200, goal_response.text
     assert goal_response.json()["goal"]["objective"] == "Original goal"
-
-
-def test_internal_owner_header_assigns_thread_to_owner() -> None:
-    import asyncio
-
-    from app.gateway.internal_auth import INTERNAL_OWNER_USER_ID_HEADER_NAME, INTERNAL_SYSTEM_ROLE
-
-    store = InMemoryStore()
-    checkpointer = InMemorySaver()
-    thread_store = MemoryThreadMetaStore(store)
-    request = SimpleNamespace(
-        headers={INTERNAL_OWNER_USER_ID_HEADER_NAME: "owner-1"},
-        state=SimpleNamespace(user=SimpleNamespace(id="default", system_role=INTERNAL_SYSTEM_ROLE)),
-        app=SimpleNamespace(state=SimpleNamespace(checkpointer=checkpointer, thread_store=thread_store)),
-    )
-
-    async def _scenario():
-        response = await threads.create_thread(
-            threads.ThreadCreateRequest(thread_id="channel-thread", metadata={}),
-            request,
-        )
-        owner_row = await thread_store.get("channel-thread", user_id="owner-1")
-        internal_row = await thread_store.get("channel-thread", user_id="default")
-        return response, owner_row, internal_row
-
-    response, owner_row, internal_row = asyncio.run(_scenario())
-
-    assert response.thread_id == "channel-thread"
-    assert owner_row is not None
-    assert owner_row["user_id"] == "owner-1"
-    assert internal_row is None
-
-
-def test_goal_thread_creation_uses_internal_owner_header() -> None:
-    import asyncio
-
-    from app.gateway.internal_auth import INTERNAL_OWNER_USER_ID_HEADER_NAME, INTERNAL_SYSTEM_ROLE
-
-    store = InMemoryStore()
-    checkpointer = InMemorySaver()
-    thread_store = MemoryThreadMetaStore(store)
-    request = SimpleNamespace(
-        headers={INTERNAL_OWNER_USER_ID_HEADER_NAME: "owner-1"},
-        state=SimpleNamespace(user=SimpleNamespace(id="default", system_role=INTERNAL_SYSTEM_ROLE)),
-        app=SimpleNamespace(state=SimpleNamespace(checkpointer=checkpointer, thread_store=thread_store)),
-    )
-
-    async def _scenario():
-        await threads._ensure_thread_for_goal("channel-goal-thread", request)
-        owner_row = await thread_store.get("channel-goal-thread", user_id="owner-1")
-        internal_row = await thread_store.get("channel-goal-thread", user_id="default")
-        owner_threads = await thread_store.search(user_id="owner-1")
-        return owner_row, internal_row, owner_threads
-
-    owner_row, internal_row, owner_threads = asyncio.run(_scenario())
-
-    assert owner_row is not None
-    assert owner_row["user_id"] == "owner-1"
-    assert internal_row is None
-    assert [thread["thread_id"] for thread in owner_threads] == ["channel-goal-thread"]
 
 
 def test_get_thread_returns_iso_for_legacy_unix_record() -> None:

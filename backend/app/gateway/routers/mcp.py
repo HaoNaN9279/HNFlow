@@ -9,7 +9,7 @@ from typing import Any, Literal, NamedTuple
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.gateway.deps import require_admin_user
+from app.gateway.permissions import require_admin_user
 from deerflow.config.extensions_config import (
     ExtensionsConfig,
     McpRoutingConfig,

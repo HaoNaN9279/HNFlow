@@ -109,7 +109,6 @@ def test_subagent_builder_emits_working_deferred_filter():
     dropped filter stops hiding (turn 1 would bind mcp_calc)."""
     from deerflow.agents.middlewares.tool_error_handling_middleware import build_subagent_runtime_middlewares
     from deerflow.config.app_config import AppConfig, CircuitBreakerConfig
-    from deerflow.config.guardrails_config import GuardrailsConfig
     from deerflow.config.model_config import ModelConfig
     from deerflow.config.sandbox_config import SandboxConfig
 
@@ -136,7 +135,6 @@ def test_subagent_builder_emits_working_deferred_filter():
             )
         ],
         sandbox=SandboxConfig(use="test"),
-        guardrails=GuardrailsConfig(enabled=False),
         circuit_breaker=CircuitBreakerConfig(failure_threshold=7, recovery_timeout_sec=11),
     )
 

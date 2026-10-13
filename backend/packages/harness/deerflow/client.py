@@ -17,7 +17,6 @@ Usage:
 
 import asyncio
 import concurrent.futures
-import copy
 import logging
 import mimetypes
 import os
@@ -33,10 +32,9 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
-from deerflow.agents.lead_agent.agent import _authorize_model_name, build_middlewares
+from deerflow.agents.lead_agent.agent import build_middlewares
 from deerflow.agents.lead_agent.prompt import apply_prompt_template, get_enabled_skills_for_config
 from deerflow.agents.thread_state import get_thread_state_schema, normalize_middleware_state_schemas
-from deerflow.authz.principal import build_principal_from_context
 from deerflow.config.agents_config import AGENT_NAME_PATTERN
 from deerflow.config.app_config import get_app_config, is_trace_correlation_enabled, reload_app_config
 from deerflow.config.extensions_config import (
@@ -76,15 +74,9 @@ from deerflow.utils.thread_id import resolve_thread_id, validate_thread_id
 
 logger = logging.getLogger(__name__)
 
-_EMBEDDED_AUTHORIZATION_CONTEXT_KEYS = frozenset(
+_EMBEDDED_CONTEXT_KEYS = frozenset(
     {
         "user_id",
-        "user_role",
-        "oauth_provider",
-        "oauth_id",
-        "channel_user_id",
-        "is_internal",
-        "authz_attributes",
     }
 )
 
@@ -256,21 +248,6 @@ class DeerFlowClient:
         if context is not None:
             cfg.update(context)
 
-        authorization_identity = None
-        if self._app_config.authorization.enabled:
-            principal = build_principal_from_context(
-                cfg,
-                default_role=self._app_config.authorization.default_role,
-            )
-            authorization_identity = (
-                principal.user_id,
-                principal.role,
-                principal.oauth_provider,
-                principal.oauth_id,
-                principal.channel_user_id,
-                principal.is_internal,
-                copy.deepcopy(principal.attributes),
-            )
         key = (
             cfg.get("model_name"),
             cfg.get("thinking_enabled"),
@@ -282,7 +259,6 @@ class DeerFlowClient:
             frozenset(self._available_skills) if self._available_skills is not None else None,
             self._checkpoint_channel_mode,
             self._checkpoint_snapshot_frequency,
-            authorization_identity,
         )
 
         if self._agent is not None and self._agent_config_key == key:
@@ -290,24 +266,16 @@ class DeerFlowClient:
 
         thinking_enabled = cfg.get("thinking_enabled", True)
         model_name = cfg.get("model_name")
-        # Phase 3: enforce model:use authorization on the embedded/library path
-        # too, mirroring the Gateway runtime path in ``_make_lead_agent`` so the
-        # role-scoped model policy cannot be bypassed by constructing the agent
-        # through ``DeerFlowClient``. Resolve the ``None`` default to a concrete
-        # name first (what ``create_chat_model(name=None)`` would pick) so the
-        # policy covers the implicit default model. ``cfg`` already carries the
-        # identity that ``apply_tool_authorization`` reads below.
+        # Resolve the ``None`` default to a concrete name (what
+        # ``create_chat_model(name=None)`` would pick).
         if model_name is None and self._app_config.models:
             model_name = self._app_config.models[0].name
-        model_name = _authorize_model_name(model_name, context=cfg, app_config=self._app_config)
         subagent_enabled = cfg.get("subagent_enabled", False)
         max_concurrent_subagents = cfg.get("max_concurrent_subagents", 3)
         max_total_subagents = cfg.get("max_total_subagents", self._app_config.subagents.max_total_per_run)
 
         tools = self._get_tools(model_name=model_name, subagent_enabled=subagent_enabled)
 
-        # Add framework-provided tools before authorization so Layer 1 sees
-        # every capability that can become model-visible.
         skills_list = get_enabled_skills_for_config(self._app_config)
         if self._available_skills is not None:
             skills_list = [s for s in skills_list if s.name in self._available_skills]
@@ -320,17 +288,6 @@ class DeerFlowClient:
         if skill_setup.describe_skill_tool:
             late_tools.append(skill_setup.describe_skill_tool)
 
-        # Apply authorization Layer 1 before deferred assembly.
-        from deerflow.authz.tool_filter import apply_tool_authorization
-
-        configured_tool_ids = {id(tool) for tool in tools}
-        authorized_tools, _authz_provider = apply_tool_authorization(
-            [*tools, *late_tools],
-            context=cfg,
-            app_config=self._app_config,
-        )
-        tools = [tool for tool in authorized_tools if id(tool) in configured_tool_ids]
-        late_tools = [tool for tool in authorized_tools if id(tool) not in configured_tool_ids]
         final_tools, deferred_setup = assemble_deferred_tools(tools, enabled=self._app_config.tool_search.enabled)
         final_tools.extend(late_tools)
         mcp_routing_middleware = build_mcp_routing_middleware(
@@ -338,7 +295,7 @@ class DeerFlowClient:
             deferred_setup,
             top_k=self._app_config.tool_search.auto_promote_top_k,
         )
-        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(authorized_tools, deferred_names=deferred_setup.deferred_names)
+        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(final_tools, deferred_names=deferred_setup.deferred_names)
 
         effective_user_id = cfg.get("user_id") or get_effective_user_id()
 
@@ -360,7 +317,6 @@ class DeerFlowClient:
                     deferred_setup=deferred_setup,
                     mcp_routing_middleware=mcp_routing_middleware,
                     user_id=effective_user_id,
-                    authorization_provider=_authz_provider,
                 ),
                 self._checkpoint_channel_mode,
                 self._checkpoint_snapshot_frequency,
@@ -852,19 +808,14 @@ class DeerFlowClient:
 
         run_id = str(uuid.uuid4())
         context: dict[str, Any] = {"thread_id": thread_id, "run_id": run_id}
-        for key in _EMBEDDED_AUTHORIZATION_CONTEXT_KEYS:
+        for key in _EMBEDDED_CONTEXT_KEYS:
             if key in kwargs:
                 context[key] = kwargs[key]
 
         configurable = config.get("configurable") or {}
         deerflow_trace_id = get_current_trace_id()
         effective_user_id = context.get("user_id") or get_effective_user_id()
-        if self._app_config.authorization.enabled:
-            # Match the existing user-scoped storage/tracing identity when an
-            # embedded caller relies on CurrentUser instead of an explicit
-            # user_id override. Layer 1, Layer 2, and the agent cache must see
-            # the same actor.
-            context["user_id"] = effective_user_id
+        context["user_id"] = effective_user_id
         inject_langfuse_metadata(
             config,
             thread_id=thread_id,

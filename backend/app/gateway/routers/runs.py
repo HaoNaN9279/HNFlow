@@ -12,9 +12,9 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_feedback_repo, get_run_event_store, get_run_manager, get_run_store, get_stream_bridge
 from app.gateway.pagination import trim_run_message_page
+from app.gateway.permissions import require_permission
 from app.gateway.run_models import RunCreateRequest
 from app.gateway.services import build_checkpoint_state_accessor, sse_consumer, start_run, wait_for_run_completion
 from deerflow.runtime import serialize_channel_values_for_api

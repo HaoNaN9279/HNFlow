@@ -181,12 +181,12 @@ http {
 def test_gateway_cors_configuration_uses_gateway_allowlist():
     gateway_config = _read("backend/app/gateway/config.py")
     gateway_app = _read("backend/app/gateway/app.py")
-    csrf_middleware = _read("backend/app/gateway/csrf_middleware.py")
+    cors_module = _read("backend/app/gateway/cors.py")
 
     assert not re.search(r"(?<!GATEWAY_)[\"']CORS_ORIGINS[\"']", gateway_config)
     assert "cors_origins" not in gateway_config
     assert "get_configured_cors_origins" in gateway_app
-    assert "GATEWAY_CORS_ORIGINS" in csrf_middleware
+    assert "GATEWAY_CORS_ORIGINS" in cors_module
 
 
 def test_frontend_rewrites_langgraph_prefix_to_gateway():
@@ -221,8 +221,6 @@ def test_smoke_test_docs_do_not_expect_standalone_langgraph_server():
 
 def test_gateway_runtime_docs_do_not_reference_transition_modes():
     docs = {
-        "backend/docs/AUTH_UPGRADE.md": _read("backend/docs/AUTH_UPGRADE.md"),
-        "backend/docs/AUTH_TEST_DOCKER_GAP.md": _read("backend/docs/AUTH_TEST_DOCKER_GAP.md"),
         "docs/CODE_CHANGE_SUMMARY_BY_FILE.md": _read("docs/CODE_CHANGE_SUMMARY_BY_FILE.md"),
     }
 

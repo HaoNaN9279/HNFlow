@@ -11,8 +11,8 @@ from typing import BinaryIO
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_config
+from app.gateway.permissions import require_permission
 from deerflow.config.app_config import AppConfig
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id

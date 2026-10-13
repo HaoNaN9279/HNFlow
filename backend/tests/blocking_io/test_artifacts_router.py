@@ -18,9 +18,9 @@ does no full-file read; ``FileResponse`` streams the bytes at ASGI send
 time, off the loop, which is why the gate has nothing to catch there
 either way.
 
-The ``@require_permission`` decorator is bypassed via ``__wrapped__`` so the
-anchor exercises the handler's own filesystem IO, not the authz layer. Imports
-sit at module top so any import-time IO runs at collection, outside the gate.
+The ``@require_permission`` decorator is a pass-through in the single-user
+deployment, so the handler itself is invoked directly. Imports sit at module
+top so any import-time IO runs at collection, outside the gate.
 """
 
 from __future__ import annotations
@@ -40,9 +40,9 @@ from app.gateway.routers.artifacts import ArtifactUpdateRequest, get_artifact, u
 
 pytestmark = pytest.mark.asyncio
 
-# The undecorated coroutine (``require_permission`` uses ``functools.wraps``).
-_get_artifact = get_artifact.__wrapped__
-_update_artifact = update_artifact.__wrapped__
+# The route handler (the permission decorator is a pass-through).
+_get_artifact = get_artifact
+_update_artifact = update_artifact
 
 
 async def _seed(tmp_path: Path, monkeypatch, thread_id: str, virtual_path: str) -> Path:

@@ -251,16 +251,16 @@ async def test_run_manager_batch_history_methods_default_to_current_user():
 
 
 @pytest.mark.anyio
-async def test_run_manager_batch_history_methods_fail_closed_without_user_context():
+async def test_run_manager_batch_history_methods_default_to_default_user_without_context():
     from deerflow.runtime import user_context
 
     manager = RunManager(store=MemoryRunStore())
     token = user_context._current_user.set(None)
     try:
-        with pytest.raises(RuntimeError, match="user_id=AUTO"):
-            await manager.list_successful_regenerate_sources("t1")
-        with pytest.raises(RuntimeError, match="user_id=AUTO"):
-            await manager.get_many_by_thread("t1", {"run-1"})
+        # Single-user deployment: AUTO resolves to DEFAULT_USER_ID, so both
+        # calls succeed and simply find no rows for the default bucket.
+        assert await manager.list_successful_regenerate_sources("t1") == set()
+        assert await manager.get_many_by_thread("t1", {"run-1"}) == {}
     finally:
         user_context._current_user.reset(token)
 

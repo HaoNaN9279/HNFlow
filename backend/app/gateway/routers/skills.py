@@ -7,8 +7,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.gateway.deps import get_config, require_admin_user
+from app.gateway.deps import get_config
 from app.gateway.path_utils import resolve_thread_virtual_path
+from app.gateway.permissions import require_admin_user
 from deerflow.agents.lead_agent.prompt import clear_skills_system_prompt_cache, refresh_skills_system_prompt_cache_async, refresh_user_skills_system_prompt_cache_async
 from deerflow.config.app_config import AppConfig
 from deerflow.config.extensions_config import (

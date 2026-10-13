@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,8 +13,6 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from app.gateway.routers import workflow_routes
 from app.gateway.routers.workflow_routes import _resolve_workflow_metadata
 from deerflow.config.database_config import DatabaseConfig
@@ -75,42 +73,26 @@ _DEFINITION_WITH_CAPABILITY_GROUPS = {
     ],
 }
 
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
+_STUB_PERMISSIONS: list[str] = []
 
 
 # ── Custom stub middleware ────────────────────────────────────────────────────
 
 
 class _WorkflowTestAuthMiddleware(BaseHTTPMiddleware):
-    """Stamp a fake user / AuthContext / auth_source onto every request.
+    """Stamp a fake user onto every request."""
 
-    Extends the standard stub from _router_auth_helpers with
-    ``auth_source = "session"`` so that ``get_current_user_from_request``
-    returns the stubbed user (it requires auth_source ∈ {session, auth_disabled,
-    internal} to short-circuit the JWT decode path).
-    """
-
-    def __init__(self, app: ASGIApp, user_factory: Callable[[], User]) -> None:
+    def __init__(self, app: ASGIApp, user_factory: Callable[[], SimpleNamespace]) -> None:
         super().__init__(app)
         self._user_factory = user_factory
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        user = self._user_factory()
-        request.state.user = user
-        request.state.auth_source = "session"
-        request.state.auth = AuthContext(user=user, permissions=list(_STUB_PERMISSIONS))
+        request.state.user = self._user_factory()
         return await call_next(request)
 
 
-def _make_authed_workflow_app(repo, user_factory: Callable[[], User] | None = None):
-    """Build a FastAPI test app with stub auth + workflow repo on app.state."""
+def _make_authed_workflow_app(repo, user_factory: Callable[[], SimpleNamespace] | None = None):
+    """Build a FastAPI test app with stub identity + workflow repo on app.state."""
     from unittest.mock import AsyncMock, MagicMock
 
     factory = user_factory or _make_stub_user
@@ -118,7 +100,7 @@ def _make_authed_workflow_app(repo, user_factory: Callable[[], User] | None = No
     app.add_middleware(_WorkflowTestAuthMiddleware, user_factory=factory)
     app.state.workflow_definition_repo = repo
 
-    # thread_store mock needed by @require_permission's owner_check
+    # thread_store mock needed by the route module
     repo_mock = MagicMock()
     repo_mock.check_access = AsyncMock(return_value=True)
     app.state.thread_store = repo_mock
@@ -127,14 +109,12 @@ def _make_authed_workflow_app(repo, user_factory: Callable[[], User] | None = No
     return app
 
 
-def _make_stub_user() -> User:
+def _make_stub_user() -> SimpleNamespace:
     # Use a stable id so that the same user is returned across multiple
     # requests within one test (POST + GET must share the same user_id).
-    return User(
-        email="test@example.com",
-        password_hash="x",
+    return SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
         system_role="user",
-        id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
     )
 
 
@@ -149,20 +129,16 @@ async def _make_repo(tmp_path):
     return WorkflowDefinitionRepository(sf)
 
 
-def _user_a() -> User:
-    return User(
-        id=uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
-        email="alice@test.com",
-        password_hash="x",
+def _user_a() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         system_role="user",
     )
 
 
-def _user_b() -> User:
-    return User(
-        id=uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"),
-        email="bob@test.com",
-        password_hash="x",
+def _user_b() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         system_role="user",
     )
 

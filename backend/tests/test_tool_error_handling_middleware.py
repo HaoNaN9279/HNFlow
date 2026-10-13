@@ -17,7 +17,6 @@ from deerflow.agents.middlewares.view_image_middleware import ViewImageMiddlewar
 from deerflow.config import summarization_config
 from deerflow.config.app_config import AppConfig, CircuitBreakerConfig
 from deerflow.config.extensions_config import ExtensionsConfig
-from deerflow.config.guardrails_config import GuardrailsConfig
 from deerflow.config.model_config import ModelConfig
 from deerflow.config.sandbox_config import SandboxConfig
 from deerflow.subagents.status_contract import SUBAGENT_ERROR_KEY, SUBAGENT_STATUS_KEY
@@ -54,7 +53,6 @@ def _make_app_config(*, supports_vision: bool = False) -> AppConfig:
             )
         ],
         sandbox=SandboxConfig(use="test"),
-        guardrails=GuardrailsConfig(enabled=False),
         circuit_breaker=CircuitBreakerConfig(failure_threshold=7, recovery_timeout_sec=11),
     )
 
@@ -209,7 +207,6 @@ def test_tool_progress_middleware_is_outer_relative_to_error_handling(monkeypatc
             )
         ],
         sandbox=SandboxConfig(use="test"),
-        guardrails=GuardrailsConfig(enabled=False),
         circuit_breaker=CircuitBreakerConfig(failure_threshold=7, recovery_timeout_sec=11),
         tool_progress=ToolProgressConfig(enabled=True),
     )

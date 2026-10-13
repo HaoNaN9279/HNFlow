@@ -12,8 +12,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_current_user, get_feedback_repo, get_run_store
+from app.gateway.permissions import require_permission
 from deerflow.utils.thread_id import ThreadId
 
 logger = logging.getLogger(__name__)

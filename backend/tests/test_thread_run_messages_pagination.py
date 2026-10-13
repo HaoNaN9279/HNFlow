@@ -75,6 +75,7 @@ def _make_store_only_run_manager() -> RunManager:
             multitask_strategy="reject",
             metadata={},
             kwargs={},
+            user_id="default",
             created_at="2026-01-01T00:00:00+00:00",
         )
     )

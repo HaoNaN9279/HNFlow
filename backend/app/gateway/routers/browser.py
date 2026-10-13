@@ -7,8 +7,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.browser_capability import browser_capability
+from app.gateway.permissions import require_permission
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id, reset_current_user, set_current_user
 from deerflow.utils.thread_id import ThreadId
@@ -79,7 +79,7 @@ async def _browser_thread_owned_by(thread_store, thread_id: str, user_id: str) -
 )
 @require_permission("threads", "write", owner_check=True, require_existing=True)
 async def navigate_browser(thread_id: ThreadId, body: BrowserNavigateRequest, request: Request) -> BrowserNavigateResponse:
-    user_id = str(request.state.auth.user.id)
+    user_id = get_effective_user_id()
     thread_store = getattr(request.app.state, "thread_store", None)
     if thread_store is None or not await _browser_thread_owned_by(thread_store, thread_id, user_id):
         raise HTTPException(status_code=404, detail=f"Thread {thread_id} not found")
@@ -115,61 +115,44 @@ async def navigate_browser(thread_id: ThreadId, body: BrowserNavigateRequest, re
 
 
 async def _authenticate_ws(websocket: WebSocket):
-    """Resolve the user for a WebSocket, honoring auth-disabled mode.
+    """Resolve the user for a WebSocket.
 
-    WebSocket upgrades bypass ``AuthMiddleware`` (a BaseHTTPMiddleware), so we
-    replicate the minimal cookie → user resolution here. Returns the user or
-    ``None`` when unauthenticated.
+    Single-user deployment: always resolves to the default user.
     """
-    from app.gateway.auth import decode_token
-    from app.gateway.auth.errors import TokenError
-    from app.gateway.auth_disabled import get_auth_disabled_user, is_auth_disabled
-    from app.gateway.deps import get_local_provider
+    from types import SimpleNamespace
 
-    access_token = websocket.cookies.get("access_token")
-    if access_token:
-        payload = decode_token(access_token)
-        if not isinstance(payload, TokenError):
-            provider = get_local_provider()
-            user = await provider.get_user(payload.sub)
-            if user is not None and user.token_version == payload.ver:
-                return user
-    if is_auth_disabled():
-        return get_auth_disabled_user()
-    return None
+    from deerflow.runtime.user_context import DEFAULT_USER_ID
+
+    return SimpleNamespace(id=DEFAULT_USER_ID)
 
 
 def _ws_origin_allowed(websocket: WebSocket) -> bool:
     """Reject cross-origin WebSocket upgrades (WS-CSRF defense).
 
-    WS upgrades bypass ``CSRFMiddleware`` (also a BaseHTTPMiddleware), so a
-    cross-origin page could otherwise open this socket riding the victim's
-    cookie and both observe frames and drive their authenticated browser. The
-    ``Origin`` header is browser-controlled but always sent on cross-origin
-    upgrades, so validating it is a standard, cheap mitigation.
+    WS upgrades bypass middleware, so a cross-origin page could otherwise open
+    this socket riding the victim's cookie and both observe frames and drive
+    their authenticated browser. The ``Origin`` header is browser-controlled but
+    always sent on cross-origin upgrades, so validating it is a standard, cheap
+    mitigation.
 
     Allow when: no ``Origin`` (non-browser clients such as native ws/tests do
     not send it), the origin is an explicitly configured CORS origin, or it is
     same-origin with the upgrade target's host. The WS scheme (ws/wss) differs
     from the page scheme (http/https), so same-origin compares host[:port].
     """
-    from app.gateway.csrf_middleware import (
-        _first_header_value,
-        _normalize_origin,
-        get_configured_cors_origins,
-    )
+    from app.gateway.cors import first_header_value, get_configured_cors_origins, normalize_origin
 
     origin = websocket.headers.get("origin")
     if not origin:
         return True
 
-    normalized = _normalize_origin(origin)
+    normalized = normalize_origin(origin)
     if normalized is None:
         return False
     if normalized in get_configured_cors_origins():
         return True
 
-    target_host = _first_header_value(websocket.headers.get("x-forwarded-host")) or websocket.headers.get("host")
+    target_host = first_header_value(websocket.headers.get("x-forwarded-host")) or websocket.headers.get("host")
     if target_host:
         normalized_host = normalized.split("://", 1)[-1]
         if normalized_host == target_host.strip().lower():

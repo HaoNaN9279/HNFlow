@@ -16,8 +16,8 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_current_user, get_optional_user_from_request, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
+from app.gateway.permissions import require_permission
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import sse_consumer, start_workflow_run, wait_for_run_completion
 

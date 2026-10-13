@@ -16,8 +16,8 @@ from fastapi import APIRouter, HTTPException, Request
 from langgraph.types import Command
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import get_human_task_repo, get_optional_user_from_request, get_run_manager, get_workflow_definition_repo
+from app.gateway.permissions import require_permission
 from app.gateway.services import start_workflow_run
 from deerflow.workflow.human_task_state import HumanTaskStatus, validate_human_task_submission
 from deerflow.workflow.schema import WorkflowDefinition

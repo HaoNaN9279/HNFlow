@@ -259,7 +259,6 @@ def _preserve_process_config_singletons(monkeypatch: pytest.MonkeyPatch) -> None
         acp_config,
         agents_api_config,
         checkpointer_config,
-        guardrails_config,
         memory_config,
         stream_bridge_config,
         subagents_config,
@@ -275,7 +274,6 @@ def _preserve_process_config_singletons(monkeypatch: pytest.MonkeyPatch) -> None
         (agents_api_config, "_agents_api_config"),
         (subagents_config, "_subagents_config"),
         (tool_search_config, "_tool_search_config"),
-        (guardrails_config, "_guardrails_config"),
         (checkpointer_config, "_checkpointer_config"),
         (stream_bridge_config, "_stream_bridge_config"),
         (acp_config, "_acp_agents"),
@@ -327,14 +325,12 @@ def isolated_app_with_title(isolated_deer_flow_home: Path, monkeypatch: pytest.M
 
 
 def _register_user(client, *, email: str = "runtime-e2e@example.com") -> str:
-    response = client.post(
-        "/api/v1/auth/register",
-        json={"email": email, "password": "very-strong-password-123"},
-    )
-    assert response.status_code == 201, response.text
-    csrf_token = client.cookies.get("csrf_token")
-    assert csrf_token
-    return csrf_token
+    """Single-user deployment: no registration/session is required.
+
+    Returns an empty token kept for call-site compatibility (the CSRF header is
+    no longer enforced).
+    """
+    return ""
 
 
 def _create_thread(client, csrf_token: str) -> str:
@@ -581,7 +577,8 @@ def test_stream_run_executes_real_lead_agent_setup_agent_business_path(isolated_
         TestClient(isolated_app) as client,
     ):
         csrf_token = _register_user(client, email="business-e2e@example.com")
-        auth_user_id = client.get("/api/v1/auth/me").json()["id"]
+        # Single-user deployment: identity resolves to the default bucket.
+        auth_user_id = "default"
         thread_id = _create_thread(client, csrf_token)
 
         body = _run_body(
@@ -624,7 +621,6 @@ def test_stream_run_executes_real_lead_agent_setup_agent_business_path(isolated_
         expected_soul = isolated_deer_flow_home / "users" / auth_user_id / "agents" / agent_name / "SOUL.md"
         assert expected_soul.exists(), f"setup_agent did not write SOUL.md. tmp tree: {sorted(str(p.relative_to(isolated_deer_flow_home)) for p in isolated_deer_flow_home.rglob('SOUL.md'))}"
         assert f"Agent name: {agent_name}" in expected_soul.read_text(encoding="utf-8")
-        assert not (isolated_deer_flow_home / "users" / "default" / "agents" / agent_name).exists()
 
 
 def test_cancel_interrupt_stops_running_background_run(isolated_app):

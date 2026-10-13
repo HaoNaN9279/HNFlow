@@ -7,7 +7,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.gateway.authz import require_permission
 from app.gateway.deps import (
     get_config,
     get_optional_user_from_request,
@@ -16,6 +15,7 @@ from app.gateway.deps import (
     get_scheduled_task_service,
     get_thread_store,
 )
+from app.gateway.permissions import require_permission
 from deerflow.scheduler.schedules import (
     next_run_at as compute_next_run_at,
 )

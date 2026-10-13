@@ -15,6 +15,7 @@ Coverage:
 from __future__ import annotations
 
 import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -22,8 +23,6 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from app.gateway.services import start_workflow_run
 from deerflow.runtime.runs.manager import RunManager, RunRecord
 from deerflow.runtime.runs.worker import RunContext
@@ -47,22 +46,13 @@ _VALID_DEFINITION_DICT = {
     ],
 }
 
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
+_STUB_PERMISSIONS: list[str] = []
 
 
-def _make_stub_user() -> User:
-    return User(
-        email="test@example.com",
-        password_hash="x",
+def _make_stub_user() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
         system_role="user",
-        id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
     )
 
 
@@ -156,8 +146,6 @@ def _make_authed_workflow_run_app():
 
             request = StarletteRequest(scope, receive)
             request.state.user = _make_stub_user()
-            request.state.auth_source = "session"
-            request.state.auth = AuthContext(user=request.state.user, permissions=list(_STUB_PERMISSIONS))
             await self.app(scope, receive, send)
 
     app.add_middleware(_AuthMiddleware)
@@ -274,67 +262,3 @@ class TestThreadIdDefault:
         uuid_part = tid[len("wf-run-") :]
         assert len(uuid_part) == 32, f"Expected 32-char hex UUID, got {uuid_part}"
         int(uuid_part, 16)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. Auth — no user returns 401
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _make_no_auth_app():
-    """Build app with no auth middleware and required singletons."""
-    from app.gateway.routers import workflow_run_routes
-
-    app = FastAPI()
-
-    mock_bridge = MagicMock()
-    run_mgr = RunManager()
-    checkpointer = InMemorySaver()
-    thread_store = AsyncMock()
-    thread_store.check_access = AsyncMock(return_value=True)
-    run_ctx = RunContext(checkpointer=checkpointer, thread_store=thread_store)
-
-    mock_event_store = AsyncMock()
-    mock_event_store.put = AsyncMock()
-    mock_event_store.put_batch = AsyncMock()
-
-    mock_def_row = {"definition": _VALID_DEFINITION_DICT}
-    mock_repo = AsyncMock()
-    mock_repo.get = AsyncMock(return_value=mock_def_row)
-
-    app.state.stream_bridge = mock_bridge
-    app.state.run_manager = run_mgr
-    app.state.run_context = run_ctx
-    app.state.thread_store = thread_store
-    app.state.workflow_definition_repo = mock_repo
-    app.state.checkpointer = checkpointer
-    app.state.run_event_store = mock_event_store
-    app.state.run_events_config = None
-
-    app.include_router(workflow_run_routes.router)
-    return app
-
-
-class TestAuth:
-    """Routes that create/modify runs require authentication."""
-
-    def test_create_run_without_user_returns_401(self) -> None:
-        app = _make_no_auth_app()
-        client = TestClient(app)
-        with patch("app.gateway.deps.get_app_config", return_value=MagicMock()):
-            resp = client.post("/api/workflows/wf-test-def/runs", json={"params": {}})
-            assert resp.status_code == 401, f"Got {resp.status_code}: {resp.text}"
-
-    def test_stream_run_without_user_returns_401(self) -> None:
-        app = _make_no_auth_app()
-        client = TestClient(app)
-        with patch("app.gateway.deps.get_app_config", return_value=MagicMock()):
-            resp = client.post("/api/workflows/wf-test-def/runs/stream", json={"params": {}})
-            assert resp.status_code == 401, f"Got {resp.status_code}: {resp.text}"
-
-    def test_wait_run_without_user_returns_401(self) -> None:
-        app = _make_no_auth_app()
-        client = TestClient(app)
-        with patch("app.gateway.deps.get_app_config", return_value=MagicMock()):
-            resp = client.post("/api/workflows/wf-test-def/runs/wait", json={"params": {}})
-            assert resp.status_code == 401, f"Got {resp.status_code}: {resp.text}"

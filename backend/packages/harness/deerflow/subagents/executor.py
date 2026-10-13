@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 import uuid
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Callable, Coroutine
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from contextvars import Context, copy_context
@@ -24,7 +24,6 @@ from langchain_core.runnables.config import var_child_runnable_config
 from langgraph.errors import GraphRecursionError
 
 from deerflow.agents.thread_state import SandboxState, ThreadDataState, ThreadState
-from deerflow.authz.principal import normalize_authz_attributes
 from deerflow.config import get_app_config
 from deerflow.config.app_config import AppConfig
 from deerflow.models import create_chat_model
@@ -449,13 +448,7 @@ class SubagentExecutor:
         thread_id: str | None = None,
         trace_id: str | None = None,
         user_id: str | None = None,
-        user_role: str | None = None,
-        oauth_provider: str | None = None,
-        oauth_id: str | None = None,
         run_id: str | None = None,
-        channel_user_id: str | None = None,
-        is_internal: bool = False,
-        authz_attributes: Mapping[str, Any] | None = None,
         deerflow_trace_id: str | None = None,
         extensions: Any | None = None,
         checkpointer: Any | None = None,
@@ -520,20 +513,7 @@ class SubagentExecutor:
         # Generate trace_id if not provided (for top-level calls)
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
         self.user_id = user_id
-        # Guardrail attribution propagated from the parent runtime context.
-        self.user_role = user_role
-        self.oauth_provider = oauth_provider
-        self.oauth_id = oauth_id
         self.run_id = run_id
-        # IM-channel sender identity captured at task_tool dispatch: group
-        # chats share one thread across senders, so delegated bash commands
-        # must export the dispatching turn's id, not none at all.
-        self.channel_user_id = channel_user_id
-        # Authorization identity propagated from the parent runtime context.
-        # is_internal is written unconditionally (including False) so the
-        # subagent's GuardrailMiddleware sees the same provenance as the lead.
-        self.is_internal = is_internal
-        self.authz_attributes = normalize_authz_attributes(authz_attributes)
         self.deerflow_trace_id = deerflow_trace_id
         # Parent run's extension snapshot. Binding it here (rather than reading
         # the singleton at execution time) is what keeps one run on a single
@@ -617,9 +597,6 @@ class SubagentExecutor:
         }
         if extensions is not None:
             middleware_kwargs["extensions"] = extensions
-        authz_provider = getattr(self, "_authz_provider", None)
-        if authz_provider is not None:
-            middleware_kwargs["authorization_provider"] = authz_provider
         if mcp_routing_middleware is not None:
             middleware_kwargs["mcp_routing_middleware"] = mcp_routing_middleware
         middlewares = build_subagent_runtime_middlewares(**middleware_kwargs)
@@ -726,44 +703,20 @@ class SubagentExecutor:
             container_base_path=resolved_app_config.skills.container_path,
         )
 
-        # Apply authorization Layer 1: filter tools before deferred assembly
-        # so denied tools can never enter the DeferredToolCatalog.
-        from deerflow.authz.tool_filter import apply_tool_authorization
-
-        authz_context = {
-            "user_id": self.user_id,
-            "user_role": self.user_role,
-            "oauth_provider": self.oauth_provider,
-            "oauth_id": self.oauth_id,
-            "channel_user_id": self.channel_user_id,
-            "is_internal": self.is_internal,
-            "authz_attributes": self.authz_attributes,
-        }
-        authorization_candidates = [*self._base_tools]
-        if skill_setup.describe_skill_tool is not None:
-            authorization_candidates.append(skill_setup.describe_skill_tool)
-        configured_tool_ids = {id(tool) for tool in self._base_tools}
-        authorized_tools, self._authz_provider = apply_tool_authorization(
-            authorization_candidates,
-            context=authz_context,
-            app_config=resolved_app_config,
-        )
-        configured_tools = [tool for tool in authorized_tools if id(tool) in configured_tool_ids]
-        late_tools = [tool for tool in authorized_tools if id(tool) not in configured_tool_ids]
-
-        # Assemble deferred tool_search after the subagent's name allow/deny and
-        # authorization filters, mirroring the lead path so subagents stop
-        # binding full MCP schemas.
+        # Assemble deferred tool_search after the subagent's name allow/deny
+        # filters, mirroring the lead path so subagents stop binding full MCP
+        # schemas.
         # The generated tool_search helper is intentionally not subject to the
         # subagent's name-level allow/deny (config.tools / disallowed_tools):
         # its catalog is built from that already-filtered list. Active skill
         # policy is applied later by middleware to both schema visibility and
         # execution, so promotion cannot widen an active skill's authority.
         final_tools, deferred_setup = assemble_deferred_tools(
-            configured_tools,
+            self._base_tools,
             enabled=resolved_app_config.tool_search.enabled,
         )
-        final_tools.extend(late_tools)
+        if skill_setup.describe_skill_tool is not None:
+            final_tools.append(skill_setup.describe_skill_tool)
 
         # Combine the system prompt and skill discovery metadata into a single
         # SystemMessage. Full SKILL.md bodies are loaded only when activated.
@@ -796,7 +749,7 @@ class SubagentExecutor:
         deferred_section = get_deferred_tools_prompt_section(deferred_names=deferred_setup.deferred_names)
         if deferred_section:
             system_parts.append(deferred_section)
-        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(authorized_tools, deferred_names=deferred_setup.deferred_names)
+        mcp_routing_hints_section = get_mcp_routing_hints_prompt_section(final_tools, deferred_names=deferred_setup.deferred_names)
         if mcp_routing_hints_section:
             system_parts.append(mcp_routing_hints_section)
 
@@ -967,25 +920,12 @@ class SubagentExecutor:
                 context["thread_id"] = self.thread_id
             if self.app_config is not None:
                 context["app_config"] = self.app_config
-            # Propagate guardrail attribution so delegated tool calls are
-            # evaluated with the parent run's identity (role-aware policy,
-            # audit). user_id reuses the resolved tracing id; on every
-            # authenticated/IM path this equals the parent context value.
             context["user_id"] = self.user_id
-            context["user_role"] = self.user_role
-            context["oauth_provider"] = self.oauth_provider
-            context["oauth_id"] = self.oauth_id
             context["run_id"] = self.run_id
             if task_store is not None:
                 from deerflow_extension_api import EXTENSION_TASK_STORE_KEY
 
                 context[EXTENSION_TASK_STORE_KEY] = task_store
-            if self.channel_user_id:
-                context["channel_user_id"] = self.channel_user_id
-            # Authorization identity: is_internal written unconditionally
-            # (including False); attributes copied again on write-back.
-            context["is_internal"] = self.is_internal
-            context["authz_attributes"] = dict(self.authz_attributes)
             if self.deerflow_trace_id:
                 context[DEERFLOW_TRACE_METADATA_KEY] = self.deerflow_trace_id
             context["is_subagent"] = True

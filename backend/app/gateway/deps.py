@@ -252,8 +252,6 @@ async def _flush_recovered_stream_cleanups(
 
 
 if TYPE_CHECKING:
-    from app.gateway.auth.local_provider import LocalAuthProvider
-    from app.gateway.auth.repositories.sqlite import SQLiteUserRepository
     from deerflow.persistence.thread_meta.base import ThreadMetaStore
     from deerflow.runtime import RunRecord
 
@@ -666,126 +664,29 @@ def get_run_context(request: Request) -> RunContext:
 
 
 # ---------------------------------------------------------------------------
-# Auth helpers (used by authz.py and auth middleware)
+# User identity helper
 # ---------------------------------------------------------------------------
 
-# Cached singletons to avoid repeated instantiation per request
-_cached_local_provider: LocalAuthProvider | None = None
-_cached_repo: SQLiteUserRepository | None = None
 
+async def get_current_user(request: Request) -> str:
+    """Return the effective user id for this request.
 
-def get_local_provider() -> LocalAuthProvider:
-    """Get or create the cached LocalAuthProvider singleton.
-
-    Must be called after ``init_engine_from_config()`` — the shared
-    session factory is required to construct the user repository.
+    Single-user deployment: identity always resolves to ``DEFAULT_USER_ID``.
+    Kept as an async request dependency so callers keep a stable signature.
     """
-    global _cached_local_provider, _cached_repo
-    if _cached_repo is None:
-        from app.gateway.auth.repositories.sqlite import SQLiteUserRepository
-        from deerflow.persistence.engine import get_session_factory
+    from deerflow.runtime.user_context import DEFAULT_USER_ID
 
-        sf = get_session_factory()
-        if sf is None:
-            raise RuntimeError("get_local_provider() called before init_engine_from_config(); cannot access users table")
-        _cached_repo = SQLiteUserRepository(sf)
-    if _cached_local_provider is None:
-        from app.gateway.auth.local_provider import LocalAuthProvider
-
-        _cached_local_provider = LocalAuthProvider(repository=_cached_repo)
-    return _cached_local_provider
-
-
-async def get_current_user_from_request(request: Request):
-    """Get the current authenticated user from the request cookie.
-
-    Raises HTTPException 401 if not authenticated.
-    """
-    state = getattr(request, "state", None)
-    state_user = getattr(state, "user", None)
-    from app.gateway.auth_disabled import AUTH_SOURCE_AUTH_DISABLED, AUTH_SOURCE_INTERNAL, AUTH_SOURCE_SESSION
-
-    if state_user is not None and getattr(state, "auth_source", None) in {
-        AUTH_SOURCE_SESSION,
-        AUTH_SOURCE_AUTH_DISABLED,
-        AUTH_SOURCE_INTERNAL,
-    }:
-        return state_user
-
-    from app.gateway.auth import decode_token
-    from app.gateway.auth.errors import AuthErrorCode, AuthErrorResponse, TokenError, token_error_to_code
-
-    access_token = request.cookies.get("access_token")
-    if not access_token:
-        raise HTTPException(
-            status_code=401,
-            detail=AuthErrorResponse(code=AuthErrorCode.NOT_AUTHENTICATED, message="Not authenticated").model_dump(),
-        )
-
-    payload = decode_token(access_token)
-    if isinstance(payload, TokenError):
-        raise HTTPException(
-            status_code=401,
-            detail=AuthErrorResponse(code=token_error_to_code(payload), message=f"Token error: {payload.value}").model_dump(),
-        )
-
-    provider = get_local_provider()
-    user = await provider.get_user(payload.sub)
-    if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail=AuthErrorResponse(code=AuthErrorCode.USER_NOT_FOUND, message="User not found").model_dump(),
-        )
-
-    # Token version mismatch → password was changed, token is stale
-    if user.token_version != payload.ver:
-        raise HTTPException(
-            status_code=401,
-            detail=AuthErrorResponse(code=AuthErrorCode.TOKEN_INVALID, message="Token revoked (password changed)").model_dump(),
-        )
-
-    return user
-
-
-async def require_admin_user(request: Request, *, detail: str) -> None:
-    """Require the authenticated caller to be an admin user.
-
-    ``AuthMiddleware`` normally stamps ``request.state.user`` before the request
-    reaches a router. Falling back to the strict dependency keeps the route safe
-    in tests or alternative ASGI compositions that mount a router without the
-    global middleware. ``detail`` is the route-specific 403 message.
-
-    Centralising this here means a future change to the admin definition (e.g.
-    allowing an internal system role, adding audit logging, or switching to a
-    permission-based check) lands in one place instead of drifting across the
-    per-router copies that previously existed in ``mcp`` and ``channel``
-    routers.
-    """
-    user = getattr(request.state, "user", None)
-    if user is None:
-        user = await get_current_user_from_request(request)
-
-    if getattr(user, "system_role", None) != "admin":
-        raise HTTPException(status_code=403, detail=detail)
+    return DEFAULT_USER_ID
 
 
 async def get_optional_user_from_request(request: Request):
-    """Get optional authenticated user from request.
+    """Return the effective user for this request.
 
-    Returns None if not authenticated.
+    Single-user deployment: always present (never ``None``), so the historical
+    ``user is not None`` guards in routers stay on their authenticated branch.
     """
-    try:
-        return await get_current_user_from_request(request)
-    except HTTPException:
-        return None
+    from types import SimpleNamespace
 
+    from deerflow.runtime.user_context import DEFAULT_USER_ID
 
-async def get_current_user(request: Request) -> str | None:
-    """Extract user_id from request cookie, or None if not authenticated.
-
-    Thin adapter that returns the string id for callers that only need
-    identification (e.g., ``feedback.py``). Full-user callers should use
-    ``get_current_user_from_request`` or ``get_optional_user_from_request``.
-    """
-    user = await get_optional_user_from_request(request)
-    return str(user.id) if user else None
+    return SimpleNamespace(id=DEFAULT_USER_ID)

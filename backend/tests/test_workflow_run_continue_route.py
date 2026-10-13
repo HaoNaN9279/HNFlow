@@ -15,7 +15,7 @@ Coverage:
 
 from __future__ import annotations
 
-import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,8 +23,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langgraph.checkpoint.memory import InMemorySaver
 
-from app.gateway.auth.models import User
-from app.gateway.authz import AuthContext, Permissions
 from deerflow.runtime.runs.manager import RunManager
 from deerflow.runtime.runs.worker import RunContext
 from deerflow.workflow.dispatch import (
@@ -46,22 +44,13 @@ _VALID_DEFINITION_DICT = {
     ],
 }
 
-_STUB_PERMISSIONS: list[str] = [
-    Permissions.THREADS_READ,
-    Permissions.THREADS_WRITE,
-    Permissions.THREADS_DELETE,
-    Permissions.RUNS_CREATE,
-    Permissions.RUNS_READ,
-    Permissions.RUNS_CANCEL,
-]
+_STUB_PERMISSIONS: list[str] = []
 
 
-def _make_stub_user() -> User:
-    return User(
-        email="test@example.com",
-        password_hash="x",
+def _make_stub_user() -> SimpleNamespace:
+    return SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
         system_role="user",
-        id=uuid.UUID("11111111-1111-1111-1111-111111111111"),
     )
 
 
@@ -84,8 +73,6 @@ def _make_authed_app():
 
             request = StarletteRequest(scope, receive)
             request.state.user = _make_stub_user()
-            request.state.auth_source = "session"
-            request.state.auth = AuthContext(user=request.state.user, permissions=list(_STUB_PERMISSIONS))
             await self.app(scope, receive, send)
 
     app.add_middleware(_AuthMiddleware)
@@ -205,7 +192,7 @@ class TestContinueWorkflowRunRoute:
         assert args[1] == "ai_step"
         assert args[2] == "继续干活"
         assert kwargs["params"] is None
-        assert kwargs["runtime"].context["user_id"] == str(_make_stub_user().id)
+        assert kwargs["runtime"].context["user_id"] == "default"
 
     def test_continue_forwards_params_override(self, client: TestClient) -> None:
         import deerflow.workflow.dispatch as dispatch_mod
@@ -311,13 +298,3 @@ class TestContinueWorkflowRunRoute:
             )
 
         assert resp.status_code == 422, f"Got {resp.status_code}: {resp.text}"
-
-    def test_continue_without_user_returns_401(self) -> None:
-        app = _make_no_auth_app()
-        client = TestClient(app)
-        with patch("app.gateway.deps.get_app_config", return_value=MagicMock()):
-            resp = client.post(
-                "/api/workflows/wf-test-def/runs/run-1/continue",
-                json={"node_id": "ai_step", "prompt": "p"},
-            )
-        assert resp.status_code == 401, f"Got {resp.status_code}: {resp.text}"
