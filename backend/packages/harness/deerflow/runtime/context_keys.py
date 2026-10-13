@@ -12,3 +12,8 @@ from typing import Final
 
 CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY: Final[str] = "__deerflow_pre_run_message_ids"
 WORKFLOW_RUNTIME_CONTEXT_KEY: Final[str] = "__workflow_runtime"
+#: Injection point for the local-application session manager (N4): the Gateway
+#: run worker packages a process-wide ``AppSessionManager`` under this key so
+#: the ``app:*`` workflow executors share one session map. A caller-supplied
+#: value for this host-internal key is never authoritative.
+APP_RUNTIME_CONTEXT_KEY: Final[str] = "__app_session_manager"

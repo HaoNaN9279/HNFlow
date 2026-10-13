@@ -66,6 +66,7 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "McpTaskService is constructed and started once during Gateway lifespan startup; enabled, poll_interval_seconds, lease_seconds, "
         "and max_concurrent_polls are captured into the service instance and the background poller task is not rebuilt on config.yaml edits."
     ),
+    "apps": ("The local-application registry (deerflow.config.apps_config) is loaded once at startup and its drivers own child-process / HTTP-client lifecycles; adding, removing or reconfiguring an app definition requires a restart."),
 }
 
 

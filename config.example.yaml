@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 33
+config_version: 34
 
 # ============================================================================
 # Logging
@@ -2018,6 +2018,32 @@ mcp_tasks:
   poll_interval_seconds: 5
   lease_seconds: 120
   max_concurrent_polls: 8
+
+# ============================================================================
+# Local Application Registry (N4 — local professional software)
+# ============================================================================
+# Applications driven by the app:* workflow nodes and the tool gateway's
+# `app` provider. Restart-required (drivers own child-process / HTTP-client
+# lifecycles). Disabled by default; add definitions under `definitions`.
+#
+# NOTE: app driving runs on the host — a deliberate exception to the
+# "commands must go through the sandbox" rule, because GUI / long-lived
+# professional software cannot run inside the command sandbox.
+#
+# apps:
+#   enabled: false
+#   definitions:
+#     example-cli:
+#       driver: cli                 # cli | mock
+#       description: "Example command-line tool"
+#       command: "python"
+#       args: ["scripts/example_app.py"]
+#       working_dir: "."            # optional
+#       artifact_globs: ["out/*.txt"]
+#       timeout_seconds: 600
+apps:
+  enabled: false
+  definitions: {}
 
 # ============================================================================
 # Stream Bridge Configuration
