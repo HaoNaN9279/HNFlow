@@ -171,8 +171,7 @@ class SandboxBackend(ABC):
         adopted into the warm pool or destroyed if idle too long.
 
         The default implementation returns an empty list, which is correct
-        for backends that don't manage local containers (e.g., RemoteSandboxBackend
-        delegates lifecycle to the provisioner which handles its own cleanup).
+        for backends that don't manage local containers.
 
         Returns:
             A list of SandboxInfo for all currently running sandboxes.

@@ -113,16 +113,6 @@ sandbox:
   原本读写 `/mnt/user-data/...` 的工具无需任何改动即可正常工作。
 </Callout>
 
-### Provisioner 管理的沙箱（Kubernetes）
-
-每个沙箱在 Kubernetes 集群中获得一个专用 Pod，由 Provisioner 服务管理。这提供最强的隔离性，适合有多个并发用户的生产环境。
-
-```yaml
-sandbox:
-  use: deerflow.community.aio_sandbox:AioSandboxProvider
-  provisioner_url: http://provisioner:8002
-```
-
 ## 路径映射
 
 沙箱使用路径映射来桥接主机文件系统和容器的虚拟文件系统。始终配置两个关键映射：
@@ -212,7 +202,7 @@ sandbox:
 
 ### 容器沙箱
 
-基于容器的沙箱提供文件系统和进程隔离。Agent 看不到或修改主机文件系统，除非通过显式挂载。Provisioner 管理模式增加了额外一层：每个线程获得自己的隔离 Pod。
+基于容器的沙箱提供文件系统和进程隔离。Agent 看不到或修改主机文件系统，除非通过显式挂载。
 
 ### 审计中间件
 

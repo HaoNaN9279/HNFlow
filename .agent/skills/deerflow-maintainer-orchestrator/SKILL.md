@@ -234,7 +234,7 @@ Recommend the checks matching the touched surface:
 | Frontend UI/core | `cd frontend && pnpm format && pnpm lint && pnpm typecheck && BETTER_AUTH_SECRET=local-dev-secret pnpm build && make test` |
 | Front/back thread or SSE contract | backend replay golden and full-stack replay render where feasible |
 | Frontend user workflow | Playwright E2E or browser proof with screenshot/DOM assertion |
-| Docker/sandbox/provisioner | focused backend tests plus Docker/provisioner smoke when feasible |
+| Docker/sandbox | focused backend tests plus Docker smoke when feasible |
 | Docs-only | targeted markdown review |
 
 ## Output

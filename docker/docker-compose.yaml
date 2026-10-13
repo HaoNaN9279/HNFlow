@@ -5,7 +5,6 @@
 #   - nginx:       Reverse proxy (port 2026, configurable via PORT env var)
 #   - frontend:    Next.js production server
 #   - gateway:     FastAPI Gateway API + agent runtime
-#   - provisioner: (optional) Sandbox provisioner for Kubernetes mode
 #
 # Key environment variables (set via environment/.env or scripts/deploy.sh):
 #   DEER_FLOW_PROJECT_ROOT           — project root for relative runtime paths
@@ -113,8 +112,8 @@ services:
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
       # Proxy values (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are inherited from ../.env via env_file.
       # Only NO_PROXY is declared here so internal service hostnames are always exempt from the proxy.
-      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,openviking,host.docker.internal
-      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,provisioner,openviking,host.docker.internal
+      - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
+      - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
     env_file:
       - ../.env
     extra_hosts:
@@ -122,47 +121,6 @@ services:
     networks:
       - deer-flow
     restart: unless-stopped
-
-  # ── Sandbox Provisioner (optional, Kubernetes mode) ────────────────────────
-  provisioner:
-    build:
-      context: ./provisioner
-      dockerfile: Dockerfile
-      args:
-        APT_MIRROR: ${APT_MIRROR:-}
-        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
-    container_name: deer-flow-provisioner
-    volumes:
-      - ~/.kube/config:/root/.kube/config:ro
-    environment:
-      - K8S_NAMESPACE=deer-flow
-      - SANDBOX_IMAGE=enterprise-public-cn-beijing.cr.volces.com/vefaas-public/all-in-one-sandbox:latest
-      # Optional lark-cli init image (Pattern A). Empty ⇒ legacy runtime mount.
-      # Set to a published tag (e.g. deer-flow/lark-cli-init:v1.0.65) to provision
-      # the sandbox lark-cli runtime via an init container + emptyDir.
-      - LARK_CLI_INIT_IMAGE=${LARK_CLI_INIT_IMAGE:-}
-      # Optional lark-cli broker image (Pattern B, issue #4338). When set, the
-      # sandbox gets a shim + broker sidecar that holds the credentials, so the
-      # plaintext config/data are never mounted into the sandbox. Supersedes
-      # LARK_CLI_INIT_IMAGE when both are set. Empty ⇒ broker off.
-      - LARK_CLI_BROKER_IMAGE=${LARK_CLI_BROKER_IMAGE:-}
-      - THREADS_HOST_PATH=${DEER_FLOW_HOME}/threads
-      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_HOME}
-      - KUBECONFIG_PATH=/root/.kube/config
-      - NODE_HOST=host.docker.internal
-      - K8S_API_SERVER=https://host.docker.internal:26443
-    env_file:
-      - ../.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    networks:
-      - deer-flow
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 6
 
 networks:
   deer-flow:

@@ -10,7 +10,6 @@ DeerFlow is a LangGraph-based AI super agent system with a full-stack architectu
 - **Gateway API** (port 8001): REST API plus embedded LangGraph-compatible agent runtime
 - **Frontend** (port 3000): Next.js web interface
 - **Nginx** (port 2026): Unified reverse proxy entry point
-- **Provisioner** (port 8002, optional in Docker dev): Started only when sandbox is configured for provisioner/Kubernetes mode
 
 **Runtime**:
 - `make dev`, Docker dev, and production all run the agent runtime in Gateway via `RunManager` + `run_agent()` + `StreamBridge` (`packages/harness/deerflow/runtime/`). Nginx exposes that runtime at `/api/langgraph/*` and rewrites it to Gateway's native `/api/*` routers.
@@ -243,12 +242,8 @@ untouched sync helper in the same file is still reported) — used by the
 deterministic scope step before routing each candidate to a fix and/or a
 `tests/blocking_io/` runtime anchor.
 
-Regression tests related to Docker/provisioner behavior:
+Regression tests related to Docker sandbox behavior:
 - `tests/test_docker_sandbox_mode_detection.py` (mode detection from `config.yaml`)
-- `tests/test_provisioner_kubeconfig.py` (kubeconfig file/directory handling)
-- `tests/test_provisioner_request_threading.py` (keeps provisioner sandbox CRUD
-  endpoints as sync FastAPI handlers so synchronous K8s client calls run in the
-  Starlette worker pool instead of on the ASGI event loop)
 
 Blocking-IO runtime gate (`tests/blocking_io/`):
 - Wraps every item under `tests/blocking_io/` with a strict Blockbuster
@@ -616,8 +611,8 @@ Thread identifiers use the shared `deerflow.utils.thread_id` contract
 `^[A-Za-z0-9_-]{1,64}$`. Caller-provided opaque IDs remain supported; UUIDs
 are generated only for `None`, while explicit empty strings fail validation.
 Gateway creation and state-producing request boundaries, embedded-client
-entry points, filesystem/upload/event-store consumers, scheduled launches,
-and the standalone Provisioner enforce the same contract before persistence
+entry points, filesystem/upload/event-store consumers, and scheduled launches
+enforce the same contract before persistence
 or workspace initialization. Route-addressable legacy IDs remain accepted by
 pure reads and cleanup/control endpoints. Deleting a noncanonical legacy ID
 best-effort removes its metadata and checkpoints but deliberately skips local
@@ -743,7 +738,7 @@ that cannot tell sibling branches apart.
 **Environment policy** (`sandbox/env_policy.py`): `execute_command` no longer inherits the full `os.environ`. `build_sandbox_env()` scrubs secret-looking names (`*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASS*`/`*CREDENTIAL*`) from the inherited environment before layering injected request secrets on top, so platform credentials (e.g. `OPENAI_API_KEY`) never leak into skill subprocesses. Benign vars (`PATH`, `HOME`, `LANG`, `VIRTUAL_ENV`, ...) are preserved.
 **Implementations**:
 - `LocalSandboxProvider` - Local filesystem execution. `acquire(thread_id)` returns a per-thread `LocalSandbox` (id `local:{thread_id}`) whose `path_mappings` resolve `/mnt/user-data/{workspace,uploads,outputs}` and `/mnt/acp-workspace` to that thread's host directories, so the public `Sandbox` API honours the `/mnt/user-data` contract uniformly with AIO. `acquire()` / `acquire(None)` keeps the legacy generic singleton (id `local`) for callers without a thread context. Per-thread sandboxes are held in an LRU cache (default 256 entries) guarded by a `threading.Lock`. Public, custom, legacy, and managed integration skill mappings point at stable enabled-only projection roots rather than raw skill directories.
-- `AioSandboxProvider` (`packages/harness/deerflow/community/`) - Docker-based isolation. Active-cache and warm-pool entries are checked with the backend during acquire/reuse; definitively dead containers are dropped from all in-process maps so the thread can discover or create a fresh sandbox instead of reusing a stale client. Backend health-check failures are treated as unknown, not dead; local discovery likewise treats an unverifiable container as not adoptable and falls through to create rather than failing acquire. `get()` remains an in-memory lookup for event-loop-safe tool paths — it never touches the ownership store (that would be blocking IO on the event loop); ownership is published on acquire/reclaim and refreshed off the event loop by the dedicated renewal thread (`_renew_owned_leases`). `uses_thread_data_mounts` defaults to backend detection (`LocalContainerBackend=True`, remote/provisioner backends=False), while the optional `sandbox.thread_data_mounts` boolean takes precedence for deployments that guarantee the Gateway and sandbox share the same thread user-data directories. Setting it `true` skips upload-time sandbox acquire/sync; a false positive leaves uploads unavailable to the sandbox. Local-container and hostPath-provisioner mounts use the same stable skill projection roots; PVC-backed skills remain governed by the operator-supplied PVC layout until PVC materialization is implemented. Readiness probes and `agent_sandbox` clients classify loopback/private IPs, single-label cluster hosts, and Docker/Podman internal hostnames as direct control-plane destinations and set `trust_env=False`; external FQDNs and public IPs retain environment proxy support.
+- `AioSandboxProvider` (`packages/harness/deerflow/community/`) - Docker-based isolation. Active-cache and warm-pool entries are checked with the backend during acquire/reuse; definitively dead containers are dropped from all in-process maps so the thread can discover or create a fresh sandbox instead of reusing a stale client. Backend health-check failures are treated as unknown, not dead; local discovery likewise treats an unverifiable container as not adoptable and falls through to create rather than failing acquire. `get()` remains an in-memory lookup for event-loop-safe tool paths — it never touches the ownership store (that would be blocking IO on the event loop); ownership is published on acquire/reclaim and refreshed off the event loop by the dedicated renewal thread (`_renew_owned_leases`). `uses_thread_data_mounts` defaults to backend detection (`LocalContainerBackend=True`), while the optional `sandbox.thread_data_mounts` boolean takes precedence for deployments that guarantee the Gateway and sandbox share the same thread user-data directories. Setting it `true` skips upload-time sandbox acquire/sync; a false positive leaves uploads unavailable to the sandbox. Local-container mounts use the same stable skill projection roots. Readiness probes and `agent_sandbox` clients classify loopback/private IPs, single-label cluster hosts, and Docker/Podman internal hostnames as direct control-plane destinations and set `trust_env=False`; external FQDNs and public IPs retain environment proxy support.
 - `E2BSandboxProvider` (`packages/harness/deerflow/community/e2b_sandbox/`) provides E2B remote isolation.
   New sandboxes receive a one-shot upload from the enabled-only public, custom,
   legacy, and managed integration projections. Existing E2B VMs keep their
@@ -1445,7 +1440,7 @@ Multi-file upload with automatic document conversion:
 - Duplicate filenames in a single upload request are auto-renamed with `_N` suffixes so later files do not truncate earlier files
 - Gateway HTTP uploads stage bytes as `.upload-*.part` files and atomically replace the destination only after size validation. These staging files are hidden from upload listings, agent upload context, and sandbox listing/search tools, and swept on Gateway startup if a hard crash leaves one behind.
 - Gateway HTTP upload/list/delete handlers offload filesystem work through `deerflow.utils.file_io.run_file_io`, a dedicated ContextVar-preserving file IO executor. Non-mounted sandbox uploads acquire sandboxes with `SandboxProvider.acquire_async()` and offload `read_bytes()` plus `sandbox.update_file()` together.
-- Mounted upload paths skip both sandbox acquisition and per-file synchronization. For AIO remote/provisioner deployments this requires an explicit, accurate `sandbox.thread_data_mounts: true`; omission preserves backend auto-detection.
+- Mounted upload paths skip both sandbox acquisition and per-file synchronization. This requires an explicit, accurate `sandbox.thread_data_mounts: true`; omission preserves backend auto-detection.
 - Agent receives uploaded file list via `UploadsMiddleware`
 
 See [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md) for details.

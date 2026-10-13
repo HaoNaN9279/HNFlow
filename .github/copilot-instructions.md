@@ -9,7 +9,7 @@ DeerFlow is a full-stack "super agent harness".
 - Backend: Python 3.12, LangGraph + FastAPI gateway, sandbox/tool system, memory, MCP integration.
 - Frontend: Next.js 16 + React 19 + TypeScript + pnpm.
 - Local dev entrypoint: root `Makefile` starts backend + frontend + nginx on `http://localhost:2026`.
-- Docker dev entrypoint: `make docker-*` (mode-aware provisioner startup from `config.yaml`).
+- Docker dev entrypoint: `make docker-*` (auto-detects the sandbox mode from `config.yaml`).
 
 Current repo footprint is medium-large (backend service, frontend app, docker stack, skills library, docs).
 

@@ -666,7 +666,7 @@ def check_sandbox(config_path: Path) -> list[CheckResult]:
                 )
         elif "AioSandboxProvider" in sandbox_use:
             results.append(CheckResult("sandbox configured", "ok", "Container sandbox"))
-            if not sandbox.get("provisioner_url") and not (shutil.which("docker") or shutil.which("container")):
+            if not (shutil.which("docker") or shutil.which("container")):
                 results.append(
                     CheckResult(
                         "container runtime available",

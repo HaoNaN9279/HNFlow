@@ -12,7 +12,6 @@ import pytest
 
 from deerflow.config.paths import Paths, join_host_path
 from deerflow.config.sandbox_config import SandboxConfig
-from deerflow.runtime.user_context import reset_current_user, set_current_user
 
 _LEGACY_COLLIDING_IDENTITIES = (
     ("user-9721", "thread-9721"),
@@ -193,50 +192,6 @@ def test_get_user_skill_mounts_mounts_only_global_integrations(tmp_path, monkeyp
     assert alice["/mnt/skills/integrations"] != bob["/mnt/skills/integrations"]
     assert alice["/mnt/skills/integrations"] == str(tmp_path / "home" / "users" / "alice" / "skills_view" / "integrations")
     assert bob["/mnt/skills/integrations"] == str(tmp_path / "home" / "users" / "bob" / "skills_view" / "integrations")
-
-
-def test_get_extra_mounts_provisioner_payload_has_unique_container_paths(tmp_path, monkeypatch, provisioner_module):
-    """Full AIO mount composition must not send duplicate paths to provisioner."""
-    aio_mod = importlib.import_module("deerflow.community.aio_sandbox.aio_sandbox_provider")
-    remote_backend = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
-    skills_root = tmp_path / "skills"
-    (skills_root / "public").mkdir(parents=True)
-    home = tmp_path / "home"
-
-    config = SimpleNamespace(
-        skills=SimpleNamespace(
-            get_skills_path=lambda: skills_root,
-            container_path="/mnt/skills",
-        )
-    )
-
-    monkeypatch.setattr(aio_mod, "get_app_config", lambda: config)
-    monkeypatch.setattr(aio_mod, "get_paths", lambda: Paths(base_dir=home))
-    monkeypatch.setattr(aio_mod, "get_effective_user_id", lambda: "default")
-    monkeypatch.setattr(remote_backend, "user_should_see_legacy_skills", lambda *_args, **_kwargs: False)
-
-    provider = _make_provider(tmp_path)
-    mounts = provider._get_extra_mounts("thread-1", user_id="alice")
-    container_paths = [container for _host, container, _read_only in mounts]
-
-    assert len(container_paths) == len(set(container_paths))
-    assert "/mnt/skills/custom" in container_paths
-    assert "/mnt/skills/integrations" in container_paths
-
-    payload = remote_backend._provisioner_extra_mounts_payload(mounts)
-    payload_paths = [str(item["container_path"]) for item in payload]
-    assert len(payload_paths) == len(set(payload_paths))
-
-    provisioner_module.DEER_FLOW_HOST_BASE_DIR = str(home)
-    validated = provisioner_module._validated_extra_mounts([provisioner_module.ExtraMount(**item) for item in payload])
-    validated_paths = [mount.container_path for mount in validated]
-
-    assert len(validated_paths) == len(set(validated_paths))
-    assert set(validated_paths) == {
-        "/mnt/acp-workspace",
-        "/mnt/skills/custom",
-        "/mnt/skills/integrations",
-    }
 
 
 def test_join_host_path_preserves_windows_drive_letter_style():
@@ -494,71 +449,6 @@ async def test_acquire_internal_async_offloads_cached_reuse_health_check(tmp_pat
         (provider._ensure_skills_projection, ("default",)),
         (provider._reuse_in_process_sandbox, ("thread-cached-async",)),
     ]
-
-
-def test_remote_backend_create_forwards_effective_user_id(monkeypatch):
-    """Provisioner mode must receive user_id so PVC subPath matches user isolation."""
-    remote_mod = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
-    backend = remote_mod.RemoteSandboxBackend("http://provisioner:8002")
-    token = set_current_user(SimpleNamespace(id="user-7"))
-    posted: dict = {}
-
-    class _Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"sandbox_url": "http://sandbox.local"}
-
-    def _post(url, json, timeout, headers=None):  # noqa: A002 - mirrors requests.post kwarg
-        posted.update({"url": url, "json": json, "timeout": timeout})
-        return _Response()
-
-    monkeypatch.setattr(remote_mod.requests, "post", _post)
-    monkeypatch.setattr(remote_mod, "user_should_see_legacy_skills", lambda _user_id: True)
-
-    try:
-        backend.create("thread-42", "sandbox-42")
-    finally:
-        reset_current_user(token)
-
-    assert posted["url"] == "http://provisioner:8002/api/sandboxes"
-    assert posted["json"] == {
-        "sandbox_id": "sandbox-42",
-        "thread_id": "thread-42",
-        "user_id": "user-7",
-        "include_legacy_skills": True,
-    }
-
-
-def test_remote_backend_create_prefers_explicit_user_id(monkeypatch):
-    """Provisioner mode must not fall back to the ambient default for channel runs."""
-    remote_mod = importlib.import_module("deerflow.community.aio_sandbox.remote_backend")
-    backend = remote_mod.RemoteSandboxBackend("http://provisioner:8002")
-    posted: dict = {}
-
-    class _Response:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return {"sandbox_url": "http://sandbox.local"}
-
-    def _post(url, json, timeout, headers=None):  # noqa: A002 - mirrors requests.post kwarg
-        posted.update({"url": url, "json": json, "timeout": timeout})
-        return _Response()
-
-    monkeypatch.setattr(remote_mod.requests, "post", _post)
-    monkeypatch.setattr(remote_mod, "get_effective_user_id", lambda: "default")
-    monkeypatch.setattr(remote_mod, "user_should_see_legacy_skills", lambda _user_id: False)
-
-    backend.create("thread-42", "sandbox-42", user_id="ou-user")
-
-    assert posted["json"]["user_id"] == "ou-user"
-    assert posted["json"]["include_legacy_skills"] is False
-
-
-# ── Sandbox client teardown (#2872) ──────────────────────────────────────────
 
 
 def _make_provider_with_active_sandbox(tmp_path, sandbox_id: str):

@@ -126,7 +126,7 @@ models:
 
 Choose the execution environment for agent file and command operations:
 
-<Tabs items={["Local (default)", "Docker container", "K8s Provisioner"]}>
+<Tabs items={["Local (default)", "Docker container"]}>
   <Tabs.Tab>
 ```yaml
 sandbox:
@@ -145,13 +145,6 @@ sandbox:
 
 Install: `cd backend && uv add 'deerflow-harness[aio-sandbox]'`
 
-  </Tabs.Tab>
-  <Tabs.Tab>
-```yaml
-sandbox:
-  use: deerflow.community.aio_sandbox:AioSandboxProvider
-  provisioner_url: http://provisioner:8002
-```
   </Tabs.Tab>
 </Tabs>
 

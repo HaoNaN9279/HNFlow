@@ -55,7 +55,6 @@ from .ownership import (
     make_sandbox_ownership_store,
     resolve_ownership_config,
 )
-from .remote_backend import RemoteSandboxBackend
 from .sandbox_info import SandboxInfo
 
 logger = logging.getLogger(__name__)
@@ -264,20 +263,11 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
     # ── Factory methods ──────────────────────────────────────────────────
 
     def _create_backend(self) -> SandboxBackend:
-        """Create the appropriate backend based on configuration.
+        """Create the local container backend.
 
-        Selection logic (checked in order):
-        1. ``provisioner_url`` set → RemoteSandboxBackend (provisioner mode)
-              Provisioner dynamically creates Pods + Services in k3s.
-        2. Default → LocalContainerBackend (local mode)
-              Local provider manages container lifecycle directly (start/stop).
+        The single-user build ships only :class:`LocalContainerBackend`; the
+        remote provisioner (Kubernetes) backend was removed.
         """
-        provisioner_url = self._config.get("provisioner_url")
-        if provisioner_url:
-            logger.info(f"Using remote sandbox backend with provisioner at {provisioner_url}")
-            api_key = self._config.get("provisioner_api_key", "")
-            return RemoteSandboxBackend(provisioner_url=provisioner_url, api_key=api_key)
-
         logger.info("Using local container sandbox backend")
         return LocalContainerBackend(
             image=self._config["image"],
@@ -307,13 +297,6 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
             "thread_data_mounts": getattr(sandbox_config, "thread_data_mounts", None),
             "environment": self._resolve_env_vars(sandbox_config.environment or {}),
             "ownership": getattr(sandbox_config, "ownership", None),
-            # A redis stream bridge means the deployment is multi-instance, which
-            # is what the ownership store must default to. Read the same source
-            # the bridge's own resolver reads, not just its env var.
-            "stream_bridge": getattr(config, "stream_bridge", None),
-            # provisioner URL for dynamic pod management (e.g. http://provisioner:8002)
-            "provisioner_url": getattr(sandbox_config, "provisioner_url", None) or "",
-            "provisioner_api_key": getattr(sandbox_config, "provisioner_api_key", None) or "",
         }
 
     @staticmethod
@@ -810,8 +793,8 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
     def _dedupe_mounts_by_container_path(mounts: list[tuple[str, str, bool]]) -> list[tuple[str, str, bool]]:
         """Keep the first mount for each container path.
 
-        Duplicate container paths are rejected by the provisioner and can also
-        fail local Docker creation. The earlier mount wins because mount helpers
+        Duplicate container paths are rejected by the local Docker daemon and
+        can fail local Docker creation. The earlier mount wins because mount helpers
         are appended in priority order: thread data, skill roots, integration
         skill roots, then integration runtimes/credentials.
         """

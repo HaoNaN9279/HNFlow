@@ -34,7 +34,6 @@ HNFlow 是**图驱动的确定性编排引擎**。它以 DeerFlow harness（Lang
 | **Nginx** | `2026` | 统一反向代理入口——浏览器打开这个 |
 | **Gateway API** | `8001` | FastAPI REST API + 内嵌 LangGraph 兼容 agent 运行时 |
 | **Frontend** | `3000` | Next.js Web 界面 |
-| **Provisioner** | `8002` | 可选——仅当 sandbox 配置为 provisioner/K8s 模式时启动 |
 
 Nginx 是唯一公共入口：它托管前端，并把 `/api/langgraph/*` 代理到 Gateway 的 LangGraph 运行时（重写为 Gateway 原生 `/api/*` 路由）；其余 `/api/*` 直通 Gateway 的 REST 路由。运行时与路由细节见 [backend/AGENTS.md](backend/AGENTS.md)。Nginx 压缩 HTML 与已配置的文本资源，代理层刻意保留 SSE、字体、图片、音频、视频不压缩。
 
@@ -53,7 +52,7 @@ HNFlow/
 │   ├── packages/harness/           # deerflow-harness 包（import: deerflow.*）——agent 框架
 │   └── app/                        # FastAPI Gateway（import: app.*）
 ├── frontend/                       # Next.js 前端（pnpm）——见 frontend/AGENTS.md
-├── docker/                         # docker-compose 文件、nginx 配置、provisioner
+├── docker/                         # docker-compose 文件、nginx 配置
 ├── skills/                         # Agent skills：public/（已提交）、custom/（gitignored）
 │                                    # 托管集成 skill 包全局位于 .deer-flow/integrations/skills/{provider}/
 │                                    # 集成凭据与启用状态保持按用户隔离

@@ -64,8 +64,8 @@ sandbox:
     assert _detect_mode_with_config(config) == "local"
 
 
-def test_detect_mode_aio_without_provisioner_url():
-    """AIO sandbox without provisioner_url should map to aio mode."""
+def test_detect_mode_aio():
+    """AIO sandbox provider should map to aio mode."""
     config = """
 sandbox:
   use: deerflow.community.aio_sandbox:AioSandboxProvider
@@ -74,19 +74,19 @@ sandbox:
     assert _detect_mode_with_config(config) == "aio"
 
 
-def test_detect_mode_provisioner_with_url():
-    """AIO sandbox with provisioner_url should map to provisioner mode."""
+def test_detect_mode_aio_ignores_provisioner_url():
+    """provisioner_url no longer selects a provisioner mode: AIO maps to aio."""
     config = """
 sandbox:
   use: deerflow.community.aio_sandbox:AioSandboxProvider
   provisioner_url: http://provisioner:8002
 """.strip()
 
-    assert _detect_mode_with_config(config) == "provisioner"
+    assert _detect_mode_with_config(config) == "aio"
 
 
 def test_detect_mode_ignores_commented_provisioner_url():
-    """Commented provisioner_url should not activate provisioner mode."""
+    """A commented provisioner_url does not change AIO detection either."""
     config = """
 sandbox:
   use: deerflow.community.aio_sandbox:AioSandboxProvider

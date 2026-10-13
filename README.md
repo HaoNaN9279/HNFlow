@@ -111,7 +111,7 @@ LangGraph checkpointer（sqlite / postgres）覆盖整图（含子图）：
 执行引擎、断点、挂起、MCP、沙箱、记忆、子代理、扩展系统全部复用底层 harness：
 
 - **MCP**：stdio / http / sse、OAuth、session pool、tool_search 懒加载、路由提示；
-- **Sandbox**：本地 / Docker / provisioner(K8s) 多模式，bash 等命令类节点强制走沙箱执行，禁止直连宿主 shell；
+- **Sandbox**：本地 / Docker 两种模式，bash 等命令类节点强制走沙箱执行，禁止直连宿主 shell；
 - **Skills / 扩展**：middleware 链、allowed-tools 策略、skill 安全扫描原样作用于节点执行上下文；
 - **调度**：scheduler（cron / once）与多租户 user_id 隔离直接套用。
 
@@ -171,7 +171,6 @@ HNFlow 采用六层架构，核心是**定义层 + 编译层**新增，其余全
 | **Nginx** | `2026` | 统一反向代理入口，浏览器访问入口 |
 | **Gateway API** | `8001` | FastAPI REST API + 内嵌 LangGraph 兼容 agent 运行时 |
 | **Frontend** | `3000` | Next.js Web 界面 |
-| **Provisioner** | `8002` | 可选，仅沙箱配置为 provisioner/K8s 模式时启动 |
 
 - Nginx 是唯一对外入口：托管前端，并将 `/api/langgraph/*` 重写为 Gateway 原生 `/api/*` 路由，其余 `/api/*` 直连 Gateway REST 路由；
 - 两个 compose 文件均以 `${BIND_HOST:-127.0.0.1}:${PORT:-2026}:2026` 发布入口——**默认绑定 loopback**，匹配本地部署模型；裸写 `"${PORT}:2026"` 会绑定 `0.0.0.0`，需显式确认；
@@ -333,7 +332,7 @@ start → 任务描述 → AI 节点（template_prompt，初轮 reset）
 HNFlow 默认面向**本地信任环境模型**（个人 / 小团队本机部署），但仍遵循最小暴露与隔离原则：
 
 - **默认 loopback 绑定**：compose 入口默认 `127.0.0.1:2026`，不暴露公网；需要对外服务时显式设置 `BIND_HOST` 并自行评估风险；
-- **沙箱隔离**：bash / command 等命令类节点强制走 Sandbox 执行（本地 / Docker / provisioner 模式），禁止直连宿主 shell；文件写入同样受沙箱文件系统约束；
+- **沙箱隔离**：bash / command 等命令类节点强制走 Sandbox 执行（本地 / Docker 模式），禁止直连宿主 shell；文件写入同样受沙箱文件系统约束；
 - **危险节点默认待审核**：AI 生成的 bash / http 等危险节点默认写入 `pending_review_nodes` 元数据，运行时要求人工确认；生成工具的任何结果必须过图结构校验才可保存；
 - **人工确认兜底**：非幂等节点（bash / http / MCP 调用）失败不自动重试，转人工确认；涉及覆盖、提交、删除、发布等操作必须用户二次确认；
 - **依赖静态校验**：功能组依赖存在性、版本范围、循环引用在保存时静态拦截，节点锁定 `guid@version`，新版本只提示不自动升级；

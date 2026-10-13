@@ -229,7 +229,6 @@ def _make_aio_provider(config: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
         "idle_timeout": config.get("idle_timeout", 600),
         "mounts": config.get("mounts", []),
         "environment": config.get("environment", {}),
-        "provisioner_url": config.get("provisioner_url", ""),
     }
 
     with _patched_module_attr(

@@ -39,7 +39,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NGINX_CONFIGS = (
     "docker/nginx/nginx.conf",
     "docker/nginx/nginx.local.conf",
-    "deploy/helm/deer-flow/templates/configmap-nginx.yaml",
 )
 
 # Text prompts never carry binary file attachments (those go through the

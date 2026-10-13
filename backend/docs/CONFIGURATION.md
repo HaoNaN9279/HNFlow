@@ -401,27 +401,15 @@ reclaim its warm VM on the next acquire; different threads cannot share a VM.
 evicted; active VMs continue and the provider may temporarily exceed the cap if
 all boxes are active.
 
-**Docker Execution with Kubernetes** (runs sandbox code in Kubernetes pods via provisioner service):
-
-This mode runs each sandbox in an isolated Kubernetes Pod on your **host machine's cluster**. Requires Docker Desktop K8s, OrbStack, or similar local K8s setup.
-
-```yaml
-sandbox:
-   use: deerflow.community.aio_sandbox:AioSandboxProvider
-   provisioner_url: http://provisioner:8002
-```
-
-When using Docker development (`make docker-start`), DeerFlow starts the `provisioner` service only if this provisioner mode is configured. In local or plain Docker sandbox modes, `provisioner` is skipped.
-
-Remote/provisioner backends default to explicit file synchronization because
-DeerFlow cannot infer whether their `/mnt/user-data` mount points reference the
-same storage as the Gateway. When the deployment guarantees that both sides use
-the same thread user-data directories, opt out of that extra transfer:
+Container backends default to explicit file synchronization unless DeerFlow can
+infer that the sandbox's `/mnt/user-data` mount points reference the same
+storage as the Gateway. Local container mounts already share the thread
+user-data directories; opt out of the extra transfer explicitly when a custom
+backend does too:
 
 ```yaml
 sandbox:
   use: deerflow.community.aio_sandbox:AioSandboxProvider
-  provisioner_url: http://provisioner:8002
   thread_data_mounts: true
 ```
 
@@ -431,8 +419,6 @@ Only set it to `true` after verifying the Gateway's
 `users/{user_id}/threads/{thread_id}/user-data` directory and the sandbox's
 `/mnt/user-data` are the same storage; a false positive skips synchronization
 and makes newly uploaded files unavailable inside the sandbox.
-
-See [Provisioner Setup Guide](../../docker/provisioner/README.md) for detailed configuration, prerequisites, and troubleshooting.
 
 **E2B Cloud Sandbox** (runs sandbox code in [E2B](https://e2b.dev) cloud micro-VMs):
 
@@ -577,8 +563,6 @@ sandbox:
   image: your-registry/your-aio-sandbox:tag
 ```
 
-In provisioner mode, sandbox Pods are created by the provisioner service, so configure the provisioner `SANDBOX_IMAGE` environment variable instead of `sandbox.image`. See the [Provisioner Setup Guide](../../docker/provisioner/README.md#custom-sandbox-image).
-
 If you rebuild the runtime from scratch instead of extending the published image, it must expose the same HTTP API used by `agent-sandbox`. DeerFlow currently depends on:
 
 - `sandbox.get_context()`, including `home_dir`
@@ -707,8 +691,7 @@ before exposing an instance to untrusted input.
 | Mode | `config.yaml` | Host Docker socket | Isolation |
 |------|---------------|--------------------|-----------|
 | `local` (default) | `deerflow.sandbox.local:LocalSandboxProvider` | Not mounted | Commands run **inside the gateway container** on its filesystem. Not a strong boundary — `allow_host_bash` is `false` by default and should stay off for untrusted workloads. |
-| `aio` (pure DooD) | `deerflow.community.aio_sandbox:AioSandboxProvider` (no `provisioner_url`) | **Mounted** (opt-in overlay) | Sandbox containers are started via the host Docker daemon. |
-| `provisioner` (Kubernetes) | `AioSandboxProvider` + `provisioner_url` | Not mounted | Sandbox pods are created through the provisioner's K8s API over HTTP. Strongest isolation. |
+| `aio` (DooD) | `deerflow.community.aio_sandbox:AioSandboxProvider` | **Mounted** (opt-in overlay) | Sandbox containers are started via the host Docker daemon. |
 
 #### The Docker socket is host root
 
@@ -725,9 +708,6 @@ To keep this off the default attack surface:
   added only for `aio` mode through the opt-in `docker/docker-compose.dood.yaml`
   overlay, which `scripts/deploy.sh` and `scripts/docker.sh` append
   automatically when `detect_sandbox_mode()` returns `aio`.
-- Prefer **provisioner/Kubernetes mode** for multi-tenant or internet-exposed
-  deployments — it isolates sandboxes without handing the gateway the host
-  daemon.
 - If you must use `aio`/DooD, treat the host as part of the gateway's trust
   boundary: run it on a dedicated host, and consider a scoped Docker API proxy
   instead of the raw socket.

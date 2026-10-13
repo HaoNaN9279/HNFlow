@@ -44,7 +44,6 @@ load_proxy_env_from_dotenv() {
 detect_sandbox_mode() {
     local config_file="$PROJECT_ROOT/config.yaml"
     local sandbox_use=""
-    local provisioner_url=""
 
     if [ ! -f "$config_file" ]; then
         echo "local"
@@ -62,25 +61,8 @@ detect_sandbox_mode() {
         }
     ' "$config_file")
 
-    provisioner_url=$(awk '
-        /^[[:space:]]*sandbox:[[:space:]]*$/ { in_sandbox=1; next }
-        in_sandbox && /^[^[:space:]#]/ { in_sandbox=0 }
-        in_sandbox && /^[[:space:]]*provisioner_url:[[:space:]]*/ {
-            line=$0
-            sub(/^[[:space:]]*provisioner_url:[[:space:]]*/, "", line)
-            print line
-            exit
-        }
-    ' "$config_file")
-
-    if [[ "$sandbox_use" == *"deerflow.sandbox.local:LocalSandboxProvider"* ]]; then
-        echo "local"
-    elif [[ "$sandbox_use" == *"deerflow.community.aio_sandbox:AioSandboxProvider"* ]]; then
-        if [ -n "$provisioner_url" ]; then
-            echo "provisioner"
-        else
-            echo "aio"
-        fi
+    if [[ "$sandbox_use" == *"deerflow.community.aio_sandbox:AioSandboxProvider"* ]]; then
+        echo "aio"
     else
         echo "local"
     fi
@@ -192,13 +174,10 @@ start() {
     sandbox_mode="$(detect_sandbox_mode)"
 
     services="frontend gateway nginx"
-    if [ "$sandbox_mode" = "provisioner" ]; then
-        services="frontend gateway provisioner nginx"
-    fi
 
-    # Only aio mode (AioSandboxProvider without provisioner_url) needs the host
-    # Docker socket. Mount it via the opt-in docker-compose.dood.yaml overlay so
-    # the default (local) and provisioner modes never expose the host daemon.
+    # Only aio mode (AioSandboxProvider) needs the host Docker socket. Mount it
+    # via the opt-in docker-compose.dood.yaml overlay so the default (local) mode
+    # never exposes the host daemon.
     # Mounting the socket = root-equivalent host control; see SECURITY.md.
     if [ "$sandbox_mode" = "aio" ]; then
         local docker_socket="${DEER_FLOW_DOCKER_SOCKET:-/var/run/docker.sock}"
@@ -212,20 +191,15 @@ start() {
 
     echo -e "${BLUE}Runtime: Gateway embedded agent runtime${NC}"
     echo -e "${BLUE}Detected sandbox mode: $sandbox_mode${NC}"
-    if [ "$sandbox_mode" = "provisioner" ]; then
-        echo -e "${BLUE}Provisioner enabled (Kubernetes mode).${NC}"
-    else
-        echo -e "${BLUE}Provisioner disabled (not required for this sandbox mode).${NC}"
-    fi
     echo ""
-    
-    # Set DEER_FLOW_ROOT for provisioner if not already set
+
+    # Ensure DEER_FLOW_ROOT is set for compose mount resolution.
     if [ -z "$DEER_FLOW_ROOT" ]; then
         export DEER_FLOW_ROOT="$PROJECT_ROOT"
         echo -e "${BLUE}Setting DEER_FLOW_ROOT=$DEER_FLOW_ROOT${NC}"
         echo ""
     fi
-    
+
     # Ensure config.yaml exists before starting.
     if [ ! -f "$PROJECT_ROOT/config.yaml" ]; then
         if [ -f "$PROJECT_ROOT/config.example.yaml" ]; then
@@ -302,16 +276,12 @@ logs() {
             service="nginx"
             echo -e "${BLUE}Viewing nginx logs...${NC}"
             ;;
-        --provisioner)
-            service="provisioner"
-            echo -e "${BLUE}Viewing provisioner logs...${NC}"
-            ;;
         "")
             echo -e "${BLUE}Viewing all logs...${NC}"
             ;;
         *)
             echo -e "${YELLOW}Unknown option: $1${NC}"
-            echo "Usage: $0 logs [--frontend|--gateway|--nginx|--provisioner]"
+            echo "Usage: $0 logs [--frontend|--gateway|--nginx]"
             exit 1
             ;;
     esac
@@ -368,7 +338,6 @@ help() {
     echo "                  --frontend   View frontend logs only"
     echo "                  --gateway    View gateway logs only"
     echo "                  --nginx      View nginx logs only"
-    echo "                  --provisioner View provisioner logs only"
     echo "  stop          - Stop Docker development services"
     echo "  help          - Show this help message"
     echo ""

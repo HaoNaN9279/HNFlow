@@ -122,18 +122,6 @@ Get an API key at [e2b.dev/dashboard](https://e2b.dev/dashboard) and either set 
   that read or write under `/mnt/user-data/...` continue to work transparently.
 </Callout>
 
-### Provisioner-managed Sandbox (Kubernetes)
-
-Each sandbox gets a dedicated Pod in a Kubernetes cluster, managed by the provisioner service. This provides the strongest isolation and is recommended for production environments with multiple concurrent users.
-
-```yaml
-sandbox:
-  use: deerflow.community.aio_sandbox:AioSandboxProvider
-  provisioner_url: http://provisioner:8002
-```
-
-The provisioner service is included in `docker/docker-compose-dev.yaml` and manages the Pod and Service lifecycle for each sandbox ID.
-
 ## Path mappings
 
 The sandbox uses path mappings to bridge the host filesystem and the container's virtual filesystem. Two key mappings are always configured:
@@ -224,7 +212,7 @@ Even without `bash`, the agent can still read and write files through the dedica
 
 ### Container sandbox
 
-Container-based sandboxes provide filesystem and process isolation. The agent cannot see or modify the host filesystem except through explicit mounts. The provisioner-managed mode adds a further layer: each thread gets its own isolated Pod.
+Container-based sandboxes provide filesystem and process isolation. The agent cannot see or modify the host filesystem except through explicit mounts.
 
 ### Audit middleware
 
