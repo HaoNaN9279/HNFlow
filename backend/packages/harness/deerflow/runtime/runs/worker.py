@@ -49,6 +49,7 @@ from deerflow.runtime.checkpoint_state import (
     graph_writable_channels,
 )
 from deerflow.runtime.context_keys import (
+    APP_RUNTIME_CONTEXT_KEY,
     CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY,
     WORKFLOW_RUNTIME_CONTEXT_KEY,
 )
@@ -425,6 +426,13 @@ def _build_runtime_context(
         runtime_ctx[WORKFLOW_RUNTIME_CONTEXT_KEY] = workflow_runtime
     else:
         runtime_ctx.pop(WORKFLOW_RUNTIME_CONTEXT_KEY, None)
+    # Publish the process-wide local-application session manager so the app:*
+    # workflow executors and the tool gateway's app provider share one session
+    # map. Overwritten (never caller-supplied) because it is host-internal; the
+    # manager itself fail-closes when apps.enabled=false.
+    from deerflow.apps.session import get_session_manager
+
+    runtime_ctx[APP_RUNTIME_CONTEXT_KEY] = get_session_manager()
     return runtime_ctx
 
 

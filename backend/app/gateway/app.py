@@ -12,6 +12,7 @@ from app.gateway.cors import CORS_EXPOSED_HEADERS, get_configured_cors_origins
 from app.gateway.deps import langgraph_runtime
 from app.gateway.routers import (
     agents,
+    apps,
     artifacts,
     assistants_compat,
     browser,
@@ -467,6 +468,7 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Features API is mounted at /api/features
     app.include_router(features.router)
+    app.include_router(apps.router)
 
     # Console API (cross-thread observability) is mounted at /api/console
     app.include_router(console.router)
