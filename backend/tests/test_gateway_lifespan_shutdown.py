@@ -13,7 +13,7 @@ import logging
 import threading
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import FastAPI
 
@@ -29,7 +29,6 @@ async def _run_lifespan_with_upload_staging_cleanup():
     app = FastAPI()
     startup_config = SimpleNamespace(log_level="INFO", memory=SimpleNamespace(token_counting="char", enabled=False, shutdown_flush_timeout_seconds=30.0))
     cleanup_upload_staging_files = MagicMock(return_value=2)
-    close_oidc_service = AsyncMock()
 
     with (
         patch("app.gateway.app.get_app_config", return_value=startup_config),
@@ -37,19 +36,17 @@ async def _run_lifespan_with_upload_staging_cleanup():
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
         patch("app.gateway.app.cleanup_stale_upload_staging_files", cleanup_upload_staging_files),
-        patch("app.gateway.app.auth.close_oidc_service", close_oidc_service),
     ):
         async with lifespan(app):
             pass
 
-    return cleanup_upload_staging_files, close_oidc_service
+    return cleanup_upload_staging_files
 
 
 def test_lifespan_sweeps_upload_staging_files_on_startup():
-    cleanup_upload_staging_files, close_oidc_service = asyncio.run(_run_lifespan_with_upload_staging_cleanup())
+    cleanup_upload_staging_files = asyncio.run(_run_lifespan_with_upload_staging_cleanup())
 
     cleanup_upload_staging_files.assert_called_once_with()
-    close_oidc_service.assert_awaited_once()
 
 
 async def _run_lifespan_with_memory_flush(
@@ -78,7 +75,6 @@ async def _run_lifespan_with_memory_flush(
             shutdown_flush_timeout_seconds=5.0,
         ),
     )
-    close_oidc_service = AsyncMock()
 
     manager = MagicMock()
     if isinstance(flush_return, Exception):
@@ -102,7 +98,6 @@ async def _run_lifespan_with_memory_flush(
         patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("deerflow.skills.projection.ensure_public_skill_projection"),
-        patch("app.gateway.app.auth.close_oidc_service", close_oidc_service),
         patch("deerflow.agents.memory.get_memory_manager", return_value=manager),
         patch("deerflow.extensions.notify.suspend_extension_system_observations", suspend_system_observations),
     ):
@@ -183,7 +178,6 @@ async def _run_lifespan_with_warm_return(warm_return: bool | None) -> MagicMock:
             shutdown_flush_timeout_seconds=5.0,
         ),
     )
-    close_oidc_service = AsyncMock()
 
     manager = MagicMock()
     manager.warm.return_value = warm_return
@@ -192,7 +186,6 @@ async def _run_lifespan_with_warm_return(warm_return: bool | None) -> MagicMock:
         patch("app.gateway.app.get_app_config", return_value=startup_config),
         patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
-        patch("app.gateway.app.auth.close_oidc_service", close_oidc_service),
         patch("deerflow.agents.memory.get_memory_manager", return_value=manager),
     ):
         async with lifespan(app):
@@ -243,7 +236,6 @@ async def _run_lifespan_with_slow_retrieval_warm() -> float:
         patch("app.gateway.app.get_app_config", return_value=startup_config),
         patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
-        patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
         patch("deerflow.agents.memory.get_memory_manager", return_value=manager),
     ):
         context = lifespan(app)
@@ -292,7 +284,6 @@ async def _run_shutdown_with_blocked_retrieval_warm() -> tuple[float, MagicMock]
         patch("app.gateway.app.get_gateway_config", return_value=MagicMock(host="x", port=0)),
         patch("app.gateway.app.langgraph_runtime", _noop_langgraph_runtime),
         patch("app.gateway.app._RETRIEVAL_WARM_SHUTDOWN_TIMEOUT_SECONDS", 0.01),
-        patch("app.gateway.app.auth.close_oidc_service", AsyncMock()),
         patch("deerflow.agents.memory.get_memory_manager", return_value=manager),
     ):
         context = lifespan(app)

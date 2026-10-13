@@ -645,9 +645,6 @@ export const enUS: Translations = {
     reportIssue: "Report an issue",
     contactUs: "Contact us",
     about: "About DeerFlow",
-    logout: "Log out",
-    gatewayUnavailable: "Gateway is temporarily unavailable.",
-    gatewayUnavailableRetrying: "Retrying in the background…",
   },
 
   // Conversation

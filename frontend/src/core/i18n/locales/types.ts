@@ -533,9 +533,6 @@ export interface Translations {
     reportIssue: string;
     contactUs: string;
     about: string;
-    logout: string;
-    gatewayUnavailable: string;
-    gatewayUnavailableRetrying: string;
   };
 
   // Conversation

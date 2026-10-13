@@ -12,7 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 from deerflow.config.acp_config import ACPAgentConfig, load_acp_config_from_dict
 from deerflow.config.agent_storage_config import AgentStorageConfig
 from deerflow.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
-from deerflow.config.auth_config import AuthAppConfig
 from deerflow.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.config.extensions_config import ExtensionsConfig
@@ -243,7 +242,6 @@ class AppConfig(BaseModel):
     tool_progress: ToolProgressConfig = Field(default_factory=ToolProgressConfig, description="Tool progress state machine middleware configuration")
     read_before_write: ReadBeforeWriteConfig = Field(default_factory=ReadBeforeWriteConfig, description="Read-before-write file gate middleware configuration")
     safety_finish_reason: SafetyFinishReasonConfig = Field(default_factory=SafetyFinishReasonConfig, description="Provider safety-filter finish_reason interception middleware configuration")
-    auth: AuthAppConfig = Field(default_factory=AuthAppConfig, description="Authentication configuration (local + OIDC SSO)")
     model_config = ConfigDict(extra="allow")
     database: DatabaseConfig = Field(
         default_factory=DatabaseConfig,

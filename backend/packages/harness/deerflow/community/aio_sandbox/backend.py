@@ -96,9 +96,8 @@ async def wait_for_sandbox_ready_async(sandbox_url: str, timeout: int = 30, poll
 class SandboxBackend(ABC):
     """Abstract base for sandbox provisioning backends.
 
-    Two implementations:
+    Implementation:
     - LocalContainerBackend: starts Docker/Apple Container locally, manages ports
-    - RemoteSandboxBackend: connects to a pre-existing URL (K8s service, external)
     """
 
     @abstractmethod
