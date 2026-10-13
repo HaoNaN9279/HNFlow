@@ -18,14 +18,12 @@ from app.gateway.routers import (
     console,
     features,
     human_task_routes,
-    input_polish,
     mcp,
     memory,
     models,
     runs,
     scheduled_tasks,
     skills,
-    suggestions,
     thread_runs,
     threads,
     uploads,
@@ -386,14 +384,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
                 "description": "Create and manage custom agents with per-agent config and prompts",
             },
             {
-                "name": "suggestions",
-                "description": "Generate follow-up question suggestions for conversations",
-            },
-            {
-                "name": "input-polish",
-                "description": "Polish composer draft input before sending",
-            },
-            {
                 "name": "assistants-compat",
                 "description": "LangGraph Platform-compatible assistants API (stub)",
             },
@@ -518,12 +508,6 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Agents API is mounted at /api/agents
     app.include_router(agents.router)
-
-    # Suggestions API is mounted at /api/threads/{thread_id}/suggestions
-    app.include_router(suggestions.router)
-
-    # Input polishing API is mounted at /api/input-polish
-    app.include_router(input_polish.router)
 
     # Assistants compatibility API (LangGraph Platform stub)
     app.include_router(assistants_compat.router)

@@ -19,7 +19,7 @@ so contract drift turns the build red instead.
   *shape*.
 - **Layer 2 — full-stack render** (`frontend/tests/e2e-real-backend/`): real
   Next.js + real gateway (replay model) + Chromium; asserts the replayed
-  auto-title and a follow-up suggestion render in the browser. Guards semantic
+  auto-title and rendered answer render in the browser. Guards semantic
   *render*. (Complementary to Layer 1 — neither subsumes the other.)
 
 Layer 2 also hosts **cross-stack contract scenarios** — the dangerous class

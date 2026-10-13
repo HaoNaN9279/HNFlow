@@ -1062,31 +1062,6 @@ tool_output:
   #   bash: 20000
 
 # ============================================================================
-# Suggestions Configuration
-# ============================================================================
-# Configure whether the agent automatically generates follow-up question
-# suggestions at the end of each response.
-
-suggestions:
-  enabled: true
-  max_suggestions: 3
-
-
-# ============================================================================
-# Input Polish Configuration
-# ============================================================================
-# Configure whether the composer can rewrite draft input before sending.
-
-input_polish:
-  enabled: true
-  # Maximum draft length accepted by /api/input-polish.
-  max_chars: 4000
-  # Optional fast model for draft polishing. Leave null to use the default chat model.
-  # For best UX, set this to your lowest-latency inexpensive model.
-  model_name: null
-
-
-# ============================================================================
 # Loop Detection Configuration
 # ============================================================================
 # Detect and interrupt repeated identical tool-call loops.

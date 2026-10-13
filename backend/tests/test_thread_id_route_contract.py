@@ -6,7 +6,7 @@ Two complementary guards:
 1. A static sweep (AST over ``app/gateway/routers/*.py``) asserting every
    route handler that declares a ``thread_id`` parameter annotates it
    ``ThreadId`` — this is what prevents new routes from silently landing
-   with a raw ``str`` again (the suggestions/thread_runs/threads gaps).
+   with a raw ``str`` again (the thread_runs/threads gaps).
 2. A runtime sweep hitting every ``{thread_id}`` route with a non-canonical
    ID and asserting a 422 whose error location names ``thread_id``.
 
@@ -75,13 +75,12 @@ def _collect_thread_id_routes():
         runs,
         scheduled_tasks,
         skills,
-        suggestions,
         thread_runs,
         threads,
         uploads,
     )
 
-    routers = [artifacts, browser, runs, scheduled_tasks, skills, suggestions, thread_runs, threads, uploads]
+    routers = [artifacts, browser, runs, scheduled_tasks, skills, thread_runs, threads, uploads]
     cases = []
     for module in routers:
         for route in module.router.routes:
@@ -119,7 +118,7 @@ def test_browser_websocket_rejects_noncanonical_thread_id():
 def test_sweep_covers_expected_surface():
     """Sanity: the sweep must actually see the known thread_id routes."""
     assert len(_THREAD_ID_ROUTES) >= 30
-    assert any("suggestions" in name for name, _, _ in _THREAD_ID_ROUTES)
+    assert any("thread_runs" in name for name, _, _ in _THREAD_ID_ROUTES)
 
 
 @pytest.mark.parametrize(

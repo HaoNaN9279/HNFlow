@@ -89,7 +89,6 @@ FastAPI application providing REST endpoints plus the public LangGraph-compatibl
 - `uploads.py` - `/api/threads/{id}/uploads` - File upload
 - `threads.py` - `/api/threads/{id}` - Local DeerFlow thread data cleanup after LangGraph deletion
 - `artifacts.py` - `/api/threads/{id}/artifacts` - Artifact serving
-- `suggestions.py` - `/api/threads/{id}/suggestions` - Follow-up suggestion generation
 
 The web conversation delete flow first deletes Gateway-managed thread state through the LangGraph-compatible route, then the Gateway `threads.py` router removes DeerFlow-managed filesystem data via `Paths.delete_thread_dir()`.
 
