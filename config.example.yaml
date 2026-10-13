@@ -1796,7 +1796,7 @@ skill_evolution:
 # Legacy standalone checkpointer config. Kept for backward compatibility.
 # Prefer the unified `database` section below, which drives the LangGraph
 # checkpointer, LangGraph Store, and HNFlow application data (runs,
-# feedback, events) from a single backend setting.
+# threads metadata, events) from a single backend setting.
 #
 # If both `checkpointer` and `database` are present, `checkpointer`
 # takes precedence for the LangGraph checkpointer and Store only.
@@ -1816,7 +1816,7 @@ skill_evolution:
 # Database
 # ============================================================================
 # Unified storage backend for the LangGraph checkpointer, LangGraph Store,
-# and HNFlow application data (runs, threads metadata, feedback, etc.).
+# and HNFlow application data (runs, threads metadata, etc.).
 #
 # backend: memory  -- No persistence, data lost on restart
 # backend: sqlite  -- Single-node deployment, files in sqlite_dir
@@ -1884,8 +1884,6 @@ skill_evolution:
 #        ALTER TABLE public.runs                  SET SCHEMA deerflow;
 #        ALTER TABLE public.run_events            SET SCHEMA deerflow;
 #        ALTER TABLE public.threads_meta          SET SCHEMA deerflow;
-#        ALTER TABLE public.feedback              SET SCHEMA deerflow;
-#        ALTER TABLE public.users                 SET SCHEMA deerflow;
 #        ALTER TABLE public.agents                SET SCHEMA deerflow;
 #        -- Scheduled-task tables:
 #        ALTER TABLE public.scheduled_tasks       SET SCHEMA deerflow;

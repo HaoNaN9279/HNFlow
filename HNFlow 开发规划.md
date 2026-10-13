@@ -330,7 +330,9 @@
 
 > **进度（A5 TUI）**：删 `packages/harness/deerflow/tui/**`（15 模块 + widgets）、`backend/docs/TUI.md`、`docs/tui/`、`tests/test_tui_*.py`（16）；移除 `[project.scripts]` 的 `deerflow` 入口；`test_thread_id_validation` 去 TUI `/resume` 用例。`harness/pyproject.toml` 的 `tui` extra 与 backend `textual` dev 依赖**暂留**（`uv.lock` 因 tenki-sandbox registry 缺口无法重生成，注释说明，`uv lock --check` 仍通过）。代码注释与 `README{,_zh}.md`/`CONTRIBUTING.md` 树同步。ruff 干净、测试收集无 import 错误、受影响套件通过。
 
-> 说明：A4（运营类）/ A5（TUI）已完成并各自独立提交。剩余裁剪仅有 §8.3 [隔离] 项（MCP 长期任务 / skill_evolution / agents_api / 远程沙箱 / 云搜索 / browser / voice-sidecar），保持默认关闭、不进主路径，待 P1 稳定后复查转删。
+> **进度（[隔离] 项审计，§8.5 步 6）**：逐项核对「默认关闭 + 主路径摘除」，全部已满足，无需代码改动——`agents_api.enabled`/`skill_evolution.enabled`/`mcp_tasks.enabled` 默认 `false`；`agents_api` 路由经 `_require_agents_api_enabled()` 在关闭时返回 403、`browser` 路由经 `_browser_tools_enabled()` 在未启用时返回 404，两者前端均按 `/api/features` 门控；`sandbox.use` 默认 `deerflow.sandbox.local:LocalSandboxProvider`，e2b/boxlite/tenki/aio 远程 provider 仅在显式配置时装配；云搜索/抓取 provider 除最小检索集（`ddg_search` 搜索、`jina_ai` 抓取、`ddg` 图搜）外均在 `config.example.yaml` 注释默认关闭；browser 面板/工具默认关闭；语音输入与侧车为前端浏览器原生能力/本地 UI，无云端依赖。顺带清理 `config.example.yaml` 中 A1/A4a 遗留的 `feedback`/`users` 表注释引用（`database` 段说明与 Postgres schema 迁移示例）。按 §8.7，[隔离] 项在 P1 期间保持默认关闭，待 P2 复查转删。
+
+> 说明：A4（运营类）/ A5（TUI）/ [隔离] 审计已完成，裁剪规划（§8.2 [删除] 清单 + §8.3 [隔离] 默认关闭）全部落地。
 
 ---
 
