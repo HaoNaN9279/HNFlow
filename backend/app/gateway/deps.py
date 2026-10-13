@@ -456,8 +456,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         app.state.run_event_store = make_run_event_store(run_events_config)
 
         # RunManager with store backing for persistence
-        sb_config = getattr(config, "stream_bridge", None)
-        cleanup_delay = getattr(sb_config, "recovered_stream_cleanup_delay_seconds", 60.0) if sb_config else 60.0
+        cleanup_delay = 60.0
         recovered_stream_cleanup_tasks: dict[asyncio.Task[None], str] = {}
 
         def track_recovered_stream_cleanup(

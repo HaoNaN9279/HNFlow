@@ -216,7 +216,7 @@ class AioSandboxProvider(WarmPoolLifecycleMixin[SandboxInfo], SandboxProvider):
         self._owner_id = generate_owner_id()
 
         self._config = self._load_config()
-        self._ownership_config = resolve_ownership_config(self._config.get("ownership"), stream_bridge=self._config.get("stream_bridge"))
+        self._ownership_config = resolve_ownership_config(self._config.get("ownership"))
         self._ownership: SandboxOwnershipStore = make_sandbox_ownership_store(self._ownership_config, owner_id=self._owner_id)
         if not self._ownership.supports_cross_process:
             # Peers cannot see these leases, so every container looks like an

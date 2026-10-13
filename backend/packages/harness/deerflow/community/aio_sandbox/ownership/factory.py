@@ -1,9 +1,8 @@
 """Resolve the configured sandbox ownership store.
 
-Mirrors ``stream_bridge``'s ``make_stream_bridge``: dispatch on ``config.type``,
-lazy per-branch imports so a memory-only install never imports ``redis``, and an
-env-var escape hatch so a container deployment can flip the backend without
-editing config.yaml.
+Dispatches on ``config.type`` with lazy per-branch imports so a memory-only
+install never imports ``redis``, plus an env-var escape hatch so a container
+deployment can flip the backend without editing config.yaml.
 """
 
 from __future__ import annotations
@@ -14,7 +13,6 @@ import socket
 import uuid
 
 from deerflow.config.sandbox_config import SandboxOwnershipConfig
-from deerflow.config.stream_bridge_config import StreamBridgeConfig
 
 from .base import SandboxOwnershipStore
 
@@ -33,26 +31,17 @@ def generate_owner_id() -> str:
     return f"{socket.gethostname()}:{uuid.uuid4().hex}"
 
 
-def resolve_ownership_config(config: SandboxOwnershipConfig | None, *, stream_bridge: StreamBridgeConfig | None = None) -> SandboxOwnershipConfig:
+def resolve_ownership_config(config: SandboxOwnershipConfig | None) -> SandboxOwnershipConfig:
     """Fill in an omitted ownership section.
 
-    A deployment that already points the stream bridge at Redis is by definition
-    multi-instance, so it gets a redis ownership store rather than silently
-    falling back to memory (which cannot see peers and would leave #4206 open).
-
-    Both of the stream bridge's own redis triggers are honoured, and in its
-    order (``stream_bridge/async_provider.py::_resolve_config``): the config.yaml
-    section first, then the env var. Reading only the env var would miss the
-    config.yaml-native way of pointing the bridge at Redis — i.e. exactly the
-    multi-instance deployments this inference exists for.
+    A container deployment that sets an ownership/stream-bridge Redis URL is by
+    definition multi-instance, so it gets a redis ownership store rather than
+    silently falling back to memory (which cannot see peers and would leave
+    #4206 open). Ownership is env-driven in the single-user build; the removed
+    ``stream_bridge`` config no longer has a ``type`` to infer from.
     """
     if config is not None:
         return config
-
-    if stream_bridge is not None and stream_bridge.type == "redis":
-        redis_url = stream_bridge.redis_url or os.getenv(_ENV_OWNERSHIP_REDIS_URL) or os.getenv(_ENV_STREAM_BRIDGE_REDIS_URL)
-        logger.info("Sandbox ownership: redis inferred from stream_bridge.type (multi-instance deployment)")
-        return SandboxOwnershipConfig(type="redis", redis_url=redis_url)
 
     redis_url = os.getenv(_ENV_OWNERSHIP_REDIS_URL) or os.getenv(_ENV_STREAM_BRIDGE_REDIS_URL)
     if redis_url:

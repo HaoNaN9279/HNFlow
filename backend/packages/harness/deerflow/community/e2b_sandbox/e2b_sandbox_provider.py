@@ -177,7 +177,6 @@ class E2BSandboxProvider(SandboxProvider):
         )
         self._ownership_config = resolve_ownership_config(
             self._config.get("ownership"),
-            stream_bridge=self._config.get("stream_bridge"),
         )
         self._ownership: SandboxOwnershipStore = make_sandbox_ownership_store(
             self._ownership_config,

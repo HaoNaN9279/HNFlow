@@ -10,7 +10,6 @@ Order of resolution:
 2. Auto-detection from config.yaml — currently maps:
    - database.backend == postgres        -> postgres
    - checkpointer.type == postgres       -> postgres
-   - stream_bridge.type == redis         -> redis
    - tools[].name == browser_navigate    -> browser
    - sandbox.ownership.type == redis     -> redis
    - channels.buzz.enabled == true       -> buzz
@@ -262,8 +261,6 @@ def detect_from_config(path: Path) -> list[str]:
         extras.add("postgres")
     if (section_value(lines, "checkpointer", "type") or "").lower() == "postgres":
         extras.add("postgres")
-    if (section_value(lines, "stream_bridge", "type") or "").lower() == "redis":
-        extras.add("redis")
     if (nested_section_value(lines, "sandbox.ownership", "type") or "").lower() == "redis":
         extras.add("redis")
     if (nested_section_value(lines, "channels.discord", "enabled") or "").lower() == "true":

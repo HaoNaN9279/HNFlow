@@ -32,7 +32,6 @@ from deerflow.community.aio_sandbox.ownership import (
     resolve_ownership_config,
 )
 from deerflow.config.sandbox_config import SandboxOwnershipConfig
-from deerflow.config.stream_bridge_config import StreamBridgeConfig
 
 REDIS_TEST_URL = os.environ.get("DEER_FLOW_TEST_REDIS_URL", "redis://localhost:6379/15")
 
@@ -371,33 +370,6 @@ def test_stream_bridge_redis_env_implies_redis_ownership(monkeypatch):
     resolved = resolve_ownership_config(None)
     assert resolved.type == "redis"
     assert resolved.redis_url == "redis://somewhere:6379/0"
-
-
-def test_stream_bridge_redis_in_config_yaml_implies_redis_ownership(monkeypatch):
-    """The config.yaml-native way of using redis must trigger the inference too.
-
-    The stream bridge's own resolver reads `app_config.stream_bridge` *before*
-    the env var, so inferring only from the env var missed every deployment that
-    configures the bridge in config.yaml — i.e. exactly the multi-instance
-    deployments this inference exists for.
-    """
-    monkeypatch.delenv("DEER_FLOW_STREAM_BRIDGE_REDIS_URL", raising=False)
-    monkeypatch.delenv("DEER_FLOW_SANDBOX_OWNERSHIP_REDIS_URL", raising=False)
-
-    resolved = resolve_ownership_config(None, stream_bridge=StreamBridgeConfig(type="redis", redis_url="redis://in-yaml:6379/0"))
-
-    assert resolved.type == "redis"
-    assert resolved.redis_url == "redis://in-yaml:6379/0"
-
-
-def test_memory_stream_bridge_does_not_imply_redis_ownership(monkeypatch):
-    """The other direction: a single-process bridge must not force redis."""
-    monkeypatch.delenv("DEER_FLOW_STREAM_BRIDGE_REDIS_URL", raising=False)
-    monkeypatch.delenv("DEER_FLOW_SANDBOX_OWNERSHIP_REDIS_URL", raising=False)
-
-    resolved = resolve_ownership_config(None, stream_bridge=StreamBridgeConfig(type="memory"))
-
-    assert resolved.type == "memory"
 
 
 def test_explicit_config_wins_over_env(monkeypatch):

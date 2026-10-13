@@ -143,9 +143,9 @@ def test_detect_from_config_sqlite_returns_no_extras(tmp_path):
     assert detect.detect_from_config(cfg) == []
 
 
-def test_detect_from_config_redis_via_stream_bridge(tmp_path):
+def test_detect_from_config_redis_via_sandbox_ownership(tmp_path):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("stream_bridge:\n  type: redis\n  redis_url: redis://localhost:6379/0\n")
+    cfg.write_text("sandbox:\n  ownership:\n    type: redis\n    redis_url: redis://localhost:6379/0\n")
     assert detect.detect_from_config(cfg) == ["redis"]
 
 
@@ -204,13 +204,13 @@ def test_detect_from_config_ignores_commented_buzz_block(tmp_path):
 
 def test_detect_from_config_memory_stream_bridge_returns_no_extras(tmp_path):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("stream_bridge:\n  type: memory\n  queue_maxsize: 256\n")
+    cfg.write_text("stream_bridge:\n  queue_maxsize: 256\n")
     assert detect.detect_from_config(cfg) == []
 
 
 def test_detect_from_config_combines_postgres_and_redis(tmp_path):
     cfg = tmp_path / "config.yaml"
-    cfg.write_text("database:\n  backend: postgres\nstream_bridge:\n  type: redis\n")
+    cfg.write_text("database:\n  backend: postgres\nsandbox:\n  ownership:\n    type: redis\n")
     # Sorted unique extras across all detectors.
     assert detect.detect_from_config(cfg) == ["postgres", "redis"]
 

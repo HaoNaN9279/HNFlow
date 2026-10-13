@@ -225,7 +225,7 @@ make down       # 停止并移除容器
 
 浏览器打开 <http://localhost:2026>。
 
-长期部署建议配置 `database.backend` 为 `sqlite` 或 `postgres`（LangGraph checkpointer、Store 与应用数据共享同一后端）。生产默认单 Gateway worker（`GATEWAY_WORKERS=1`）；多 worker 需 Postgres + Redis stream bridge。
+长期部署建议配置 `database.backend` 为 `sqlite` 或 `postgres`（LangGraph checkpointer、Store 与应用数据共享同一后端）。HNFlow 单机单 worker（`GATEWAY_WORKERS=1`），SSE 由进程内内存 stream bridge 承担，无需 Redis。
 
 ### 常用命令
 
