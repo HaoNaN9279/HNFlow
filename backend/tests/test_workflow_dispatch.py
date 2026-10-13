@@ -176,7 +176,7 @@ class TestCancelWorkflowRun:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "outcome",
-        [CancelOutcome.cancelled, CancelOutcome.requested, CancelOutcome.taken_over],
+        [CancelOutcome.cancelled],
     )
     async def test_ok_outcomes(self, outcome: CancelOutcome) -> None:
         run_mgr = MagicMock()
@@ -193,7 +193,6 @@ class TestCancelWorkflowRun:
     @pytest.mark.parametrize(
         "outcome",
         [
-            CancelOutcome.lease_valid_elsewhere,
             CancelOutcome.not_cancellable,
             CancelOutcome.not_active_locally,
             CancelOutcome.unknown,

@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 from sqlalchemy.exc import DatabaseError as SQLAlchemyDatabaseError
 
-from deerflow.config.run_ownership_config import RunOwnershipConfig
 from deerflow.runtime import DisconnectMode, RunManager, RunStatus, ThreadOperationKind
 from deerflow.runtime.events.store.memory import MemoryRunEventStore
 from deerflow.runtime.runs.manager import CancelOutcome, ConflictError, PersistenceRetryPolicy, RunStartOutcome
@@ -108,27 +107,6 @@ class FailingDeleteRunStore(MemoryRunStore):
         raise RuntimeError("delete failed")
 
 
-class LostLeaseRunStore(MemoryRunStore):
-    """Run store that reports a reservation was taken over."""
-
-    async def update_lease(self, run_id, *, owner_worker_id, lease_expires_at):
-        return False
-
-
-class PausedLostLeaseRunStore(MemoryRunStore):
-    """Run store whose failed renewal can be released after reservation cleanup."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.renewal_started = asyncio.Event()
-        self.finish_renewal = asyncio.Event()
-
-    async def update_lease(self, run_id, *, owner_worker_id, lease_expires_at):
-        self.renewal_started.set()
-        await self.finish_renewal.wait()
-        return False
-
-
 async def _stored_statuses(store: MemoryRunStore, *run_ids: str) -> dict[str, Any]:
     rows = {}
     for run_id in run_ids:
@@ -157,38 +135,6 @@ async def test_reservation_delete_failure_preserves_body_error_and_clears_local_
     assert manager._runs_by_thread == {}
     assert len(await store.list_inflight()) == 1
     assert "leaving it for orphan reconciliation" in caplog.text
-
-
-@pytest.mark.anyio
-async def test_reservation_lease_loss_surfaces_as_conflict_after_cancelling_body():
-    store = LostLeaseRunStore()
-    manager = RunManager(
-        store=store,
-        run_ownership_config=RunOwnershipConfig(
-            lease_seconds=30,
-            grace_seconds=10,
-            heartbeat_enabled=True,
-        ),
-    )
-    entered = asyncio.Event()
-
-    async def hold_reservation() -> None:
-        async with manager.reserve_thread_operation(
-            "thread-1",
-            kind=ThreadOperationKind.checkpoint_write,
-        ):
-            entered.set()
-            await asyncio.Event().wait()
-
-    task = asyncio.create_task(hold_reservation())
-    await entered.wait()
-
-    await manager._renew_leases()
-
-    with pytest.raises(ConflictError, match="reservation lease was lost"):
-        await task
-    assert not await manager.has_inflight("thread-1")
-    assert await store.list_inflight() == []
 
 
 @pytest.mark.anyio
@@ -228,49 +174,6 @@ async def test_reservation_cancelled_while_attaching_task_is_released(monkeypatc
     assert manager._runs == {}
     assert manager._runs_by_thread == {}
     assert await store.list_inflight() == []
-
-
-@pytest.mark.anyio
-async def test_late_failed_renewal_does_not_cancel_released_reservation():
-    store = PausedLostLeaseRunStore()
-    manager = RunManager(
-        store=store,
-        run_ownership_config=RunOwnershipConfig(
-            lease_seconds=30,
-            grace_seconds=10,
-            heartbeat_enabled=True,
-        ),
-    )
-    entered = asyncio.Event()
-    leave_body = asyncio.Event()
-    context_exited = asyncio.Event()
-    finish_request = asyncio.Event()
-
-    async def request() -> None:
-        async with manager.reserve_thread_operation(
-            "thread-1",
-            kind=ThreadOperationKind.checkpoint_write,
-        ):
-            entered.set()
-            await leave_body.wait()
-        context_exited.set()
-        await finish_request.wait()
-
-    request_task = asyncio.create_task(request())
-    await entered.wait()
-    renewal_task = asyncio.create_task(manager._renew_leases())
-    await store.renewal_started.wait()
-
-    leave_body.set()
-    await context_exited.wait()
-    assert not await manager.has_inflight("thread-1")
-
-    store.finish_renewal.set()
-    await renewal_task
-    assert not request_task.done()
-
-    finish_request.set()
-    await request_task
 
 
 @pytest.mark.anyio

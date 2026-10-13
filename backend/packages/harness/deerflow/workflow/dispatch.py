@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 _WF_NODE_EVENT_TYPES = ("wf:node:started", "wf:node:completed", "wf:node:failed")
 
 #: Cancel outcomes that mean "the cancellation was accepted/handled".
-_OK_CANCEL_OUTCOMES = frozenset({"cancelled", "requested", "taken_over"})
+_OK_CANCEL_OUTCOMES = frozenset({"cancelled"})
 
 
 class WorkflowDispatchUnavailableError(RuntimeError):
@@ -361,8 +361,8 @@ async def cancel_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any]:
     """Cancel a workflow run via the injected run manager.
 
     Maps :class:`deerflow.runtime.runs.manager.CancelOutcome` to a compact
-    result: ``cancelled`` / ``requested`` / ``taken_over`` → ``{"ok": True,
-    "outcome": ...}``; any other outcome → ``{"ok": False, "reason": ...}``.
+    result: ``cancelled`` → ``{"ok": True, "outcome": ...}``; any other
+    outcome → ``{"ok": False, "reason": ...}``.
     """
     bundle = _require_runtime_bundle(runtime)
     run_manager = bundle.get("run_manager")

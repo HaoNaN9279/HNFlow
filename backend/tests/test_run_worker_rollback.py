@@ -3,7 +3,7 @@ import copy
 from contextlib import suppress
 from types import SimpleNamespace
 from typing import Annotated, Any, NotRequired, TypedDict
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, AnyMessage, HumanMessage
@@ -16,13 +16,10 @@ from langgraph.graph.message import add_messages
 from langgraph.types import Overwrite
 
 from deerflow.agents.thread_state import merge_artifacts, merge_message_writes
-from deerflow.config.run_ownership_config import RunOwnershipConfig
 from deerflow.runtime.checkpoint_state import CheckpointStateAccessor
 from deerflow.runtime.context_keys import CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY
-from deerflow.runtime.events.store.memory import MemoryRunEventStore
 from deerflow.runtime.runs.manager import CancelOutcome, ConflictError, RunManager
 from deerflow.runtime.runs.schemas import RunStatus
-from deerflow.runtime.runs.store.memory import MemoryRunStore
 from deerflow.runtime.runs.worker import (
     RollbackPoint,
     RunContext,
@@ -88,74 +85,6 @@ async def test_pending_cancel_stops_waiting_for_prior_finalization():
     assert factory_called is False
     assert record.status == RunStatus.interrupted
     bridge.publish_end.assert_awaited_once_with(record.run_id)
-
-
-@pytest.mark.anyio
-async def test_remote_cancel_wins_when_graph_finishes_before_owner_heartbeat():
-    store = MemoryRunStore()
-    ownership = RunOwnershipConfig(
-        heartbeat_enabled=True,
-        lease_seconds=30,
-        grace_seconds=10,
-    )
-    owner = RunManager(
-        store=store,
-        worker_id="worker-a",
-        run_ownership_config=ownership,
-    )
-    peer = RunManager(
-        store=store,
-        worker_id="worker-b",
-        run_ownership_config=ownership,
-    )
-    record = await owner.create_or_reject("thread-cancel-race")
-    bridge = SimpleNamespace(
-        publish=AsyncMock(),
-        publish_end=AsyncMock(),
-        cleanup=AsyncMock(),
-    )
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    class _FinishingAgent:
-        async def astream(
-            self,
-            graph_input,
-            config=None,
-            stream_mode=None,
-            subgraphs=False,
-        ):
-            del graph_input, config, stream_mode, subgraphs
-            started.set()
-            await release.wait()
-            yield {"messages": []}
-
-    task = asyncio.create_task(
-        run_agent(
-            bridge,
-            owner,
-            record,
-            ctx=RunContext(
-                checkpointer=None,
-                event_store=MemoryRunEventStore(),
-            ),
-            agent_factory=lambda **_kwargs: _FinishingAgent(),
-            graph_input={},
-            config={},
-        )
-    )
-    record.task = task
-
-    await asyncio.wait_for(started.wait(), timeout=1)
-    assert await peer.cancel(record.run_id, action="rollback") == CancelOutcome.requested
-    release.set()
-    await asyncio.wait_for(task, timeout=1)
-
-    stored = await store.get(record.run_id)
-    assert stored is not None
-    assert stored["status"] == "error"
-    assert stored["error"] == "Rolled back by user"
-    assert record.status == RunStatus.error
 
 
 def _make_rollback_point(*, checkpoint_id="ckpt-1", messages=("before",), pending_writes=()):
@@ -3064,46 +2993,4 @@ async def test_worker_finally_block_swallows_helper_exceptions(monkeypatch):
     # reflects the run outcome.
     assert helper_called.is_set()
     assert captured_status.get("status") == ("thread-1", "interrupted")
-    bridge.publish_end.assert_awaited_once_with(record.run_id)
-
-
-@pytest.mark.anyio
-async def test_worker_skips_execution_and_finalization_after_ownership_loss():
-    """A fenced worker closes its stream without starting or finalizing work."""
-    run_manager = RunManager()
-    record = await run_manager.create("thread-lease-lost")
-    record.ownership_lost = True
-    record.abort_event.set()
-    record.status = RunStatus.error
-
-    bridge = SimpleNamespace(
-        publish=AsyncMock(),
-        publish_end=AsyncMock(),
-        cleanup=AsyncMock(),
-    )
-    thread_store = SimpleNamespace(
-        update_display_name=AsyncMock(),
-        update_status=AsyncMock(),
-    )
-    on_run_completed = AsyncMock()
-    agent_factory = MagicMock(side_effect=AssertionError("fenced worker started the agent"))
-
-    await run_agent(
-        bridge,
-        run_manager,
-        record,
-        ctx=RunContext(
-            checkpointer=None,
-            thread_store=thread_store,
-            on_run_completed=on_run_completed,
-        ),
-        agent_factory=agent_factory,
-        graph_input={"messages": []},
-        config={},
-    )
-
-    agent_factory.assert_not_called()
-    thread_store.update_display_name.assert_not_awaited()
-    thread_store.update_status.assert_not_awaited()
-    on_run_completed.assert_not_awaited()
     bridge.publish_end.assert_awaited_once_with(record.run_id)

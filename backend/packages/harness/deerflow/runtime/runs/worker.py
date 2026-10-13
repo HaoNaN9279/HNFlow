@@ -723,7 +723,7 @@ async def run_agent(
                 timeout=_EXTENSION_TASK_NOTIFY_TIMEOUT_SECONDS,
             )
 
-        if not record.ownership_lost and thread_store is not None:
+        if thread_store is not None:
             try:
                 await thread_store.update_status(thread_id, "running")
             except Exception:
@@ -1126,13 +1126,7 @@ async def run_agent(
             )
 
     finally:
-        if record.ownership_lost:
-            logger.warning(
-                "Skipping durable finalization for run %s because this worker no longer owns its lease",
-                run_id,
-            )
-
-        if not record.ownership_lost and _is_edit_replay_run(record) and record.status != RunStatus.success:
+        if _is_edit_replay_run(record) and record.status != RunStatus.success:
             if not record.finalizing:
                 await run_manager.set_finalizing(run_id, True)
             try:
@@ -1158,10 +1152,10 @@ async def run_agent(
 
         # Persist any subagent step events still buffered (#3779) — including on
         # abort/exception paths, where the stream loop broke before its own flush.
-        if not record.ownership_lost and subagent_events is not None:
+        if subagent_events is not None:
             await subagent_events.flush()
 
-        if not record.ownership_lost and event_store is not None and pre_run_workspace_snapshot is not None:
+        if event_store is not None and pre_run_workspace_snapshot is not None:
             try:
                 await record_workspace_changes(
                     event_store,
@@ -1179,7 +1173,7 @@ async def run_agent(
         # the staged terminal status is persisted. This ordering closes the
         # crash window where a terminal run could otherwise outlive its receipt.
         # A fenced worker leaves receipt recovery to the peer that claimed it.
-        if not record.ownership_lost and journal is not None:
+        if journal is not None:
             try:
                 await journal.flush()
             except Exception:
@@ -1208,7 +1202,7 @@ async def run_agent(
                     persist=False,
                 )
 
-        if not record.ownership_lost and event_store is not None:
+        if event_store is not None:
             try:
                 # Even after bounded receipt retries are exhausted, persist the
                 # real worker outcome. Leaving a successful row inflight would
@@ -1229,7 +1223,7 @@ async def run_agent(
             except Exception:
                 logger.warning("Failed to persist terminal status for run %s after delivery receipt attempts", run_id, exc_info=True)
 
-        if not record.ownership_lost and journal is not None and persist_completion:
+        if journal is not None and persist_completion:
             try:
                 # Persist token usage + convenience fields to RunStore
                 completion = journal.get_completion_data()
@@ -1237,7 +1231,7 @@ async def run_agent(
             except Exception:
                 logger.warning("Failed to persist run completion for %s (non-fatal)", run_id, exc_info=True)
 
-        if started and not record.ownership_lost and checkpointer is not None and record.status == RunStatus.interrupted and not _is_edit_replay_run(record):
+        if started and checkpointer is not None and record.status == RunStatus.interrupted and not _is_edit_replay_run(record):
             try:
                 await run_manager.wait_for_prior_finalizing(thread_id, run_id)
                 if not await run_manager.has_later_started_run(thread_id, run_id):
@@ -1246,7 +1240,7 @@ async def run_agent(
                 logger.debug("Failed to generate interrupted title for thread %s (non-fatal)", thread_id)
 
         # Sync title from checkpoint to threads_meta.display_name
-        if started and not record.ownership_lost and checkpointer is not None and thread_store is not None:
+        if started and checkpointer is not None and thread_store is not None:
             try:
                 ckpt_config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": ""}}
                 ckpt_tuple = await checkpointer.aget_tuple(ckpt_config)
@@ -1260,7 +1254,7 @@ async def run_agent(
 
         # Persist run duration to checkpoint metadata so history reads
         # don't need to correlate runs and events.
-        if started and not record.ownership_lost and checkpointer is not None and record.status == RunStatus.success:
+        if started and checkpointer is not None and record.status == RunStatus.success:
             try:
                 created = datetime.fromisoformat(record.created_at.replace("Z", "+00:00"))
                 updated = datetime.fromisoformat(record.updated_at.replace("Z", "+00:00"))
@@ -1278,14 +1272,14 @@ async def run_agent(
                 logger.debug("Failed to persist run duration for thread %s run %s (non-fatal)", thread_id, run_id)
 
         # Update threads_meta status based on run outcome
-        if started and not record.ownership_lost and thread_store is not None:
+        if started and thread_store is not None:
             try:
                 final_status = "idle" if record.status == RunStatus.success else record.status.value
                 await thread_store.update_status(thread_id, final_status)
             except Exception:
                 logger.debug("Failed to update thread_meta status for %s (non-fatal)", thread_id)
 
-        if not record.ownership_lost and ctx.on_run_completed is not None:
+        if ctx.on_run_completed is not None:
             try:
                 await ctx.on_run_completed(record)
             except Exception:

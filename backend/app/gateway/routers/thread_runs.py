@@ -15,7 +15,6 @@ import asyncio
 import logging
 import uuid
 from copy import deepcopy
-from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -208,54 +207,6 @@ def _cancel_conflict_detail(run_id: str, record: RunRecord) -> str:
     if record.status in (RunStatus.pending, RunStatus.running):
         return f"Run {run_id} is not active on this worker and cannot be cancelled"
     return f"Run {run_id} is not cancellable (status: {record.status.value})"
-
-
-def _compute_retry_after(lease_expires_at: str | None, grace_seconds: int) -> int | None:
-    """Return seconds until the lease expires + grace, for ``Retry-After``.
-
-    Returns ``None`` when the lease is NULL or unparseable so the caller
-    can decide whether to send a generic 409 without the header.
-
-    The ``max(1, ...)`` floor means a lease just about to expire yields
-    ``Retry-After: 1``.  This is a lower bound, not a recommended poll
-    interval — clients that honour this header should apply minimum
-    backoff / jitter rather than retrying every second.
-    """
-    if lease_expires_at is None:
-        return None
-    try:
-        dt = datetime.fromisoformat(lease_expires_at)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)
-    except (ValueError, TypeError):
-        return None
-    remaining = (dt - datetime.now(UTC)).total_seconds() + grace_seconds
-    return max(1, int(remaining))
-
-
-async def _raise_lease_valid_elsewhere(
-    run_id: str,
-    run_mgr,  # RunManager (avoid import for testability)
-    record: RunRecord,
-) -> None:
-    """Re-fetch the lease and raise HTTP 409 + Retry-After.
-
-    ``record.lease_expires_at`` may be stale (fetched at request start while
-    the owner renewed between our read and the conditional UPDATE). Re-read
-    from the store to get the fresh value so ``Retry-After`` is accurate.
-    """
-    fresh = await run_mgr.get(run_id)
-    if fresh is not None:
-        record = fresh
-    retry_after = _compute_retry_after(record.lease_expires_at, run_mgr.grace_seconds)
-    headers: dict[str, str] = {}
-    if retry_after is not None:
-        headers["Retry-After"] = str(retry_after)
-    raise HTTPException(
-        status_code=409,
-        detail=f"Run {run_id} is active on another worker; retry after lease expiry.",
-        headers=headers,
-    )
 
 
 def _record_to_response(record: RunRecord) -> RunResponse:
@@ -936,9 +887,8 @@ async def cancel_run(
     - wait=true: Block until the run fully stops, return 204
     - wait=false: Return immediately with 202
 
-    In multi-worker deployments, a cancel landing on a non-owning worker
-    durably notifies the owner when its lease is live, or takes over and
-    terminalizes the run when that lease has expired.
+    A run can only be cancelled while it is in-memory on this (single) worker;
+    a run that isn't active locally returns 409.
     """
     run_mgr = get_run_manager(request)
     record = await run_mgr.get(run_id)
@@ -947,34 +897,14 @@ async def cancel_run(
 
     outcome = await run_mgr.cancel(run_id, action=action)
 
-    # Success paths — the run was cancelled locally, durably requested from
-    # a live owner, or taken over from a dead worker.
-    if outcome in (
-        CancelOutcome.cancelled,
-        CancelOutcome.requested,
-        CancelOutcome.taken_over,
-    ):
+    if outcome == CancelOutcome.cancelled:
         if wait and record.task is not None:
             try:
                 await record.task
             except asyncio.CancelledError:
                 pass
             return Response(status_code=204)
-        if wait and outcome == CancelOutcome.requested:
-            bridge = get_stream_bridge(request)
-            if record.store_only and bridge.supports_cross_process:
-                completed = await wait_for_run_completion(
-                    bridge,
-                    record,
-                    request,
-                    run_mgr,
-                )
-                if completed:
-                    return Response(status_code=204)
         return Response(status_code=202)
-
-    if outcome == CancelOutcome.lease_valid_elsewhere:
-        await _raise_lease_valid_elsewhere(run_id, run_mgr, record)
 
     # not_cancellable, not_active_locally, unknown
     raise HTTPException(status_code=409, detail=_cancel_conflict_detail(run_id, record))
@@ -1035,35 +965,14 @@ async def stream_existing_run(
     # Cancel if an action was requested (stop-button / interrupt flow)
     if action is not None:
         outcome = await run_mgr.cancel(run_id, action=action)
-        if outcome == CancelOutcome.taken_over:
-            # The run was on another worker and is now marked ``error`` in the
-            # store.  There is no local stream to drain — return immediately so
-            # the client doesn't hang on an SSE subscription this worker can
-            # never serve.
-            return Response(status_code=202)
-        if outcome not in (CancelOutcome.cancelled, CancelOutcome.requested):
-            if outcome == CancelOutcome.lease_valid_elsewhere:
-                await _raise_lease_valid_elsewhere(run_id, run_mgr, record)
+        if outcome != CancelOutcome.cancelled:
             raise HTTPException(status_code=409, detail=_cancel_conflict_detail(run_id, record))
-        if outcome == CancelOutcome.requested and record.store_only and not bridge.supports_cross_process:
-            # The request is durable, but this bridge cannot observe the
-            # owner's stream. Returning 202 is safer than hanging forever on
-            # a process-local subscription.
-            return Response(status_code=202)
         if wait and record.task is not None:
             try:
                 await record.task
             except (asyncio.CancelledError, Exception):
                 pass
             return Response(status_code=204)
-        if wait and outcome == CancelOutcome.requested:
-            completed = await wait_for_run_completion(
-                bridge,
-                record,
-                request,
-                run_mgr,
-            )
-            return Response(status_code=204 if completed else 202)
 
     return StreamingResponse(
         sse_consumer(bridge, record, request, run_mgr),

@@ -197,11 +197,8 @@ async def cancel_workflow_run(definition_id: str, run_id: str, request: Request)
 
     outcome = await run_mgr.cancel(run_id, action="interrupt")
 
-    if outcome in (CancelOutcome.cancelled, CancelOutcome.requested, CancelOutcome.taken_over):
+    if outcome == CancelOutcome.cancelled:
         return Response(status_code=202)
-
-    if outcome == CancelOutcome.lease_valid_elsewhere:
-        raise HTTPException(status_code=409, detail=f"Run {run_id} is active on another worker")
 
     raise HTTPException(status_code=409, detail=f"Run {run_id} cannot be cancelled")
 

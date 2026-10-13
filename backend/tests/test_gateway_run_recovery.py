@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import anyio
@@ -13,13 +12,11 @@ from fastapi import FastAPI
 
 import deerflow.runtime as runtime_module
 from app.gateway import deps as gateway_deps
-from deerflow.config.run_ownership_config import RunOwnershipConfig
 from deerflow.persistence import engine as engine_module
 from deerflow.persistence import thread_meta as thread_meta_module
-from deerflow.runtime import END_SENTINEL, MemoryStreamBridge, RunManager
+from deerflow.runtime import MemoryStreamBridge
 from deerflow.runtime.checkpointer import async_provider as checkpointer_module
 from deerflow.runtime.events import store as event_store_module
-from deerflow.runtime.runs.store.memory import MemoryRunStore
 
 
 @asynccontextmanager
@@ -38,14 +35,10 @@ class _FakeRunManager:
         self,
         *,
         store,
-        run_ownership_config=None,
         event_store=None,
-        on_orphans_recovered=None,
     ):
         self.store = store
-        self.run_ownership_config = run_ownership_config
         self.event_store = event_store
-        self.on_orphans_recovered = on_orphans_recovered
         self.reconcile_calls: list[dict] = []
         self.list_by_thread_calls: list[dict] = []
         self.shutdown_calls: int = 0
@@ -64,12 +57,6 @@ class _FakeRunManager:
     async def list_by_thread(self, thread_id: str, *, user_id=None, limit: int = 100):
         self.list_by_thread_calls.append({"thread_id": thread_id, "user_id": user_id, "limit": limit})
         return self.latest_by_thread.get(thread_id, self.recovered_runs[:limit])
-
-    async def start_heartbeat(self) -> None:
-        pass
-
-    async def stop_heartbeat(self) -> None:
-        pass
 
     async def shutdown(self, *, timeout: float = 5.0) -> None:
         # No in-flight tasks in these startup-recovery tests; langgraph_runtime
@@ -163,57 +150,6 @@ async def test_shutdown_flushes_delayed_recovered_stream_cleanup_immediately():
 
     assert stream_bridge.delayed_cleanup_cancelled.is_set()
     assert stream_bridge.cleanup_calls == [("run-1", 60.0), ("run-1", 0)]
-
-
-@pytest.mark.anyio
-async def test_periodic_recovery_terminalizes_stream_without_thread_projection():
-    """Periodic recovery must close streams without racing thread projection."""
-    store = MemoryRunStore()
-    stream_bridge = _RetainedMemoryStreamBridge()
-    thread_store = _FakeThreadStore()
-    expired = (datetime.now(UTC) - timedelta(seconds=60)).isoformat()
-    await store.put(
-        "periodic-orphan",
-        thread_id="thread-1",
-        status="running",
-        owner_worker_id="dead-worker",
-        lease_expires_at=expired,
-        created_at=expired,
-    )
-    await stream_bridge.publish("periodic-orphan", "values", {"step": 1})
-
-    async def terminalize(recovered_runs):
-        await gateway_deps._terminalize_recovered_runs(
-            stream_bridge,
-            recovered_runs,
-            cleanup_delay=60.0,
-        )
-
-    manager = RunManager(
-        store=store,
-        worker_id="live-worker",
-        run_ownership_config=RunOwnershipConfig(
-            heartbeat_enabled=True,
-            lease_seconds=30,
-            grace_seconds=10,
-        ),
-        on_orphans_recovered=terminalize,
-    )
-
-    await manager._reconcile_orphans_periodic()
-    await anyio.sleep(0)
-    received = [
-        entry
-        async for entry in stream_bridge.subscribe(
-            "periodic-orphan",
-            heartbeat_interval=0.01,
-        )
-    ]
-    await anyio.sleep(0)
-
-    assert received[-1] is END_SENTINEL
-    assert stream_bridge.cleanup_calls == [("periodic-orphan", 60.0)]
-    assert thread_store.status_updates == []
 
 
 @pytest.mark.anyio

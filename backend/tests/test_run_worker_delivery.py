@@ -2,7 +2,7 @@
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -384,44 +384,6 @@ async def test_changed_outputs_fail_when_present_files_only_presents_an_unrelate
     assert delivery["matched_paths"] == []
     assert delivery["satisfied"] is False
     assert record.status == RunStatus.error
-
-
-@pytest.mark.anyio
-async def test_fenced_worker_leaves_delivery_receipt_to_peer_recovery():
-    """A stale worker must not finalize the singleton delivery receipt."""
-    run_manager = RunManager()
-    record = await run_manager.create("thread-lease-lost")
-    record.ownership_lost = True
-    record.abort_event.set()
-    record.status = RunStatus.error
-    event_store = MemoryRunEventStore()
-    thread_store = SimpleNamespace(
-        update_display_name=AsyncMock(),
-        update_status=AsyncMock(),
-    )
-    on_run_completed = AsyncMock()
-    agent_factory = MagicMock(side_effect=AssertionError("fenced worker started the agent"))
-
-    await run_agent(
-        _make_bridge(),
-        run_manager,
-        record,
-        ctx=RunContext(
-            checkpointer=None,
-            event_store=event_store,
-            thread_store=thread_store,
-            on_run_completed=on_run_completed,
-        ),
-        agent_factory=agent_factory,
-        graph_input={},
-        config={},
-    )
-
-    assert await _delivery_events(event_store, record.thread_id, record.run_id) == []
-    agent_factory.assert_not_called()
-    thread_store.update_display_name.assert_not_awaited()
-    thread_store.update_status.assert_not_awaited()
-    on_run_completed.assert_not_awaited()
 
 
 @pytest.mark.anyio

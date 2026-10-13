@@ -58,7 +58,7 @@ def _browser_tools_enabled_in_config(config: AppConfig) -> bool:
 def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
     """Refuse unsafe multi-worker configurations before persistence starts.
 
-    Four checks (all must pass for multi-worker):
+    Three checks (all must pass for multi-worker):
 
     1. Process-local browser sessions must be disabled. Browser tools keep
        Chromium and Playwright objects in one worker's memory, while ordinary
@@ -67,10 +67,6 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
        concurrent multi-process access.
     3. ``run_events.backend`` must be ``db``. Memory and JSONL stores are
        process-local, so workers cannot enforce a shared singleton receipt.
-    4. ``run_ownership.heartbeat_enabled`` must be True — without heartbeat,
-       every run has a NULL lease, so reconciliation treats all inflight
-       runs as orphans and Worker B would kill Worker A's live runs on
-       every rolling update or scale-up.
 
     This gate runs once at startup before any persistence engine is
     initialised so the error message is clear and the process exits
@@ -97,16 +93,6 @@ def _enforce_postgres_for_multi_worker(config: AppConfig) -> None:
             f"GATEWAY_WORKERS={workers} requires run_events.backend='db', but run_events.backend is '{run_events_backend}'. "
             "Memory and JSONL event stores are process-local, so delivery receipt singleton guarantees cannot hold across workers. "
             "Set GATEWAY_WORKERS=1 or configure run_events.backend: db."
-        )
-
-    run_ownership = getattr(config, "run_ownership", None)
-    if run_ownership is None or not run_ownership.heartbeat_enabled:
-        raise SystemExit(
-            f"GATEWAY_WORKERS={workers} requires run_ownership.heartbeat_enabled=true. "
-            "Without heartbeat, every run has a NULL lease, so reconciliation "
-            "treats all inflight runs as orphans — Worker B would kill Worker A's "
-            "live runs on every rolling update or scale-up. "
-            "Set run_ownership.heartbeat_enabled=true in config.yaml."
         )
 
 
@@ -470,7 +456,6 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
         app.state.run_event_store = make_run_event_store(run_events_config)
 
         # RunManager with store backing for persistence
-        run_ownership_config = getattr(config, "run_ownership", None)
         sb_config = getattr(config, "stream_bridge", None)
         cleanup_delay = getattr(sb_config, "recovered_stream_cleanup_delay_seconds", 60.0) if sb_config else 60.0
         recovered_stream_cleanup_tasks: dict[asyncio.Task[None], str] = {}
@@ -482,25 +467,13 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             recovered_stream_cleanup_tasks[task] = run_id
             task.add_done_callback(lambda completed: recovered_stream_cleanup_tasks.pop(completed, None))
 
-        async def terminalize_recovered_runs(recovered_runs: list[RunRecord]) -> None:
-            await _terminalize_recovered_runs(
-                app.state.stream_bridge,
-                recovered_runs,
-                cleanup_delay=cleanup_delay,
-                on_cleanup_scheduled=track_recovered_stream_cleanup,
-            )
-
         app.state.run_manager = RunManager(
             store=app.state.run_store,
-            run_ownership_config=run_ownership_config,
             event_store=app.state.run_event_store,
-            on_orphans_recovered=terminalize_recovered_runs,
         )
-        # Startup recovery: mark inflight runs whose lease has expired as error.
-        # In single-worker mode (SQLite / backend=memory), no run has a lease, so
-        # all inflight rows are reclaimed (unchanged behaviour). In multi-worker
-        # mode (Postgres), only runs with an expired lease are reclaimed; runs
-        # owned by another live worker are skipped.
+        # Startup recovery: mark inflight runs left by a previous process as
+        # error. Single-worker runs carry no lease, so every inflight row is
+        # reclaimed — the crash-recovery path.
         from deerflow.utils.time import now_iso
 
         recovered_runs = await app.state.run_manager.reconcile_orphaned_inflight_runs(
@@ -519,9 +492,6 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.thread_store,
             recovered_runs,
         )
-
-        # Start the lease heartbeat if enabled (multi-worker deployments).
-        await app.state.run_manager.start_heartbeat()
 
         try:
             yield
