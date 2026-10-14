@@ -1,0 +1,39 @@
+{
+  "job": "P1_资源治理",
+  "plan": "plan.md",
+  "started_at": "2026-10-14T11:13:28",
+  "status": "completed",
+  "commit": "4c6a808",
+  "steps": [
+    { "id": "S1", "name": "deerflow/locks/file_lock.py 跨进程可重入文件锁 + acquire_many + 单测", "status": "completed" },
+    { "id": "S2", "name": "配置：AppDefinition.resources + AppsConfig.resources/licenses/on_conflict/acquire_timeout_seconds + 校验 + config_version 37 + 测试", "status": "completed" },
+    { "id": "S3", "name": "deerflow/resources/governor.py（容量/占用/FIFO/license slots/策略）+ 单测", "status": "completed" },
+    { "id": "S4", "name": "AppSessionManager 接入（license 实例级 + 操作级配额 + try/finally 释放）+ 单测", "status": "completed" },
+    { "id": "S5", "name": "local_app.py 执行器错误翻译 + degraded 标记写回 + 单测", "status": "completed" },
+    { "id": "S6", "name": "Gateway 注入（经会话管理器单例）+ 工具网关路径测试", "status": "completed" },
+    { "id": "S7", "name": "GET /api/apps/resources + GET /api/apps 描述补字段 + 路由测试", "status": "completed" },
+    { "id": "S8", "name": "文档同步 + 全量回归 + ruff + 提交", "status": "completed" }
+  ],
+  "decisions": [
+    "范围：只做 N8（配额/排队/License/独占锁/降级告警）；不做 N9–N11、不改前端",
+    "计量：声明式配额 + 准入闸门，不做真实 GPU/显存计量；未声明维度不占额；未声明配额时 governor 完全 no-op（现有行为逐字节不变）",
+    "占用层级：实例级 license（launch→close）+ 操作级 GPU/CPU/内存/磁盘（script/wait/collect）",
+    "冲突策略：on_conflict=wait(默认,超时失败)/fail/degrade(放行+告警+degraded 标记)",
+    "排队实现：进程内 threading.Condition + 固定维度顺序一次性原子申请（+FIFO 票号），无新线程/无外部队列",
+    "独占锁：新建 deerflow/locks/file_lock.py（可重入 + fcntl/msvcrt + acquire_many 统一顺序）；不改 skills/projection.py",
+    "并行调度：不改 flow:parallel，靠闸门限流（与「不造新调度器」一致）",
+    "多 worker：配额为单进程；跨进程全局配额/GPU 实测量记为后续增量",
+    "无迁移：配额不落库，app_instances.resources(JSON) 承载 counters/degraded",
+    "前端：本切片不动"
+  ],
+  "findings": [
+    "所有 app 操作的唯一咽喉是 AppSessionManager（工作流 app:* 执行器与工具网关 app provider 都经它），准入放在这里即全局生效，工具网关无需改路径。",
+    "S6 原计划新增 APP_RESOURCE_GOVERNOR_CONTEXT_KEY；实际未引入无用键：get_session_manager() 现在直接由 apps 配置构造 governor，而该单例已由 worker 注入 APP_RUNTIME_CONTEXT_KEY，因此执行器与工具网关自动共用同一 governor（更少耦合，已写进 backend/AGENTS.md）。",
+    "governor 用 threading（非 asyncio）：AppSessionManager 的方法都是同步的且已被 asyncio.to_thread 卸载，同步 Condition 既贴合又天然排队；多维度+license 在同一把锁下一次原子申请，杜绝部分持有与加锁顺序死锁。",
+    "AppDefinition.exclusive 的 attach 复用不重复占 license slot（补测试 test_exclusive_attach_does_not_take_a_second_slot）。",
+    "degrade 语义：放行且不记账（oversubscription），仅告警 + degraded 计数；license 与数值维度统一适用（默认 wait，需操作者显式开启）。",
+    "工具网关 app 工具把配额失败作为 {\"status\": \"resource_unavailable\"} 数据返回（模型可等待重试），工作流节点则翻译为带维度的 WorkflowExecutionError（供 N7 退避/DLQ 消费）。",
+    "跨进程文件锁复用先例 semantics 于 skills/projection.py（不抽取，避免技能投影回归）；测试覆盖同线程可重入、跨线程串行、跨进程互斥、acquire_many 顺序无关与无部分持有、超时与非法名拒绝。",
+    "全量离线回归 75 failed / 10020 passed（+63 通过）：75 项全部为既有平台失败，无新增失败（N7 基线 76 = 75 平台 + test_human_task_repository 同微秒 flake，本次该 flake 通过）。"
+  ]
+}
