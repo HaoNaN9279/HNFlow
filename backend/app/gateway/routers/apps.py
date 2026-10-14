@@ -1,9 +1,11 @@
-"""Local-application registry + instance endpoints (N4/N6/N8).
+"""Local-application registry + instance endpoints (N4/N6/N8/N10b).
 
 - ``GET /api/apps`` — the registered applications and whether each driver can
   operate them (plus their N8 declared resources/license).
 - ``GET /api/apps/resources`` — the N8 admission state: configured caps,
   current occupancy, and queue depth (plus license pools).
+- ``GET /api/apps/{name}/presence`` — whether a *person* is using the
+  application right now (N10b, §17), for a canvas or an operator.
 - ``GET /api/apps/sessions`` — instance records. On a SQL backend these are the
   durable ``app_instances`` rows (with live status merged in and ``?status=`` /
   ``?include_archived=`` / ``?include_orphaned=`` filters); on the memory
@@ -11,6 +13,8 @@
 - ``GET /api/apps/sessions/{id}`` — one instance.
 - ``POST /api/apps/sessions/{id}/close`` — stop the live session (if in memory)
   and persist ``stopped``.
+- ``POST /api/apps/sessions/{id}/release`` — hand a machine-held instance back
+  to a person *without* stopping it (N10b).
 - ``POST /api/apps/sessions/{id}/archive`` — archive a non-live instance.
 - ``DELETE /api/apps/sessions/{id}`` — delete the record.
 - ``POST /api/apps/sessions/cleanup`` — delete terminal records older than the
@@ -22,6 +26,7 @@ editing ``config.yaml`` sees new definitions on the next request. The instance
 the read-only list falls back to live sessions.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any
 
@@ -29,8 +34,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.gateway.deps import get_app_instance_repo, get_config
+from deerflow.apps.presence import HOLDER_UNKNOWN, SOURCE_CACHE, PresenceReport
 from deerflow.apps.registry import AppRegistry
-from deerflow.apps.session import AppSession, AppSessionManager, get_session_manager
+from deerflow.apps.session import AppDisabledError, AppNotFoundError, AppSession, AppSessionManager, get_session_manager
 from deerflow.config.app_config import AppConfig
 from deerflow.persistence.app_instances import CLEANUP_STATUSES
 from deerflow.runtime.user_context import DEFAULT_USER_ID
@@ -85,6 +91,22 @@ class AppInstanceInfo(BaseModel):
     resources: dict = Field(default_factory=dict)
     archived: bool = False
     live: bool = False
+    holder: str = Field(
+        default=HOLDER_UNKNOWN,
+        description="Who holds this instance (N10b): machine | human | unknown. Live sessions report what the engine knew when it acquired; rows report it when their record carries it, else unknown.",
+    )
+    taken_over_from: str | None = Field(default=None, description="'human' while this instance is held as a take-over from a person (N10b).")
+
+
+class AppPresenceResponse(BaseModel):
+    """Whether a person is using one application right now (N10b, §17)."""
+
+    app_name: str
+    state: str = Field(..., description="idle | busy | human | unknown")
+    detail: str = ""
+    source: str = Field(default="", description="Where the answer came from: driver | engine | none")
+    observed_at: float = Field(default=0.0, description="Epoch seconds of the observation (0 = never observed)")
+    cached: bool = Field(default=False, description="True when this answer was reused from a recent probe rather than taken now")
 
 
 class AppInstancesResponse(BaseModel):
@@ -129,10 +151,16 @@ def _session_info(session: AppSession, *, live: bool) -> AppInstanceInfo:
         resources={},
         archived=session.status == "archived",
         live=live,
+        holder=session.holder,
+        taken_over_from=session.taken_over_from,
     )
 
 
 def _row_info(row: dict, *, live: bool) -> AppInstanceInfo:
+    # The record carries the acquisition facts N8/N10b wrote through (``degraded``,
+    # ``holder``, ``taken_over_from``); a row from before N10b has none, and
+    # "unknown" is the honest reading of "we did not record who held it".
+    resources = dict(row.get("resources") or {})
     return AppInstanceInfo(
         session_id=row["id"],
         app_name=row["app_name"],
@@ -144,9 +172,11 @@ def _row_info(row: dict, *, live: bool) -> AppInstanceInfo:
         created_at=row.get("created_at"),
         last_active=row.get("last_active"),
         artifacts=list(row.get("artifacts") or []),
-        resources=dict(row.get("resources") or {}),
+        resources=resources,
         archived=row.get("status") == "archived",
         live=live,
+        holder=str(resources.get("holder") or HOLDER_UNKNOWN),
+        taken_over_from=resources.get("taken_over_from"),
     )
 
 
@@ -188,6 +218,26 @@ async def get_app_resources() -> AppResourcesResponse:
         on_conflict=snapshot["on_conflict"],
         acquire_timeout_seconds=snapshot["acquire_timeout_seconds"],
     )
+
+
+# ── presence (N10b) ──────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/{app_name}/presence",
+    response_model=AppPresenceResponse,
+    summary="Get Local Application Human Presence",
+    description="Report whether a person is using the application (N10b). Answers come from the application's own declared probe; an application that declares none reports 'unknown' rather than claiming to be free.",
+)
+async def get_app_presence(app_name: str, force: bool = Query(default=False, description="Bypass the short-lived probe cache and ask the application now.")) -> AppPresenceResponse:
+    manager = get_session_manager()
+    try:
+        report: PresenceReport = await asyncio.to_thread(manager.probe_presence, app_name, force=force)
+    except (AppDisabledError, AppNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # A probe failure is already normalized to ``unknown`` inside the driver
+    # boundary; this endpoint therefore never turns "we could not tell" into 5xx.
+    return AppPresenceResponse(app_name=app_name, state=report.state, detail=report.detail, source=report.source, observed_at=report.observed_at, cached=report.source == SOURCE_CACHE)
 
 
 # ── instances ────────────────────────────────────────────────────────────────
@@ -285,6 +335,35 @@ async def close_app_session(session_id: str, request: Request) -> AppInstanceInf
         if updated is not None:
             row = updated
     return _row_info(row, live=False)
+
+
+@router.post(
+    "/sessions/{session_id}/release",
+    response_model=AppInstanceInfo,
+    summary="Release Local Application Session",
+    description="Hand a machine-held instance back to a person without stopping it (N10b). The instance keeps running and keeps its license slot.",
+)
+async def release_app_session(session_id: str, request: Request) -> AppInstanceInfo:
+    manager = get_session_manager()
+    released = manager.release(session_id)
+    if released is None:
+        raise HTTPException(status_code=404, detail="App instance is not live on this process")
+
+    repo = getattr(request.app.state, "app_instance_repo", None)
+    if repo is not None:
+        # Best-effort (``record_operation`` swallows its own failures): the live
+        # hand-back already happened, so a persistence problem must not turn a
+        # successful release into an error.
+        from deerflow.apps.persistence import record_operation
+
+        await record_operation(
+            repo,
+            released,
+            user_id=DEFAULT_USER_ID,
+            status=released.status,
+            resource_deltas={"holder": released.holder, "taken_over_from": released.taken_over_from},
+        )
+    return _session_info(released, live=True)
 
 
 @router.post(

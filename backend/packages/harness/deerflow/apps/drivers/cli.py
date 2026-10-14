@@ -31,6 +31,7 @@ from deerflow.apps.driver import (
     DriverUndoResult,
     DriverWaitResult,
 )
+from deerflow.apps.presence import SOURCE_DRIVER, SOURCE_NONE, PresenceReport, parse_presence_output
 from deerflow.config.apps_config import AppDefinition
 
 logger = logging.getLogger(__name__)
@@ -223,6 +224,53 @@ class CliAppDriver:
     def undo(self, definition: AppDefinition, launch: DriverLaunch, *, steps: int = 1) -> DriverUndoResult:
         """Report the honest absence of native undo for a plain CLI application."""
         return DriverUndoResult(status="unsupported", detail="cli driver has no application undo/history")
+
+    #: N10b: a bare subprocess cannot see who is at the keyboard either, so the
+    #: engine learns presence only from a command the *application* publishes
+    #: (``AppDefinition.presence_command``).  Without one the answer is honestly
+    #: unknown — never "free".
+    supports_presence = True
+
+    def probe_presence(self, definition: AppDefinition) -> PresenceReport:
+        """Run the definition's declared presence command (N10b, §17).
+
+        The command is appended in the same position as a ``run_script`` script
+        (``<command> <args> <script_args> <presence_command>``) rather than being
+        split by a shell: the application's executable interprets it, so no
+        quoting or path-separator rules are invented here.
+
+        Contract: exit code 0 and a state token (``idle`` / ``busy`` / ``human``
+        / ``unknown``) as the first word of the first non-empty stdout line.
+        A non-zero exit, a timeout, or unparsable output all answer ``unknown``.
+        """
+        command = definition.command
+        presence_command = definition.presence_command
+        if not presence_command:
+            return PresenceReport.unknown(detail=f"{definition.driver} app declares no presence_command", source=SOURCE_NONE)
+        if not command:
+            return PresenceReport.unknown(detail="cli driver presence probe requires a command", source=SOURCE_NONE)
+
+        argv = [command, *definition.args, *definition.script_args, presence_command]
+        try:
+            completed = subprocess.run(  # noqa: S603 - operator-configured command
+                argv,
+                cwd=str(_resolve_cwd(definition)),
+                env=_resolve_env(definition),
+                capture_output=True,
+                text=True,
+                timeout=float(definition.timeout_seconds),
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return PresenceReport.unknown(detail=f"presence probe timed out after {definition.timeout_seconds:g}s", source=SOURCE_DRIVER)
+        except OSError as exc:
+            return PresenceReport.unknown(detail=f"presence probe could not run: {exc}", source=SOURCE_DRIVER)
+
+        if completed.returncode != 0:
+            stderr = (completed.stderr or "").strip().splitlines()
+            detail = stderr[0] if stderr else f"exit code {completed.returncode}"
+            return PresenceReport.unknown(detail=f"presence probe failed: {detail}", source=SOURCE_DRIVER)
+        return PresenceReport(state=parse_presence_output(completed.stdout or ""), source=SOURCE_DRIVER, detail="declared presence_command")
 
     def close(self, definition: AppDefinition, launch: DriverLaunch) -> None:
         pid = launch.pid

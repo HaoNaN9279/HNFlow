@@ -31,6 +31,7 @@ import time
 from typing import Any
 
 from deerflow.apps.persistence import record_launch, record_operation
+from deerflow.apps.presence import ACCESS_PREEMPT, HOLDER_HUMAN, HOLDER_MACHINE, AccessDecision
 from deerflow.apps.session import AppError, AppSessionManager, get_session_manager
 from deerflow.assets.ref import fingerprint_file, make_ref
 from deerflow.resources.governor import ResourceUnavailableError
@@ -38,6 +39,7 @@ from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUN
 from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.workflow.compensation import record_undo, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
+from deerflow.workflow.conflict import ConflictGuard, conflicts_requested
 from deerflow.workflow.executors import WorkflowExecutionError
 from deerflow.workflow.preview import RECOVERY_APP_UNDO, RECOVERY_NONE, ActionPreview, make_preview
 from deerflow.workflow.undo import UndoKind, UndoStatus
@@ -62,6 +64,63 @@ def _resource_error(node_label: str, exc: ResourceUnavailableError) -> WorkflowE
     scheduler's retry/backoff (N7) can act on it.
     """
     return WorkflowExecutionError(f"{node_label}: local resource unavailable: {exc}")
+
+
+def _human_conflict_error(node_label: str, app_name: str, decision: AccessDecision) -> WorkflowExecutionError:
+    """Translate an N10b human-conflict refusal into a node failure.
+
+    Names the application, what was observed, and the knob that changes the
+    outcome — a bare "busy" would leave both the operator and the N7 retry path
+    guessing whether waiting or preempting was intended.
+    """
+    return WorkflowExecutionError(f"{node_label}: application {app_name!r} is not free: {decision.reason} (observed presence: {decision.presence.state}; see apps.on_human_conflict)")
+
+
+def _note_takeover(session: Any, decision: AccessDecision) -> None:
+    """Record a preemption on the session so the take-over stays visible (N10b)."""
+    if decision.outcome == ACCESS_PREEMPT:
+        session.taken_over_from = HOLDER_HUMAN
+        session.taken_over_at = time.time()
+
+
+def _allow_preempt(manager: AppSessionManager, app_name: str) -> bool:
+    """Whether the application opted in to being taken over from a person (N10b)."""
+    definition = manager.registry.get(app_name)
+    return bool(getattr(definition, "allow_preempt", False))
+
+
+def _conflict_targets(manager: AppSessionManager, app_name: str, params: dict[str, Any]) -> list[str]:
+    """Host paths whose change counts as a conflict for this node (N10b).
+
+    ``params.conflict_globs`` overrides the application's declared
+    ``artifact_globs``; either way, patterns resolve like the drivers resolve
+    them (relative to the definition's ``working_dir``), and only paths that
+    exist are returned — the guard asserts "what I saw is unchanged", and a file
+    that does not exist yet says nothing a re-check could compare against.
+    """
+    override = params.get("conflict_globs")
+    if override is None:
+        definition = manager.registry.get(app_name)
+        patterns = list(getattr(definition, "artifact_globs", []) or [])
+    else:
+        patterns = _string_list(override)
+
+    definition = manager.registry.get(app_name)
+    working_dir = getattr(definition, "working_dir", None)
+    base = os.path.expandvars(str(working_dir)) if working_dir else None
+    return _expand_globs(patterns, base=base)
+
+
+def _expand_globs(patterns: list[str], *, base: str | None) -> list[str]:
+    """Resolve declared patterns to existing host paths (order-preserving)."""
+    import glob as _glob
+
+    found: list[str] = []
+    for pattern in patterns:
+        expanded = os.path.expandvars(pattern)
+        absolute = expanded if os.path.isabs(expanded) or not base else os.path.join(base, expanded)
+        found.extend(sorted(_glob.glob(absolute, recursive=True)))
+    return list(dict.fromkeys(found))
 
 
 def _degraded_delta(before: int, session: Any) -> int:
@@ -127,7 +186,16 @@ async def exec_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     except AppError as exc:
         raise WorkflowExecutionError(f"app:launch: {exc}") from exc
 
-    launch_deltas: dict[str, Any] = {"degraded": 1} if getattr(session, "launch_degraded", False) else {}
+    # N8 records a degraded launch here; N10b records who the engine found holding
+    # the application, so the durable record can answer "was this taken over?"
+    # without a schema change.
+    launch_deltas: dict[str, Any] = {}
+    if getattr(session, "launch_degraded", False):
+        launch_deltas["degraded"] = 1
+    if getattr(session, "holder", HOLDER_MACHINE) != HOLDER_MACHINE:
+        launch_deltas["holder"] = session.holder
+    if getattr(session, "taken_over_from", None):
+        launch_deltas["taken_over_from"] = session.taken_over_from
     await record_launch(_repo(runtime), session, user_id=_user_id(runtime), resource_deltas=launch_deltas)
 
     port = session.to_port()
@@ -160,6 +228,30 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     undo_steps = _undo_steps(params)
     try:
         session = manager.resolve(app, inputs.get("session"))
+    except AppError as exc:
+        raise WorkflowExecutionError(f"app:script: {exc}") from exc
+
+    # N10b (§21): snapshot the declared artifacts *before* the node waits, so a
+    # person regenerating them while we queue is detected instead of clobbered.
+    guard: ConflictGuard | None = None
+    if conflicts_requested(params):
+        paths = await asyncio.to_thread(_conflict_targets, manager, app, params)
+        refs = [make_ref(path, scope="host") for path in paths]
+        guard = await asyncio.to_thread(lambda: ConflictGuard.snapshot(refs, label="app:script"))
+
+    # N10b (§17): opt-in per-operation presence check.  Off by default because a
+    # presence probe cannot attribute in-flight work — an application whose probe
+    # reports generic busyness would refuse on the engine's own previous job.
+    if params.get("check_presence") is True:
+        decision = await asyncio.to_thread(manager.acquire_access, app)
+        if not decision.allowed:
+            raise _human_conflict_error("app:script", app, decision)
+        _note_takeover(session, decision)
+
+    if guard is not None:
+        await asyncio.to_thread(guard.check)
+
+    try:
         started = time.monotonic()
         before = int(getattr(session, "degraded_operations", 0))
         result = await asyncio.to_thread(manager.run_script, session, script=script, args=args, env=env)
@@ -382,13 +474,19 @@ def preview_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inputs:
     app = _require_app(params, "app:launch")
     mode = params.get("mode") or "launch"
     verb = "Attach to" if mode == "attach" else "Start"
+    risks = ["a started instance keeps running until it is closed (closing it is cleanup, not a rollback)"]
+    if _allow_preempt(_manager(runtime), app):
+        # Declarative only: who is using the application is decided live when the
+        # node runs, not frozen into an approval snapshot (a person leaving or
+        # arriving between approval and execution is the expected case).
+        risks.append(f"if a person is using {app}, this may take the application over (allow_preempt is declared)")
     return make_preview(
         params,
         action="attach_app" if mode == "attach" else "launch_app",
         summary=f"{verb} a local application instance: {app}",
         reversible=False,
         recovery=RECOVERY_NONE,
-        risks=["a started instance keeps running until it is closed (closing it is cleanup, not a rollback)"],
+        risks=risks,
         required_confirmations=["crash_confirm"],
     )
 
@@ -417,6 +515,9 @@ def preview_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inputs:
     else:
         risks = [f"{app} declares no undo support, so in-app state changes cannot be rolled back automatically"]
         recovery = RECOVERY_NONE
+
+    if params.get("check_presence") is True:
+        risks.append(f"this node waits for or refuses an application a person is using (apps.on_human_conflict; {app} allow_preempt={_allow_preempt(manager, app)})")
 
     return make_preview(
         params,

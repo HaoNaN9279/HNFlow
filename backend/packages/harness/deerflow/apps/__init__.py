@@ -28,6 +28,7 @@ from deerflow.apps.registry import AppRegistry, get_app_registry
 from deerflow.apps.session import (
     AppDisabledError,
     AppError,
+    AppHumanPresentError,
     AppNotFoundError,
     AppSession,
     AppSessionManager,
@@ -46,6 +47,7 @@ __all__ = [
     "get_app_registry",
     "AppError",
     "AppDisabledError",
+    "AppHumanPresentError",
     "AppNotFoundError",
     "AppSessionNotFoundError",
     "AppSession",

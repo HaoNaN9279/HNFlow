@@ -9,6 +9,12 @@ application operation passes through (``app:*`` executors and the tool
 gateway's ``app`` provider both call it), so the declared GPU/CPU/memory/disk
 demand and license slots are enforced here — an instance holds its license slot
 for life, an operation holds its numeric demand for its duration.
+N10b adds **human/machine sharing control** (§17): before the engine takes an
+application it does not already hold, the application's declared presence probe
+answers who is using it, the pure decision table in
+:mod:`deerflow.apps.presence` turns that plus the configured policy into an
+outcome, and a ``wait`` queues here.  Presence lives at the same choke point as
+the quota, so both entry points are governed by one implementation.
 
 A session is exposed on a workflow port as a plain JSON dict
 (:meth:`AppSession.to_port`) so it flows through the existing ``data`` port
@@ -24,11 +30,31 @@ import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from deerflow.apps.driver import AppDriver, AppDriverError, DriverLaunch, DriverScriptResult, DriverUndoResult, DriverWaitResult, driver_supports_undo, driver_undo
+from deerflow.apps.driver import AppDriver, AppDriverError, DriverLaunch, DriverScriptResult, DriverUndoResult, DriverWaitResult, driver_presence, driver_supports_undo, driver_undo
+from deerflow.apps.presence import (
+    ACCESS_WAIT,
+    HOLDER_HUMAN,
+    HOLDER_MACHINE,
+    HOLDERS,
+    HUMAN_CONFLICT_FAIL,
+    SOURCE_CACHE,
+    AccessDecision,
+    PresenceReport,
+    decide_access,
+    holder_for,
+)
 from deerflow.apps.registry import AppRegistry, get_app_registry
 from deerflow.resources.governor import ResourceDemand, ResourceGovernor, ResourceLease
 
 logger = logging.getLogger(__name__)
+
+#: How long a presence answer may be reused before the application is asked
+#: again.  A probe spawns a process, so the `/api/apps` style read path must not
+#: probe per request; the acquisition path always probes fresh.
+_PRESENCE_CACHE_SECONDS = 5.0
+
+#: How often a ``wait`` human-conflict admission re-probes while it queues.
+_PRESENCE_POLL_SECONDS = 0.5
 
 
 # ── Errors ─────────────────────────────────────────────────────────────────────
@@ -50,6 +76,21 @@ class AppSessionNotFoundError(AppError):
     """Raised when no live session matches the referenced application/session."""
 
 
+class AppHumanPresentError(AppError):
+    """Raised when a person holds the application and the policy refuses (N10b).
+
+    Carries the observed state and the knob to change so the node failure is
+    actionable: the N7 retry/backoff path can retry later, and the operator can
+    switch ``apps.on_human_conflict`` (or declare ``allow_preempt``) if taking
+    the software over is actually intended.
+    """
+
+    def __init__(self, app_name: str, decision: AccessDecision) -> None:
+        self.app_name = app_name
+        self.decision = decision
+        super().__init__(f"application {app_name!r} is not free: {decision.reason} (observed presence: {decision.presence.state}); set apps.on_human_conflict, or declare the application's allow_preempt, if taking it over is intended")
+
+
 # ── Session model ──────────────────────────────────────────────────────────────
 
 
@@ -68,6 +109,17 @@ class AppSession:
     created_at: float = 0.0
     last_active: float = 0.0
     artifacts: list[str] = field(default_factory=list)
+    #: N10b (§17): who holds this instance — the engine (:data:`HOLDER_MACHINE`),
+    #: a person it attached to or took over from (:data:`HOLDER_HUMAN`), or an
+    #: acquisition made while presence could not be determined
+    #: (:data:`HOLDER_UNKNOWN`).  This is what the engine *knew when it acquired*,
+    #: not a live claim: the live answer is served by ``probe_presence``.
+    holder: str = HOLDER_MACHINE
+    #: ``"human"`` while this instance is held as a take-over from a person;
+    #: cleared by :meth:`AppSessionManager.release`.
+    taken_over_from: str | None = None
+    #: When the take-over happened (epoch seconds; 0.0 when there was none).
+    taken_over_at: float = 0.0
     #: How many operations on this instance ran against an oversubscribed
     #: quota (N8 ``on_conflict: degrade``). Process-local observation only —
     #: deliberately *not* part of the ``to_port`` contract.
@@ -89,6 +141,8 @@ class AppSession:
             "endpoint": self.endpoint,
             "handle": dict(self.handle),
             "exclusive": self.exclusive,
+            "holder": self.holder,
+            "taken_over_from": self.taken_over_from,
         }
 
     @classmethod
@@ -101,6 +155,8 @@ class AppSession:
         if not isinstance(session_id, str) or not isinstance(app_name, str):
             return None
         handle = value.get("handle")
+        holder = value.get("holder")
+        taken_over_from = value.get("taken_over_from")
         return cls(
             session_id=session_id,
             app_name=app_name,
@@ -110,6 +166,10 @@ class AppSession:
             endpoint=value.get("endpoint"),
             handle=dict(handle) if isinstance(handle, dict) else {},
             exclusive=bool(value.get("exclusive", True)),
+            # A port value written before N10b carries no holder; the engine's own
+            # session is the safe reading for a handle that resolved nothing.
+            holder=holder if isinstance(holder, str) and holder in HOLDERS else HOLDER_MACHINE,
+            taken_over_from=taken_over_from if isinstance(taken_over_from, str) else None,
         )
 
 
@@ -125,6 +185,8 @@ class AppSessionManager:
         self._sessions: dict[str, AppSession] = {}
         self._drivers: dict[str, AppDriver] = {}
         self._lock = threading.Lock()
+        #: Short-lived presence answers, keyed by application name (N10b).
+        self._presence_cache: dict[str, tuple[float, PresenceReport]] = {}
 
     @property
     def governor(self) -> ResourceGovernor | None:
@@ -167,6 +229,12 @@ class AppSessionManager:
         status reported as ``attached`` rather than leaking a second instance.
         Reattaching does **not** take a second license slot (the live instance
         already holds one); creating a new instance does.
+
+        N10b: reuse of a session the engine already holds never consults
+        presence (there is nobody to arbitrate with — it is our instance), but
+        taking an application we do *not* hold goes through
+        :meth:`acquire_access` first, so a person working in the software is
+        respected before the driver is ever called.
         """
         definition = self._require_definition(app_name)
         if definition.exclusive and mode != "attach":
@@ -176,6 +244,10 @@ class AppSessionManager:
                 existing.last_active = time.time()
                 existing.launch_degraded = False
                 return existing
+
+        decision = self.acquire_access(app_name)
+        if not decision.allowed:
+            raise AppHumanPresentError(app_name, decision)
 
         # N8: the license slot is held for the instance's whole life.
         lease = self._acquire_license(definition)
@@ -201,10 +273,115 @@ class AppSessionManager:
             degraded_operations=1 if lease is not None and lease.degraded else 0,
             launch_degraded=bool(lease is not None and lease.degraded),
             resource_lease=lease if lease is not None and lease.reserved else None,
+            holder=holder_for(decision),
+            taken_over_from=decision.taken_over_from,
+            taken_over_at=now if decision.taken_over_from else 0.0,
         )
         with self._lock:
             self._sessions[session.session_id] = session
         return session
+
+    # -- N10b: presence / human-machine sharing --
+
+    def probe_presence(self, app_name: str, *, force: bool = False) -> PresenceReport:
+        """Ask whether a person is using *app_name* (N10b, §17).
+
+        Answers come from the application's own declared probe; an application
+        that declares none answers ``unknown``, which is a real answer and not a
+        failure.  Results are cached briefly because a probe spawns a process —
+        callers that must not act on a stale answer (acquisition, the ``wait``
+        loop) pass ``force=True``.
+        """
+        definition = self._require_definition(app_name)
+        now = time.monotonic()
+        if not force:
+            with self._lock:
+                cached = self._presence_cache.get(app_name)
+            if cached is not None and now - cached[0] < _PRESENCE_CACHE_SECONDS:
+                # Re-stamp the source so a reused answer is never mistaken for a
+                # probe taken now (the stored report keeps its own provenance).
+                return replace(cached[1], source=SOURCE_CACHE)
+
+        report = driver_presence(self._driver_for(app_name), definition)
+        if not report.observed_at:
+            report = replace(report, observed_at=time.time())
+        with self._lock:
+            self._presence_cache[app_name] = (now, report)
+        return report
+
+    def check_access(self, app_name: str, *, force: bool = False) -> AccessDecision:
+        """Apply the configured human-conflict policy to one observed presence.
+
+        Does not block: a ``wait`` outcome is returned as such, and
+        :meth:`acquire_access` is the caller that acts on it.
+        """
+        definition = self._require_definition(app_name)
+        return decide_access(
+            self.probe_presence(app_name, force=force),
+            policy=self._human_conflict_policy(),
+            allow_preempt=bool(getattr(definition, "allow_preempt", False)),
+        )
+
+    def acquire_access(self, app_name: str, *, timeout: float | None = None) -> AccessDecision:
+        """Decide whether the engine may take *app_name* right now (N10b).
+
+        Honours the ``wait`` policy by re-probing until the application is free
+        or the budget runs out (``apps.acquire_timeout_seconds``, overridable
+        here for callers with their own budget), and returns the final decision
+        — including a ``refuse`` that explains the timeout.  A ``preempt``
+        outcome is returned as-is; recording the take-over is the caller's
+        (``launch``) job, because only the caller knows whether it then commits.
+        """
+        budget = self._human_conflict_budget() if timeout is None else max(0.0, float(timeout))
+        deadline = time.monotonic() + budget
+        while True:
+            decision = self.check_access(app_name, force=True)
+            if decision.outcome != ACCESS_WAIT:
+                return decision
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return replace(
+                    decision,
+                    outcome="refuse",
+                    reason=f"{decision.reason}; gave up after {budget:g}s (raise apps.acquire_timeout_seconds or change apps.on_human_conflict)",
+                )
+            time.sleep(min(_PRESENCE_POLL_SECONDS, remaining))
+
+    def release(self, session_id: str, *, to: str = HOLDER_HUMAN) -> AppSession | None:
+        """Hand an instance back to a person without stopping it (N10b).
+
+        Distinct from :meth:`close`: the instance keeps running (and keeps
+        holding its license slot — it still occupies the machine), but the
+        engine no longer claims it, so a human can take over the software while
+        the run leaves the session alone.  Returns ``None`` for an unknown or
+        already-closed session.
+        """
+        if to not in HOLDERS:
+            raise ValueError(f"unknown holder {to!r}; expected one of {sorted(HOLDERS)}")
+        with self._lock:
+            session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        session.holder = to
+        session.taken_over_from = None
+        session.last_active = time.time()
+        self._forget_presence(session.app_name)
+        return session
+
+    def _human_conflict_policy(self) -> str:
+        value = getattr(self._registry, "on_human_conflict", HUMAN_CONFLICT_FAIL)
+        return value if isinstance(value, str) else HUMAN_CONFLICT_FAIL
+
+    def _human_conflict_budget(self) -> float:
+        value = getattr(self._registry, "acquire_timeout_seconds", 60.0)
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            return 60.0
+
+    def _forget_presence(self, app_name: str) -> None:
+        with self._lock:
+            self._presence_cache.pop(app_name, None)
 
     # -- N8 admission helpers --
 
@@ -384,12 +561,15 @@ class AppSessionManager:
             self._governor_release(session.resource_lease)
             session.resource_lease = None
         session.status = "stopped"
+        self._forget_presence(session.app_name)
         return True
 
     def reset(self) -> None:
         """Stop every session and clear the map (tests / shutdown)."""
         for session in list(self.list_sessions()):
             self.close(session.session_id)
+        with self._lock:
+            self._presence_cache.clear()
 
 
 # ── Process-wide default manager ───────────────────────────────────────────────
@@ -434,6 +614,7 @@ __all__ = [
     "AppError",
     "AppDisabledError",
     "AppNotFoundError",
+    "AppHumanPresentError",
     "AppSessionNotFoundError",
     "AppSession",
     "AppSessionManager",

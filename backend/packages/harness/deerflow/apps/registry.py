@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from deerflow.apps.driver import AppDriver, AppDriverError
 from deerflow.apps.drivers import build_driver
+from deerflow.apps.presence import HUMAN_CONFLICT_FAIL
 from deerflow.config.apps_config import AppDefinition, AppsConfig, get_apps_config
 
 
@@ -23,10 +24,23 @@ class AppRegistry:
 
     enabled: bool = False
     definitions: Mapping[str, AppDefinition] = field(default_factory=dict)
+    #: N10b (§17): what to do when a person is using an application the engine
+    #: wants (``fail`` / ``wait`` / ``preempt``).  Carried here because the
+    #: session manager — the single choke point — enforces it and is built from
+    #: this view rather than from the whole config.
+    on_human_conflict: str = HUMAN_CONFLICT_FAIL
+    #: N10b: how long a ``wait`` human-conflict admission queues before failing
+    #: (mirrors ``apps.acquire_timeout_seconds``, the N8 budget).
+    acquire_timeout_seconds: float = 60.0
 
     @classmethod
     def from_config(cls, config: AppsConfig) -> AppRegistry:
-        return cls(enabled=config.enabled, definitions=dict(config.definitions))
+        return cls(
+            enabled=config.enabled,
+            definitions=dict(config.definitions),
+            on_human_conflict=config.on_human_conflict,
+            acquire_timeout_seconds=config.acquire_timeout_seconds,
+        )
 
     def get(self, name: str) -> AppDefinition | None:
         return self.definitions.get(name)

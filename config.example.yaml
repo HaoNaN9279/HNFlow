@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 38
+config_version: 39
 
 # ============================================================================
 # Logging
@@ -2079,6 +2079,18 @@ apps:
   # on_conflict: wait
   # acquire_timeout_seconds: 60
   #
+  # --- N10b: human/machine sharing (who is using the application) ---
+  # A person working in the application and the engine driving it is a real
+  # conflict, and the engine only knows about it when the application itself
+  # says so (per-definition `presence_command` below). What to do when a person
+  # is using an application the engine wants:
+  #   fail    - refuse the operation (default: never take over silently)
+  #   wait    - queue until they let go (fails after acquire_timeout_seconds)
+  #   preempt - take it over; honoured only where the definition declares
+  #             `allow_preempt: true`, otherwise it falls back to fail
+  #
+  # on_human_conflict: fail
+  #
   # Each definition may declare what it occupies while it runs. An app whose
   # `resources` block is omitted is not governed at all:
   #
@@ -2087,6 +2099,15 @@ apps:
   #     driver: cli
   #     command: blender
   #     resources: { gpu: 1, memory_mb: 4096, license: blender_render }
+  #     # N10b: how the engine can tell that someone is using this application.
+  #     # Passed to the application exactly like a run_script script; it must
+  #     # exit 0 and print one state token as the first word of the first line:
+  #     # idle | busy | human | unknown. Absent = the engine honestly reports
+  #     # "unknown", which never blocks and never preempts.
+  #     presence_command: "--python-expr import sys; sys.exit(0)"
+  #     # N10b: opt in to being taken over from a person (only used when
+  #     # on_human_conflict is preempt). Default false.
+  #     allow_preempt: false
   definitions: {}
 
 # ============================================================================

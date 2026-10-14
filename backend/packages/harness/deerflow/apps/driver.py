@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
+from deerflow.apps.presence import SOURCE_DRIVER, SOURCE_NONE, PresenceReport, normalize_presence_state
 from deerflow.config.apps_config import AppDefinition
 
 
@@ -158,6 +159,67 @@ class AppDriverError(RuntimeError):
     """Raised by a driver when an operation cannot be performed."""
 
 
+#: Optional N10b capability.  A driver that can answer "is a person using this
+#: application right now?" declares ``supports_presence = True`` and implements
+#: ``probe_presence(...)``.  Like ``supports_undo`` (N10) neither is part of the
+#: ``AppDriver`` protocol: adding a method to a ``runtime_checkable`` protocol
+#: breaks every existing driver's ``isinstance`` check, and presence detection
+#: is genuinely optional — most GUI applications cannot report it at all, and an
+#: unprobeable application answers ``unknown`` rather than being blocked.
+
+
+def driver_supports_presence(driver: Any) -> bool:
+    """Whether *driver* declares **and** implements a presence probe.
+
+    Both halves are required, for the same reason as :func:`driver_supports_undo`:
+    a flag without the method cannot answer, and a method without the flag has
+    promised nothing.  A wrong answer here would let the engine claim it checked
+    who was using an application when it never asked.
+    """
+    return bool(getattr(driver, "supports_presence", False)) and callable(getattr(driver, "probe_presence", None))
+
+
+def driver_presence(driver: Any, definition: AppDefinition) -> PresenceReport:
+    """Ask *driver* who is using the application (N10b).
+
+    Never raises and never guesses: an absent capability, a driver error, or an
+    unshaped answer all become :data:`~deerflow.apps.presence.PRESENCE_UNKNOWN`.
+    Turning a broken probe into "the application is free" would be the one
+    failure mode preemption cannot survive, so the failure direction is always
+    towards *not knowing*.
+    """
+    name = getattr(driver, "name", "driver")
+    if not driver_supports_presence(driver):
+        return PresenceReport.unknown(detail=f"{name} cannot report human presence", source=SOURCE_NONE)
+    try:
+        report = driver.probe_presence(definition)
+    except AppDriverError as exc:
+        return PresenceReport.unknown(detail=str(exc), source=SOURCE_DRIVER)
+    except Exception as exc:  # noqa: BLE001 — a driver boundary; presence must not fail a run
+        return PresenceReport.unknown(detail=f"{type(exc).__name__}: {exc}", source=SOURCE_DRIVER)
+    return _coerce_presence(report)
+
+
+def _coerce_presence(report: Any) -> PresenceReport:
+    """Normalize a driver's answer across the boundary.
+
+    A well-behaved driver returns a :class:`PresenceReport`; a bare state string
+    or ``{"state": ...}`` mapping is accepted so a thin driver does not have to
+    import the report type.  Anything else is unknown.
+    """
+    if isinstance(report, PresenceReport):
+        return report
+    if isinstance(report, str):
+        return PresenceReport(state=normalize_presence_state(report), source=SOURCE_DRIVER)
+    if isinstance(report, dict):
+        return PresenceReport(
+            state=normalize_presence_state(report.get("state")),
+            detail=str(report.get("detail") or ""),
+            source=str(report.get("source") or SOURCE_DRIVER),
+        )
+    return PresenceReport.unknown(detail="driver returned no presence information", source=SOURCE_DRIVER)
+
+
 __all__ = [
     "DriverLaunch",
     "DriverScriptResult",
@@ -167,4 +229,6 @@ __all__ = [
     "AppDriverError",
     "driver_supports_undo",
     "driver_undo",
+    "driver_supports_presence",
+    "driver_presence",
 ]

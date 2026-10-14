@@ -44,6 +44,12 @@ AppDriverName = Literal["cli", "mock"]
 #: Conflict policy when a declared quota or license slot is exhausted (N8).
 ResourceConflictPolicy = Literal["wait", "fail", "degrade"]
 
+#: What to do when a *person* is using an application the engine wants (N10b).
+#: Distinct from :data:`ResourceConflictPolicy`: that one arbitrates declared
+#: capacity between machine operations, this one arbitrates the software itself
+#: between a human and the engine.
+HumanConflictPolicy = Literal["fail", "wait", "preempt"]
+
 #: Stable app-name grammar — mirrors the workflow id contract
 #: (``^[A-Za-z0-9_-]{1,64}$``), kept local so this module has no workflow
 #: import edge.
@@ -144,12 +150,39 @@ class AppDefinition(BaseModel):
     artifact_globs: list[str] = Field(default_factory=list, description="Glob patterns (relative to working_dir) that collect() returns.")
     timeout_seconds: int = Field(default=600, ge=1, description="Default per-operation timeout in seconds.")
     exclusive: bool = Field(default=True, description="When true a second launch of the same app reattaches to the existing session (single-instance apps).")
+    # -- N10b human/machine sharing --
+    presence_command: str | None = Field(
+        default=None,
+        description=(
+            "Command the application understands that reports whether someone is using it (N10b). "
+            "Passed in the same position as a run_script script; exit 0 plus a state token "
+            "(idle/busy/human/unknown) as the first word of the first stdout line. "
+            "Omitted (default) = the engine honestly reports 'unknown' and never blocks on it."
+        ),
+    )
+    allow_preempt: bool = Field(
+        default=False,
+        description=(
+            "When true the engine may take this application over from a person who is using it, but only "
+            "under apps.on_human_conflict: preempt (N10b). Default false: a preempt policy without this "
+            "opt-in refuses instead, so software is never silently taken away from a human."
+        ),
+    )
     # -- N8 resource governance --
     resources: AppResourceDemand = Field(default_factory=AppResourceDemand, description="Declared resource demand (N8); all-zero means the app is not governed.")
 
     @field_validator("command")
     @classmethod
     def _command_strip(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator("presence_command")
+    @classmethod
+    def _presence_command_strip(cls, value: str | None) -> str | None:
+        """Normalize blank to ``None`` (which means "no probe", not "empty command")."""
         if value is None:
             return None
         stripped = value.strip()
@@ -176,6 +209,16 @@ class AppsConfig(BaseModel):
     licenses: dict[str, LicenseGroup] = Field(default_factory=dict, description="License group → concurrent slot count (N8).")
     on_conflict: ResourceConflictPolicy = Field(default="wait", description="What to do when a declared quota or license is exhausted: wait (queue, then fail on timeout), fail, or degrade (proceed and warn).")
     acquire_timeout_seconds: float = Field(default=60.0, ge=1, le=86400, description="How long a 'wait' admission may queue before failing (N8).")
+    # -- N10b human/machine sharing --
+    on_human_conflict: HumanConflictPolicy = Field(
+        default="fail",
+        description=(
+            "What to do when a person is using an application the engine wants (N10b): "
+            "fail (default — refuse, never take over silently), wait (queue until they let go, "
+            "bounded by acquire_timeout_seconds), or preempt (take over — honoured only for a "
+            "definition that declares allow_preempt, otherwise it falls back to fail)."
+        ),
+    )
 
     @field_validator("definitions")
     @classmethod
@@ -245,6 +288,7 @@ __all__ = [
     "AppResourceDemand",
     "AppDefinition",
     "AppsConfig",
+    "HumanConflictPolicy",
     "LicenseGroup",
     "RESOURCE_DIMENSIONS",
     "ResourceConflictPolicy",

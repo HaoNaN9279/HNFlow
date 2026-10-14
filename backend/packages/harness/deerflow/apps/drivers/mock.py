@@ -18,10 +18,18 @@ from deerflow.apps.driver import (
     DriverUndoResult,
     DriverWaitResult,
 )
+from deerflow.apps.presence import PRESENCE_IDLE, SOURCE_DRIVER, PresenceReport, parse_presence_output
 from deerflow.config.apps_config import AppDefinition
 
 #: Filename the mock driver always writes; also its default artifact glob.
 MOCK_ARTIFACT_NAME = "mock-output.txt"
+
+#: N10b: presence marker file the mock driver reads.  Its content is a presence
+#: state token; when it is absent the mock reports ``idle``.  A file (rather
+#: than a config field or an in-process switch) keeps the probe reachable from
+#: the host the way a real application's own state would be, so a test can make
+#: the application "human-occupied" with one write and no API.
+MOCK_PRESENCE_NAME = ".mock-presence"
 
 
 def _workdir(definition: AppDefinition, launch: DriverLaunch | None = None) -> Path:
@@ -100,8 +108,23 @@ class MockAppDriver:
     def health(self, definition: AppDefinition, launch: DriverLaunch) -> bool:
         return True
 
+    #: N10b: the mock reports presence from a marker file so the sharing rules
+    #: (wait / refuse / preempt) can be tested offline without a real GUI.
+    supports_presence = True
+
+    def probe_presence(self, definition: AppDefinition) -> PresenceReport:
+        """Read the presence marker file (absent = ``idle``)."""
+        path = _workdir(definition) / MOCK_PRESENCE_NAME
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return PresenceReport(state=PRESENCE_IDLE, source=SOURCE_DRIVER, detail=f"mock: no {MOCK_PRESENCE_NAME} marker")
+        except OSError as exc:
+            return PresenceReport.unknown(detail=f"mock: could not read {MOCK_PRESENCE_NAME}: {exc}", source=SOURCE_DRIVER)
+        return PresenceReport(state=parse_presence_output(text), source=SOURCE_DRIVER, detail=f"mock: {MOCK_PRESENCE_NAME}")
+
     def close(self, definition: AppDefinition, launch: DriverLaunch) -> None:
         return None
 
 
-__all__ = ["MockAppDriver", "MOCK_ARTIFACT_NAME"]
+__all__ = ["MockAppDriver", "MOCK_ARTIFACT_NAME", "MOCK_PRESENCE_NAME"]

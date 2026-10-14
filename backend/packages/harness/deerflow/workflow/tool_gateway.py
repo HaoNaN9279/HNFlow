@@ -185,7 +185,7 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
             import json
 
             from deerflow.apps.persistence import record_launch, record_operation
-            from deerflow.apps.session import get_session_manager
+            from deerflow.apps.session import AppHumanPresentError, get_session_manager
             from deerflow.resources.governor import ResourceUnavailableError
 
             manager = get_session_manager()
@@ -199,12 +199,26 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
                 # N8: report the blocking quota/license as data, so the calling
                 # agent can wait and retry instead of seeing an opaque error.
                 return json.dumps({"app": app_name, "status": "resource_unavailable", "error": str(exc)}, ensure_ascii=False)
+            except AppHumanPresentError as exc:
+                # N10b (§17): a person is using the application and the configured
+                # policy refused. Reported as data (like the quota case) so the
+                # agent can tell the user instead of treating it as a crash.
+                return json.dumps(
+                    {
+                        "app": app_name,
+                        "status": "human_present",
+                        "presence": exc.decision.presence.to_dict(),
+                        "error": str(exc),
+                    },
+                    ensure_ascii=False,
+                )
             await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"artifacts": len(artifacts)})
             return json.dumps(
                 {
                     "app": app_name,
                     "session_id": session.session_id,
                     "status": result.status,
+                    "holder": session.holder,
                     "exit_code": result.exit_code,
                     "stdout": result.stdout,
                     "stderr": result.stderr,
@@ -216,6 +230,7 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
         return _run
 
     tools: dict[str, BaseTool] = {}
+    available_apps: list[str] = []
     for name, definition in registry.entries():
         try:
             if not registry.build_driver(name).available(definition):
@@ -223,6 +238,7 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
         except Exception as e:  # noqa: BLE001 - fail-open per app
             logger.warning("Tool gateway: app %r driver unavailable: %s", name, e)
             continue
+        available_apps.append(name)
         tool_name = f"app_{name}"
         tools[tool_name] = StructuredTool.from_function(
             coroutine=_make_runner(name),
@@ -230,7 +246,60 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
             description=f"Run a script command in the local application '{name}'. {definition.description}".strip(),
             args_schema=AppRunInput,
         )
+    if available_apps:
+        tools[PRESENCE_TOOL_NAME] = _presence_tool(available_apps)
     return tools
+
+
+#: N10b: read-only presence check the agent can call before taking an application.
+PRESENCE_TOOL_NAME = "check_app_presence"
+
+
+def _presence_tool(app_names: list[str]) -> BaseTool:
+    """Build the ``check_app_presence`` tool over the available applications.
+
+    Read-only and purely informational: the *enforcement* lives in the session
+    manager (every acquisition passes through it), so an agent that never calls
+    this tool is still governed.  Its value is letting the agent decide *before*
+    it spends a node on an application a person is using, and having the answer
+    in the transcript when it does not.
+    """
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, Field
+
+    catalog = ", ".join(app_names)
+
+    class PresenceInput(BaseModel):
+        app: str = Field(description=f"Registered local application name. One of: {catalog}")
+
+    async def _run(app: str) -> str:
+        import asyncio
+        import json
+
+        from deerflow.apps.session import AppDisabledError, AppNotFoundError, get_session_manager
+
+        manager = get_session_manager()
+        try:
+            report = await asyncio.to_thread(manager.probe_presence, app, force=True)
+        except (AppDisabledError, AppNotFoundError) as exc:
+            return json.dumps({"app": app, "status": "unknown_app", "error": str(exc)}, ensure_ascii=False)
+        return json.dumps(
+            {
+                "app": app,
+                "state": report.state,
+                "detail": report.detail,
+                "observed_at": report.observed_at,
+                "note": "unknown means the application publishes no presence probe; it does not mean the application is free",
+            },
+            ensure_ascii=False,
+        )
+
+    return StructuredTool.from_function(
+        coroutine=_run,
+        name=PRESENCE_TOOL_NAME,
+        description=f"Check whether a person is currently using a local application before driving it. Registered applications: {catalog}",
+        args_schema=PresenceInput,
+    )
 
 
 def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None, instance_repo: Any = None, user_id: str | None = None) -> ToolGateway:
@@ -327,4 +396,5 @@ __all__ = [
     "PROVIDER_BUILTIN",
     "PROVIDER_SANDBOX",
     "PROVIDER_APP",
+    "PRESENCE_TOOL_NAME",
 ]
