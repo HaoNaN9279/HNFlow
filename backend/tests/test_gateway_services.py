@@ -2483,4 +2483,73 @@ async def test_start_run_rejects_invalid_thread_id_before_resolving_dependencies
         await start_run(RunCreateRequest(), "thread.with.dot", SimpleNamespace())
 
     assert exc_info.value.status_code == 422
-    assert "Invalid thread_id" in exc_info.value.detail
+    assert "Invalid thread_id" in str(exc_info.value.detail)
+
+
+def test_launch_scheduled_workflow_run_resolves_definition_and_dispatches(monkeypatch):
+    """N7: a scheduled workflow target reuses start_workflow_run, not a new stack."""
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.gateway import services as gateway_services
+    from app.gateway.services import launch_scheduled_workflow_run
+
+    class _DefinitionRepo:
+        async def get(self, definition_id, *, user_id):
+            assert definition_id == "wf-1"
+            return {"id": "wf-1", "definition": {"id": "wf-1", "name": "WF", "nodes": [], "edges": []}}
+
+    async def _scenario():
+        captured: dict[str, object] = {}
+
+        async def fake_start_workflow_run(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(run_id="run-wf", thread_id=kwargs["thread_id"])
+
+        with (
+            patch.object(gateway_services, "get_workflow_definition_repo", lambda _request: _DefinitionRepo()),
+            patch.object(gateway_services, "start_workflow_run", side_effect=fake_start_workflow_run),
+        ):
+            result = await launch_scheduled_workflow_run(
+                definition_id="wf-1",
+                params={"input_path": "/data/a.fbx"},
+                thread_id="wf-thread",
+                app=SimpleNamespace(state=SimpleNamespace()),
+                metadata={"scheduled_task_id": "task-1", "scheduled_trigger": "scheduled"},
+            )
+        return captured, result
+
+    captured, result = asyncio.run(_scenario())
+
+    assert captured["definition_id"] == "wf-1"
+    assert captured["params"] == {"input_path": "/data/a.fbx"}
+    assert captured["thread_id"] == "wf-thread"
+    assert captured["on_disconnect"] == "continue"
+    assert captured["metadata"]["scheduled_task_id"] == "task-1"
+    assert result == {"run_id": "run-wf", "thread_id": "wf-thread"}
+
+
+def test_launch_scheduled_workflow_run_raises_for_missing_definition():
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from app.gateway import services as gateway_services
+    from app.gateway.services import launch_scheduled_workflow_run
+
+    class _EmptyRepo:
+        async def get(self, definition_id, *, user_id):
+            return None
+
+    async def _scenario():
+        with patch.object(gateway_services, "get_workflow_definition_repo", lambda _request: _EmptyRepo()):
+            await launch_scheduled_workflow_run(
+                definition_id="nope",
+                params={},
+                thread_id="wf-thread",
+                app=SimpleNamespace(state=SimpleNamespace()),
+            )
+
+    with pytest.raises(RuntimeError, match="not found for scheduled target"):
+        asyncio.run(_scenario())

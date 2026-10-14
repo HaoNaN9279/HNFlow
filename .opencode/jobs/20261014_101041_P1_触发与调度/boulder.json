@@ -1,0 +1,26 @@
+{
+  "job": "P1_触发与调度",
+  "plan": "plan.md",
+  "started_at": "2026-10-14T10:10:41",
+  "status": "awaiting_confirmation",
+  "steps": [
+    { "id": "S1", "name": "deerflow/scheduler/triggers.py 纯函数（is_trigger_due + trigger_key）+ 单测", "status": "pending" },
+    { "id": "S2", "name": "迁移 0018_scheduled_task_triggers + ORM 字段/索引 + 仓储（attempt/dedupe_key/条件型 claim）+ 测试", "status": "pending" },
+    { "id": "S3", "name": "SchedulerConfig 退避字段 + config.example + config_version 36 + reload 边界", "status": "pending" },
+    { "id": "S4", "name": "app/scheduler/probe.py TriggerProbe 快照 + 单测", "status": "pending" },
+    { "id": "S5", "name": "payload_template 渲染器 + 单测", "status": "pending" },
+    { "id": "S6", "name": "ScheduledTaskService：条件型 dispatch/launch_workflow/去重/退避/dead_lettered + 测试", "status": "pending" },
+    { "id": "S7", "name": "launch_scheduled_workflow_run + app.py 注入 + 路由（新类型/字段/requeue）+ 测试", "status": "pending" },
+    { "id": "S8", "name": "文档同步 + 全量回归 + ruff + 提交", "status": "pending" }
+  ],
+  "decisions": [
+    "范围：只做 N7（触发源 + 载荷映射 + 幂等/退避/DLQ）；通知/资源治理/前端不做",
+    "触发实现：复用既有 scheduled-task 栈 + 纯函数 is_trigger_due + app 层 TriggerProbe（不引入事件总线/新线程）",
+    "应用事件来源：轮询 app_instances 表（DB 为准，重启不丢）",
+    "载荷映射：payload_template + {{payload.<key>}}/{{now}} 插值 → agent prompt / workflow params",
+    "去重：(task_id, dedupe_key) 部分唯一索引为原子仲裁，冲突记 skipped",
+    "重试：每任务 max_attempts 默认 1（opt-in），指数退避 + 上限，耗尽 dead_lettered + POST /requeue",
+    "前端：本切片不动",
+    "通知（tool:notify）：本切片不做，记为后续增量"
+  ]
+}

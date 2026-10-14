@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -14,18 +14,23 @@ from app.gateway.deps import (
     get_scheduled_task_run_repo,
     get_scheduled_task_service,
     get_thread_store,
+    get_workflow_definition_repo,
 )
 from app.gateway.permissions import require_permission
 from deerflow.scheduler.schedules import (
-    next_run_at as compute_next_run_at,
-)
-from deerflow.scheduler.schedules import (
-    normalize_cron_expression,
+    SUPPORTED_SCHEDULE_TYPES,
     validate_timezone,
 )
+from deerflow.scheduler.schedules import (
+    next_run_at as compute_next_run_at,
+)
+from deerflow.scheduler.triggers import validate_schedule_spec
 from deerflow.utils.thread_id import ThreadId
 
 router = APIRouter(prefix="/api", tags=["scheduled-tasks"])
+
+_TARGET_KINDS = frozenset({"agent", "workflow"})
+_MAX_ATTEMPTS_BOUNDS = (1, 10)
 
 
 def _ensure_task_mutable(task: dict[str, Any]) -> None:
@@ -36,6 +41,24 @@ def _ensure_task_mutable(task: dict[str, Any]) -> None:
         )
 
 
+async def _workflow_definition_exists(request: Request, definition_id: str, user_id: str) -> bool:
+    repo = get_workflow_definition_repo(request)
+    return await repo.get(definition_id, user_id=user_id) is not None
+
+
+def _validate_target(*, target_kind: str, target_definition_id: str | None) -> None:
+    if target_kind not in _TARGET_KINDS:
+        raise HTTPException(status_code=422, detail=f"Unsupported target_kind (expected one of {sorted(_TARGET_KINDS)})")
+    if target_kind == "workflow" and not target_definition_id:
+        raise HTTPException(status_code=422, detail="workflow target requires target_definition_id")
+
+
+def _validate_max_attempts(max_attempts: int) -> None:
+    low, high = _MAX_ATTEMPTS_BOUNDS
+    if not (low <= max_attempts <= high):
+        raise HTTPException(status_code=422, detail=f"max_attempts must be between {low} and {high}")
+
+
 class ScheduledTaskCreateRequest(BaseModel):
     thread_id: ThreadId | None = None
     context_mode: str = "fresh_thread_per_run"
@@ -44,6 +67,10 @@ class ScheduledTaskCreateRequest(BaseModel):
     schedule_type: str
     schedule_spec: dict[str, Any]
     timezone: str
+    target_kind: str = "agent"
+    target_definition_id: str | None = None
+    payload_template: dict[str, Any] = Field(default_factory=dict)
+    max_attempts: int = 1
 
 
 class ScheduledTaskUpdateRequest(BaseModel):
@@ -53,6 +80,10 @@ class ScheduledTaskUpdateRequest(BaseModel):
     prompt: str | None = Field(default=None, min_length=1)
     schedule_spec: dict[str, Any] | None = None
     timezone: str | None = None
+    target_kind: str | None = None
+    target_definition_id: str | None = None
+    payload_template: dict[str, Any] | None = None
+    max_attempts: int | None = None
 
 
 @router.get("/scheduled-tasks")
@@ -81,17 +112,17 @@ async def create_scheduled_task(request: Request, body: ScheduledTaskCreateReque
             raise HTTPException(status_code=422, detail="reuse_thread requires thread_id")
         if not await thread_store.check_access(body.thread_id, str(user.id), require_existing=True):
             raise HTTPException(status_code=404, detail="Thread not found")
-    if body.schedule_type not in {"once", "cron"}:
-        raise HTTPException(status_code=422, detail="Unsupported schedule_type")
+    if body.schedule_type not in SUPPORTED_SCHEDULE_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported schedule_type (expected one of {sorted(SUPPORTED_SCHEDULE_TYPES)})")
+    _validate_target(target_kind=body.target_kind, target_definition_id=body.target_definition_id)
+    _validate_max_attempts(body.max_attempts)
+    if body.target_kind == "workflow" and body.target_definition_id and not await _workflow_definition_exists(request, body.target_definition_id, str(user.id)):
+        raise HTTPException(status_code=404, detail=f"Workflow {body.target_definition_id} not found")
 
     schedule_spec = dict(body.schedule_spec)
     try:
         validate_timezone(body.timezone)
-        if body.schedule_type == "cron":
-            raw_cron = schedule_spec.get("cron")
-            if not isinstance(raw_cron, str):
-                raise HTTPException(status_code=422, detail="cron schedule requires schedule_spec.cron")
-            schedule_spec["cron"] = normalize_cron_expression(raw_cron)
+        schedule_spec = validate_schedule_spec(body.schedule_type, schedule_spec)
         next_run_at = compute_next_run_at(
             body.schedule_type,
             schedule_spec,
@@ -121,6 +152,10 @@ async def create_scheduled_task(request: Request, body: ScheduledTaskCreateReque
         schedule_spec=schedule_spec,
         timezone=body.timezone,
         next_run_at=next_run_at,
+        target_kind=body.target_kind,
+        target_definition_id=body.target_definition_id,
+        payload_template=body.payload_template,
+        max_attempts=body.max_attempts,
     )
 
 
@@ -170,20 +205,24 @@ async def update_scheduled_task(task_id: str, request: Request, body: ScheduledT
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # N7 target fields: validate the effective pair so a half-applied update
+    # (kind=workflow, definition removed) cannot be persisted.
+    if "target_kind" in updates or "target_definition_id" in updates or "max_attempts" in updates:
+        effective_kind = str(updates.get("target_kind", existing.get("target_kind") or "agent"))
+        effective_definition = updates.get("target_definition_id", existing.get("target_definition_id"))
+        _validate_target(target_kind=effective_kind, target_definition_id=effective_definition)
+        if "target_definition_id" in updates and effective_definition and not await _workflow_definition_exists(request, str(effective_definition), str(user.id)):
+            raise HTTPException(status_code=404, detail=f"Workflow {effective_definition} not found")
+    if "max_attempts" in updates:
+        _validate_max_attempts(int(updates["max_attempts"]))
+
     if "schedule_spec" in updates or "timezone" in updates:
         schedule_spec = dict(existing["schedule_spec"])
         if "schedule_spec" in updates and isinstance(updates["schedule_spec"], dict):
             schedule_spec = dict(updates["schedule_spec"])
         timezone = str(updates.get("timezone", existing["timezone"]))
         try:
-            if existing["schedule_type"] == "cron":
-                raw_cron = schedule_spec.get("cron")
-                if not isinstance(raw_cron, str):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="cron schedule requires schedule_spec.cron",
-                    )
-                schedule_spec["cron"] = normalize_cron_expression(raw_cron)
+            schedule_spec = validate_schedule_spec(existing["schedule_type"], schedule_spec)
             next_run_at = compute_next_run_at(
                 existing["schedule_type"],
                 schedule_spec,
@@ -261,12 +300,37 @@ async def trigger_scheduled_task(task_id: str, request: Request):
     task = await repo.get(task_id, user_id=str(user.id))
     if task is None:
         raise HTTPException(status_code=404, detail="Scheduled task not found")
-    result = await service.dispatch_task(task, now=datetime.now(UTC), trigger="manual")
+    # ``force`` makes the manual trigger an explicit human override: a
+    # condition-driven task fires even when its condition is not currently met.
+    result = await service.dispatch_task(task, now=datetime.now(UTC), trigger="manual", force=True)
     if result["outcome"] == "conflict":
         raise HTTPException(status_code=409, detail=result["error"] or "Scheduled task trigger conflicted with an active run")
     if result["outcome"] == "failed":
         raise HTTPException(status_code=502, detail=result["error"] or "Scheduled task trigger failed")
     return {"id": task_id, "triggered": True}
+
+
+@router.post("/scheduled-tasks/{task_id}/requeue")
+@require_permission("threads", "write")
+async def requeue_scheduled_task(task_id: str, request: Request):
+    """Drain a dead-lettered task: reset the failure streak and re-arm it (N7)."""
+    config = get_config()
+    repo = get_scheduled_task_repo(request)
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    existing = await repo.get(task_id, user_id=str(user.id))
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Scheduled task not found")
+    if existing.get("status") != "dead_lettered":
+        raise HTTPException(status_code=409, detail="Only a dead-lettered scheduled task can be requeued")
+    if existing["schedule_type"] == "once":
+        # A consumed `once` deadline is in the past; re-arm at the minimum delay.
+        next_run_at = datetime.now(UTC) + timedelta(seconds=config.scheduler.min_once_delay_seconds)
+    else:
+        next_run_at = compute_next_run_at(existing["schedule_type"], existing["schedule_spec"], existing["timezone"], now=datetime.now(UTC))
+    await repo.rearm(task_id, status="enabled", attempt=0, next_run_at=next_run_at, last_error=None)
+    return await repo.get(task_id, user_id=str(user.id))
 
 
 @router.delete("/scheduled-tasks/{task_id}")

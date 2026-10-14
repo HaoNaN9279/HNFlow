@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 35
+config_version: 36
 
 # ============================================================================
 # Logging
@@ -1980,8 +1980,9 @@ agent_storage:
 # ============================================================================
 # Scheduled Tasks Configuration
 # ============================================================================
-# Background scheduler for one-time and recurring (cron) agent runs.
-# All fields are restart-required (captured at Gateway lifespan startup).
+# Background scheduler for one-time, recurring (cron), and condition-driven
+# (file watch / application event / idle) runs. All fields are restart-required
+# (captured at Gateway lifespan startup).
 #
 # Multi-worker note: the scheduler runs once per uvicorn worker. SQLite silently
 # ignores row-level locks, so multiple workers can double-fire the same task.
@@ -1994,12 +1995,16 @@ agent_storage:
 #   lease_seconds: 120           # Claim lease; a crashed process's task becomes reclaimable after this
 #   max_concurrent_runs: 3       # Global cap on active scheduled runs; each poll claims only into the remaining budget
 #   min_once_delay_seconds: 60   # Minimum future offset for one-time tasks at creation time
+#   retry_backoff_seconds: 60    # Base backoff for a failed task that still has attempts left
+#   max_retry_backoff_seconds: 3600  # Upper bound for the exponential backoff (base * 2**attempt)
 scheduler:
   enabled: false
   poll_interval_seconds: 5
   lease_seconds: 120
   max_concurrent_runs: 3
   min_once_delay_seconds: 60
+  retry_backoff_seconds: 60
+  max_retry_backoff_seconds: 3600
 
 # ============================================================================
 # Long-running MCP Tasks Configuration

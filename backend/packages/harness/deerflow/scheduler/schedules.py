@@ -5,6 +5,19 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
+# ``once``/``cron`` are driven by a persisted ``next_run_at`` timestamp; the
+# condition-driven kinds (file watch / application event / idle) have no
+# future timestamp and are evaluated against a runtime snapshot on every poll
+# (see ``triggers.py``). Keeping both kinds in one claim loop is what lets the
+# existing lease/budget machinery apply to both.
+TIME_BASED_SCHEDULE_TYPES: frozenset[str] = frozenset({"once", "cron"})
+CONDITIONAL_SCHEDULE_TYPES: frozenset[str] = frozenset({"file", "event", "idle"})
+SUPPORTED_SCHEDULE_TYPES: frozenset[str] = TIME_BASED_SCHEDULE_TYPES | CONDITIONAL_SCHEDULE_TYPES
+
+
+def is_conditional_schedule_type(schedule_type: str) -> bool:
+    return schedule_type in CONDITIONAL_SCHEDULE_TYPES
+
 
 def validate_timezone(timezone_name: str) -> str:
     try:
@@ -29,6 +42,11 @@ def next_run_at(
     now: datetime,
 ) -> datetime | None:
     validate_timezone(timezone_name)
+    if schedule_type in CONDITIONAL_SCHEDULE_TYPES:
+        # No future timestamp exists for a condition-driven trigger; the poller
+        # evaluates it against a snapshot instead. Returning ``None`` here keeps
+        # this the single entry point for "when does this fire".
+        return None
     if now.tzinfo is None:
         now = now.replace(tzinfo=UTC)
 

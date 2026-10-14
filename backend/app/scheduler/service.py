@@ -4,14 +4,17 @@ import asyncio
 import logging
 import socket
 import uuid
-from datetime import UTC, datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from fastapi import HTTPException
 
-from deerflow.persistence.scheduled_task_runs import ActiveScheduledRunConflict
+from deerflow.persistence.scheduled_task_runs import ActiveScheduledRunConflict, DuplicateTriggerConflict
 from deerflow.runtime import ConflictError, RunRecord
-from deerflow.scheduler.schedules import next_run_at
+from deerflow.scheduler.payload import render_template
+from deerflow.scheduler.schedules import CONDITIONAL_SCHEDULE_TYPES, next_run_at
+from deerflow.scheduler.triggers import is_trigger_due, trigger_key_for
 from deerflow.utils.thread_id import validate_thread_id
 
 logger = logging.getLogger(__name__)
@@ -20,6 +23,12 @@ logger = logging.getLogger(__name__)
 # byte-identical outcomes for the same "task already has an active run" condition.
 _ACTIVE_RUN_CONFLICT_ERROR = "task already has an active run"
 _SKIP_ACTIVE_RUN_ERROR = "skipped: a previous run of this task is still active"
+# This exact trigger occurrence (same file mtime / app-instance transition /
+# idle window) was already dispatched; the DB's dedupe index said so.
+_DUPLICATE_TRIGGER_ERROR = "skipped: this trigger occurrence was already dispatched"
+# A ``workflow`` target needs the app-layer launcher; without it the dispatch
+# fails loudly instead of silently degrading to an agent run.
+_MISSING_WORKFLOW_LAUNCHER_ERROR = "workflow target requires a workflow launcher"
 
 
 class ScheduledTaskService:
@@ -32,10 +41,18 @@ class ScheduledTaskService:
         poll_interval_seconds: int,
         lease_seconds: int,
         max_concurrent_runs: int,
+        launch_workflow=None,
+        trigger_probe=None,
+        retry_backoff_seconds: int = 60,
+        max_retry_backoff_seconds: int = 3600,
     ) -> None:
         self._task_repo = task_repo
         self._task_run_repo = task_run_repo
         self._launch_run = launch_run
+        self._launch_workflow = launch_workflow
+        self._trigger_probe = trigger_probe
+        self._retry_backoff_seconds = retry_backoff_seconds
+        self._max_retry_backoff_seconds = max_retry_backoff_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._lease_seconds = lease_seconds
         self._max_concurrent_runs = max_concurrent_runs
@@ -104,7 +121,32 @@ class ScheduledTaskService:
         *,
         now: datetime,
         trigger: str,
+        force: bool = False,
     ) -> dict[str, Any]:
+        """Dispatch one claimed task.
+
+        ``force`` (manual ``POST /trigger``) skips the condition gate for
+        condition-driven triggers while still evaluating it for the payload.
+        """
+        payload: dict[str, Any] = {}
+        dedupe_key: str | None = None
+        schedule_type = task.get("schedule_type")
+        if schedule_type in CONDITIONAL_SCHEDULE_TYPES:
+            try:
+                due, reason, payload = await self._evaluate_condition(task, now=now)
+            except Exception as exc:
+                logger.exception("Scheduled task %s: trigger evaluation failed", task.get("id"))
+                await self._fail_task(task, now=now, error=str(exc), trigger=trigger)
+                return {"outcome": "failed", "task_run_id": None, "run_id": None, "thread_id": task.get("thread_id"), "error": str(exc)}
+            if not due and not force:
+                # Release the claim so the next poll re-evaluates it; a condition
+                # that is false this cycle must not stay leased.
+                await self._release_claim(task, now=now)
+                logger.debug("Scheduled task %s not due: %s", task.get("id"), reason)
+                return {"outcome": "not_due", "task_run_id": None, "run_id": None, "thread_id": task.get("thread_id"), "error": None}
+            if due:
+                dedupe_key = trigger_key_for(schedule_type, payload)
+
         execution_thread_id = task.get("thread_id")
         if task.get("context_mode") == "fresh_thread_per_run" or execution_thread_id is None:
             execution_thread_id = str(uuid.uuid4())
@@ -118,22 +160,7 @@ class ScheduledTaskService:
             # surface as HTTP 500 on manual trigger and, in the poller, abort
             # the rest of the claimed batch every cycle while the task itself
             # is never marked with last_error.
-            task_status = self._task_status_for_failure(task, trigger=trigger)
-            await self._task_repo.update_after_launch(
-                task["id"],
-                status=task_status,
-                next_run_at=next_run_at(
-                    task["schedule_type"],
-                    task["schedule_spec"],
-                    task["timezone"],
-                    now=now,
-                ),
-                last_run_at=now,
-                last_run_id=None,
-                last_thread_id=execution_thread_id,
-                last_error=str(exc),
-                increment_run_count=False,
-            )
+            await self._fail_task(task, now=now, error=str(exc), trigger=trigger, thread_id=execution_thread_id)
             return {
                 "outcome": "failed",
                 "task_run_id": None,
@@ -162,6 +189,7 @@ class ScheduledTaskService:
             return await self._record_scheduled_skip(task, thread_id=execution_thread_id, now=now, trigger=trigger)
 
         task_run_id = f"task-run-{uuid.uuid4().hex}"
+        attempt_ordinal = int(task.get("attempt") or 0) + 1
         try:
             await self._task_run_repo.create(
                 run_record_id=task_run_id,
@@ -170,7 +198,18 @@ class ScheduledTaskService:
                 scheduled_for=now,
                 trigger=trigger,
                 status="queued",
+                dedupe_key=dedupe_key,
+                attempt=attempt_ordinal,
             )
+        except DuplicateTriggerConflict:
+            # This occurrence is already recorded. The dedupe index is the
+            # atomic arbiter; we cannot stamp a "skipped" tombstone with the
+            # same key (it would conflict again), so release the claim and
+            # report a skip.
+            if trigger == "manual":
+                return {"outcome": "conflict", "task_run_id": None, "run_id": None, "thread_id": execution_thread_id, "error": _DUPLICATE_TRIGGER_ERROR}
+            await self._release_claim(task, now=now, error=_DUPLICATE_TRIGGER_ERROR)
+            return {"outcome": "skipped", "task_run_id": None, "run_id": None, "thread_id": execution_thread_id, "error": _DUPLICATE_TRIGGER_ERROR}
         except ActiveScheduledRunConflict:
             # Lost the create race for the task's single active slot: a
             # concurrent dispatch passed the same fast-path check and inserted
@@ -194,16 +233,14 @@ class ScheduledTaskService:
         # still takes the retention path instead of the release-the-slot path.
         launch_succeeded = False
         try:
-            result = await self._launch_run(
+            result = await self._launch_target(
+                task,
+                payload=payload,
+                dedupe_key=dedupe_key,
                 thread_id=execution_thread_id,
-                assistant_id=task.get("assistant_id"),
-                prompt=task["prompt"],
-                owner_user_id=task.get("user_id"),
-                metadata={
-                    "scheduled_task_id": task["id"],
-                    "scheduled_task_run_id": task_run_id,
-                    "scheduled_trigger": trigger,
-                },
+                task_run_id=task_run_id,
+                trigger=trigger,
+                now=now,
             )
             launch_succeeded = True
             launched_run_id = result["run_id"]
@@ -324,26 +361,17 @@ class ScheduledTaskService:
                     "error": str(exc),
                 }
 
-            # _launch_run itself failed (or a step before it did): no live run
+            # The launch itself failed (or a step before it did): no live run
             # was created, so it is safe to release the active slot.
-            task_status = self._task_status_for_failure(task, trigger=trigger)
             await self._task_run_repo.update_status(
                 task_run_id,
                 status="failed",
                 error=str(exc),
                 started_at=now,
                 finished_at=now,
+                attempt=attempt_ordinal,
             )
-            await self._task_repo.update_after_launch(
-                task["id"],
-                status=task_status,
-                next_run_at=next_at,
-                last_run_at=now,
-                last_run_id=None,
-                last_thread_id=execution_thread_id,
-                last_error=str(exc),
-                increment_run_count=False,
-            )
+            await self._fail_task(task, now=now, error=str(exc), trigger=trigger, thread_id=execution_thread_id)
             return {
                 "outcome": "conflict" if self._is_overlap_conflict(exc) else "failed",
                 "task_run_id": task_run_id,
@@ -351,6 +379,130 @@ class ScheduledTaskService:
                 "thread_id": execution_thread_id,
                 "error": str(exc),
             }
+
+    async def _evaluate_condition(self, task: dict[str, Any], *, now: datetime) -> tuple[bool, str, dict[str, Any]]:
+        """Probe + pure evaluation for a condition-driven trigger."""
+        snapshot: dict[str, Any] = {}
+        if self._trigger_probe is not None:
+            snapshot = await self._trigger_probe.build(task, now=now)
+        decision = is_trigger_due(
+            task["schedule_type"],
+            task.get("schedule_spec"),
+            now=now,
+            next_run_at=task.get("next_run_at"),
+            last_run_at=task.get("last_run_at"),
+            snapshot=snapshot,
+        )
+        return decision.due, decision.reason, dict(decision.payload)
+
+    async def _release_claim(self, task: dict[str, Any], *, now: datetime, error: str | None = None) -> None:
+        """Return a claimed-but-not-dispatched task to the claimable pool."""
+        await self._task_repo.rearm(
+            task["id"],
+            status="enabled",
+            attempt=int(task.get("attempt") or 0),
+            next_run_at=next_run_at(task["schedule_type"], task["schedule_spec"], task["timezone"], now=now),
+            last_error=error if error is not None else task.get("last_error"),
+        )
+
+    def _retry_delay(self, attempt: int) -> int:
+        return min(self._retry_backoff_seconds * (2**attempt), self._max_retry_backoff_seconds)
+
+    async def _fail_task(self, task: dict[str, Any], *, now: datetime, error: str, trigger: str, thread_id: str | None = None) -> str:
+        """Record a failed dispatch, applying the N7 retry/backoff policy.
+
+        Retry accounts only for scheduled dispatches (a human-initiated failure
+        is theirs to retry) and only when the task opted in via
+        ``max_attempts > 1``; the default of 1 keeps the pre-N7 behavior byte
+        for byte (``cron`` re-enabled, ``once`` failed).
+
+        Returns the status written.
+        """
+        attempt = int(task.get("attempt") or 0)
+        max_attempts = int(task.get("max_attempts") or 1)
+        next_at = next_run_at(task["schedule_type"], task["schedule_spec"], task["timezone"], now=now)
+        if trigger == "scheduled" and max_attempts > 1:
+            if attempt + 1 < max_attempts:
+                delay = self._retry_delay(attempt)
+                await self._task_repo.rearm(
+                    task["id"],
+                    status="enabled",
+                    attempt=attempt + 1,
+                    next_run_at=now + timedelta(seconds=delay),
+                    last_error=error,
+                )
+                return "enabled"
+            await self._task_repo.rearm(
+                task["id"],
+                status="dead_lettered",
+                attempt=attempt + 1,
+                next_run_at=next_at,
+                last_error=error,
+            )
+            return "dead_lettered"
+        status = self._task_status_for_failure(task, trigger=trigger)
+        await self._task_repo.update_after_launch(
+            task["id"],
+            status=status,
+            next_run_at=next_at,
+            last_run_at=now,
+            last_run_id=None,
+            last_thread_id=thread_id if thread_id is not None else task.get("thread_id"),
+            last_error=error,
+            increment_run_count=False,
+            attempt=attempt + 1,
+        )
+        return status
+
+    @staticmethod
+    def _render_prompt(task: dict[str, Any], payload: Mapping[str, Any], *, now: datetime) -> str:
+        """Agent-target prompt: a templated ``prompt`` wins, else the literal."""
+        template = task.get("payload_template") or {}
+        if isinstance(template, Mapping) and "prompt" in template:
+            rendered = render_template({"prompt": template["prompt"]}, payload, now=now)
+            return str(rendered.get("prompt", ""))
+        return str(task.get("prompt") or "")
+
+    async def _launch_target(
+        self,
+        task: dict[str, Any],
+        *,
+        payload: Mapping[str, Any],
+        dedupe_key: str | None,
+        thread_id: str,
+        task_run_id: str,
+        trigger: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        """Launch the task's target: a workflow run or a prompt-driven agent run."""
+        metadata: dict[str, Any] = {
+            "scheduled_task_id": task["id"],
+            "scheduled_task_run_id": task_run_id,
+            "scheduled_trigger": trigger,
+        }
+        if dedupe_key is not None:
+            metadata["scheduled_dedupe_key"] = dedupe_key
+        if task.get("target_kind") == "workflow":
+            if self._launch_workflow is None:
+                raise RuntimeError(_MISSING_WORKFLOW_LAUNCHER_ERROR)
+            definition_id = task.get("target_definition_id")
+            if not definition_id:
+                raise RuntimeError("workflow target requires target_definition_id")
+            params = render_template(task.get("payload_template"), payload, now=now)
+            return await self._launch_workflow(
+                definition_id=definition_id,
+                params=params,
+                thread_id=thread_id,
+                owner_user_id=task.get("user_id"),
+                metadata=metadata,
+            )
+        return await self._launch_run(
+            thread_id=thread_id,
+            assistant_id=task.get("assistant_id"),
+            prompt=self._render_prompt(task, payload, now=now),
+            owner_user_id=task.get("user_id"),
+            metadata=metadata,
+        )
 
     def _active_run_conflict_result(self, thread_id: str) -> dict[str, Any]:
         """Manual-trigger response when the task already has an active run.
@@ -433,6 +585,34 @@ class ScheduledTaskService:
             "error": error,
         }
 
+    @staticmethod
+    def _should_retry(task: dict[str, Any], *, trigger: str) -> bool:
+        return trigger == "scheduled" and int(task.get("max_attempts") or 1) > 1
+
+    async def _rearm_for_retry(self, task: dict[str, Any], *, error: str | None) -> str:
+        """Re-arm with backoff, or dead-letter once the attempt budget is spent."""
+        now = datetime.now(UTC)
+        attempt = int(task.get("attempt") or 0)
+        max_attempts = int(task.get("max_attempts") or 1)
+        if attempt + 1 < max_attempts:
+            delay = self._retry_delay(attempt)
+            await self._task_repo.rearm(
+                task["id"],
+                status="enabled",
+                attempt=attempt + 1,
+                next_run_at=now + timedelta(seconds=delay),
+                last_error=error,
+            )
+            return "enabled"
+        await self._task_repo.rearm(
+            task["id"],
+            status="dead_lettered",
+            attempt=attempt + 1,
+            next_run_at=next_run_at(task["schedule_type"], task["schedule_spec"], task["timezone"], now=now),
+            last_error=error,
+        )
+        return "dead_lettered"
+
     async def handle_run_completion(self, record: RunRecord) -> None:
         metadata = record.metadata or {}
         task_id = metadata.get("scheduled_task_id")
@@ -471,7 +651,15 @@ class ScheduledTaskService:
         if task is None:
             return
 
+        # N7 retry: a real run failure consumes an attempt when the task opted
+        # in (``max_attempts > 1``) and the dispatch was scheduled, not manual.
+        if terminal_status == "failed" and self._should_retry(task, trigger=str(metadata.get("scheduled_trigger") or "scheduled")):
+            await self._rearm_for_retry(task, error=error)
+            return
+
         updates: dict[str, Any] = {"last_error": error}
+        if terminal_status == "success":
+            updates["attempt"] = 0
         if task["schedule_type"] == "once":
             # The single occurrence is consumed either way (the run did launch,
             # so re-arming risks duplicate side effects), but an interrupt ends

@@ -34,6 +34,25 @@ class ActiveScheduledRunConflict(Exception):
         super().__init__(f"scheduled task {task_id!r} already has an active run")
 
 
+class DuplicateTriggerConflict(Exception):
+    """This physical trigger occurrence was already dispatched for the task.
+
+    Raised by :meth:`ScheduledTaskRunRepository.create` when inserting a run row
+    with a ``dedupe_key`` that an existing row for the same task already holds
+    (partial unique index ``uq_scheduled_task_run_dedupe``). Condition-driven
+    triggers (``file``/``event``/``idle``) are re-evaluated on every poll, so the
+    same file mtime / app-instance terminal transition / idle window can be
+    observed again; the DB is the atomic arbiter for "dispatch this occurrence
+    exactly once". Callers record it as a ``skipped`` occurrence, mirroring the
+    ``ActiveScheduledRunConflict`` handling.
+    """
+
+    def __init__(self, task_id: str, dedupe_key: str) -> None:
+        self.task_id = task_id
+        self.dedupe_key = dedupe_key
+        super().__init__(f"scheduled task {task_id!r} already dispatched trigger {dedupe_key!r}")
+
+
 class ScheduledTaskRunRepository:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._sf = session_factory
@@ -55,6 +74,8 @@ class ScheduledTaskRunRepository:
         scheduled_for: datetime,
         trigger: str,
         status: str,
+        dedupe_key: str | None = None,
+        attempt: int = 1,
     ) -> dict[str, Any]:
         row = ScheduledTaskRunRow(
             id=run_record_id,
@@ -63,14 +84,25 @@ class ScheduledTaskRunRepository:
             scheduled_for=scheduled_for,
             trigger=trigger,
             status=status,
+            dedupe_key=dedupe_key,
+            attempt=attempt,
             created_at=datetime.now(UTC),
         )
         async with self._sf() as session:
             session.add(row)
             try:
                 await session.commit()
-            except IntegrityError:
+            except IntegrityError as exc:
                 await session.rollback()
+                # Two partial unique indexes can reject this insert:
+                # ``uq_scheduled_task_run_dedupe`` (this exact trigger
+                # occurrence already ran) and ``uq_scheduled_task_run_active``
+                # (an active run exists). The message check is the common case;
+                # the existence probe is the dialect-independent arbiter, since
+                # a dedupe_row can also be a *terminal* row (outside the active
+                # predicate) and the messages differ across SQLite/Postgres.
+                if dedupe_key is not None and ("dedupe" in str(getattr(exc, "orig", exc)).lower() or await self._has_dedupe_row(session, task_id, dedupe_key)):
+                    raise DuplicateTriggerConflict(task_id, dedupe_key) from None
                 # Only active-status inserts can trip the partial unique index
                 # ``uq_scheduled_task_run_active``; a terminal-status row (e.g.
                 # a "skipped" tombstone) is outside its predicate and cannot
@@ -81,6 +113,12 @@ class ScheduledTaskRunRepository:
                 raise
             await session.refresh(row)
             return self._row_to_dict(row)
+
+    @staticmethod
+    async def _has_dedupe_row(session: AsyncSession, task_id: str, dedupe_key: str) -> bool:
+        stmt = select(ScheduledTaskRunRow.id).where(ScheduledTaskRunRow.task_id == task_id, ScheduledTaskRunRow.dedupe_key == dedupe_key).limit(1)
+        result = await session.execute(stmt)
+        return result.scalars().first() is not None
 
     async def list_by_task(self, task_id: str, *, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
         stmt = (
@@ -113,6 +151,7 @@ class ScheduledTaskRunRepository:
         error: str | None = None,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
+        attempt: int | None = None,
         protect_terminal: bool = False,
     ) -> None:
         async with self._sf() as session:
@@ -132,6 +171,8 @@ class ScheduledTaskRunRepository:
             row.status = status
             row.run_id = run_id
             row.error = error
+            if attempt is not None:
+                row.attempt = attempt
             if started_at is not None:
                 row.started_at = started_at
             if finished_at is not None:

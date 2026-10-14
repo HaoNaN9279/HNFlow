@@ -7,9 +7,10 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
+from deerflow.scheduler.schedules import CONDITIONAL_SCHEDULE_TYPES
 from deerflow.utils.time import coerce_iso
 
-TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_TASK_STATUSES: frozenset[str] = frozenset({"completed", "failed", "cancelled", "dead_lettered"})
 
 
 class ScheduledTaskRepository:
@@ -44,6 +45,10 @@ class ScheduledTaskRepository:
         schedule_spec: dict[str, Any],
         timezone: str,
         next_run_at: datetime | None,
+        target_kind: str = "agent",
+        target_definition_id: str | None = None,
+        payload_template: dict[str, Any] | None = None,
+        max_attempts: int = 1,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         row = ScheduledTaskRow(
@@ -58,6 +63,10 @@ class ScheduledTaskRepository:
             schedule_spec=schedule_spec,
             timezone=timezone,
             next_run_at=next_run_at,
+            target_kind=target_kind,
+            target_definition_id=target_definition_id,
+            payload_template=payload_template or {},
+            max_attempts=max_attempts,
             created_at=now,
             updated_at=now,
         )
@@ -117,11 +126,28 @@ class ScheduledTaskRepository:
         limit: int,
     ) -> list[dict[str, Any]]:
         lease_expires_at = now + timedelta(seconds=lease_seconds)
+        # A row is claimable when it is due and not currently held:
+        # - time-based (``once``/``cron``): ``next_run_at`` has arrived;
+        # - condition-driven (``file``/``event``/``idle``): it has no future
+        #   timestamp, so every poll re-evaluates it against a runtime snapshot
+        #   (``scheduler/triggers.py``) after the claim succeeds.
+        # Ordering puts time-based work first (``nulls_last``) so a steady
+        # stream of condition-driven rows cannot starve scheduled deadlines;
+        # the shared ``limit``/``max_concurrent_runs`` budget bounds both.
+        due = or_(
+            and_(
+                ScheduledTaskRow.next_run_at.is_not(None),
+                ScheduledTaskRow.next_run_at <= now,
+            ),
+            and_(
+                ScheduledTaskRow.schedule_type.in_(sorted(CONDITIONAL_SCHEDULE_TYPES)),
+                ScheduledTaskRow.next_run_at.is_(None),
+            ),
+        )
         stmt = (
             select(ScheduledTaskRow)
             .where(
-                ScheduledTaskRow.next_run_at.is_not(None),
-                ScheduledTaskRow.next_run_at <= now,
+                due,
                 or_(
                     and_(
                         ScheduledTaskRow.status == "enabled",
@@ -140,7 +166,7 @@ class ScheduledTaskRepository:
                     ),
                 ),
             )
-            .order_by(ScheduledTaskRow.next_run_at.asc(), ScheduledTaskRow.id.asc())
+            .order_by(ScheduledTaskRow.next_run_at.asc().nulls_last(), ScheduledTaskRow.id.asc())
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -187,6 +213,35 @@ class ScheduledTaskRepository:
             row.last_thread_id = last_thread_id
             if increment_run_count:
                 row.run_count += 1
+            row.lease_owner = None
+            row.lease_expires_at = None
+            row.updated_at = datetime.now(UTC)
+            await session.commit()
+
+    async def rearm(
+        self,
+        task_id: str,
+        *,
+        status: str,
+        attempt: int,
+        next_run_at: datetime | None,
+        last_error: str | None,
+    ) -> None:
+        """Re-arm a task (retry backoff, or DLQ requeue) without run bookkeeping.
+
+        Distinct from :meth:`update_after_launch`: a retry decision must not
+        rewrite ``last_run_at``/``last_run_id``/``last_thread_id`` (those
+        describe the run that just failed), and a DLQ requeue must be allowed to
+        move a terminal row back to claimable.
+        """
+        async with self._sf() as session:
+            row = await session.get(ScheduledTaskRow, task_id)
+            if row is None:
+                return
+            row.status = status
+            row.attempt = attempt
+            row.next_run_at = next_run_at
+            row.last_error = last_error
             row.lease_owner = None
             row.lease_expires_at = None
             row.updated_at = datetime.now(UTC)

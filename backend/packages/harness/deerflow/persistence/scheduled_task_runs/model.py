@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Index, String, Text, text
+from sqlalchemy import DateTime, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
@@ -18,6 +18,13 @@ class ScheduledTaskRunRow(Base):
     scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     trigger: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), index=True)
+    # Occurrence identity for condition-driven triggers (N7), e.g.
+    # ``<path>:<mtime>`` / ``<session_id>:<status>``. ``NULL`` for ``once``/
+    # ``cron`` (their ``next_run_at`` already advances after a dispatch), which
+    # keeps them outside the partial unique dedupe index below.
+    dedupe_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # 1-based attempt ordinal of the failure streak this row belongs to.
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -49,5 +56,20 @@ class ScheduledTaskRunRow(Base):
             unique=True,
             sqlite_where=text("status IN ('queued', 'running')"),
             postgresql_where=text("status IN ('queued', 'running')"),
+        ),
+        # Atomic arbiter for condition-driven trigger idempotency (N7): a
+        # physical trigger (same file mtime / same app-instance terminal
+        # transition / same idle window) can be observed again on a later poll,
+        # so the dispatch that already recorded it must win. Status-only partial
+        # uniqueness would not cover this; ``dedupe_key IS NULL`` keeps
+        # ``once``/``cron`` runs (which have no occurrence identity and may
+        # legitimately repeat across occurrences) outside the index.
+        Index(
+            "uq_scheduled_task_run_dedupe",
+            "task_id",
+            "dedupe_key",
+            unique=True,
+            sqlite_where=text("dedupe_key IS NOT NULL"),
+            postgresql_where=text("dedupe_key IS NOT NULL"),
         ),
     )

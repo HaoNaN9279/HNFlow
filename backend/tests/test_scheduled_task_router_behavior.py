@@ -90,8 +90,8 @@ class _Service:
         self.calls = []
         self.result = {"outcome": "launched"}
 
-    async def dispatch_task(self, task, *, now, trigger):
-        self.calls.append((task, now, trigger))
+    async def dispatch_task(self, task, *, now, trigger, force: bool = False):
+        self.calls.append((task, now, trigger, force))
         return self.result
 
 

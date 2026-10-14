@@ -1455,6 +1455,54 @@ async def launch_scheduled_thread_run(
     return {"run_id": record.run_id, "thread_id": record.thread_id}
 
 
+async def launch_scheduled_workflow_run(
+    *,
+    definition_id: str,
+    params: dict[str, Any],
+    thread_id: str,
+    request: Request | None = None,
+    app: Any | None = None,
+    owner_user_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Scheduler entry point for a ``target_kind=workflow`` task (N7).
+
+    Loads the saved definition and dispatches through :func:`start_workflow_run`
+    — the same run lifecycle the canvas and chat entry points use, so a scheduled
+    workflow run is never a parallel execution stack. Failures raise so the
+    scheduler records them against the task (retry / DLQ).
+    """
+    if request is None:
+        if app is None:
+            raise ValueError("launch_scheduled_workflow_run requires request or app")
+        request = SimpleNamespace(
+            app=app,
+            headers={},
+            state=SimpleNamespace(),
+            cookies={},
+        )
+    user_id = owner_user_id or DEFAULT_USER_ID
+    repo = get_workflow_definition_repo(request)
+    row = await repo.get(definition_id, user_id=user_id)
+    if row is None:
+        raise RuntimeError(f"Workflow {definition_id!r} not found for scheduled target")
+    definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+    if definition_dict is None:
+        raise RuntimeError(f"Workflow {definition_id!r} has no definition body")
+    definition = WorkflowDefinition.model_validate(definition_dict)
+
+    record = await start_workflow_run(
+        definition_id=definition_id,
+        definition=definition,
+        params=params,
+        thread_id=thread_id,
+        request=request,
+        on_disconnect="continue",
+        metadata=metadata or {},
+    )
+    return {"run_id": record.run_id, "thread_id": record.thread_id}
+
+
 async def sse_consumer(
     bridge: StreamBridge,
     record: RunRecord,

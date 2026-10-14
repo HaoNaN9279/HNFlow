@@ -117,6 +117,33 @@ class AppInstanceRepository:
             result = await session.execute(stmt)
             return [_row_to_dict(row) for row in result.scalars()]
 
+    async def list_terminal_since(
+        self,
+        user_id: str,
+        *,
+        app_name: str,
+        since: datetime | None,
+        statuses: tuple[str, ...] = ("stopped", "crashed"),
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Terminal instances of one app touched after ``since`` (N7 event triggers).
+
+        ``since=None`` means "any recorded terminal instance" (first evaluation
+        of a trigger that has never fired). Ordered newest-first so the event
+        trigger dispatches for the most recent transition.
+        """
+        stmt = select(AppInstanceRow).where(
+            AppInstanceRow.user_id == user_id,
+            AppInstanceRow.app_name == app_name,
+            AppInstanceRow.status.in_(statuses),
+        )
+        if since is not None:
+            stmt = stmt.where(AppInstanceRow.updated_at > since)
+        stmt = stmt.order_by(AppInstanceRow.updated_at.desc(), AppInstanceRow.id.desc()).limit(limit)
+        async with self._sf() as session:
+            result = await session.execute(stmt)
+            return [_row_to_dict(row) for row in result.scalars()]
+
     # -- lifecycle --
 
     async def record_operation(

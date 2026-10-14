@@ -169,17 +169,26 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("LangGraph runtime initialised")
 
         try:
-            from app.gateway.services import launch_scheduled_thread_run
+            from app.gateway.services import launch_scheduled_thread_run, launch_scheduled_workflow_run
             from app.scheduler import ScheduledTaskService
+            from app.scheduler.probe import TriggerProbe
+            from deerflow.persistence.engine import get_session_factory
 
             if getattr(app.state, "scheduled_task_repo", None) is not None and getattr(app.state, "scheduled_task_run_repo", None) is not None:
                 scheduled_task_service = ScheduledTaskService(
                     task_repo=app.state.scheduled_task_repo,
                     task_run_repo=app.state.scheduled_task_run_repo,
                     launch_run=lambda **kwargs: launch_scheduled_thread_run(app=app, **kwargs),
+                    launch_workflow=lambda **kwargs: launch_scheduled_workflow_run(app=app, **kwargs),
+                    trigger_probe=TriggerProbe(
+                        session_factory=get_session_factory(),
+                        instance_repo=getattr(app.state, "app_instance_repo", None),
+                    ),
                     poll_interval_seconds=startup_config.scheduler.poll_interval_seconds,
                     lease_seconds=startup_config.scheduler.lease_seconds,
                     max_concurrent_runs=startup_config.scheduler.max_concurrent_runs,
+                    retry_backoff_seconds=startup_config.scheduler.retry_backoff_seconds,
+                    max_retry_backoff_seconds=startup_config.scheduler.max_retry_backoff_seconds,
                 )
                 app.state.scheduled_task_service = scheduled_task_service
                 if startup_config.scheduler.enabled:

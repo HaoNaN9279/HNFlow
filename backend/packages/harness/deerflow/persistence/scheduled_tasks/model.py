@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, Integer, String, Text
+from sqlalchemy import JSON, DateTime, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from deerflow.persistence.base import Base
@@ -23,6 +23,17 @@ class ScheduledTaskRow(Base):
     timezone: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), default="enabled", index=True)
     overlap_policy: Mapped[str] = mapped_column(String(16), default="skip")
+    # Dispatch target (N7): ``agent`` keeps the original prompt-driven lead-agent
+    # run; ``workflow`` launches ``target_definition_id`` with params rendered
+    # from ``payload_template`` against the trigger payload.
+    target_kind: Mapped[str] = mapped_column(String(16), nullable=False, default="agent", server_default=text("'agent'"))
+    target_definition_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload_template: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default=text("'{}'"))
+    # Retry bookkeeping (N7): ``max_attempts`` defaults to 1 = no retry, so
+    # existing tasks keep their exact behavior; ``attempt`` is the count of
+    # consecutive failed attempts consumed by the current failure streak.
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default=text("0"))
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
