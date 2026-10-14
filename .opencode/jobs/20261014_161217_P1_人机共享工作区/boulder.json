@@ -1,0 +1,50 @@
+{
+  "job": "P1_人机共享工作区",
+  "plan": "plan.md",
+  "started_at": "2026-10-14T16:12:17",
+  "status": "awaiting_confirmation",
+  "commit": null,
+  "scope": "P1 切片 6 后半 = N10b：§17 人机共享 + §21 第一点的四件事——人在用探测（declared presence，unknown 不阻塞）、准入决策（纯函数 decide_access：proceed/wait/refuse/preempt）、归属与可见性（holder / 交还 / API + 工具）、防冲突（复用 N10 指纹守卫，独立于审批）。不做共享黑板（§24.6a）、不做跨进程占用表、不做前端 UI",
+  "resolved_questions": [],
+  "open_questions": [
+    "Q1 范围：本切片 = §17 人机共享四件事（独占/共享、抢占、可见性、防冲突），共享黑板（§24.6a）不做？",
+    "Q2 unknown 语义：未知 presence 放行并标记（fail-open，保持既有行为，建议）还是阻塞（fail-closed）？",
+    "Q3 抢占是否纳入：纳入（仅 allow_preempt=true 声明后生效，未声明回退 fail，建议）还是本切片只做 fail/wait、抢占留 N10c？"
+  ],
+  "steps": [
+    { "id": "S1", "name": "presence 纯原语 apps/presence.py（PresenceState/PresenceReport/AccessDecision/decide_access 决定表）", "status": "pending" },
+    { "id": "S2", "name": "驱动 presence 能力（声明+实现双条件；cli 声明式 presence_command；mock marker 文件）", "status": "pending" },
+    { "id": "S3", "name": "配置字段 apps.on_human_conflict / allow_preempt / presence_command + config_version 39", "status": "pending" },
+    { "id": "S4", "name": "manager 集成：probe_presence（缓存）/ acquire_access（wait）/ 抢占标记 / release / holder 入端口", "status": "pending" },
+    { "id": "S5", "name": "冲突检测：params.detect_conflicts=true 在执行器内快照+改动前复验（复用 N10 指纹）", "status": "pending" },
+    { "id": "S6", "name": "API + 可见性：GET /api/apps/{name}/presence、POST /sessions/{id}/release、holder 字段、工具 check_app_presence", "status": "pending" },
+    { "id": "S7", "name": "文档同步 + 全量回归 + ruff + 提交", "status": "pending" }
+  ],
+  "decisions": [
+    "D1 范围 = §17 人机共享 + §21 第一点；共享黑板（§24.6a）不做",
+    "D2 presence 为「声明 + 实现」双条件可选驱动能力（supports_presence + probe_presence），AppDriver 协议不加方法",
+    "D3 unknown 是一等答案且不阻塞：只有确知有人才拦；对无知 fail-closed 会让所有无法报告 presence 的应用不可用",
+    "D4 决策是纯函数 decide_access（零 I/O），I/O 与阻塞在 manager",
+    "D5 抢占必须 allow_preempt=true 显式声明，未声明回退 fail；成立时记 taken_over_from/at",
+    "D6 presence 检查在「取得应用」时（launch/attach）；按需探测走 API/工具；app:script 可 opt-in 逐操作检查",
+    "D7 冲突检测复用 N10 指纹守卫：会话级 = presence/holder 观测，文件级 = 执行器内快照+复验（detect_conflicts=true）；不做改完后归因的启发式",
+    "D8 不新增节点类型、不改执行器签名；决策落在 AppSessionManager 唯一咽喉",
+    "D9 可见性 additive：to_port() holder、GET /api/apps/sessions holder、GET /api/apps/{name}/presence、POST /sessions/{id}/release、工具 check_app_presence",
+    "D10 presence/抢占是进程内治理；跨进程互斥仍由 N8 license slots + file_lock 承担",
+    "D11 配置 additive：apps.on_human_conflict（默认 fail）、allow_preempt（默认 false）、presence_command（默认 null，退出码 0 + stdout token ∈ {idle,busy,human,unknown}，其余一律 unknown）；config_version 38→39",
+    "D12 前端零改动",
+    "D13 mock 用 .mock-presence marker 文件脚本化 presence（离线可测，不加 mock 专用配置字段）",
+    "D14 审批快照刻意不冻结 presence（人在审批期间离开/回来是预期变化），只在预览里放声明性抢占风险",
+    "D15 无迁移、无新表；app_instances.exclusive（实例基数语义）保持不变，与「谁在用」正交"
+  ],
+  "findings": [],
+  "baseline": {
+    "backend_full_regression": "77 failed / 10300 passed / 104 skipped (N10)",
+    "head_migration": "0019_human_task_kind_and_undo",
+    "next_migration": "(none — N10b adds no migration)",
+    "config_version": 38,
+    "next_config_version": 39,
+    "pre_existing_platform_failure_groups": 25,
+    "frontend": "133 files / all passed (N10, zero frontend changes)"
+  }
+}
