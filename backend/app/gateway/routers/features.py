@@ -34,12 +34,19 @@ class AppsFeature(BaseModel):
     enabled: bool = Field(..., description="Whether the local-application registry and app:* nodes are available")
 
 
+class EnvironmentFeature(BaseModel):
+    """Availability of the environment report (N11)."""
+
+    enabled: bool = Field(..., description="Whether environment probing and GET /api/environment report anything")
+
+
 class FeaturesResponse(BaseModel):
     """Frontend-facing feature availability flags."""
 
     agents_api: AgentsApiFeature
     browser_control: BrowserControlFeature
     apps: AppsFeature
+    environment: EnvironmentFeature
 
 
 @router.get(
@@ -55,4 +62,16 @@ async def list_features(config: AppConfig = Depends(get_config)) -> FeaturesResp
         agents_api=AgentsApiFeature(enabled=config.agents_api.enabled),
         browser_control=BrowserControlFeature(enabled=browser.available),
         apps=AppsFeature(enabled=config.apps.enabled),
+        environment=EnvironmentFeature(enabled=_environment_enabled(config)),
     )
+
+
+def _environment_enabled(config: AppConfig) -> bool:
+    """Read ``apps.environment.enabled`` defensively — this is a read-only probe.
+
+    A feature-availability read must not 500 because a config object is missing a
+    section; the default (probing on) matches both ``EnvironmentConfig`` and every
+    deployment where the section simply is not written out.
+    """
+    environment = getattr(getattr(config, "apps", None), "environment", None)
+    return bool(getattr(environment, "enabled", True))

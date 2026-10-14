@@ -3,6 +3,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
+from deerflow.environment.spec import RequirementSpec
 
 SKILL_MD_FILE = "SKILL.md"
 
@@ -84,6 +85,11 @@ class Skill:
     skill_id: str | None = None
     # Frontmatter ``dependencies`` declarations (T8 dependency resolution).
     dependencies: tuple[DependencySpec, ...] | None = None
+    # Frontmatter ``requires`` declarations (N11 environment probing): what this
+    # capability group needs from the machine (executables, versions, paths,
+    # runtimes, plugins). Probed and reported by ``deerflow.environment``; an
+    # empty tuple means the skill declares nothing and is never gated.
+    requirements: tuple[RequirementSpec, ...] = ()
 
     @property
     def skill_path(self) -> str:

@@ -34,6 +34,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from deerflow.environment.spec import RequirementSpec
+
 logger = logging.getLogger(__name__)
 
 #: Supported driver names (slice 1 driver matrix, plan §3.1).
@@ -124,6 +126,32 @@ class LicenseGroup(BaseModel):
     slots: int = Field(default=1, ge=1, le=1000, description="Concurrent holders allowed by this license.")
 
 
+class EnvironmentConfig(BaseModel):
+    """Environment-probing knobs (N11, plan §22).
+
+    Probing is **read-only** and best-effort: it answers "is this here, and which
+    version" and never installs, downloads, or edits the environment.  The
+    defaults keep that posture — probing runs, but a failing requirement only
+    produces a diagnostic.  ``require_on_load`` is the operator's opt-in to turn
+    a missing/mismatched requirement into a Gateway startup failure, for
+    deployments that must not serve traffic on an unprepared machine.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(default=True, description="Master switch for environment probing and the /api/environment report.")
+    require_on_load: bool = Field(
+        default=False,
+        description=(
+            "When true, a *definitively failed* required spec (missing/mismatched) fails Gateway startup. "
+            "Default false: requirements are reported and logged, never blocking — an application that is "
+            "installed but unused today must not be able to keep the whole service down."
+        ),
+    )
+    probe_timeout_seconds: float = Field(default=5.0, gt=0, le=600, description="Wall-clock cap for one version command.")
+    cache_seconds: float = Field(default=5.0, ge=0, le=3600, description="How long a probe answer is reused (0 disables the cache).")
+
+
 class AppDefinition(BaseModel):
     """How one local application is detected and driven.
 
@@ -145,11 +173,27 @@ class AppDefinition(BaseModel):
     spawn_on_launch: bool = Field(default=False, description="When true the cli driver starts the command as a long-lived background process on launch; when false launch just opens an attach-style session.")
     # -- shared --
     script_args: list[str] = Field(default_factory=list, description="Arguments inserted after `args` and before any per-call script/args.")
-    version_command: str | None = Field(default=None, description="Optional command whose output names the detected version.")
+    version_command: str | None = Field(
+        default=None,
+        description=(
+            "Optional token that asks this application for its own version (N11). Passed in the same argv position "
+            "as a run_script script (and as presence_command), so no shell quoting rules are invented here; the "
+            "first version-like token in the output becomes the application's detected version."
+        ),
+    )
     endpoint: str | None = Field(default=None, description="Base URL for HTTP-driven applications (reserved for future drivers).")
     artifact_globs: list[str] = Field(default_factory=list, description="Glob patterns (relative to working_dir) that collect() returns.")
     timeout_seconds: int = Field(default=600, ge=1, description="Default per-operation timeout in seconds.")
     exclusive: bool = Field(default=True, description="When true a second launch of the same app reattaches to the existing session (single-instance apps).")
+    # -- N11 environment requirements --
+    requires: list[RequirementSpec] = Field(
+        default_factory=list,
+        description=(
+            "Declared environment requirements for this application (N11): executables, versions, paths, language "
+            "runtimes, and plugins that must be present. Probed and reported; only a definitively failed required "
+            "spec can block startup, and only under apps.environment.require_on_load."
+        ),
+    )
     # -- N10b human/machine sharing --
     presence_command: str | None = Field(
         default=None,
@@ -204,6 +248,8 @@ class AppsConfig(BaseModel):
     definitions: dict[str, AppDefinition] = Field(default_factory=dict, description="Application name → definition.")
     persist_sessions: bool = Field(default=True, description="Persist instance records to the SQL database when one is configured (ignored on the in-memory backend).")
     session_retention_days: int = Field(default=30, ge=1, le=3650, description="Retention window for archived/stopped/orphaned instance records swept by the cleanup endpoint.")
+    # -- N11 environment probing --
+    environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig, description="Environment-probing knobs (N11).")
     # -- N8 resource governance --
     resources: ResourceLimits = Field(default_factory=ResourceLimits, description="Global host capacity caps for local applications (N8). Omit a dimension = unlimited.")
     licenses: dict[str, LicenseGroup] = Field(default_factory=dict, description="License group → concurrent slot count (N8).")
@@ -288,6 +334,7 @@ __all__ = [
     "AppResourceDemand",
     "AppDefinition",
     "AppsConfig",
+    "EnvironmentConfig",
     "HumanConflictPolicy",
     "LicenseGroup",
     "RESOURCE_DIMENSIONS",

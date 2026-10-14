@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 from deerflow.config.runtime_paths import runtime_home
@@ -99,6 +100,89 @@ def join_host_path(base: str, *parts: str) -> str:
     return _join_host_path(base, *parts)
 
 
+# ── N11 data-directory model ─────────────────────────────────────────────────
+
+#: Whose data a directory holds.
+SCOPE_GLOBAL = "global"
+SCOPE_PER_USER = "per-user"
+
+DATA_DIR_SCOPES: frozenset[str] = frozenset({SCOPE_GLOBAL, SCOPE_PER_USER})
+
+
+@dataclass(frozen=True)
+class DataDir:
+    """One directory in the single-machine data layout (N11, plan §22).
+
+    ``required`` means "this application must be able to use it" — it drives
+    :meth:`Paths.ensure_data_dirs`, so an optional directory is never created
+    speculatively.  ``purpose`` is a human sentence, because the point of the
+    layout is that an operator can read it and know what a directory is for.
+    """
+
+    name: str
+    path: Path
+    purpose: str = ""
+    scope: str = SCOPE_GLOBAL
+    required: bool = True
+
+    def __post_init__(self) -> None:
+        if self.scope not in DATA_DIR_SCOPES:
+            raise ValueError(f"unknown data-dir scope {self.scope!r}; expected one of {sorted(DATA_DIR_SCOPES)}")
+
+    def to_dict(self) -> dict[str, object]:
+        return {"name": self.name, "path": str(self.path), "purpose": self.purpose, "scope": self.scope, "required": self.required}
+
+
+@dataclass(frozen=True)
+class DataDirStatus:
+    """What :meth:`Paths.check_data_dirs` observed about one directory.
+
+    ``writable`` is three-valued: ``True``/``False`` are answers, ``None`` means
+    the directory does not exist (or could not be judged), which is not the same
+    as "not writable".
+    """
+
+    name: str
+    path: Path
+    purpose: str = ""
+    scope: str = SCOPE_GLOBAL
+    required: bool = True
+    exists: bool = False
+    writable: bool | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether this directory is usable as it stands."""
+        return self.exists and self.writable is not False
+
+    @property
+    def problem(self) -> str:
+        """Empty when fine; otherwise the shortest honest description."""
+        if not self.exists:
+            return "does not exist"
+        if self.writable is False:
+            return "not writable"
+        return ""
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "path": str(self.path),
+            "purpose": self.purpose,
+            "scope": self.scope,
+            "required": self.required,
+            "exists": self.exists,
+            "writable": self.writable,
+            "ok": self.ok,
+            "problem": self.problem,
+        }
+
+
+def missing_required_data_dirs(statuses: list[DataDirStatus]) -> list[DataDirStatus]:
+    """The required directories that are unusable — what a startup gate keys on."""
+    return [status for status in statuses if status.required and not status.ok]
+
+
 class Paths:
     """
     Centralized path configuration for DeerFlow application data.
@@ -123,6 +207,14 @@ class Paths:
         1. Constructor argument `base_dir`
         2. DEER_FLOW_HOME environment variable
         3. Caller project fallback: `{project_root}/.deer-flow`
+
+    Single-machine data layout (N11, dev plan §22): :meth:`data_dirs` is the
+    canonical, ordered list of the host directories this layout owns, with what
+    each one is for.  §22 names four kinds of data (definitions / checkpoints /
+    assets / app sessions); in this build three of them are **rows in the SQL
+    database**, not directories — the mapping is stated in
+    :meth:`data_dirs`'s docstring so an operator backing up a machine knows
+    exactly which paths plus which database file constitute a complete copy.
     """
 
     def __init__(self, base_dir: str | Path | None = None) -> None:
@@ -416,6 +508,172 @@ class Paths:
         thread_dir = self.thread_dir(thread_id, user_id=user_id)
         if thread_dir.exists():
             shutil.rmtree(thread_dir)
+
+    # ── N11 data-directory convention ────────────────────────────────────────
+
+    def data_dirs(
+        self,
+        *,
+        memory_enabled: bool = True,
+        database_dir: str | Path | None = None,
+    ) -> list[DataDir]:
+        """The canonical single-machine data layout (N11, plan §22).
+
+        Returns the ordered list of host directories this layout owns, each with
+        what it is for.  The list is the **specification**: the paths themselves
+        are the existing :class:`Paths` accessors, unchanged — this method only
+        names them in one place so a report, a startup check and (in N11b) a
+        backup can agree on what "the data directory" means.
+
+        Where §22's four kinds of data actually live in this build:
+
+        - **definitions** → ``workflow_definitions`` rows in the SQL database.
+        - **checkpoints** → LangGraph checkpoint tables in the same database.
+        - **assets** → operator-owned paths listed in ``assets.roots`` (never
+          DeerFlow's own directory; an empty allow-list means no host assets).
+        - **app sessions** → ``app_instances`` rows in the same database, plus
+          the live in-process instances.
+
+        so ``database`` (when a file-backed SQLite is configured) is part of the
+        answer even though it is not a subdirectory of ``base_dir``.
+
+        ``required`` is derived from the caller's configuration rather than
+        hard-coded: with memory disabled the derived retrieval index is not part
+        of the layout, and with no file database there is no database directory.
+        ``threads`` is the legacy pre-user-isolation layout and is never created
+        by this application, so it is listed but not required.
+        """
+
+        base = self.base_dir
+        dirs = [
+            DataDir(
+                name="base",
+                path=base,
+                purpose="Application data root (DEER_FLOW_HOME); holds memory.json, USER.md and the directories below.",
+                required=True,
+            ),
+            DataDir(
+                name="users",
+                path=base / "users",
+                purpose="Per-user isolation buckets: {user_id}/threads/{thread_id}/user-data/{workspace,uploads,outputs}, agents/, skills/, integrations/.",
+                scope=SCOPE_PER_USER,
+                required=True,
+            ),
+            DataDir(
+                name="skills_view",
+                path=self.skills_view_dir,
+                purpose="Enabled-only skill projections that sandboxes bind-mount (public + per-user custom/legacy/integrations).",
+                required=True,
+            ),
+            DataDir(
+                name="integrations",
+                path=self.integration_skills_dir(),
+                purpose="Globally installed managed integration skill packages (read-only; credentials stay per-user).",
+                required=True,
+            ),
+            DataDir(
+                name="locks",
+                path=base / "locks",
+                purpose="Cross-process file locks (N8 resource_lock / acquire_many).",
+                required=True,
+            ),
+            DataDir(
+                name="undo",
+                path=base / "undo",
+                purpose="N10 compensation backups ({run_id}/{node_id}/) — engine-private recovery material, deliberately outside assets.roots.",
+                required=True,
+            ),
+        ]
+
+        if memory_enabled:
+            dirs.append(
+                DataDir(
+                    name="retrieval",
+                    path=base / ".retrieval",
+                    purpose="Derived memory retrieval index (rebuildable; safe to delete).",
+                    required=False,
+                )
+            )
+
+        if database_dir is not None:
+            dirs.append(
+                DataDir(
+                    name="database",
+                    path=Path(database_dir),
+                    purpose="SQLite database directory: workflow definitions, checkpoints, app instances, runs, human tasks and undo records all live in <dir>/deerflow.db.",
+                    required=True,
+                )
+            )
+
+        dirs.append(
+            DataDir(
+                name="threads",
+                path=base / "threads",
+                purpose="Legacy (pre user-isolation) thread directories. Listed for completeness; never created or repaired here.",
+                required=False,
+            )
+        )
+        return dirs
+
+    def check_data_dirs(
+        self,
+        *,
+        memory_enabled: bool = True,
+        database_dir: str | Path | None = None,
+    ) -> list[DataDirStatus]:
+        """Report existence and writability for every layout directory.
+
+        **Read-only**: nothing is created and nothing is touched.  A missing
+        directory is reported as such; ``writable`` is ``None`` for a missing
+        directory (we cannot judge a directory that is not there) and never a
+        guess.
+        """
+        statuses: list[DataDirStatus] = []
+        for entry in self.data_dirs(memory_enabled=memory_enabled, database_dir=database_dir):
+            try:
+                exists = entry.path.is_dir()
+            except OSError:
+                exists = False
+            writable: bool | None = None
+            if exists:
+                try:
+                    writable = os.access(entry.path, os.W_OK)
+                except OSError:
+                    writable = None
+            statuses.append(
+                DataDirStatus(
+                    name=entry.name,
+                    path=entry.path,
+                    purpose=entry.purpose,
+                    scope=entry.scope,
+                    required=entry.required,
+                    exists=exists,
+                    writable=writable,
+                )
+            )
+        return statuses
+
+    def ensure_data_dirs(
+        self,
+        *,
+        memory_enabled: bool = True,
+        database_dir: str | Path | None = None,
+    ) -> list[Path]:
+        """Create the **required** layout directories; idempotent.
+
+        Only directories this application owns are created, and only the required
+        ones — a non-required entry (the derived retrieval index, the legacy
+        threads root) is left alone so a fresh install does not sprout directories
+        that nothing is going to use.  Failures propagate: a data root that cannot
+        be created is a real startup problem, not a warning.
+        """
+        created: list[Path] = []
+        for entry in self.data_dirs(memory_enabled=memory_enabled, database_dir=database_dir):
+            if not entry.required:
+                continue
+            entry.path.mkdir(parents=True, exist_ok=True)
+            created.append(entry.path)
+        return created
 
     def resolve_virtual_path(self, thread_id: str, virtual_path: str, *, user_id: str | None = None) -> Path:
         """Resolve a sandbox virtual path to the actual host filesystem path.

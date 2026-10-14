@@ -2,6 +2,7 @@ import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,7 @@ from app.gateway.routers import (
     assistants_compat,
     browser,
     console,
+    environment,
     features,
     human_task_routes,
     mcp,
@@ -70,6 +72,72 @@ async def _warm_memory_retrieval(manager) -> None:
         logger.warning("Memory retrieval index rebuild skipped", exc_info=True)
 
 
+def _database_dir(config: AppConfig) -> str | None:
+    """The SQLite directory, or ``None`` when the backend keeps no database file."""
+    database = getattr(config, "database", None)
+    if database is None or getattr(database, "backend", None) != "sqlite":
+        return None
+    try:
+        return str(Path(database.sqlite_path).parent)
+    except Exception:  # pragma: no cover - defensive; a bad DB path must not break startup
+        return None
+
+
+def _bootstrap_environment(config: AppConfig) -> None:
+    """Ensure the N11 data layout and report the environment once (blocking).
+
+    Runs on a worker thread from the lifespan.  Directory creation is fatal on
+    failure (the application owns those paths); requirement probing never is,
+    unless the operator opted into ``apps.environment.require_on_load``.
+
+    Sections are read defensively: this hook is a *diagnostic*, and a diagnostic
+    must not be able to keep the Gateway from starting.  A minimal or partial
+    configuration therefore probes with ``EnvironmentConfig`` defaults instead of
+    raising; a real ``AppConfig`` always carries the section.
+    """
+    from deerflow.apps.registry import AppRegistry
+    from deerflow.config.apps_config import EnvironmentConfig
+    from deerflow.config.paths import get_paths
+    from deerflow.environment.report import build_environment_report
+    from deerflow.environment.requirements import validate_environment
+
+    apps_config = getattr(config, "apps", None)
+    environment_config = getattr(apps_config, "environment", None) or EnvironmentConfig()
+    memory_enabled = bool(getattr(getattr(config, "memory", None), "enabled", True))
+    paths = get_paths()
+    created = paths.ensure_data_dirs(memory_enabled=memory_enabled, database_dir=_database_dir(config))
+    logger.debug("Ensured %d data director(ies)", len(created))
+
+    if not environment_config.enabled:
+        logger.debug("Environment probing disabled (apps.environment.enabled=false)")
+        return
+
+    requirement_status = validate_environment(
+        registry=AppRegistry.from_config(apps_config) if apps_config is not None else None,
+        skills=None,
+        enabled=True,
+        timeout=environment_config.probe_timeout_seconds,
+        cache_seconds=environment_config.cache_seconds,
+        require_on_load=environment_config.require_on_load,
+    )
+    report = build_environment_report(
+        enabled=True,
+        requirement_status=requirement_status,
+        data_dir_statuses=paths.check_data_dirs(memory_enabled=memory_enabled, database_dir=_database_dir(config)),
+        require_on_load=environment_config.require_on_load,
+    )
+
+    problems = report.blocking_problems
+    if report.overall != "ok":
+        for problem in problems:
+            logger.warning("Environment problem: %s", problem)
+        if report.overall == "degraded":
+            logger.info("Environment report: some requirements are unresolved (unknown) but nothing required is broken")
+
+    if environment_config.require_on_load and problems:
+        raise RuntimeError("Environment requirements failed and apps.environment.require_on_load is set: " + "; ".join(problems))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
@@ -98,6 +166,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     public_projection_ready = await asyncio.to_thread(ensure_public_skill_projection, app_config=startup_config)
     if public_projection_ready:
         logger.info("Ensured the public skill projection; user projections repair lazily on sandbox acquire")
+
+    # N11 (§22): ensure the canonical data-directory layout exists and report the
+    # environment once.  Probing is read-only and best-effort, so a failing
+    # requirement is normally a diagnostic, not a failure — but
+    # `apps.environment.require_on_load` upgrades a definitively failed required
+    # item into a refusal to serve, for deployments that must not start on an
+    # unprepared machine.  A directory that cannot be created is always fatal:
+    # the application owns those paths and cannot work correctly without them.
+    await asyncio.to_thread(_bootstrap_environment, startup_config)
 
     # Agent observability (Monocle). Off by default; enabled with
     # MONOCLE_TRACING. Initialized here at startup — not at import time — so a
@@ -478,6 +555,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Features API is mounted at /api/features
     app.include_router(features.router)
     app.include_router(apps.router)
+
+    # Environment report (N11) is mounted at /api/environment
+    app.include_router(environment.router)
 
     # Console API (cross-thread observability) is mounted at /api/console
     app.include_router(console.router)

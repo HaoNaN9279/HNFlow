@@ -4,6 +4,9 @@ import re as _stdlib_re
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
+
+from deerflow.environment.spec import RequirementSpec
 
 from .types import SKILL_MD_FILE, DependencySpec, GroupManifest, SecretRequirement, Skill, SkillCategory
 from .versions import parse_version
@@ -167,6 +170,41 @@ def parse_dependencies(raw: object, skill_file: Path) -> tuple[DependencySpec, .
     return tuple(deps)
 
 
+def parse_requirements(raw: object, skill_file: Path) -> tuple[RequirementSpec, ...]:
+    """Parse the optional ``requires`` frontmatter field (N11, plan §22).
+
+    A capability group can only run where the software it drives exists, so a
+    skill package declares what it needs in the same shape an application
+    definition does (``deerflow.environment.spec.RequirementSpec``).  The field is
+    a list of mappings::
+
+        requires:
+          - { kind: version, name: blender, command: [blender, "--version"], expect: ">=4.0" }
+          - { kind: plugin, name: "addons/my-addon", optional: true }
+
+    Malformed entries are dropped with a warning instead of failing the whole
+    skill, mirroring :func:`parse_required_secrets`: a typo in an optional
+    declaration must not make an otherwise-installable package unloadable, and the
+    report still shows what was actually declared.  A missing field yields ``()``.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        logger.warning("Ignoring non-list requires in %s: %r", skill_file, raw)
+        return ()
+
+    requirements: list[RequirementSpec] = []
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            logger.warning("Ignoring requires[%d] in %s: not a mapping", index, skill_file)
+            continue
+        try:
+            requirements.append(RequirementSpec.model_validate(item))
+        except ValidationError as exc:
+            logger.warning("Ignoring malformed requires[%d] in %s: %s", index, skill_file, exc)
+    return tuple(requirements)
+
+
 def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: Path | None = None) -> Skill | None:
     """Parse a SKILL.md file and extract metadata.
 
@@ -266,6 +304,9 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             logger.error("Invalid dependencies in %s: %s", skill_file, exc)
             return None
 
+        # --- environment requirements (N11) ---
+        requirements = parse_requirements(metadata.get("requires"), skill_file)
+
         return Skill(
             name=name,
             description=description,
@@ -282,6 +323,7 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             compatibility=compatibility,
             skill_id=skill_id,
             dependencies=dependencies,
+            requirements=requirements,
         )
 
     except Exception:

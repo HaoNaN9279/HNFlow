@@ -27,14 +27,14 @@ def test_features_reports_agents_api_enabled() -> None:
     with TestClient(_app_with_config(agents_api_enabled=True)) as client:
         response = client.get("/api/features")
     assert response.status_code == 200
-    assert response.json() == {"agents_api": {"enabled": True}, "browser_control": {"enabled": False}, "apps": {"enabled": False}}
+    assert response.json() == {"agents_api": {"enabled": True}, "browser_control": {"enabled": False}, "apps": {"enabled": False}, "environment": {"enabled": True}}
 
 
 def test_features_reports_agents_api_disabled() -> None:
     with TestClient(_app_with_config(agents_api_enabled=False)) as client:
         response = client.get("/api/features")
     assert response.status_code == 200
-    assert response.json() == {"agents_api": {"enabled": False}, "browser_control": {"enabled": False}, "apps": {"enabled": False}}
+    assert response.json() == {"agents_api": {"enabled": False}, "browser_control": {"enabled": False}, "apps": {"enabled": False}, "environment": {"enabled": True}}
 
 
 def test_features_reports_browser_control_enabled_when_configured_and_runtime_available() -> None:
@@ -55,6 +55,30 @@ def test_features_reports_browser_control_disabled_when_runtime_missing() -> Non
         response = client.get("/api/features")
     assert response.status_code == 200
     assert response.json()["browser_control"] == {"enabled": False}
+
+
+def test_features_reports_environment_toggle() -> None:
+    """N11: the report endpoint is advertised, and honours apps.environment.enabled."""
+    app = FastAPI()
+    app.include_router(features.router)
+    fake_config = SimpleNamespace(
+        agents_api=SimpleNamespace(enabled=False),
+        apps=SimpleNamespace(enabled=True, environment=SimpleNamespace(enabled=False)),
+        tools=[],
+    )
+    app.dependency_overrides[get_config] = lambda: fake_config
+    with TestClient(app) as client:
+        response = client.get("/api/features")
+    assert response.status_code == 200
+    assert response.json()["environment"] == {"enabled": False}
+
+
+def test_features_tolerates_a_config_without_the_apps_environment_section() -> None:
+    """A read-only availability probe must not 500 over a missing section."""
+    with TestClient(_app_with_config(agents_api_enabled=True)) as client:
+        response = client.get("/api/features")
+    assert response.status_code == 200
+    assert response.json()["environment"] == {"enabled": True}
 
 
 def test_features_reports_browser_control_disabled_for_unguarded_cdp() -> None:

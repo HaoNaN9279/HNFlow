@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 39
+config_version: 40
 
 # ============================================================================
 # Logging
@@ -2091,6 +2091,24 @@ apps:
   #
   # on_human_conflict: fail
   #
+  # --- N11: environment probing (what this machine must have) ---
+  # Probing is READ-ONLY: it answers "is this here, and which version" and never
+  # installs, downloads, or edits the environment. Requirements are declared per
+  # application (`definitions.<name>.requires` below) and per skill package
+  # (SKILL.md frontmatter `requires:`), then reported by GET /api/environment and
+  # `python -m deerflow.environment`. Outcomes are three-valued plus "unknown":
+  # ok / missing / mismatch, and unknown (the probe could not answer) counts as
+  # neither a pass nor a failure.
+  #
+  # environment:
+  #   enabled: true            # report + startup diagnostics
+  #   require_on_load: false   # true = a definitively failed REQUIRED spec fails
+  #                            # Gateway startup (default: report only, never block,
+  #                            # so an installed-but-unused app cannot keep the
+  #                            # service down)
+  #   probe_timeout_seconds: 5  # wall-clock cap for one version command
+  #   cache_seconds: 5          # reuse a probe answer this long (0 disables)
+  #
   # Each definition may declare what it occupies while it runs. An app whose
   # `resources` block is omitted is not governed at all:
   #
@@ -2108,6 +2126,20 @@ apps:
   #     # N10b: opt in to being taken over from a person (only used when
   #     # on_human_conflict is preempt). Default false.
   #     allow_preempt: false
+  #     # N11: what this application needs from the machine. `command` is an argv
+  #     # list (never a shell string), and `expect` is a version constraint:
+  #     #   >=4.0,<5   >=4   ^4.2 (same major)   ~4.2 (same minor)   * (any)
+  #     # Omitted `command` for version/runtime means [name, "--version"].
+  #     requires:
+  #       - { kind: version, name: blender, command: [blender, "--version"], expect: ">=4.0" }
+  #       - { kind: plugin, name: "addons/my-addon" }   # relative to working_dir
+  #       - { kind: path, name: "$SHOT_TEMPLATE_DIR" }   # $VARS allowed
+  #       - { kind: runtime, name: python, expect: "^3.11" }
+  #
+  # `version_command` asks the application for its own version, in the same argv
+  # position as presence_command; the first version-like token is reported as the
+  # app's detected version:
+  #     version_command: "--version"
   definitions: {}
 
 # ============================================================================
