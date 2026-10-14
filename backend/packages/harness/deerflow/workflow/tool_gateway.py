@@ -186,13 +186,19 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
 
             from deerflow.apps.persistence import record_launch, record_operation
             from deerflow.apps.session import get_session_manager
+            from deerflow.resources.governor import ResourceUnavailableError
 
             manager = get_session_manager()
-            session = await asyncio.to_thread(manager.launch, app_name)
-            await record_launch(instance_repo, session, user_id=owner)
-            result = await asyncio.to_thread(manager.run_script, session, script=script or None, args=list(args or []))
-            await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"scripts_run": 1})
-            artifacts = await asyncio.to_thread(manager.collect, session)
+            try:
+                session = await asyncio.to_thread(manager.launch, app_name)
+                await record_launch(instance_repo, session, user_id=owner)
+                result = await asyncio.to_thread(manager.run_script, session, script=script or None, args=list(args or []))
+                await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"scripts_run": 1})
+                artifacts = await asyncio.to_thread(manager.collect, session)
+            except ResourceUnavailableError as exc:
+                # N8: report the blocking quota/license as data, so the calling
+                # agent can wait and retry instead of seeing an opaque error.
+                return json.dumps({"app": app_name, "status": "resource_unavailable", "error": str(exc)}, ensure_ascii=False)
             await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"artifacts": len(artifacts)})
             return json.dumps(
                 {

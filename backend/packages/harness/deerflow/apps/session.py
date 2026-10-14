@@ -4,6 +4,11 @@ Owns the process-local map of live :class:`AppSession` instances and routes
 operations to the driver declared by the application definition.  Slice 1
 keeps sessions **in memory** (plan decision 4): durable instance records and
 recovery are N6's job, so no half-persisted state exists here.
+N8 adds **admission control**: the manager is the single choke point every
+application operation passes through (``app:*`` executors and the tool
+gateway's ``app`` provider both call it), so the declared GPU/CPU/memory/disk
+demand and license slots are enforced here — an instance holds its license slot
+for life, an operation holds its numeric demand for its duration.
 
 A session is exposed on a workflow port as a plain JSON dict
 (:meth:`AppSession.to_port`) so it flows through the existing ``data`` port
@@ -16,11 +21,12 @@ import logging
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from deerflow.apps.driver import AppDriver, AppDriverError, DriverLaunch, DriverScriptResult, DriverWaitResult
 from deerflow.apps.registry import AppRegistry, get_app_registry
+from deerflow.resources.governor import ResourceDemand, ResourceGovernor, ResourceLease
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +68,15 @@ class AppSession:
     created_at: float = 0.0
     last_active: float = 0.0
     artifacts: list[str] = field(default_factory=list)
+    #: How many operations on this instance ran against an oversubscribed
+    #: quota (N8 ``on_conflict: degrade``). Process-local observation only —
+    #: deliberately *not* part of the ``to_port`` contract.
+    degraded_operations: int = 0
+    #: Whether the most recent ``launch`` call itself was admitted by degrading
+    #: (N8). Reset on every launch, including the attach path. Not serialized.
+    launch_degraded: bool = False
+    #: The license slot held for this instance's life (N8). Never serialized.
+    resource_lease: ResourceLease | None = field(default=None, repr=False, compare=False)
 
     def to_port(self) -> dict[str, Any]:
         """Serialize to a JSON-safe dict for the ``session`` workflow port."""
@@ -104,11 +119,17 @@ class AppSession:
 class AppSessionManager:
     """Process-local application instance/session manager."""
 
-    def __init__(self, registry: AppRegistry | None = None) -> None:
+    def __init__(self, registry: AppRegistry | None = None, *, governor: ResourceGovernor | None = None) -> None:
         self._registry = registry if registry is not None else get_app_registry()
+        self._governor = governor
         self._sessions: dict[str, AppSession] = {}
         self._drivers: dict[str, AppDriver] = {}
         self._lock = threading.Lock()
+
+    @property
+    def governor(self) -> ResourceGovernor | None:
+        """The admission gate this manager enforces (``None`` = ungoverned)."""
+        return self._governor
 
     # -- registry helpers --
 
@@ -144,6 +165,8 @@ class AppSessionManager:
 
         For an ``exclusive`` app, an existing live session is reused and its
         status reported as ``attached`` rather than leaking a second instance.
+        Reattaching does **not** take a second license slot (the live instance
+        already holds one); creating a new instance does.
         """
         definition = self._require_definition(app_name)
         if definition.exclusive and mode != "attach":
@@ -151,10 +174,18 @@ class AppSessionManager:
             if existing is not None:
                 existing.status = "attached"
                 existing.last_active = time.time()
+                existing.launch_degraded = False
                 return existing
 
-        driver = self._driver_for(app_name)
-        launch: DriverLaunch = driver.launch(definition, mode=mode)
+        # N8: the license slot is held for the instance's whole life.
+        lease = self._acquire_license(definition)
+        try:
+            driver = self._driver_for(app_name)
+            launch: DriverLaunch = driver.launch(definition, mode=mode)
+        except BaseException:
+            self._governor_release(lease)
+            raise
+
         now = time.time()
         session = AppSession(
             session_id=f"app-{uuid.uuid4().hex}",
@@ -167,10 +198,45 @@ class AppSessionManager:
             exclusive=definition.exclusive,
             created_at=now,
             last_active=now,
+            degraded_operations=1 if lease is not None and lease.degraded else 0,
+            launch_degraded=bool(lease is not None and lease.degraded),
+            resource_lease=lease if lease is not None and lease.reserved else None,
         )
         with self._lock:
             self._sessions[session.session_id] = session
         return session
+
+    # -- N8 admission helpers --
+
+    def _acquire_license(self, definition: Any) -> ResourceLease | None:
+        """Take the definition's license slot, if it declares one."""
+        if self._governor is None:
+            return None
+        license_name = getattr(getattr(definition, "resources", None), "license", None)
+        if not license_name:
+            return None
+        return self._governor.acquire(ResourceDemand(license=license_name))
+
+    def _acquire_operation(self, definition: Any, session: AppSession) -> ResourceLease | None:
+        """Take the definition's numeric demand for one operation.
+
+        The license is deliberately excluded: it is held by the instance, not
+        by each operation.
+        """
+        if self._governor is None:
+            return None
+        demand = ResourceDemand.from_declaration(getattr(definition, "resources", None))
+        numeric = replace(demand, license=None)
+        if numeric.total() == 0:
+            return None
+        lease = self._governor.acquire(numeric)
+        if lease.degraded:
+            session.degraded_operations += 1
+        return lease
+
+    def _governor_release(self, lease: ResourceLease | None) -> None:
+        if lease is not None and self._governor is not None:
+            self._governor.release(lease)
 
     def get(self, session_id: str) -> AppSession | None:
         with self._lock:
@@ -221,27 +287,37 @@ class AppSessionManager:
     ) -> DriverScriptResult:
         driver = self._driver_for(session.app_name)
         definition = self._definition_for_session(session)
+        lease = self._acquire_operation(definition, session)
         session.status = "busy"
         try:
             result = driver.run_script(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), script=script, args=list(args or []), env=env)
         finally:
             session.status = "ready"
             session.last_active = time.time()
+            self._governor_release(lease)
         return result
 
     def wait(self, session: AppSession, *, reason: str | None = None, timeout: float | None = None) -> DriverWaitResult:
         driver = self._driver_for(session.app_name)
         definition = self._definition_for_session(session)
-        result = driver.wait(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), reason=reason, timeout=timeout)
-        session.last_active = time.time()
+        lease = self._acquire_operation(definition, session)
+        try:
+            result = driver.wait(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), reason=reason, timeout=timeout)
+        finally:
+            session.last_active = time.time()
+            self._governor_release(lease)
         return result
 
     def collect(self, session: AppSession, *, globs: list[str] | None = None) -> list[str]:
         driver = self._driver_for(session.app_name)
         definition = self._definition_for_session(session)
-        artifacts = driver.collect(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), globs=globs)
+        lease = self._acquire_operation(definition, session)
+        try:
+            artifacts = driver.collect(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), globs=globs)
+        finally:
+            session.last_active = time.time()
+            self._governor_release(lease)
         session.artifacts = list(artifacts)
-        session.last_active = time.time()
         return artifacts
 
     def health(self, session: AppSession) -> bool:
@@ -266,6 +342,10 @@ class AppSessionManager:
             driver.close(definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle))
         except Exception:  # noqa: BLE001 - best-effort teardown
             logger.warning("app session %s: driver close failed", session_id, exc_info=True)
+        finally:
+            # N8: the instance is gone, so its license slot goes back.
+            self._governor_release(session.resource_lease)
+            session.resource_lease = None
         session.status = "stopped"
         return True
 
@@ -282,12 +362,25 @@ _default_lock = threading.Lock()
 
 
 def get_session_manager() -> AppSessionManager:
-    """Return the process-wide session manager (built from current config)."""
+    """Return the process-wide session manager (built from current config).
+
+    The manager is built with the N8 resource governor derived from
+    ``apps.resources`` / ``apps.licenses``.  A configuration that declares
+    neither makes the governor a no-op, so an untouched deployment behaves
+    exactly as it did before N8.
+    """
     global _default_manager
     with _default_lock:
         if _default_manager is None:
-            _default_manager = AppSessionManager()
+            _default_manager = AppSessionManager(governor=build_governor_from_config())
         return _default_manager
+
+
+def build_governor_from_config() -> ResourceGovernor:
+    """Build the N8 governor from the loaded ``apps`` configuration."""
+    from deerflow.config.apps_config import get_apps_config
+
+    return ResourceGovernor.from_apps_config(get_apps_config())
 
 
 def reset_session_manager() -> None:
@@ -307,6 +400,7 @@ __all__ = [
     "AppSessionNotFoundError",
     "AppSession",
     "AppSessionManager",
+    "build_governor_from_config",
     "get_session_manager",
     "reset_session_manager",
 ]

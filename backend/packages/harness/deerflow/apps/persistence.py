@@ -34,8 +34,13 @@ class AppInstanceStore(Protocol):
     async def set_status(self, session_id: str, **kwargs: Any) -> dict[str, Any] | None: ...
 
 
-async def record_launch(repo: AppInstanceStore | None, session: AppSession, *, user_id: str) -> None:
-    """Write an instance record for a freshly launched/attached session."""
+async def record_launch(repo: AppInstanceStore | None, session: AppSession, *, user_id: str, resource_deltas: dict[str, Any] | None = None) -> None:
+    """Write an instance record for a freshly launched/attached session.
+
+    ``resource_deltas`` seeds the durable counters for the launch itself (N8
+    records a ``degraded`` launch here, since a degraded license slot has no
+    later operation to attribute it to).
+    """
     if repo is None:
         return
     try:
@@ -50,6 +55,7 @@ async def record_launch(repo: AppInstanceStore | None, session: AppSession, *, u
             handle=dict(session.handle),
             exclusive=session.exclusive,
             created_at=session.created_at or None,
+            resources=dict(resource_deltas or {}),
         )
     except Exception:  # noqa: BLE001 - persistence must never fail the live op
         logger.warning("app instance persist: launch of %s failed", session.session_id, exc_info=True)

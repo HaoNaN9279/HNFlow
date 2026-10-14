@@ -31,6 +31,7 @@ from typing import Any
 
 from deerflow.apps.persistence import record_launch, record_operation
 from deerflow.apps.session import AppError, AppSessionManager, get_session_manager
+from deerflow.resources.governor import ResourceUnavailableError
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUNTIME_CONTEXT_KEY
 from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.workflow.compiler import WorkflowRuntime
@@ -46,6 +47,21 @@ def _require_crash_confirm(params: dict[str, Any], node_label: str) -> None:
     """Raise if ``params.crash_confirm`` is not truthy."""
     if params.get("crash_confirm") is not True:
         raise WorkflowExecutionError(f"{node_label}: node requires crash_confirm=true (non-idempotent execution must be explicitly confirmed)")
+
+
+def _resource_error(node_label: str, exc: ResourceUnavailableError) -> WorkflowExecutionError:
+    """Translate an N8 admission failure into a node failure.
+
+    A queued operation that never fit is a *real* failure: the node reports the
+    blocking dimension (or license group) so the run error is actionable and the
+    scheduler's retry/backoff (N7) can act on it.
+    """
+    return WorkflowExecutionError(f"{node_label}: local resource unavailable: {exc}")
+
+
+def _degraded_delta(before: int, session: Any) -> int:
+    """How many of this node's operations ran against an oversubscribed quota (N8)."""
+    return max(0, int(getattr(session, "degraded_operations", before)) - before)
 
 
 def _context(runtime: WorkflowRuntime) -> dict[str, Any]:
@@ -101,10 +117,13 @@ async def exec_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     manager = _manager(runtime)
     try:
         session = await asyncio.to_thread(manager.launch, app, mode=mode)
+    except ResourceUnavailableError as exc:
+        raise _resource_error("app:launch", exc) from exc
     except AppError as exc:
         raise WorkflowExecutionError(f"app:launch: {exc}") from exc
 
-    await record_launch(_repo(runtime), session, user_id=_user_id(runtime))
+    launch_deltas: dict[str, Any] = {"degraded": 1} if getattr(session, "launch_degraded", False) else {}
+    await record_launch(_repo(runtime), session, user_id=_user_id(runtime), resource_deltas=launch_deltas)
 
     port = session.to_port()
     return {"session": port, "out": port}
@@ -129,13 +148,19 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     try:
         session = manager.resolve(app, inputs.get("session"))
         started = time.monotonic()
+        before = int(getattr(session, "degraded_operations", 0))
         result = await asyncio.to_thread(manager.run_script, session, script=script, args=args, env=env)
+    except ResourceUnavailableError as exc:
+        raise _resource_error("app:script", exc) from exc
     except AppError as exc:
         raise WorkflowExecutionError(f"app:script: {exc}") from exc
 
     deltas: dict[str, Any] = {"scripts_run": 1, "busy_seconds": round(time.monotonic() - started, 3)}
     if result.status == "failed":
         deltas["last_error"] = result.stderr or "script failed"
+    degraded = _degraded_delta(before, session)
+    if degraded:
+        deltas["degraded"] = degraded
     await record_operation(_repo(runtime), session, user_id=_user_id(runtime), status=session.status, resource_deltas=deltas)
 
     return {
@@ -167,16 +192,23 @@ async def exec_app_wait(runtime: WorkflowRuntime, params: dict[str, Any], inputs
     try:
         session = manager.resolve(app, inputs.get("session"))
         started = time.monotonic()
+        before = int(getattr(session, "degraded_operations", 0))
         result = await asyncio.to_thread(manager.wait, session, reason=reason, timeout=timeout)
+    except ResourceUnavailableError as exc:
+        raise _resource_error("app:wait", exc) from exc
     except AppError as exc:
         raise WorkflowExecutionError(f"app:wait: {exc}") from exc
 
+    wait_deltas: dict[str, Any] = {"waits": 1, "busy_seconds": round(time.monotonic() - started, 3)}
+    degraded = _degraded_delta(before, session)
+    if degraded:
+        wait_deltas["degraded"] = degraded
     await record_operation(
         _repo(runtime),
         session,
         user_id=_user_id(runtime),
         status=session.status,
-        resource_deltas={"waits": 1, "busy_seconds": round(time.monotonic() - started, 3)},
+        resource_deltas=wait_deltas,
     )
 
     return {"session": session.to_port(), "out": {"status": result.status, "detail": result.detail}}
@@ -199,16 +231,23 @@ async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inp
     manager = _manager(runtime)
     try:
         session = manager.resolve(app, inputs.get("session"))
+        before = int(getattr(session, "degraded_operations", 0))
         artifacts = await asyncio.to_thread(manager.collect, session, globs=globs)
+    except ResourceUnavailableError as exc:
+        raise _resource_error("app:collect", exc) from exc
     except AppError as exc:
         raise WorkflowExecutionError(f"app:collect: {exc}") from exc
 
+    collect_deltas: dict[str, Any] = {"artifacts": len(artifacts)}
+    degraded = _degraded_delta(before, session)
+    if degraded:
+        collect_deltas["degraded"] = degraded
     await record_operation(
         _repo(runtime),
         session,
         user_id=_user_id(runtime),
         status=session.status,
-        resource_deltas={"artifacts": len(artifacts)},
+        resource_deltas=collect_deltas,
     )
 
     return {"session": session.to_port(), "out": artifacts[0] if artifacts else None, "artifacts": artifacts}

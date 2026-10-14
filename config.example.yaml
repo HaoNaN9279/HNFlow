@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 36
+config_version: 37
 
 # ============================================================================
 # Logging
@@ -2052,6 +2052,41 @@ apps:
   enabled: false
   persist_sessions: true
   session_retention_days: 30
+  # --- N8: local resource governance (host-side admission control) ---
+  # Capacity the local-application layer may hand out. Omit a dimension (or set
+  # it to null) to leave it unlimited. Nothing measures real hardware: an
+  # application occupies exactly what its own `resources:` block declares, and
+  # a dimension it does not declare occupies nothing.
+  #
+  # resources:
+  #   gpu: 1
+  #   cpu: 8
+  #   memory_mb: 16384
+  #   disk_mb: 102400
+  #
+  # License pools: applications declaring the same `resources.license` group
+  # share these slots (default 1 = mutually exclusive), so instances under one
+  # license never preempt each other.
+  #
+  # licenses:
+  #   blender_render: { slots: 1 }
+  #
+  # What to do when a declared quota or license is exhausted:
+  #   wait    - queue until it fits (fails after acquire_timeout_seconds) [default]
+  #   fail    - fail the operation immediately
+  #   degrade - proceed anyway and warn (deliberate oversubscription)
+  #
+  # on_conflict: wait
+  # acquire_timeout_seconds: 60
+  #
+  # Each definition may declare what it occupies while it runs. An app whose
+  # `resources` block is omitted is not governed at all:
+  #
+  # definitions:
+  #   blender:
+  #     driver: cli
+  #     command: blender
+  #     resources: { gpu: 1, memory_mb: 4096, license: blender_render }
   definitions: {}
 
 # ============================================================================

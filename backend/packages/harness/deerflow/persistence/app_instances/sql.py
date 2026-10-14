@@ -57,6 +57,7 @@ class AppInstanceRepository:
         handle: dict[str, Any] | None = None,
         exclusive: bool = True,
         created_at: float | None = None,
+        resources: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         created = datetime.fromtimestamp(created_at, tz=UTC) if created_at else now
@@ -70,7 +71,7 @@ class AppInstanceRepository:
             endpoint=endpoint,
             handle=dict(handle or {}),
             exclusive=exclusive,
-            resources={},
+            resources=dict(resources or {}),
             created_at=created,
             last_active=now,
             updated_at=now,

@@ -15,7 +15,7 @@ from deerflow.apps.session import (
     AppSessionManager,
     AppSessionNotFoundError,
 )
-from deerflow.config.apps_config import AppDefinition, AppsConfig
+from deerflow.config.apps_config import AppDefinition, AppResourceDemand, AppsConfig
 
 
 def _registry(tmp_path: Path, *, enabled: bool = True, exclusive: bool = True) -> AppRegistry:
@@ -32,8 +32,27 @@ def test_registry_describe_reports_availability(tmp_path):
     registry = _registry(tmp_path)
     described = registry.describe()
     assert described == [
-        {"name": "demo", "driver": "mock", "description": "demo app", "available": True, "error": None},
+        {
+            "name": "demo",
+            "driver": "mock",
+            "description": "demo app",
+            "available": True,
+            "error": None,
+            "resources": {"gpu": 0, "cpu": 0, "memory_mb": 0, "disk_mb": 0},
+            "license": None,
+        },
     ]
+
+
+def test_registry_describe_includes_declared_resources(tmp_path):
+    config = AppsConfig(
+        enabled=True,
+        definitions={"blender": AppDefinition(driver="mock", description="B", working_dir=str(tmp_path), resources=AppResourceDemand(gpu=1, memory_mb=2048, license="render"))},
+        licenses={"render": {"slots": 1}},
+    )
+    described = AppRegistry.from_config(config).describe()
+    assert described[0]["resources"] == {"gpu": 1, "cpu": 0, "memory_mb": 2048, "disk_mb": 0}
+    assert described[0]["license"] == "render"
 
 
 def test_launch_creates_session_and_exclusive_reuses(tmp_path):

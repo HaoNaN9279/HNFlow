@@ -1,7 +1,9 @@
-"""Local-application registry + instance endpoints (N4/N6).
+"""Local-application registry + instance endpoints (N4/N6/N8).
 
 - ``GET /api/apps`` — the registered applications and whether each driver can
-  operate them.
+  operate them (plus their N8 declared resources/license).
+- ``GET /api/apps/resources`` — the N8 admission state: configured caps,
+  current occupancy, and queue depth (plus license pools).
 - ``GET /api/apps/sessions`` — instance records. On a SQL backend these are the
   durable ``app_instances`` rows (with live status merged in and ``?status=`` /
   ``?include_archived=`` / ``?include_orphaned=`` filters); on the memory
@@ -21,6 +23,7 @@ the read-only list falls back to live sessions.
 """
 
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -43,6 +46,8 @@ class AppInfo(BaseModel):
     description: str = ""
     available: bool = Field(..., description="Whether the declared driver can operate this application")
     error: str | None = Field(default=None, description="Driver construction error, when unavailable")
+    resources: dict = Field(default_factory=dict, description="Declared per-operation demand (N8): gpu/cpu/memory_mb/disk_mb")
+    license: str | None = Field(default=None, description="License group this application belongs to (N8)")
 
 
 class AppsListResponse(BaseModel):
@@ -50,6 +55,18 @@ class AppsListResponse(BaseModel):
 
     enabled: bool
     apps: list[AppInfo]
+
+
+class AppResourcesResponse(BaseModel):
+    """N8 admission state for the local-application layer."""
+
+    enabled: bool = Field(..., description="True when caps or license pools are declared (otherwise every demand is a no-op)")
+    limits: dict = Field(default_factory=dict, description="Configured capacity caps; null = unlimited")
+    in_use: dict = Field(default_factory=dict, description="Currently reserved demand per dimension")
+    waiting: dict = Field(default_factory=dict, description="Queued admissions per dimension")
+    licenses: dict = Field(default_factory=dict, description="License pools: slots / in_use / waiting")
+    on_conflict: str | None = Field(default=None, description="Configured conflict policy: wait | fail | degrade")
+    acquire_timeout_seconds: float | None = Field(default=None, description="How long a queued admission waits before failing")
 
 
 class AppInstanceInfo(BaseModel):
@@ -149,6 +166,28 @@ def _live_by_id(manager: AppSessionManager) -> dict[str, AppSession]:
 async def list_apps(config: AppConfig = Depends(get_config)) -> AppsListResponse:
     registry = AppRegistry.from_config(config.apps)
     return AppsListResponse(enabled=config.apps.enabled, apps=[AppInfo(**entry) for entry in registry.describe()])
+
+
+@router.get(
+    "/resources",
+    response_model=AppResourcesResponse,
+    summary="Get Local Application Resource State",
+    description="Report the N8 admission state: declared caps, current occupancy, queue depth, and license pools.",
+)
+async def get_app_resources() -> AppResourcesResponse:
+    governor = get_session_manager().governor
+    if governor is None or not governor.is_configured:
+        return AppResourcesResponse(enabled=False)
+    snapshot: dict[str, Any] = governor.snapshot()
+    return AppResourcesResponse(
+        enabled=True,
+        limits=snapshot["limits"],
+        in_use=snapshot["in_use"],
+        waiting=snapshot["waiting"],
+        licenses=snapshot["licenses"],
+        on_conflict=snapshot["on_conflict"],
+        acquire_timeout_seconds=snapshot["acquire_timeout_seconds"],
+    )
 
 
 # ── instances ────────────────────────────────────────────────────────────────

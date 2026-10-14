@@ -116,7 +116,17 @@ def test_list_apps_reports_registry(tmp_path: Path):
     assert response.status_code == 200
     body = response.json()
     assert body["enabled"] is True
-    assert body["apps"] == [{"name": "demo", "driver": "mock", "description": "demo", "available": True, "error": None}]
+    assert body["apps"] == [
+        {
+            "name": "demo",
+            "driver": "mock",
+            "description": "demo",
+            "available": True,
+            "error": None,
+            "resources": {"gpu": 0, "cpu": 0, "memory_mb": 0, "disk_mb": 0},
+            "license": None,
+        }
+    ]
 
 
 def test_list_apps_disabled_is_empty():

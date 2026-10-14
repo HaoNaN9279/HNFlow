@@ -51,9 +51,10 @@ class AppRegistry:
     def describe(self) -> list[dict[str, object]]:
         """Serialize the registry for the ``GET /api/apps`` surface.
 
-        Each entry reports whether its driver can operate the definition;
-        driver construction failures are reported as ``available: false``
-        rather than raised (fail-open read).
+        Each entry reports whether its driver can operate the definition and
+        what the definition declares it occupies (N8); driver construction
+        failures are reported as ``available: false`` rather than raised
+        (fail-open read).
         """
         out: list[dict[str, object]] = []
         for name, definition in self.entries():
@@ -70,6 +71,8 @@ class AppRegistry:
                     "description": definition.description,
                     "available": available,
                     "error": error,
+                    "resources": definition.resources.numeric(),
+                    "license": definition.resources.license,
                 }
             )
         return out
