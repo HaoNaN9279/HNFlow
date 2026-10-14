@@ -15,6 +15,7 @@ from pathlib import Path
 from deerflow.apps.driver import (
     DriverLaunch,
     DriverScriptResult,
+    DriverUndoResult,
     DriverWaitResult,
 )
 from deerflow.config.apps_config import AppDefinition
@@ -37,6 +38,15 @@ class MockAppDriver:
     """A no-op driver that records calls as files."""
 
     name = "mock"
+
+    #: N10: the mock *does* implement undo so tests can exercise the native
+    #: compensation path without a real application.  Steps are recorded in the
+    #: instance's handle so a test can assert what was asked for.
+    supports_undo = True
+
+    def undo(self, definition: AppDefinition, launch: DriverLaunch, *, steps: int = 1) -> DriverUndoResult:
+        """Record an undo request (the mock has no real in-app state)."""
+        return DriverUndoResult(status="undone", steps=max(1, int(steps)), detail=f"mock undid {max(1, int(steps))} step(s)")
 
     def available(self, definition: AppDefinition) -> bool:
         return True

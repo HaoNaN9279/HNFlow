@@ -36,8 +36,11 @@ from deerflow.assets.ref import fingerprint_file, make_ref
 from deerflow.resources.governor import ResourceUnavailableError
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUNTIME_CONTEXT_KEY
 from deerflow.runtime.user_context import DEFAULT_USER_ID
+from deerflow.workflow.compensation import record_undo, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.executors import WorkflowExecutionError
+from deerflow.workflow.preview import RECOVERY_APP_UNDO, RECOVERY_NONE, ActionPreview, make_preview
+from deerflow.workflow.undo import UndoKind, UndoStatus
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +138,13 @@ async def exec_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inpu
 
 
 async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
-    """Run an in-app script command against the resolved session."""
+    """Run an in-app script command against the resolved session.
+
+    N10: with ``params.rollback_on_failure`` the node records what it did (for a
+    later run-level undo), and when the script fails it asks the application to
+    undo its own steps.  Applications that declare no undo support are reported
+    as such instead of silently pretending the state was rolled back.
+    """
     _require_crash_confirm(params, "app:script")
     app = _require_app(params, "app:script")
     script = params.get("script")
@@ -147,6 +156,8 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
         raise WorkflowExecutionError("app:script: param 'env' must be a mapping")
 
     manager = _manager(runtime)
+    undo_requested = rollback_requested(params)
+    undo_steps = _undo_steps(params)
     try:
         session = manager.resolve(app, inputs.get("session"))
         started = time.monotonic()
@@ -157,6 +168,9 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     except AppError as exc:
         raise WorkflowExecutionError(f"app:script: {exc}") from exc
 
+    if result.status == "failed" and undo_requested:
+        await _undo_app_script(runtime, manager, session, params=params, steps=undo_steps)
+
     deltas: dict[str, Any] = {"scripts_run": 1, "busy_seconds": round(time.monotonic() - started, 3)}
     if result.status == "failed":
         deltas["last_error"] = result.stderr or "script failed"
@@ -164,6 +178,20 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     if degraded:
         deltas["degraded"] = degraded
     await record_operation(_repo(runtime), session, user_id=_user_id(runtime), status=session.status, resource_deltas=deltas)
+
+    if undo_requested and result.status != "failed":
+        # The action stands, so it stays undoable: record the native undo (or the
+        # absence of one) for a later run-level compensation.
+        supported = manager.supports_undo(app)
+        await record_undo(
+            runtime,
+            node_id=str(params.get("node_id") or ""),
+            kind=UndoKind.APP_UNDO if supported else UndoKind.FILE_BACKUP,
+            session_id=session.session_id,
+            app_steps=undo_steps if supported else None,
+            detail=("application undo available" if supported else f"{app} declares no undo support; in-app state cannot be rolled back"),
+            status=UndoStatus.RECORDED if supported else UndoStatus.SKIPPED,
+        )
 
     return {
         "session": session.to_port(),
@@ -174,6 +202,54 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
             "stderr": result.stderr,
         },
     }
+
+
+def _undo_steps(params: dict[str, Any]) -> int:
+    """How many in-app undo steps compensate this node (default 1)."""
+    raw = params.get("undo_steps", 1)
+    try:
+        steps = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise WorkflowExecutionError("app:script: param 'undo_steps' must be an integer") from exc
+    if steps < 1:
+        raise WorkflowExecutionError("app:script: param 'undo_steps' must be at least 1")
+    return steps
+
+
+async def _undo_app_script(runtime: WorkflowRuntime, manager: AppSessionManager, session: Any, *, params: dict[str, Any], steps: int) -> None:
+    """Compensate a failed in-app script through the application's own undo.
+
+    A driver without undo support leaves the in-app state as it is; the record
+    says so explicitly rather than implying a rollback happened.
+    """
+    node_id = str(params.get("node_id") or "")
+    if not manager.supports_undo(session.app_name):
+        await record_undo(
+            runtime,
+            node_id=node_id,
+            kind=UndoKind.FILE_BACKUP,
+            session_id=session.session_id,
+            detail=f"script failed; {session.app_name} declares no undo support, so in-app state was not rolled back",
+            status=UndoStatus.FAILED,
+        )
+        return
+    try:
+        outcome = await asyncio.to_thread(manager.undo, session, steps=steps)
+    except ResourceUnavailableError as exc:
+        await record_undo(runtime, node_id=node_id, kind=UndoKind.APP_UNDO, session_id=session.session_id, app_steps=steps, detail=f"undo blocked: {exc}", status=UndoStatus.FAILED)
+        return
+    except AppError as exc:
+        await record_undo(runtime, node_id=node_id, kind=UndoKind.APP_UNDO, session_id=session.session_id, app_steps=steps, detail=f"undo failed: {exc}", status=UndoStatus.FAILED)
+        return
+    await record_undo(
+        runtime,
+        node_id=node_id,
+        kind=UndoKind.APP_UNDO,
+        session_id=session.session_id,
+        app_steps=steps,
+        detail=f"rolled back {outcome.steps} step(s) after failure: {outcome.detail}",
+        status=UndoStatus.UNDONE if outcome.status == "undone" else UndoStatus.FAILED,
+    )
 
 
 # ── app:wait ─────────────────────────────────────────────────────────────────
@@ -284,9 +360,80 @@ async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inp
     return {"session": session.to_port(), "out": artifacts[0] if artifacts else None, "artifacts": artifacts, "assets": assets}
 
 
+# ── preview (N10) ────────────────────────────────────────────────────────────
+
+
+def _driver_undo_supported(manager: AppSessionManager, app_name: str) -> bool:
+    """Whether the application's driver can undo in-app steps (N10).
+
+    Delegates to the manager, which probes the live driver registry — so a
+    reloaded definition or a swapped driver cannot leave a stale capability claim
+    behind.  An unknown app or a probe failure answers ``False``: never upgrade
+    the recovery claim on a guess.
+    """
+    try:
+        return bool(manager.supports_undo(app_name))
+    except Exception:  # noqa: BLE001 — an unknown app is simply not undoable
+        return False
+
+
+def preview_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> ActionPreview:
+    """Describe an ``app:launch`` — starting or attaching to an instance."""
+    app = _require_app(params, "app:launch")
+    mode = params.get("mode") or "launch"
+    verb = "Attach to" if mode == "attach" else "Start"
+    return make_preview(
+        params,
+        action="attach_app" if mode == "attach" else "launch_app",
+        summary=f"{verb} a local application instance: {app}",
+        reversible=False,
+        recovery=RECOVERY_NONE,
+        risks=["a started instance keeps running until it is closed (closing it is cleanup, not a rollback)"],
+        required_confirmations=["crash_confirm"],
+    )
+
+
+def preview_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> ActionPreview:
+    """Describe an ``app:script`` — an in-app mutation.
+
+    Recovery is claimed as ``app_undo`` only when the driver actually supports
+    it; otherwise the action is reported as irreversible so the approver is not
+    told a rollback exists when it does not.
+    """
+    app = _require_app(params, "app:script")
+    script = params.get("script")
+    args = _string_list(params.get("args"))
+    manager = _manager(runtime)
+    undoable = _driver_undo_supported(manager, app)
+
+    target = f"script {script!r}" if script else "the application's default action"
+    if args:
+        target = f"{target} with {len(args)} argument(s)"
+    summary = f"Run {target} in {app}"
+
+    if undoable:
+        risks = ["in-app state changes are rolled back through the application's own undo when they fail"]
+        recovery = RECOVERY_APP_UNDO
+    else:
+        risks = [f"{app} declares no undo support, so in-app state changes cannot be rolled back automatically"]
+        recovery = RECOVERY_NONE
+
+    return make_preview(
+        params,
+        action="run_script",
+        summary=summary,
+        reversible=undoable,
+        recovery=recovery,
+        risks=risks,
+        required_confirmations=["crash_confirm"],
+    )
+
+
 __all__ = [
     "exec_app_launch",
     "exec_app_script",
     "exec_app_wait",
     "exec_app_collect",
+    "preview_app_launch",
+    "preview_app_script",
 ]

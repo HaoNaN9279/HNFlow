@@ -1350,6 +1350,7 @@ async def start_workflow_run(
     # injects it into ``config["context"]`` so the ``human:task`` executor can
     # persist pending tasks.
     human_task_repo = getattr(request.app.state, "human_task_repo", None)
+    workflow_undo_repo = getattr(request.app.state, "workflow_undo_repo", None)
 
     disconnect = DisconnectMode.cancel if on_disconnect == "cancel" else DisconnectMode.continue_
 
@@ -1383,6 +1384,7 @@ async def start_workflow_run(
                         definition_resolver=definition_resolver,
                         resume=resume,
                         human_task_repo=human_task_repo,
+                        workflow_undo_repo=workflow_undo_repo,
                         origin_run_id=origin_run_id,
                     )
 

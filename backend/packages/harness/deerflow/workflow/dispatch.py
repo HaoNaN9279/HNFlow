@@ -17,6 +17,7 @@ The Gateway runtime injects a run-singleton bundle into
         "stream_bridge": StreamBridge,
         "run_ctx": RunContext,
         "human_task_repo": HumanTaskRepository | None,   # optional
+        "workflow_undo_repo": WorkflowUndoRepository | None,  # optional (N10)
     }
 
 Every public entry point reads this bundle from the ``ToolRuntime`` context.
@@ -181,6 +182,7 @@ async def start_workflow_run(
 
     run_workflow = deps["run_workflow"]
     human_task_repo = bundle.get("human_task_repo")
+    workflow_undo_repo = bundle.get("workflow_undo_repo")
 
     async def worker() -> None:
         await run_workflow(
@@ -193,6 +195,7 @@ async def start_workflow_run(
             definition_resolver=definition_resolver,
             resume=resume,
             human_task_repo=human_task_repo,
+            workflow_undo_repo=workflow_undo_repo,
             origin_run_id=origin_run_id,
             continue_nodes=continue_nodes,
             origin_thread_id=origin_thread_id,
@@ -403,6 +406,72 @@ async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | Non
     if token_usage is not None:
         summary["token_usage"] = token_usage
     return summary
+
+
+async def undo_workflow_run(run_id: str, *, runtime: Any, dry_run: bool = False) -> dict[str, Any]:
+    """Undo a run's reversible actions, newest first (N10, §21).
+
+    Conversation-side counterpart of ``POST /api/workflows/{id}/runs/{rid}/undo``:
+    both drive :func:`deerflow.workflow.undo_service.execute_run_undo`, so the
+    agent and the canvas undo through the same logic and the same records.
+
+    Returns ``{run_id, dry_run, planned, outcomes}``.  Raises
+    :class:`WorkflowRunNotFoundError` for an unknown run and
+    :class:`WorkflowDispatchUnavailableError` when the bundle has no undo
+    repository (a memory backend has no records to replay).
+    """
+    from deerflow.workflow.undo_service import execute_run_undo, plan_run_undo
+
+    bundle = _require_runtime_bundle(runtime)
+    run_manager = bundle.get("run_manager")
+    if run_manager is None:
+        raise WorkflowDispatchUnavailableError("Workflow runtime bundle has no 'run_manager' — cannot undo workflow runs")
+    repo = bundle.get("workflow_undo_repo")
+    if repo is None:
+        raise WorkflowDispatchUnavailableError("Workflow runtime bundle has no 'workflow_undo_repo' — undo records need a SQL database backend")
+
+    user_id = resolve_runtime_user_id(runtime)
+    record = await run_manager.get(run_id, user_id=user_id)
+    if record is None:
+        raise WorkflowRunNotFoundError(f"Workflow run {run_id} was not found")
+
+    rows = await repo.list_by_run(run_id, user_id=user_id)
+    planned = plan_run_undo(rows)
+    outcomes = await execute_run_undo(
+        planned,
+        repo=repo,
+        user_id=user_id,
+        sandbox_factory=_workflow_thread_sandbox_factory(record.thread_id, user_id),
+        session_manager=_session_manager(),
+        dry_run=dry_run,
+    )
+    return {
+        "run_id": run_id,
+        "dry_run": dry_run,
+        "planned": len(planned),
+        "outcomes": [outcome.to_port() for outcome in outcomes],
+    }
+
+
+def _workflow_thread_sandbox_factory(thread_id: str, user_id: str) -> Any:
+    """Lazy sandbox accessor for the run's thread (host-only undo without one)."""
+
+    def _build() -> Any:
+        from deerflow.sandbox.sandbox_provider import get_sandbox_provider
+
+        provider = get_sandbox_provider()
+        return provider.get(provider.acquire(thread_id, user_id=user_id))
+
+    return _build
+
+
+def _session_manager() -> Any | None:
+    try:
+        from deerflow.apps.session import get_session_manager
+
+        return get_session_manager()
+    except Exception:  # noqa: BLE001 — undo of file targets still works without it
+        return None
 
 
 async def _read_run_token_usage(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:

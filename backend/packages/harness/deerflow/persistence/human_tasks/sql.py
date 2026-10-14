@@ -46,6 +46,7 @@ class HumanTaskRepository:
         user_id: str,
         workflow_run_id: str,
         node_id: str,
+        kind: str = "task",
         description: str = "",
         inputs_snapshot: dict[str, Any] | None = None,
         output_spec: dict[str, Any] | None = None,
@@ -59,6 +60,7 @@ class HumanTaskRepository:
             workflow_run_id=workflow_run_id,
             node_id=node_id,
             status=HumanTaskStatus.PENDING.value,
+            kind=kind,
             description=description,
             inputs_snapshot=dict(inputs_snapshot or {}),
             output_spec=dict(output_spec or {}),
@@ -97,10 +99,12 @@ class HumanTaskRepository:
             row = (await session.execute(stmt)).scalar_one_or_none()
             return self._row_to_dict(row) if row is not None else None
 
-    async def list_by_user(self, user_id: str, *, status: str | None = None) -> list[dict[str, Any]]:
+    async def list_by_user(self, user_id: str, *, status: str | None = None, kind: str | None = None) -> list[dict[str, Any]]:
         stmt = select(HumanTaskRow).where(HumanTaskRow.user_id == user_id)
         if status is not None:
             stmt = stmt.where(HumanTaskRow.status == status)
+        if kind is not None:
+            stmt = stmt.where(HumanTaskRow.kind == kind)
         stmt = stmt.order_by(HumanTaskRow.created_at.desc(), HumanTaskRow.id.desc())
         async with self._sf() as session:
             result = await session.execute(stmt)

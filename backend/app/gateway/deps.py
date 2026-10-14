@@ -431,12 +431,16 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             )
             from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
             from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
+            from deerflow.persistence.workflow_undo import WorkflowUndoRepository
 
             app.state.mcp_task_repo = McpTaskRepository(sf)
             app.state.scheduled_task_repo = ScheduledTaskRepository(sf)
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
             app.state.human_task_repo = HumanTaskRepository(sf)
+            # Durable undo records (N10): what each irreversible node did, so a
+            # failed node can roll back and a finished run can be undone.
+            app.state.workflow_undo_repo = WorkflowUndoRepository(sf)
             # Durable local-application instance records (N6). Honors the
             # ``apps.persist_sessions`` kill switch; live sessions still work
             # without it (the executors' write-through becomes a no-op).
@@ -450,6 +454,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_run_repo = None
             app.state.workflow_definition_repo = None
             app.state.human_task_repo = None
+            app.state.workflow_undo_repo = None
             app.state.app_instance_repo = None
 
         # Startup recovery (N6): instances left active by a previous process are
@@ -607,6 +612,18 @@ def get_human_task_repo(request: Request):
     val = getattr(request.app.state, "human_task_repo", None)
     if val is None:
         raise HTTPException(status_code=503, detail="Human task repo not available")
+    return val
+
+
+def get_workflow_undo_repo(request: Request):
+    """Return the durable workflow undo repository, or 503 on the memory backend.
+
+    Required by the N10 action-preview / run-undo routes: undo records are durable
+    bookkeeping, so a memory backend has nothing to read back.
+    """
+    val = getattr(request.app.state, "workflow_undo_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Workflow undo repo not available")
     return val
 
 

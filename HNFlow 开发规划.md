@@ -96,7 +96,7 @@
 | N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ | ◐ P1 切片 3：`file`/`event`/`idle` 触发 + 载荷→端口映射（workflow 目标）+ 触发去重 + 退避重试/死信（`dead_lettered` + requeue）已落地 |
 | N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 | ◐ P1 切片 4：声明式配额 + 准入闸门（排队/fail/degrade）+ License slots + 跨进程可重入文件锁 + `GET /api/apps/resources` 已落地 |
 | N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 | ◐ P1 切片 5：`AssetRef` 资产建模（`asset://` URI + 指纹 + 契约校验）+ `data:asset` 节点（inspect/import/export/convert）+ `assets` 配置段 + `app:collect` 资产输出 已落地 |
-| N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ⬜ P1 |
+| N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ◐ P1 切片 6：预览（纯函数 + 资产指纹）+ 节点内审批门（HumanTask `kind=approval` + interrupt + 冻结快照复验）+ 失败回滚 + run 级 undo（驱动原生优先，文件级备份后备）已落地；共享工作区治理列为 N10b |
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范 | ⬜ P1 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ⬜ P2 |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ⬜ P2 |
@@ -136,12 +136,14 @@
 
 > **进度（切片 5：N9 文件/资产与跨软件数据契约已落地）**：新增 `deerflow/assets/`——`ref.py` 的 `AssetRef`（规范 `asset://` URI + scope 内可用 `path` + 指纹 `size`/`mtime`/`sha256`/`extension`/`media_type`/`contract`/`source`，经 `data` 端口以 dict 流转，**不新增 PortType**）与 `contracts.py` 的 `AssetContract`（扩展名/media_type/单位与坐标约定）与 `AssetConverter`（`from`/`to`/`command`/`args` 模板，必须含 `{in}`/`{out}`）。新增 `data:asset` 节点（`workflow/executors/asset.py`）：`inspect`（只读读指纹，注册幂等）/`import`（宿主→沙箱）/`export`（沙箱→宿主，临时文件 + `os.replace` 原子写）/`convert`（声明式转换器，命令**走 sandbox**）；三个写操作在**执行器内部**要求 `crash_confirm=true`（同 `data:file` write 先例，不打成 pending_review 危险节点）。宿主访问受 `config.yaml assets.roots` 白名单约束（**默认空 = 禁用往返**，三重校验：归一化包含 + 源文件拒 symlink + `resolve()` 后复核防父目录 symlink 逃逸）并受 `assets.max_bytes` 上限约束；`assets.contracts` 命中即校验（报错携带期望/实际）。`app:collect` 增量输出 `assets`（每产物一个 `scope="host"` 的 `AssetRef`，`params.hash` 可选 SHA-256），`artifacts`/`out` 原样保留 → 旧工作流零破坏。`config_version` 37→38；**无迁移**（资产不落库）；前端只同步节点目录/类型（新增 `data:asset` 条目 + `app:collect` 的 `assets` 端口），无新页面。真实软件格式互转脚本本体、资产版本库/溯源历史、资产 UI 记为后续增量。
 
+> **进度（切片 6：N10 预览 / 审批 / undo 已落地）**：新增 `deerflow/workflow/preview.py`——`ActionPreview`（动作/摘要/`reversible`/`recovery` + `sources`/`targets` + `risks` + `required_confirmations`）与 `PreviewTarget{ref, observed}`（**`observed` 是关键**：只有「真的看过」的目标才能发现审批期间文件**出现**，这正是审批要防的覆盖事故）；目标/来源直接复用 N9 `AssetRef` 承载指纹；沙箱目标刻意「只声明不指纹」（抽象 Sandbox 无 stat，观测内容要整文件下载），真实风险在宿主侧。预览器与执行器同址注册（`ExecutorRegistration.preview`）经 `CompileContext.previews` 传给 compiler，compiler 不依赖 registry。新增 `workflow/approval.py`：`require_approval=true` 的节点由 **compiler 节点包装层**在执行前预览 → 建 `kind="approval"` 的 HumanTask（`inputs_snapshot.preview` 存序列化预览）→ `interrupt()` 挂起（复用 `human:task` 的 `(run_id,node_id)` 复用规则，不重复建任务）→ 恢复后按**冻结快照**复验被观测目标指纹，不匹配即 `WorkflowExecutionError` 要求重新预览；拒绝按 `on_reject`（`fail` 默认 / `skip`），`__skip` 与无 decision 载荷一律视为**拒绝**；`require_approval` 落在无可预览类型的节点上是**编译期错误**；`crash_confirm` 门原样留在执行器内（审批预览的 `required_confirmations` 已告知人类）。新增 `workflow/compensation.py`：`rollback_on_failure=true` 时先备份被触及文件到 `{DEER_FLOW_HOME}/undo/<run_id>/<node_id>/`（**引擎私有恢复材料，不受 `assets.roots` 约束**），失败即回滚（宿主 `os.replace` 原子恢复；沙箱 `update_file`；「原本不存在」则删除，沙箱删除走 `execute_command` 且失败写进 detail）；**备份失败 → 在改动之前拒绝执行**（保守默认）；undo 记录写入 best-effort（成功变更不因记账失败而失败）。新增 `workflow/undo.py`（纯模型 `UndoRecord`/`plan_undo` 逆序/状态机 + 文件级备份恢复）、`persistence/workflow_undo/`（`workflow_undo_records` 表，`backup_paths` 与 `targets` **一一对齐**，`None` = 原本不存在）、`workflow/undo_service.py`（`execute_run_undo`：宿主直接恢复 + 沙箱按 run 的 thread 懒取沙箱 + 应用原生 undo；实例已消失 → `skipped`；每条记录落到终态故重复请求不会二次补偿）。应用原生 undo 采用**声明 + 实现双条件**（`supports_undo` 标志 + `undo` 方法，二者都不进 `AppDriver` 协议以免破坏既有驱动 `isinstance`）；`cli` 驱动诚实声明不支持，`mock` 实现以便离线测试；`AppSessionManager.undo` 仍走 N8 准入咽喉且要求会话存活。迁移 `0019_human_task_kind_and_undo`（`human_tasks.kind` 默认 `"task"` + undo 表）；`/api/human-tasks?kind=approval` 与 `list_human_tasks` 工具可列出审批请求。API：`POST /api/workflows/{id}/preview`（**定义级**预览，带显式 params/inputs）+ `GET|POST /api/workflows/{id}/runs/{rid}/undo`（计划 / 执行，支持 `dry_run`）；对话侧 `undo_workflow_run` 与路由共用同一 `undo_service`。偏离：未实现对话侧 `preview_workflow_action`（审批预览已由审批任务快照 + REST 预览路由覆盖，收益低于成本）；共享工作区治理（人在用/抢占/冲突/可见性）列为 N10b。
+
 1. **N4 本地软件接入层**（应用注册表 / 实例会话 / 驱动矩阵 / 共享）。— ◐ 切片 1 完成主体
 2. **N5 `app` 类节点**（launch/script/wait/collect）+ tool 网关 `app` provider。— ✅ 切片 1
 3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。— ◐ N6（持久化/恢复/归档/清理/资源累计）+ N7（触发源/载荷映射/去重/退避/DLQ）主体完成；N7 前端 UI 待做
 4. **N8 本地资源治理**（GPU/内存/磁盘、License 并发、独占锁）。— ◐ 声明式配额 + 准入闸门 + License slots + 跨进程文件锁主体完成；真实 GPU 计量/多 worker 全局配额待做
 5. **N9 文件/资产 + 跨软件契约**。— ◐ 资产识别/宿主↔沙箱往返/声明式转换/契约校验主体完成；真实软件格式互转脚本与资产版本库待做
-6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。— ⬜
+6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。— ◐ 切片 6 完成「预览/审批/undo」主体：`workflow/preview.py`（纯函数 `ActionPreview` + `PreviewTarget.observed` + 复用 N9 `AssetRef` 指纹）、`workflow/approval.py`（`params.require_approval=true` → compiler 包装层在执行前建 `kind=approval` 的 HumanTask 并 `interrupt()`，恢复后按**冻结的预览快照**复验指纹，不匹配即失败；`on_reject: fail|skip`；`__skip`=拒绝）、`workflow/compensation.py`（`rollback_on_failure=true` 先备份后执行，失败即回滚；备份失败则在改动前拒绝执行）、`workflow/undo.py` + `persistence/workflow_undo/`（`workflow_undo_records` 表）、`workflow/undo_service.py`（逆序撤销，宿主直接恢复 + 沙箱经 thread 取沙箱 + 应用原生 undo）、驱动 `supports_undo`/`undo` 双条件能力、`POST /api/workflows/{id}/preview` 与 `GET|POST /api/workflows/{id}/runs/{rid}/undo`、对话工具 `undo_workflow_run`；迁移 `0019`（`human_tasks.kind` + undo 表）。**共享工作区治理**（人在用检测/抢占/冲突检测/可见性）独立为 N10b
 7. **N11 环境探测 / 数据目录 / 备份迁移**。— ⬜
 
 验收：Blender/Unity/PS 等本地软件可被注册、拉起/附加、脚本驱动、产物回收；长时任务可由事件触发并跨重启恢复。
@@ -167,7 +169,7 @@
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
-| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ◐ N9 切片 5 完成（资产建模/往返/转换/契约）；N10/N11 未开始 |
+| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ◐ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo）完成；N10b 共享工作区、N11 未开始 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 

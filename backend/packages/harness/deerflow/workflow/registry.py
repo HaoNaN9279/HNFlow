@@ -2,7 +2,7 @@
 
 Provides:
 - :class:`ExecutorRegistration`: bundles a node-type with its executor and
-  metadata (idempotency, confirmation requirement, description).
+  metadata (idempotency, confirmation requirement, description, previewer).
 - :class:`ExecutorRegistry`: thread-safe key-value store keyed by
   ``NodeType``; converts to :class:`CompileContext` for the compiler.
 - :func:`build_default_registry`: public entry point lives in
@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from deerflow.workflow.compiler import CompileContext, Executor, WorkflowRuntime
+from deerflow.workflow.preview import Previewer
 from deerflow.workflow.schema import NodeType
 
 # ── Public types ───────────────────────────────────────────────────────────
@@ -47,6 +48,13 @@ class ExecutorRegistration:
         requires_confirmation: When ``True`` the executor must check
             ``params.crash_confirm`` before executing.  Default
             ``True`` for non-idempotent types (bash, http).
+        preview: Optional previewer (N10) describing this node type's
+            mutation *before* it runs.  Registering one makes the node
+            type **approvable**: a node with ``params.require_approval``
+            suspends for human confirmation, and its effect is described
+            by this callable.  ``None`` means the type has nothing
+            previewable (read-only or control-flow nodes), so
+            ``require_approval`` on it is a configuration error.
     """
 
     node_type: NodeType
@@ -54,6 +62,7 @@ class ExecutorRegistration:
     idempotent: bool = False
     description: str | None = None
     requires_confirmation: bool = False
+    preview: Previewer | None = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────
@@ -111,10 +120,13 @@ class ExecutorRegistry:
         """Convert registered executors into a :class:`CompileContext`.
 
         The returned context is ready to pass to
-        :func:`deerflow.workflow.compile_definition`.
+        :func:`deerflow.workflow.compile_definition`.  Registered previewers
+        (N10) travel alongside the executors so the compiler can gate
+        ``params.require_approval`` nodes without importing this registry.
         """
         executors: dict[NodeType, Executor] = {nt: reg.executor for nt, reg in self._registrations.items()}
-        return CompileContext(executors=executors)
+        previews: dict[NodeType, Previewer] = {nt: reg.preview for nt, reg in self._registrations.items() if reg.preview is not None}
+        return CompileContext(executors=executors, previews=previews)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

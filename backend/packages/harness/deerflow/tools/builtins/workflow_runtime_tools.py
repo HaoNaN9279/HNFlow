@@ -458,12 +458,14 @@ def _rt_deps() -> dict[str, Any]:
     from deerflow.persistence.workflow_definitions.service import get_workflow_definition
     from deerflow.workflow.danger import collect_pending_review_nodes
     from deerflow.workflow.dispatch import (
+        WorkflowDispatchUnavailableError,
         WorkflowRunNotFoundError,
         cancel_workflow_run,
         continue_workflow_node,
         get_workflow_run,
         list_run_events,
         start_workflow_run,
+        undo_workflow_run,
     )
     from deerflow.workflow.registry import _NON_IDEMPOTENT_TYPES
     from deerflow.workflow.schema import NodeType, WorkflowDefinition
@@ -477,7 +479,9 @@ def _rt_deps() -> dict[str, Any]:
         "cancel_workflow_run": cancel_workflow_run,
         "list_run_events": list_run_events,
         "continue_workflow_node": continue_workflow_node,
+        "undo_workflow_run": undo_workflow_run,
         "WorkflowRunNotFoundError": WorkflowRunNotFoundError,
+        "WorkflowDispatchUnavailableError": WorkflowDispatchUnavailableError,
         "non_idempotent_types": _NON_IDEMPOTENT_TYPES,
         "flow_types": (NodeType.FLOW_START, NodeType.FLOW_END),
     }
@@ -493,22 +497,24 @@ class HumanTaskUnavailableError(RuntimeError):
 
 
 @tool(parse_docstring=True)
-def list_human_tasks(runtime: Runtime, status: str | None = None) -> Command:
+def list_human_tasks(runtime: Runtime, status: str | None = None, kind: str | None = None) -> Command:
     """List the current user's human tasks with a compact per-task summary.
 
     Returns tasks newest-first. A ``status`` filter (``pending`` / ``reopened``
     / ``submitted`` / ``skipped`` / ``expired``) narrows the result; omitting it
-    returns every task of the user. Requires the workflow runtime injection
-    (SQL database backend).
+    returns every task of the user. A ``kind`` filter (``task`` / ``approval``)
+    selects plain human tasks versus the approval requests an irreversible node
+    suspends on. Requires the workflow runtime injection (SQL database backend).
 
     Args:
         status: Optional status to filter by.
+        kind: Optional kind to filter by — ``approval`` for approval requests.
     """
     tool_call_id = runtime.tool_call_id
     try:
         repo = _human_task_repo(runtime)
         user_id = resolve_runtime_user_id(runtime)
-        rows = _rt_run_async(repo.list_by_user(user_id, status=status))
+        rows = _rt_run_async(repo.list_by_user(user_id, status=status, kind=kind))
         tasks = [_task_summary(row) for row in rows]
         return _rt_success_command("list_human_tasks", tool_call_id, {"ok": True, "tasks": tasks, "total": len(tasks)})
     except HumanTaskUnavailableError:
@@ -591,6 +597,49 @@ def skip_human_task(task_id: str, runtime: Runtime) -> Command:
         return _rt_error_command("skip_human_task", tool_call_id, [_rt_operation_error("skip_human_task", exc)])
 
 
+@tool(parse_docstring=True)
+def undo_workflow_run(run_id: str, runtime: Runtime, dry_run: bool = False) -> Command:
+    """Undo the reversible actions a workflow run performed, newest first.
+
+    Every irreversible node in the run records what it did (a file backup, or the
+    application's own undo step), and this replays those records in reverse so the
+    last action is undone first. With ``dry_run=True`` it only reports what would
+    be undone. Reports one outcome per record: ``undone``, ``skipped`` (nothing to
+    do — for example the application instance is no longer running) or ``failed``
+    (with the reason).
+
+    Args:
+        run_id: The workflow run to undo.
+        dry_run: Report the plan without changing anything.
+    """
+    tool_call_id = runtime.tool_call_id
+    try:
+        deps = _rt_deps()
+        result = _rt_run_async(deps["undo_workflow_run"](run_id, runtime=runtime, dry_run=dry_run))
+    except Exception as exc:
+        # ``deerflow.workflow.dispatch`` is imported lazily by ``_rt_deps`` (see the
+        # module docstring), so its typed errors are matched by a helper that
+        # imports them on the failure path instead of at module import time.
+        if _is_dispatch_error(exc):
+            return _rt_error_command("undo_workflow_run", tool_call_id, [str(exc)])
+        return _rt_error_command("undo_workflow_run", tool_call_id, [_rt_operation_error("undo_workflow_run", exc)])
+
+    outcomes = result.get("outcomes") or []
+    return _rt_success_command(
+        "undo_workflow_run",
+        tool_call_id,
+        {
+            "run_id": result.get("run_id"),
+            "dry_run": result.get("dry_run", dry_run),
+            "planned": result.get("planned", 0),
+            "undone": sum(1 for o in outcomes if o.get("status") == "undone"),
+            "skipped": sum(1 for o in outcomes if o.get("status") == "skipped"),
+            "failed": sum(1 for o in outcomes if o.get("status") == "failed"),
+            "outcomes": outcomes,
+        },
+    )
+
+
 # ── T18-4: repository / runtime context access ──────────────────────────────
 
 
@@ -624,6 +673,7 @@ def _task_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
         "node_id": row.get("node_id"),
+        "kind": row.get("kind") or "task",  # N10: "approval" for an approval request
         "description": row.get("description") or "",
         "status": row.get("status"),
         "created_at": row.get("created_at"),
@@ -716,6 +766,18 @@ def _rt_error_command(tool_name: str, tool_call_id: str, errors: list[dict[str, 
             ]
         }
     )
+
+
+def _is_dispatch_error(exc: BaseException) -> bool:
+    """Whether *exc* is one of the dispatch layer's typed errors (N10).
+
+    Imported lazily because ``deerflow.workflow.dispatch`` is only resolved when a
+    tool actually runs (see the module docstring) — the failure path is the right
+    place to pay for it, and it keeps the import graph unchanged.
+    """
+    from deerflow.workflow.dispatch import WorkflowDispatchUnavailableError, WorkflowRunNotFoundError
+
+    return isinstance(exc, (WorkflowRunNotFoundError, WorkflowDispatchUnavailableError))
 
 
 def _rt_operation_error(tool_name: str, exc: Exception) -> dict[str, Any]:

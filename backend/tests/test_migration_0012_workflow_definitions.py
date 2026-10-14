@@ -87,7 +87,7 @@ async def test_upgrade_creates_table_and_index(tmp_path: Path) -> None:
 
         with sqlite3.connect(db_path) as raw:
             version_row = raw.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version_row[0] == "0018_scheduled_task_triggers", f"Expected head 0018_scheduled_task_triggers, got {version_row[0]}"
+        assert version_row[0] == "0019_human_task_kind_and_undo", f"Expected head 0019_human_task_kind_and_undo, got {version_row[0]}"
     finally:
         await close_engine()
 

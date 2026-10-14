@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/human-tasks", tags=["human-tasks"])
 
+#: Accepted ``kind`` values for the list filter (N10).  ``approval`` tasks are
+#: created by an irreversible node's approval gate; everything else is a plain
+#: ``human:task``.
+HUMAN_TASK_KINDS: frozenset[str] = frozenset({"task", "approval"})
+
 
 # ── Request / Response models ─────────────────────────────────────────────────
 
@@ -113,14 +118,16 @@ async def _resume_workflow(
 
 @router.get("")
 @require_permission("threads", "read")
-async def list_human_tasks(request: Request, status: str | None = None):
+async def list_human_tasks(request: Request, status: str | None = None, kind: str | None = None):
     user = await get_optional_user_from_request(request)
     if user is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     if status is not None and status not in {member.value for member in HumanTaskStatus}:
         raise HTTPException(status_code=422, detail={"errors": [f"无效的 status 过滤值: {status}"]})
+    if kind is not None and kind not in HUMAN_TASK_KINDS:
+        raise HTTPException(status_code=422, detail={"errors": [f"无效的 kind 过滤值: {kind}"]})
     repo = get_human_task_repo(request)
-    return await repo.list_by_user(str(user.id), status=status)
+    return await repo.list_by_user(str(user.id), status=status, kind=kind)
 
 
 @router.post("/{task_id}/submit")

@@ -28,6 +28,7 @@ from deerflow.apps.driver import (
     AppDriverError,
     DriverLaunch,
     DriverScriptResult,
+    DriverUndoResult,
     DriverWaitResult,
 )
 from deerflow.config.apps_config import AppDefinition
@@ -213,6 +214,15 @@ class CliAppDriver:
         if not pid:
             return True
         return _pid_alive(pid)
+
+    #: N10: a bare subprocess has no undo history the engine can drive, so this
+    #: driver states that plainly instead of guessing.  The engine then falls back
+    #: to file-level backups for the paths a node declares.
+    supports_undo = False
+
+    def undo(self, definition: AppDefinition, launch: DriverLaunch, *, steps: int = 1) -> DriverUndoResult:
+        """Report the honest absence of native undo for a plain CLI application."""
+        return DriverUndoResult(status="unsupported", detail="cli driver has no application undo/history")
 
     def close(self, definition: AppDefinition, launch: DriverLaunch) -> None:
         pid = launch.pid

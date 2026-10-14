@@ -51,7 +51,9 @@ from deerflow.assets.ref import (
 )
 from deerflow.config.assets_config import AssetsConfig, get_assets_config
 from deerflow.sandbox import tools as sandbox_tools
+from deerflow.workflow.compensation import Compensation, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
+from deerflow.workflow.preview import RECOVERY_BACKUP, ActionPreview, PreviewTarget, declare, make_preview, observe
 from deerflow.workflow.registry import WorkflowExecutionError
 
 logger = logging.getLogger(__name__)
@@ -220,6 +222,23 @@ def _write_host_atomically(target: Path, data: bytes) -> None:
             pass
 
 
+async def _prepare_compensation(runtime: WorkflowRuntime, params: dict[str, Any], node_label: str, targets: list[AssetRef], sandbox: Any) -> Compensation:
+    """Snapshot the targets of a mutating asset operation (N10).
+
+    When ``rollback_on_failure`` is set, a target that exists but cannot be backed
+    up aborts the node *before* it mutates anything: an irreversible action with
+    an unkeepable rollback promise is worse than a refusal.
+    """
+    return await Compensation.prepare(
+        runtime,
+        node_id=str(params.get("node_id") or ""),
+        node_label=node_label,
+        targets=targets,
+        sandbox=sandbox,
+        enabled=rollback_requested(params),
+    )
+
+
 def _resolve_sandbox_destination(params: dict[str, Any], *, source_name: str, default_scope: str, node_label: str) -> tuple[AssetScope, str]:
     """Resolve ``(scope, virtual_path)`` for an asset landing in the sandbox."""
     scope = str(params.get("destination") or default_scope).strip().lower()
@@ -275,7 +294,14 @@ async def _import(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict
 
     scope, virtual = _resolve_sandbox_destination(params, source_name=path.name, default_scope=DEFAULT_SANDBOX_DESTINATION, node_label=node_label)
     sandbox = _sandbox(runtime)
-    await asyncio.to_thread(sandbox.update_file, virtual, data)
+    target = make_ref(virtual, scope=scope)
+    compensation = await _prepare_compensation(runtime, params, node_label, [target], sandbox)
+    try:
+        await asyncio.to_thread(sandbox.update_file, virtual, data)
+    except Exception as exc:
+        await compensation.rollback(reason=str(exc) or type(exc).__name__)
+        raise
+    await compensation.commit(detail=f"imported {source.path} → {virtual}")
 
     ref = make_ref(virtual, scope=scope, size=len(data), sha256=fingerprint_bytes(data), source=node_label)
     return _result(_apply_contract(params, ref, config, node_label))
@@ -292,7 +318,13 @@ async def _export(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict
     _require_within_max_bytes(len(data), source.path, config, node_label)
 
     target = _resolve_host_destination(params, config, source_name=PurePosixPath(source.path).name, node_label=node_label)
-    await asyncio.to_thread(_write_host_atomically, target, data)
+    compensation = await _prepare_compensation(runtime, params, node_label, [make_ref(str(target), scope="host")], sandbox)
+    try:
+        await asyncio.to_thread(_write_host_atomically, target, data)
+    except Exception as exc:
+        await compensation.rollback(reason=str(exc) or type(exc).__name__)
+        raise
+    await compensation.commit(detail=f"exported {source.path} → {target}")
 
     ref = make_ref(str(target), scope="host", size=len(data), sha256=fingerprint_bytes(data), source=node_label)
     return _result(_apply_contract(params, ref, config, node_label))
@@ -322,16 +354,145 @@ async def _convert(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dic
     command = " ".join(_shell_quote(arg) for arg in argv)
     thread_data = sandbox_tools.get_thread_data(runtime)  # type: ignore[arg-type]
     command = sandbox_tools.replace_virtual_paths_in_command(command, thread_data)
-    output = await asyncio.to_thread(sandbox.execute_command, command, None, converter.timeout_seconds)
 
+    compensation = await _prepare_compensation(runtime, params, node_label, [make_ref(target_virtual, scope=scope)], sandbox)
     try:
-        data = await asyncio.to_thread(sandbox.download_file, target_virtual)
-    except OSError as exc:
-        raise WorkflowExecutionError(f"{node_label}: converter {name!r} produced no output at {target_virtual} (command output: {_truncate(output)})") from exc
-    _require_within_max_bytes(len(data), target_virtual, config, node_label)
+        output = await asyncio.to_thread(sandbox.execute_command, command, None, converter.timeout_seconds)
+
+        try:
+            data = await asyncio.to_thread(sandbox.download_file, target_virtual)
+        except OSError as exc:
+            raise WorkflowExecutionError(f"{node_label}: converter {name!r} produced no output at {target_virtual} (command output: {_truncate(output)})") from exc
+        _require_within_max_bytes(len(data), target_virtual, config, node_label)
+    except Exception as exc:
+        await compensation.rollback(reason=str(exc) or type(exc).__name__)
+        raise
+    await compensation.commit(detail=f"converted {source.path} → {target_virtual} with {name}")
 
     ref = make_ref(target_virtual, scope=scope, size=len(data), sha256=fingerprint_bytes(data), source=str(name))
     return _result(_apply_contract(params, ref, config, node_label), detail=_truncate(output))
+
+
+# ── preview (N10) ─────────────────────────────────────────────────────────────
+
+
+def _preview_host_ref(path: str, config: AssetsConfig, *, want_hash: bool) -> PreviewTarget:
+    """Fingerprint a host path when it is accessible, otherwise merely declare it.
+
+    Host fingerprints are what makes the approval staleness check real — the
+    realistic way a preview goes stale is a human editing the file in the
+    professional application while the approval is pending — so hashing is the
+    default (``params.hash is not False``) with a declared-only escape hatch for
+    callers that would rather not hash a large file.
+
+    Returns an *observed* target only when the path really was inspected; a
+    missing file is observed-and-absent (so an appearance is detectable), while
+    an inaccessible/not-allow-listed path is declared (no claim at all).
+    """
+    try:
+        resolved = _require_host_source(path, config, "preview")
+    except WorkflowExecutionError:
+        return declare(make_ref(path, scope="host"))
+    try:
+        stat_result = os.stat(resolved)
+    except OSError:
+        return observe(make_ref(str(resolved), scope="host"))
+    sha256 = fingerprint_file(resolved) if want_hash else None
+    return observe(asset_ref_from_stat(str(resolved), stat_result, scope="host", sha256=sha256))
+
+
+def preview_asset(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> ActionPreview | None:
+    """Describe a mutating ``data:asset`` operation; ``None`` for ``inspect``.
+
+    Raises for genuinely invalid input (unknown converter/contract, missing
+    path) exactly like the executor would, so an approver is never asked to
+    confirm an action that cannot run.  Configuration *gaps* (empty
+    ``assets.roots``) are reported as risks instead — the human should see that
+    the action will fail rather than have the preview blow up.
+    """
+    operation = str(params.get("operation") or "inspect").strip().lower()
+    if operation == "inspect":
+        return None
+    if operation not in _OPERATIONS:
+        raise WorkflowExecutionError(f"data:asset: unsupported operation {operation!r}")
+
+    config = _config()
+    node_label = f"data:asset ({operation})"
+    source = _source_ref(params, inputs, node_label=node_label)
+    want_hash = params.get("hash") is not False
+    risks: list[str] = []
+    if not config.host_transfer_enabled:
+        risks.append("assets.roots is empty, so host asset transfer is disabled and this action will fail")
+
+    if operation == "import":
+        if source.scope != "host":
+            raise WorkflowExecutionError(f"{node_label}: import expects a host path, got scope {source.scope!r}")
+        scope, virtual = _resolve_sandbox_destination(params, source_name=Path(source.path).name, default_scope=DEFAULT_SANDBOX_DESTINATION, node_label=node_label)
+        host = _preview_host_ref(source.path, config, want_hash=want_hash)
+        if host.ref.size is not None and host.ref.size > config.max_bytes:
+            risks.append(f"the source is {host.ref.size} bytes, above assets.max_bytes={config.max_bytes}")
+        return make_preview(
+            params,
+            action="import_asset",
+            summary=f"Copy host file {host.ref.path} into the sandbox at {virtual}",
+            reversible=True,
+            recovery=RECOVERY_BACKUP,
+            sources=[host],
+            targets=[declare(make_ref(virtual, scope=scope))],
+            risks=risks,
+            required_confirmations=["crash_confirm"],
+        )
+
+    if operation == "export":
+        if source.scope == "host":
+            raise WorkflowExecutionError(f"{node_label}: export expects a sandbox path, got a host path")
+        target: PreviewTarget
+        try:
+            host_target: Path | None = _resolve_host_destination(params, config, source_name=PurePosixPath(source.path).name, node_label=node_label)
+        except WorkflowExecutionError:
+            host_target = None
+        if host_target is not None:
+            if host_target.exists():
+                risks.append("the host destination already exists and will be replaced")
+            target = _preview_host_ref(str(host_target), config, want_hash=want_hash)
+        else:
+            target = declare(make_ref(str(params.get("destination") or PurePosixPath(source.path).name), scope="host"))
+        return make_preview(
+            params,
+            action="export_asset",
+            summary=f"Copy the sandbox asset {source.path} out to the host at {target.ref.path}",
+            reversible=True,
+            recovery=RECOVERY_BACKUP,
+            sources=[declare(source)],
+            targets=[target],
+            risks=risks,
+            required_confirmations=["crash_confirm"],
+        )
+
+    # operation == "convert"
+    name = params.get("converter")
+    converter = config.converter_for(str(name) if name else None)
+    if converter is None:
+        raise WorkflowExecutionError(f"{node_label}: converter {name!r} is not declared under assets.converters")
+    if source.scope == "host":
+        raise WorkflowExecutionError(f"{node_label}: convert operates on sandbox assets; import the file first")
+    scope, target_virtual = _resolve_sandbox_destination(
+        params,
+        source_name=f"{PurePosixPath(source.path).stem}{converter.to_extension}",
+        default_scope=DEFAULT_CONVERT_DESTINATION,
+        node_label=node_label,
+    )
+    return make_preview(
+        params,
+        action="convert_asset",
+        summary=f"Convert {source.path} with converter {name!r} into {target_virtual} (command runs in the sandbox)",
+        reversible=True,
+        recovery=RECOVERY_BACKUP,
+        sources=[declare(source)],
+        targets=[declare(make_ref(target_virtual, scope=scope))],
+        risks=risks,
+        required_confirmations=["crash_confirm"],
+    )
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
@@ -362,4 +523,4 @@ async def exec_asset(runtime: WorkflowRuntime, params: dict[str, Any], inputs: d
     return await handler(runtime, params, inputs, node_label)
 
 
-__all__ = ["DEFAULT_CONVERT_DESTINATION", "DEFAULT_SANDBOX_DESTINATION", "SANDBOX_DESTINATIONS", "exec_asset"]
+__all__ = ["DEFAULT_CONVERT_DESTINATION", "DEFAULT_SANDBOX_DESTINATION", "SANDBOX_DESTINATIONS", "exec_asset", "preview_asset"]

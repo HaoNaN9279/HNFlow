@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from deerflow.apps.driver import AppDriver, AppDriverError, DriverLaunch, DriverScriptResult, DriverWaitResult
+from deerflow.apps.driver import AppDriver, AppDriverError, DriverLaunch, DriverScriptResult, DriverUndoResult, DriverWaitResult, driver_supports_undo, driver_undo
 from deerflow.apps.registry import AppRegistry, get_app_registry
 from deerflow.resources.governor import ResourceDemand, ResourceGovernor, ResourceLease
 
@@ -319,6 +319,43 @@ class AppSessionManager:
             self._governor_release(lease)
         session.artifacts = list(artifacts)
         return artifacts
+
+    def supports_undo(self, app_name: str) -> bool:
+        """Whether the application's driver can undo in-app steps (N10).
+
+        Answered through the driver registry rather than a cached flag, so a
+        reloaded definition or a swapped driver cannot leave a stale capability
+        claim behind.
+        """
+        try:
+            return driver_supports_undo(self._driver_for(app_name))
+        except (AppError, AppDriverError):
+            return False
+
+    def undo(self, session: AppSession, *, steps: int = 1) -> DriverUndoResult:
+        """Ask the application to roll back *steps* in-app steps (N10).
+
+        Goes through the same admission gate as every other operation (N8): a
+        compensation is still host-side work on a licensed instance, so it must
+        not be able to bypass the quota.  The session must still be live — undoing
+        against an instance that is gone would silently report a rollback that
+        never happened.
+        """
+        live = self.get(session.session_id)
+        if live is None:
+            raise AppSessionNotFoundError(f"no live session {session.session_id!r}; cannot undo against an instance that is no longer running")
+        session = live
+        driver = self._driver_for(session.app_name)
+        definition = self._definition_for_session(session)
+        lease = self._acquire_operation(definition, session)
+        session.status = "busy"
+        try:
+            result = driver_undo(driver, definition, DriverLaunch(status=session.status, pid=session.pid, endpoint=session.endpoint, handle=session.handle), steps=steps)
+        finally:
+            session.status = "ready"
+            session.last_active = time.time()
+            self._governor_release(lease)
+        return result
 
     def health(self, session: AppSession) -> bool:
         try:

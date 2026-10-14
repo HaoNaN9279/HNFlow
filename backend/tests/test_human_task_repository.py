@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 
@@ -85,10 +86,15 @@ async def test_list_by_user_scopes_and_orders(tmp_path) -> None:
     for i in range(3):
         created = await _create(repo, user_id="user-a", workflow_run_id=f"wf-run-{i}", node_id=f"node-{i}")
         ids.append(created["id"])
+        # Created_at is the ordering key; two tasks minted inside the same
+        # microsecond fall back to the id tiebreaker, and ids are random uuids —
+        # so without a gap the expected order is a coin flip, not a property.
+        time.sleep(0.005)
     await _create(repo, user_id="user-b", workflow_run_id="wf-run-b")
 
     listed_a = await repo.list_by_user("user-a")
     assert [item["id"] for item in listed_a] == list(reversed(ids))
+    assert [item["created_at"] for item in listed_a] == sorted((item["created_at"] for item in listed_a), reverse=True)
     listed_b = await repo.list_by_user("user-b")
     assert len(listed_b) == 1
     await close_engine()

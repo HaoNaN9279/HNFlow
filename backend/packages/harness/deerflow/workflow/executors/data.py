@@ -6,6 +6,9 @@ Each executor follows the ``Executor`` contract:
 All data executors are **idempotent** — repeated execution with the same
 inputs produces the same outputs.  ``data:file`` write mode is the exception:
 it checks ``crash_confirm`` internally before writing.
+
+``preview_file`` (N10) describes a write *before* it happens, for the approval
+gate; read mode has nothing to preview.
 """
 
 from __future__ import annotations
@@ -15,8 +18,11 @@ import logging
 import re
 from typing import Any
 
+from deerflow.assets.ref import make_ref, scope_for_virtual_path
 from deerflow.sandbox import tools as sandbox_tools
+from deerflow.workflow.compensation import Compensation, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
+from deerflow.workflow.preview import RECOVERY_BACKUP, ActionPreview, declare, make_preview
 from deerflow.workflow.registry import WorkflowExecutionError
 
 logger = logging.getLogger(__name__)
@@ -111,7 +117,7 @@ def exec_regex(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[st
 # ── data:file ────────────────────────────────────────────────────────────────
 
 
-def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+async def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     """Read or write a file through the sandbox.
 
     ``params.operation``: ``"read"`` (default) or ``"write"``.
@@ -121,7 +127,9 @@ def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str
     ``inputs.in`` as fallback; optional ``params.append`` (default False).
 
     The executor is registered as idempotent (read is the primary use
-    case).  Write mode performs an internal crash-confirmation check.
+    case).  Write mode performs an internal crash-confirmation check, and
+    honours ``params.rollback_on_failure`` (N10) by snapshotting the target
+    before writing and restoring it if the operation fails.
     """
     operation: str = params.get("operation", "read")
     path: str = params.get("path", "")
@@ -146,7 +154,71 @@ def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str
     if operation == "write":
         content = params.get("content") or inputs.get("in", "")
         append: bool = bool(params.get("append", False))
-        sandbox.write_file(path, str(content), append=append)
+        scope = scope_for_virtual_path(path) or "workspace"
+        target = make_ref(path, scope=scope)  # type: ignore[arg-type]
+
+        compensation = await Compensation.prepare(
+            runtime,
+            node_id=str(params.get("node_id") or ""),
+            node_label="data:file (write)",
+            targets=[target],
+            sandbox=sandbox,
+            enabled=rollback_requested(params),
+        )
+        try:
+            sandbox.write_file(path, str(content), append=append)
+        except Exception as exc:
+            await compensation.rollback(reason=str(exc) or type(exc).__name__)
+            raise
+        await compensation.commit(detail=f"{'appended to' if append else 'wrote'} {target.path}")
         return {"out": content}
 
     raise WorkflowExecutionError(f"data:file: unsupported operation {operation!r}")
+
+
+# ── data:file preview (N10) ───────────────────────────────────────────────────
+
+
+def preview_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> ActionPreview | None:
+    """Describe a ``data:file`` write; return ``None`` for the read-only mode.
+
+    The target is a *declared* sandbox ref (no fingerprint): the abstract
+    ``Sandbox`` has no ``stat``, so observing content would mean downloading the
+    whole existing file.  The summary therefore reports what will be written
+    (length only — never the content, which may hold a secret the approval row
+    must not retain) rather than what is being replaced.
+    """
+    if str(params.get("operation", "read")).lower() != "write":
+        return None
+
+    path = str(params.get("path") or "").strip()
+    if not path:
+        raise WorkflowExecutionError("data:file: missing required param 'path'")
+
+    scope = scope_for_virtual_path(path) or "workspace"
+    target = make_ref(path, scope=scope)  # type: ignore[arg-type]
+
+    content = params.get("content")
+    if content is None:
+        content = inputs.get("in", "")
+    length = len(str(content))
+    append = bool(params.get("append", False))
+
+    risks: list[str] = []
+    if append:
+        summary = f"Append {length} characters to {target.path}"
+        risks.append("the appended text becomes part of the existing file; a rollback restores the pre-append content")
+    else:
+        summary = f"Overwrite {target.path} with {length} characters"
+        risks.append("any existing content is replaced")
+
+    return make_preview(
+        params,
+        action="append_file" if append else "overwrite_file",
+        summary=summary,
+        reversible=True,
+        recovery=RECOVERY_BACKUP,
+        targets=[declare(target)],
+        risks=risks,
+        required_confirmations=["crash_confirm"],
+    )

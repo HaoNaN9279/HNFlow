@@ -15,6 +15,7 @@ from deerflow.runtime.runs.manager import RunManager, RunRecord, RunStartOutcome
 from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.runtime.runs.worker import RunContext
 from deerflow.runtime.stream_bridge.base import StreamBridge
+from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import CompileContext, compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
@@ -33,6 +34,7 @@ async def run_workflow(
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None,
     resume: Any | None = None,
     human_task_repo: Any | None = None,
+    workflow_undo_repo: Any | None = None,
     origin_run_id: str | None = None,
     continue_nodes: dict[str, str] | None = None,
     origin_thread_id: str | None = None,
@@ -172,6 +174,14 @@ async def run_workflow(
         config.setdefault("context", {})
         if isinstance(config["context"], dict):
             config["context"]["human_task_repo"] = human_task_repo
+    if workflow_undo_repo is not None:
+        # N10: the compensation guard records what an irreversible node did so the
+        # run can be undone later. Injected independently of app_config for the
+        # same reason as the human-task repo above; None on memory backends, where
+        # the guard degrades to snapshot-and-rollback without a durable record.
+        config.setdefault("context", {})
+        if isinstance(config["context"], dict):
+            config["context"][UNDO_REPO_CONTEXT_KEY] = workflow_undo_repo
     # Injected independently of app_config so the ai:llm_agent continue executor
     # can derive its session checkpoint thread.  None on memory backends — the
     # executor fails closed when continue is requested without one.

@@ -43,6 +43,7 @@ from langgraph.config import get_config  # type: ignore[import-untyped]
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
@@ -165,6 +166,12 @@ class CompileContext:
 
     Fields:
         executors: ``NodeType`` → executor callable registry.
+        previews: ``NodeType`` → previewer callable registry (N10).  A node
+            whose type has a previewer can carry ``params.require_approval``
+            and will suspend for human confirmation before executing.  Kept as
+            plain callables (not registry objects) so the compiler never
+            imports :mod:`deerflow.workflow.registry` — which imports this
+            module — and no import cycle forms.
         checkpointer: Optional LangGraph checkpointer for the top-level graph.
             Subgraphs are always compiled with ``checkpointer=None`` so their
             channels never pollute the parent thread checkpoint.
@@ -183,6 +190,7 @@ class CompileContext:
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
+    previews: dict[NodeType, Previewer] = field(default_factory=dict)
     checkpointer: Any | None = None
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
     max_nesting_depth: int = 10
@@ -226,6 +234,12 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
     if context is not None and context.executors:
         type_fp = "|".join(sorted(t.value for t in context.executors))
         digest.update(f"\0executors:{type_fp}".encode())
+    if context is not None and context.previews:
+        # The preview set decides whether a ``require_approval`` node is
+        # approvable at compile time, so two contexts that differ only in
+        # previewers must not share a cache entry.
+        preview_fp = "|".join(sorted(t.value for t in context.previews))
+        digest.update(f"\0previews:{preview_fp}".encode())
     if context is not None and context.checkpointer is not None:
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     if context is not None and context.definition_resolver is not None:
@@ -335,6 +349,7 @@ def _make_node_fn(
     node: Node,
     executor: Executor,
     incoming_edges: list[Edge],
+    previewer: Previewer | None = None,
 ) -> Callable[..., Any]:
     """Build an async node wrapper that reads inputs from state, calls the
     executor, and writes outputs back to state.
@@ -347,6 +362,11 @@ def _make_node_fn(
     Missing upstream values produce ``None`` instead of ``KeyError``.
     Only output ports that the executor actually returned are written
     to state.
+
+    When *previewer* is supplied and the node carries
+    ``params.require_approval``, the node suspends for human approval before
+    running and re-verifies the approved preview afterwards (N10, see
+    :mod:`deerflow.workflow.approval`).
     """
     # Build input-port → state-key mapping from incoming edges
     input_key_map: dict[str, str] = {}
@@ -393,6 +413,42 @@ def _make_node_fn(
             from deerflow.workflow.human_task_state import derive_output_spec  # deferred import — keeps the compiler's import graph free of a human-task cycle
 
             executor_params.setdefault("output_spec", derive_output_spec(node))
+
+        # N10: human approval gate — preview the action, suspend, then verify the
+        # approved preview is still fresh before letting the executor run.
+        # Deferred imports: ``deerflow.workflow.approval`` imports the registry,
+        # which imports this module — a module-level import would cycle.
+        if previewer is not None:
+            # Approvable (mutating) nodes get their own identity, exactly like
+            # ``ai:llm_agent`` / ``human:task``: the previewer and the
+            # compensation guard both need a stable node id, and neither can read
+            # it off the definition once the executor is running.
+            executor_params = dict(executor_params)
+            executor_params.setdefault("node_id", node.id)
+            executor_params.setdefault("node_type", node.type.value)
+
+            from deerflow.workflow.approval import approval_required
+
+            if approval_required(executor_params):
+                from deerflow.workflow.approval import ON_REJECT_FAIL, on_reject_policy, run_approval
+
+                decision = await run_approval(
+                    runtime,
+                    node_id=node.id,
+                    node_type=node.type.value,
+                    previewer=previewer,
+                    params=executor_params,
+                    inputs=inputs,
+                )
+                if not decision.approved:
+                    from deerflow.workflow.registry import WorkflowExecutionError
+
+                    note = f": {decision.note}" if decision.note else ""
+                    if on_reject_policy(executor_params) == ON_REJECT_FAIL:
+                        raise WorkflowExecutionError(f"node '{node.id}': rejected by the approver{note}")
+                    # ``skip``: continue with the node's output ports unset,
+                    # exactly like a skipped ``human:task``.
+                    return {}
 
         result = await _resolve_executor(executor, runtime, executor_params, inputs)
 
@@ -825,6 +881,7 @@ def _expand_subworkflow(
     # ── Recurse: child graph compiles with checkpointer=None ───────────
     child_ctx = CompileContext(
         executors=ctx.executors,
+        previews=ctx.previews,
         checkpointer=None,
         definition_resolver=ctx.definition_resolver,
         max_nesting_depth=ctx.max_nesting_depth,
@@ -832,6 +889,25 @@ def _expand_subworkflow(
     )
     child_graph = _compile_impl(child, child_ctx, depth=depth + 1, visiting=child_visiting, chain_path=child_chain)
     return child_graph, child
+
+
+def _validate_approval_nodes(def_: WorkflowDefinition, ctx: CompileContext) -> None:
+    """Reject ``require_approval`` on node types that cannot describe themselves.
+
+    An approvable node must have a previewer, otherwise the human would be asked
+    to confirm an action nobody could describe.  Catching it here (rather than at
+    execution time) fails the definition at save/compile, which is where the
+    mistake actually is.  ``on_reject`` is validated here too for the same reason.
+    """
+    for node in def_.nodes:
+        params = node.params or {}
+        if params.get("require_approval") is not True:
+            continue
+        if node.type not in ctx.previews:
+            raise WorkflowCompileError(f"node '{node.id}': require_approval is not supported for node type '{node.type.value}' (no previewer is registered for it)")
+        on_reject = params.get("on_reject", "fail")
+        if on_reject not in ("fail", "skip"):
+            raise WorkflowCompileError(f"node '{node.id}': on_reject must be 'fail' or 'skip', got {on_reject!r}")
 
 
 def _make_route_fn(
@@ -920,6 +996,7 @@ def _compile_impl(
     errors = validate_definition(def_)
     if errors:
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
+    _validate_approval_nodes(def_, ctx)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)
@@ -1017,7 +1094,7 @@ def _compile_impl(
             # route always falls through to default).
             executor = ctx.executors.get(node.type)
             if executor is not None:
-                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
+                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type))
                 _register(node.id, node_fn)
             else:
 
@@ -1056,7 +1133,7 @@ def _compile_impl(
         if executor is None:
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
 
-        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []))
+        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type))
         _register(node.id, node_fn)
 
     # Determine whether the end node is a registered pass-through (subgraph

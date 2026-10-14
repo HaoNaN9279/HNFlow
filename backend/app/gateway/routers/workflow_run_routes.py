@@ -42,6 +42,24 @@ class WorkflowRunContinueRequest(BaseModel):
     params: dict[str, Any] | None = None
 
 
+class WorkflowNodePreviewRequest(BaseModel):
+    """N10: describe one node's mutation without running it.
+
+    ``params`` is merged over the node's own params (so a canvas can preview an
+    edit it has not saved yet) and ``inputs`` supplies the port values to preview
+    with — a definition-level preview makes no claim about a *running* run's
+    state, which is why the caller states the inputs.
+    """
+
+    node_id: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowUndoRequest(BaseModel):
+    dry_run: bool = False
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -326,3 +344,146 @@ async def get_workflow_run_state(definition_id: str, run_id: str, request: Reque
         return {}
 
     return {k: v for k, v in values.items() if k.startswith("wf:")}
+
+
+# ── N10: action preview + run-level undo ──────────────────────────────────────
+
+
+@router.post("/{definition_id}/preview")
+@require_permission("workflows", "read")
+async def preview_workflow_node(definition_id: str, body: WorkflowNodePreviewRequest, request: Request) -> dict[str, Any]:
+    """Describe what one node would do, without running it (N10, §21).
+
+    Read-only: the node type's previewer reads the files it would touch (to
+    fingerprint them) and writes nothing.  Returns ``{preview: null}`` for a node
+    that has nothing to preview (a read-only or control-flow node) so a canvas can
+    distinguish "no preview available" from "preview failed".
+    """
+    import inspect as _inspect
+
+    from deerflow.workflow.compiler import WorkflowRuntime
+    from deerflow.workflow.executors import build_default_registry
+
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    _, definition = await _resolve_definition(request, definition_id, user)
+    node = next((n for n in definition.nodes if n.id == body.node_id), None)
+    if node is None:
+        raise HTTPException(status_code=404, detail=f"Node {body.node_id} not found in workflow {definition_id}")
+
+    previewer = build_default_registry().build_context().previews.get(node.type)
+    if previewer is None:
+        return {"preview": None, "reason": f"node type '{node.type.value}' has nothing to preview"}
+
+    runtime = WorkflowRuntime(context=_preview_context(request, user), config={}, state={})
+    params = {**node.params, **body.params, "node_id": node.id, "node_type": node.type.value}
+    try:
+        preview = previewer(runtime, params, dict(body.inputs))
+        if _inspect.isawaitable(preview):
+            preview = await preview
+    except Exception as exc:  # noqa: BLE001 — an unpreviewable node is a 422, not a 500
+        raise HTTPException(status_code=422, detail=f"cannot preview node {node.id}: {exc}") from exc
+    return {"preview": preview.to_port() if preview is not None else None}
+
+
+def _preview_context(request: Request, user: Any) -> dict[str, Any]:
+    """Runtime context a previewer needs (the shared session manager).
+
+    Deliberately *without* ``app_config``: the previewers read the process-level
+    configs directly (``get_assets_config()`` / ``get_apps_config()``), and calling
+    ``get_app_config()`` here would reload those singletons as a side effect —
+    a read-only preview must not mutate global configuration.
+    """
+    from deerflow.apps.session import get_session_manager
+
+    return {
+        "user_id": str(getattr(user, "id", "") or ""),
+        "app_session_manager": get_session_manager(),
+    }
+
+
+def _undo_repo(request: Request) -> Any:
+    repo = getattr(request.app.state, "workflow_undo_repo", None)
+    if repo is None:
+        raise HTTPException(status_code=503, detail="Undo records require a SQL database backend")
+    return repo
+
+
+def _sandbox_factory(request: Request, thread_id: str, user_id: str):
+    """A lazy sandbox accessor for run-level undo of sandbox targets.
+
+    Returns the ``Sandbox`` for the run's thread, or ``None``-raising when no
+    provider can supply one — the service then reports sandbox targets as failed
+    while still restoring host files.
+    """
+
+    def _build() -> Any:
+        from deerflow.sandbox.sandbox_provider import get_sandbox_provider
+
+        provider = get_sandbox_provider()
+        sandbox_id = provider.acquire(thread_id, user_id=user_id)
+        return provider.get(sandbox_id)
+
+    return _build
+
+
+@router.get("/{definition_id}/runs/{run_id}/undo")
+@require_permission("runs", "read")
+async def list_workflow_run_undo(definition_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """List a run's recorded irreversible actions and what an undo would replay."""
+    from deerflow.workflow.undo import UndoRecord, plan_undo
+
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    await _resolve_definition(request, definition_id, user)
+    run_mgr = get_run_manager(request)
+    await _require_run_owner(request, run_mgr, run_id)
+    repo = _undo_repo(request)
+
+    rows = await repo.list_by_run(run_id, user_id=str(user.id))
+    records = [UndoRecord.from_row(row) for row in rows]
+    planned = plan_undo(records)
+    return {
+        "records": [record.to_port() for record in records],
+        "planned": [record.to_port() for record in planned],
+    }
+
+
+@router.post("/{definition_id}/runs/{run_id}/undo")
+@require_permission("runs", "write")
+async def undo_workflow_run(definition_id: str, run_id: str, body: WorkflowUndoRequest, request: Request) -> dict[str, Any]:
+    """Undo a run's reversible actions, newest first (N10, §21).
+
+    ``dry_run=true`` reports the plan without touching anything.  Each record ends
+    in one terminal state, so repeating the request cannot apply a compensation
+    twice.
+    """
+    from deerflow.apps.session import get_session_manager
+    from deerflow.workflow.undo_service import execute_run_undo, plan_run_undo
+
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    await _resolve_definition(request, definition_id, user)
+    run_mgr = get_run_manager(request)
+    record = await _require_run_owner(request, run_mgr, run_id)
+    repo = _undo_repo(request)
+
+    rows = await repo.list_by_run(run_id, user_id=str(user.id))
+    planned = plan_run_undo(rows)
+    outcomes = await execute_run_undo(
+        planned,
+        repo=repo,
+        user_id=str(user.id),
+        sandbox_factory=_sandbox_factory(request, record.thread_id, str(user.id)),
+        session_manager=get_session_manager(),
+        dry_run=body.dry_run,
+    )
+    return {
+        "run_id": run_id,
+        "dry_run": body.dry_run,
+        "planned": len(planned),
+        "outcomes": [outcome.to_port() for outcome in outcomes],
+    }

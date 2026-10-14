@@ -46,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0018_scheduled_task_triggers"
+HEAD = "0019_human_task_kind_and_undo"
 BASELINE = "0001_baseline"
 
 

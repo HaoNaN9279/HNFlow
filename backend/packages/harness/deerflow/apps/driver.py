@@ -53,6 +53,15 @@ class DriverWaitResult:
     detail: str = ""
 
 
+@dataclass
+class DriverUndoResult:
+    """Result of a driver ``undo`` call (N10, optional capability)."""
+
+    status: str  # "undone" | "unsupported" | "failed"
+    steps: int = 0
+    detail: str = ""
+
+
 @runtime_checkable
 class AppDriver(Protocol):
     """How one application family is driven."""
@@ -109,6 +118,42 @@ class AppDriver(Protocol):
         ...
 
 
+#: Optional N10 capability.  A driver that can roll back its own in-app steps
+#: declares ``supports_undo = True`` and implements ``undo(...)``.  Neither is
+#: part of the ``AppDriver`` protocol on purpose: adding a method to a
+#: ``runtime_checkable`` protocol would make every existing driver fail an
+#: ``isinstance`` check, and undo is genuinely optional — the engine falls back
+#: to a file-level backup when it is absent.
+
+
+def driver_supports_undo(driver: Any) -> bool:
+    """Whether *driver* declares **and** implements native undo.
+
+    Both halves are required: a driver that advertises the flag without the
+    method cannot honour it, and a driver with the method but no flag has not
+    promised anything.  A wrong answer here would make the approval preview
+    claim a rollback that does not exist.
+    """
+    return bool(getattr(driver, "supports_undo", False)) and callable(getattr(driver, "undo", None))
+
+
+def driver_undo(driver: Any, definition: AppDefinition, launch: DriverLaunch, *, steps: int = 1) -> DriverUndoResult:
+    """Ask the driver to undo *steps* in-app steps (N10).
+
+    Returns ``unsupported`` rather than raising when the capability is absent, so
+    callers get a truthful answer instead of an ``AttributeError`` and can record
+    that no compensation was possible.
+    """
+    if not driver_supports_undo(driver):
+        return DriverUndoResult(status="unsupported", detail=f"{getattr(driver, 'name', 'driver')} declares no undo support")
+    try:
+        return driver.undo(definition, launch, steps=steps)
+    except AppDriverError as exc:
+        return DriverUndoResult(status="failed", detail=str(exc))
+    except Exception as exc:  # noqa: BLE001 — a driver boundary; compensation must not mask the node error
+        return DriverUndoResult(status="failed", detail=f"{type(exc).__name__}: {exc}")
+
+
 class AppDriverError(RuntimeError):
     """Raised by a driver when an operation cannot be performed."""
 
@@ -116,7 +161,10 @@ class AppDriverError(RuntimeError):
 __all__ = [
     "DriverLaunch",
     "DriverScriptResult",
+    "DriverUndoResult",
     "DriverWaitResult",
     "AppDriver",
     "AppDriverError",
+    "driver_supports_undo",
+    "driver_undo",
 ]

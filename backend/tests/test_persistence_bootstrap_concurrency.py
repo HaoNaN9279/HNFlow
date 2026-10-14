@@ -28,7 +28,7 @@ from deerflow.persistence.bootstrap import bootstrap_schema
 pytestmark = pytest.mark.asyncio
 
 
-HEAD = "0018_scheduled_task_triggers"
+HEAD = "0019_human_task_kind_and_undo"
 
 
 def _url(tmp_path: Path) -> str:

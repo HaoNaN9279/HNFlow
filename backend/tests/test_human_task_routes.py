@@ -72,7 +72,7 @@ def test_list_success_passes_user_id_to_repo():
     response = client.get("/api/human-tasks")
     assert response.status_code == 200
     assert response.json() == [{"id": "ht-1", "status": "pending"}]
-    mock_repo.list_by_user.assert_awaited_once_with(_STUB_USER_ID, status=None)
+    mock_repo.list_by_user.assert_awaited_once_with(_STUB_USER_ID, status=None, kind=None)
 
 
 def test_list_invalid_status_returns_422():
@@ -95,7 +95,7 @@ def test_list_valid_status_is_passed_through():
 
     response = client.get("/api/human-tasks", params={"status": "pending"})
     assert response.status_code == 200
-    mock_repo.list_by_user.assert_awaited_once_with(_STUB_USER_ID, status="pending")
+    mock_repo.list_by_user.assert_awaited_once_with(_STUB_USER_ID, status="pending", kind=None)
 
 
 # ── POST /{task_id}/submit ────────────────────────────────────────────────────

@@ -230,7 +230,7 @@ class TestExecFile:
 
         with patch("deerflow.workflow.executors.data.sandbox_tools.ensure_sandbox_initialized", return_value=mock_sandbox):
             rt = _dummy_runtime()
-            result = exec_file(rt, {"operation": "read", "path": "/mnt/user-data/workspace/f.txt"}, {"in": None})
+            result = asyncio.run(exec_file(rt, {"operation": "read", "path": "/mnt/user-data/workspace/f.txt"}, {"in": None}))
 
         assert result == {"out": "file contents here"}
         mock_sandbox.read_file.assert_called_once_with("/mnt/user-data/workspace/f.txt", start_line=None, end_line=None)
@@ -241,7 +241,7 @@ class TestExecFile:
 
         with patch("deerflow.workflow.executors.data.sandbox_tools.ensure_sandbox_initialized", return_value=mock_sandbox):
             rt = _dummy_runtime()
-            result = exec_file(rt, {"operation": "write", "path": "/mnt/user-data/outputs/o.txt", "content": "hello", "crash_confirm": True}, {})
+            result = asyncio.run(exec_file(rt, {"operation": "write", "path": "/mnt/user-data/outputs/o.txt", "content": "hello", "crash_confirm": True}, {}))
 
         assert result == {"out": "hello"}
         mock_sandbox.write_file.assert_called_once_with("/mnt/user-data/outputs/o.txt", "hello", append=False)
@@ -251,7 +251,7 @@ class TestExecFile:
         with patch("deerflow.workflow.executors.data.sandbox_tools.ensure_sandbox_initialized"):
             rt = _dummy_runtime()
             with pytest.raises(WorkflowExecutionError, match="crash_confirm"):
-                exec_file(rt, {"operation": "write", "path": "/tmp/x"}, {})
+                asyncio.run(exec_file(rt, {"operation": "write", "path": "/tmp/x"}, {}))
 
 
 class TestExecWait:

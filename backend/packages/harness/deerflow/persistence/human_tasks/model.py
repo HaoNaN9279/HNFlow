@@ -16,6 +16,10 @@ class HumanTaskRow(Base):
     workflow_run_id: Mapped[str] = mapped_column(String(64))
     node_id: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(32))
+    #: ``"task"`` for a plain ``human:task`` node; ``"approval"`` for the task an
+    #: irreversible node suspends on (N10).  Additive: pre-N10 rows and code paths
+    #: keep the ``"task"`` default.
+    kind: Mapped[str] = mapped_column(String(32), default="task", server_default="task")
     description: Mapped[str] = mapped_column(String(512), default="")
     inputs_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     output_spec: Mapped[dict] = mapped_column(JSON, default=dict)
