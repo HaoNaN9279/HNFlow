@@ -149,19 +149,23 @@ def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, Base
     return {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}
 
 
-def _app_tools(*, app_config: Any) -> dict[str, BaseTool]:
+def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | None = None) -> dict[str, BaseTool]:
     """One tool per *available* registered local application (N5).
 
     Each tool runs one script command against the application's shared session
     manager (launch/attach → run → collect), returning stdout and artifact
     paths as JSON.  Unavailable applications (driver cannot construct, command
     missing) are skipped so the tool list stays truthful — fail-open per app.
+    N6: when an instance repository is available it is written through
+    best-effort (the tool runs outside the workflow node context, so the repo is
+    captured at gateway-build time from ``runtime.context``).
     """
     from langchain_core.tools import StructuredTool
     from pydantic import BaseModel, Field
 
     from deerflow.apps.registry import AppRegistry
     from deerflow.config.apps_config import AppsConfig, get_apps_config
+    from deerflow.runtime.user_context import DEFAULT_USER_ID
 
     if isinstance(app_config, AppsConfig):
         apps_config = app_config
@@ -169,6 +173,7 @@ def _app_tools(*, app_config: Any) -> dict[str, BaseTool]:
         nested = getattr(app_config, "apps", None)
         apps_config = nested if isinstance(nested, AppsConfig) else get_apps_config()
     registry = AppRegistry.from_config(apps_config)
+    owner = user_id or DEFAULT_USER_ID
 
     class AppRunInput(BaseModel):
         script: str = Field(default="", description="Script command to run in the application (may be empty).")
@@ -179,12 +184,16 @@ def _app_tools(*, app_config: Any) -> dict[str, BaseTool]:
             import asyncio
             import json
 
+            from deerflow.apps.persistence import record_launch, record_operation
             from deerflow.apps.session import get_session_manager
 
             manager = get_session_manager()
             session = await asyncio.to_thread(manager.launch, app_name)
+            await record_launch(instance_repo, session, user_id=owner)
             result = await asyncio.to_thread(manager.run_script, session, script=script or None, args=list(args or []))
+            await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"scripts_run": 1})
             artifacts = await asyncio.to_thread(manager.collect, session)
+            await record_operation(instance_repo, session, user_id=owner, status=session.status, resource_deltas={"artifacts": len(artifacts)})
             return json.dumps(
                 {
                     "app": app_name,
@@ -218,7 +227,7 @@ def _app_tools(*, app_config: Any) -> dict[str, BaseTool]:
     return tools
 
 
-def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None) -> ToolGateway:
+def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None, instance_repo: Any = None, user_id: str | None = None) -> ToolGateway:
     """Build the gateway with the minimal builtin + sandbox (+ app) providers.
 
     Fail-open per provider: a provider that cannot be constructed (missing
@@ -240,7 +249,7 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
         logger.warning("Tool gateway: builtin provider unavailable: %s", e)
 
     try:
-        gateway.add_provider(StaticToolProvider(PROVIDER_APP, _app_tools(app_config=app_config)))
+        gateway.add_provider(StaticToolProvider(PROVIDER_APP, _app_tools(app_config=app_config, instance_repo=instance_repo, user_id=user_id)))
     except Exception as e:  # noqa: BLE001 - fail-open provider
         logger.warning("Tool gateway: app provider unavailable: %s", e)
 
@@ -269,6 +278,7 @@ def resolve_capability_tools(
     user_id: str | None = None,
     model_name: str | None = None,
     app_config: Any = None,
+    instance_repo: Any = None,
 ) -> list[BaseTool]:
     """Resolve an AI node's tool set from its capability groups (C1).
 
@@ -297,7 +307,7 @@ def resolve_capability_tools(
         )
         return []
 
-    gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config)
+    gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
     return gateway.resolve_all(sorted(allowed))
 
 

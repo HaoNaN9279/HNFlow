@@ -19,7 +19,7 @@ import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from deerflow.extensions import reset_loaded_extensions
-from deerflow.runtime.context_keys import WORKFLOW_RUNTIME_CONTEXT_KEY
+from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, WORKFLOW_RUNTIME_CONTEXT_KEY
 from deerflow.runtime.runs.worker import RunContext, _build_runtime_context, run_agent
 
 
@@ -58,6 +58,27 @@ def test_build_runtime_context_caller_supplied_workflow_runtime_never_wins():
 
     assert overridden[WORKFLOW_RUNTIME_CONTEXT_KEY] is authoritative
     assert WORKFLOW_RUNTIME_CONTEXT_KEY not in dropped
+
+
+def test_build_runtime_context_installs_app_instance_repo():
+    repo = object()
+    context = _build_runtime_context("thread-1", "run-1", None, app_instance_repo=repo)
+    assert context[APP_INSTANCE_REPO_CONTEXT_KEY] is repo
+
+
+def test_build_runtime_context_omits_app_instance_repo_by_default():
+    assert APP_INSTANCE_REPO_CONTEXT_KEY not in _build_runtime_context("thread-1", "run-1", None)
+
+
+def test_build_runtime_context_caller_supplied_app_repo_never_wins():
+    forged = object()
+    authoritative = object()
+
+    overridden = _build_runtime_context("thread-1", "run-1", {APP_INSTANCE_REPO_CONTEXT_KEY: forged}, app_instance_repo=authoritative)
+    dropped = _build_runtime_context("thread-1", "run-1", {APP_INSTANCE_REPO_CONTEXT_KEY: forged})
+
+    assert overridden[APP_INSTANCE_REPO_CONTEXT_KEY] is authoritative
+    assert APP_INSTANCE_REPO_CONTEXT_KEY not in dropped
 
 
 def _bridge():
@@ -113,3 +134,5 @@ async def test_run_agent_passes_workflow_runtime_singletons(monkeypatch, _isolat
     assert workflow_runtime["run_manager"] is run_manager
     assert workflow_runtime["stream_bridge"] is bridge
     assert workflow_runtime["run_ctx"] is ctx
+    # N6: the requested ctx's instance repo is forwarded under its own key.
+    assert seen["kwargs"]["app_instance_repo"] is ctx.app_instance_repo

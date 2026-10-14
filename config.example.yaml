@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 34
+config_version: 35
 
 # ============================================================================
 # Logging
@@ -2032,6 +2032,8 @@ mcp_tasks:
 #
 # apps:
 #   enabled: false
+#   persist_sessions: true        # persist instance records (SQL backends only)
+#   session_retention_days: 30    # cleanup window for terminal instance records
 #   definitions:
 #     example-cli:
 #       driver: cli                 # cli | mock
@@ -2043,6 +2045,8 @@ mcp_tasks:
 #       timeout_seconds: 600
 apps:
   enabled: false
+  persist_sessions: true
+  session_retention_days: 30
   definitions: {}
 
 # ============================================================================

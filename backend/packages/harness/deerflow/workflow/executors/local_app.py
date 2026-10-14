@@ -16,16 +16,23 @@ on the host, not in the command sandbox.
 
 Driver calls are synchronous (subprocess / HTTP) and are offloaded to a worker
 thread so the LangGraph event loop is never blocked.
+
+N6: after each successful operation the executor writes the instance record
+through the injected :class:`~deerflow.persistence.app_instances.AppInstanceRepository`
+(best-effort; a persistence failure never fails the live operation).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
+from deerflow.apps.persistence import record_launch, record_operation
 from deerflow.apps.session import AppError, AppSessionManager, get_session_manager
-from deerflow.runtime.context_keys import APP_RUNTIME_CONTEXT_KEY
+from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUNTIME_CONTEXT_KEY
+from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.executors import WorkflowExecutionError
 
@@ -41,14 +48,28 @@ def _require_crash_confirm(params: dict[str, Any], node_label: str) -> None:
         raise WorkflowExecutionError(f"{node_label}: node requires crash_confirm=true (non-idempotent execution must be explicitly confirmed)")
 
 
+def _context(runtime: WorkflowRuntime) -> dict[str, Any]:
+    context = getattr(runtime, "context", None)
+    return context if isinstance(context, dict) else {}
+
+
 def _manager(runtime: WorkflowRuntime) -> AppSessionManager:
     """Resolve the session manager from runtime context, else the process singleton."""
-    context = getattr(runtime, "context", None)
-    if isinstance(context, dict):
-        candidate = context.get(APP_RUNTIME_CONTEXT_KEY)
-        if isinstance(candidate, AppSessionManager):
-            return candidate
+    candidate = _context(runtime).get(APP_RUNTIME_CONTEXT_KEY)
+    if isinstance(candidate, AppSessionManager):
+        return candidate
     return get_session_manager()
+
+
+def _repo(runtime: WorkflowRuntime) -> Any | None:
+    """Resolve the durable instance repository (N6), or ``None`` when absent."""
+    return _context(runtime).get(APP_INSTANCE_REPO_CONTEXT_KEY)
+
+
+def _user_id(runtime: WorkflowRuntime) -> str:
+    """Resolve the record owner; the single-user build always runs as ``default``."""
+    value = _context(runtime).get("user_id")
+    return value if isinstance(value, str) and value else DEFAULT_USER_ID
 
 
 def _require_app(params: dict[str, Any], node_label: str) -> str:
@@ -83,6 +104,8 @@ async def exec_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     except AppError as exc:
         raise WorkflowExecutionError(f"app:launch: {exc}") from exc
 
+    await record_launch(_repo(runtime), session, user_id=_user_id(runtime))
+
     port = session.to_port()
     return {"session": port, "out": port}
 
@@ -105,9 +128,15 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
     manager = _manager(runtime)
     try:
         session = manager.resolve(app, inputs.get("session"))
+        started = time.monotonic()
         result = await asyncio.to_thread(manager.run_script, session, script=script, args=args, env=env)
     except AppError as exc:
         raise WorkflowExecutionError(f"app:script: {exc}") from exc
+
+    deltas: dict[str, Any] = {"scripts_run": 1, "busy_seconds": round(time.monotonic() - started, 3)}
+    if result.status == "failed":
+        deltas["last_error"] = result.stderr or "script failed"
+    await record_operation(_repo(runtime), session, user_id=_user_id(runtime), status=session.status, resource_deltas=deltas)
 
     return {
         "session": session.to_port(),
@@ -137,9 +166,18 @@ async def exec_app_wait(runtime: WorkflowRuntime, params: dict[str, Any], inputs
     manager = _manager(runtime)
     try:
         session = manager.resolve(app, inputs.get("session"))
+        started = time.monotonic()
         result = await asyncio.to_thread(manager.wait, session, reason=reason, timeout=timeout)
     except AppError as exc:
         raise WorkflowExecutionError(f"app:wait: {exc}") from exc
+
+    await record_operation(
+        _repo(runtime),
+        session,
+        user_id=_user_id(runtime),
+        status=session.status,
+        resource_deltas={"waits": 1, "busy_seconds": round(time.monotonic() - started, 3)},
+    )
 
     return {"session": session.to_port(), "out": {"status": result.status, "detail": result.detail}}
 
@@ -164,6 +202,14 @@ async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inp
         artifacts = await asyncio.to_thread(manager.collect, session, globs=globs)
     except AppError as exc:
         raise WorkflowExecutionError(f"app:collect: {exc}") from exc
+
+    await record_operation(
+        _repo(runtime),
+        session,
+        user_id=_user_id(runtime),
+        status=session.status,
+        resource_deltas={"artifacts": len(artifacts)},
+    )
 
     return {"session": session.to_port(), "out": artifacts[0] if artifacts else None, "artifacts": artifacts}
 

@@ -11,7 +11,7 @@ from deerflow.apps.drivers.mock import MOCK_ARTIFACT_NAME
 from deerflow.apps.registry import AppRegistry
 from deerflow.apps.session import AppSessionManager, reset_session_manager
 from deerflow.config.apps_config import AppDefinition, AppsConfig
-from deerflow.runtime.context_keys import APP_RUNTIME_CONTEXT_KEY
+from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUNTIME_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.danger import dangerous_node_types
 from deerflow.workflow.executors import build_default_registry
@@ -98,3 +98,67 @@ def test_launch_rejects_bad_mode(tmp_path):
     rt = _runtime(manager)
     with pytest.raises(Exception, match="mode"):
         asyncio.run(exec_app_launch(rt, {"app": "demo", "mode": "explode", "crash_confirm": True}, {}))
+
+
+# ── N6: best-effort instance persistence ─────────────────────────────────────
+
+
+class _RecordingRepo:
+    def __init__(self) -> None:
+        self.created: list[dict] = []
+        self.operations: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.created.append(kwargs)
+        return {"id": kwargs["session_id"]}
+
+    async def record_operation(self, session_id, **kwargs):
+        self.operations.append({"session_id": session_id, **kwargs})
+        return {"id": session_id}
+
+    async def set_status(self, session_id, **kwargs):
+        return {"id": session_id}
+
+
+def _runtime_with_repo(manager: AppSessionManager, repo) -> WorkflowRuntime:
+    return WorkflowRuntime(context={APP_RUNTIME_CONTEXT_KEY: manager, APP_INSTANCE_REPO_CONTEXT_KEY: repo}, state={})
+
+
+def test_executors_write_through_instance_records(tmp_path):
+    manager = _manager(tmp_path)
+    repo = _RecordingRepo()
+    rt = _runtime_with_repo(manager, repo)
+
+    launched = asyncio.run(exec_app_launch(rt, {"app": "demo", "crash_confirm": True}, {}))
+    assert repo.created[0]["app_name"] == "demo"
+    assert repo.created[0]["user_id"] == "default"
+    assert repo.created[0]["session_id"] == launched["session"]["session_id"]
+
+    asyncio.run(exec_app_script(rt, {"app": "demo", "script": "render", "crash_confirm": True}, {"session": launched["session"]}))
+    script_op = repo.operations[-1]
+    assert script_op["resource_deltas"]["scripts_run"] == 1
+    assert "busy_seconds" in script_op["resource_deltas"]
+    assert "last_error" not in script_op["resource_deltas"]
+
+    asyncio.run(exec_app_wait(rt, {"app": "demo", "for": "render"}, {"session": launched["session"]}))
+    assert repo.operations[-1]["resource_deltas"]["waits"] == 1
+
+    asyncio.run(exec_app_collect(rt, {"app": "demo"}, {"session": launched["session"]}))
+    assert repo.operations[-1]["resource_deltas"]["artifacts"] == 1
+
+
+def test_failing_repo_does_not_break_execution(tmp_path):
+    manager = _manager(tmp_path)
+
+    class _Boom:
+        async def create(self, **kwargs):
+            raise RuntimeError("db down")
+
+        async def record_operation(self, session_id, **kwargs):
+            raise RuntimeError("db down")
+
+    rt = _runtime_with_repo(manager, _Boom())
+    launched = asyncio.run(exec_app_launch(rt, {"app": "demo", "crash_confirm": True}, {}))
+    assert launched["session"]["status"] == "ready"
+    scripted = asyncio.run(exec_app_script(rt, {"app": "demo", "script": "render", "crash_confirm": True}, {"session": launched["session"]}))
+    assert scripted["out"]["status"] == "completed"

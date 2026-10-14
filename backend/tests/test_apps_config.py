@@ -61,3 +61,26 @@ def test_singleton_defaults_disabled_then_loads_and_resets():
 def test_env_values_expand_stripping():
     definition = AppDefinition(driver="cli", command="  python  ")
     assert definition.command == "python"
+
+
+def test_instance_management_defaults():
+    config = AppsConfig()
+    assert config.persist_sessions is True
+    assert config.session_retention_days == 30
+
+
+def test_session_retention_days_range_enforced():
+    with pytest.raises(ValidationError):
+        AppsConfig(session_retention_days=0)
+    with pytest.raises(ValidationError):
+        AppsConfig(session_retention_days=4000)
+    assert AppsConfig(session_retention_days=90).session_retention_days == 90
+
+
+def test_load_reads_instance_management_fields():
+    reset_apps_config()
+    load_apps_config_from_dict({"enabled": True, "persist_sessions": False, "session_retention_days": 7})
+    cfg = get_apps_config()
+    assert cfg.persist_sessions is False
+    assert cfg.session_retention_days == 7
+    reset_apps_config()

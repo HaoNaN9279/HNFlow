@@ -90,6 +90,8 @@ class AppsConfig(BaseModel):
 
     enabled: bool = Field(default=False, description="Master switch for the local-application access layer.")
     definitions: dict[str, AppDefinition] = Field(default_factory=dict, description="Application name → definition.")
+    persist_sessions: bool = Field(default=True, description="Persist instance records to the SQL database when one is configured (ignored on the in-memory backend).")
+    session_retention_days: int = Field(default=30, ge=1, le=3650, description="Retention window for archived/stopped/orphaned instance records swept by the cleanup endpoint.")
 
     @field_validator("definitions")
     @classmethod

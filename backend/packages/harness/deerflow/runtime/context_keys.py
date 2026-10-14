@@ -17,3 +17,9 @@ WORKFLOW_RUNTIME_CONTEXT_KEY: Final[str] = "__workflow_runtime"
 #: the ``app:*`` workflow executors share one session map. A caller-supplied
 #: value for this host-internal key is never authoritative.
 APP_RUNTIME_CONTEXT_KEY: Final[str] = "__app_session_manager"
+#: Injection point for the durable local-application instance repository (N6):
+#: the Gateway run worker packages an ``AppInstanceRepository`` under this key
+#: so the ``app:*`` executors write instance records through (best-effort). It
+#: is ``None`` on the memory backend. A caller-supplied value for this
+#: host-internal key is never authoritative.
+APP_INSTANCE_REPO_CONTEXT_KEY: Final[str] = "__app_instance_repo"

@@ -1,0 +1,28 @@
+{
+  "job": "P1_长期实例管理",
+  "plan": "plan.md",
+  "started_at": "2026-10-13T18:37:48",
+  "status": "completed",
+  "steps": [
+    { "id": "S1", "name": "迁移 0017_app_instances + persistence/app_instances 仓库 + 测试", "status": "completed" },
+    { "id": "S2", "name": "apps_config 保留期/持久化开关 + config.example + config_version + reload 测试", "status": "completed" },
+    { "id": "S3", "name": "apps/persistence 写穿透 helpers + context_keys 新键 + worker 注入 + 单测", "status": "completed" },
+    { "id": "S4", "name": "执行器 + 工具网关 provider 写穿透 + 集成测试", "status": "completed" },
+    { "id": "S5", "name": "deps.py 构造 repo + 启动 mark_orphaned", "status": "completed" },
+    { "id": "S6", "name": "routers/apps 扩展 + 路由测试", "status": "completed" },
+    { "id": "S7", "name": "文档同步 + 全量回归 + 提交", "status": "completed" }
+  ],
+  "decisions": [
+    "范围：只做 N6（N7–N11 各自独立计划）",
+    "写入策略：best-effort 写穿透（失败不回滚 live 操作，仅告警）",
+    "恢复语义：重启标记 orphaned，不自动重连",
+    "归档/清理：状态机 + cleanup API（保留期配置），不做定时清理",
+    "前端：本切片不动（后端 + API only）",
+    "资源累计：仅轻量计数（scripts_run/artifacts/busy_seconds/last_error）"
+  ],
+  "findings": [
+    "迁移 HEAD 由 0016_drop_feedback_table 升到 0017_app_instances；6 个测试文件的 HEAD 常量同步更新。",
+    "工具网关 app provider 无 runtime.context，故 repo 经 build_default_tool_gateway/resolve_capability_tools 的 instance_repo 参数在 AI 节点装配时注入（闭包捕获）。",
+    "config_version 34→35。"
+  ]
+}

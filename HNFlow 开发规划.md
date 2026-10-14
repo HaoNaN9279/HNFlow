@@ -92,7 +92,7 @@
 | N3 | 能力包契约 | §5.5 | permissions/evals/tool_schema_version/context_budget/required-secrets | ⬜ 未开始 |
 | N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ◐ P1 切片 1：注册表/会话/驱动（cli/mock）已落地；驱动矩阵扩展、共享/抢占、DB 持久化随后续切片 |
 | N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ✅ P1 切片 1 已落地（+ 工具网关 `app` provider） |
-| N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ⬜ P1 |
+| N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ◐ P1 切片 2：持久化实例记录（`app_instances`）+ 列表/详情/close/archive/delete/cleanup + 启动孤儿标记 + 资源累计已落地 |
 | N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ | ⬜ P1 |
 | N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 | ⬜ P1 |
 | N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 | ⬜ P1 |
@@ -128,9 +128,11 @@
 
 > **进度（切片 1：N4+N5 已落地）**：`deerflow/apps/`（应用注册表 `registry.py` + 驱动协议 `driver.py` + 会话管理 `session.py` + `drivers/{cli,mock}.py`）、`config.yaml apps:` 段（重启生效，`config_version 34`）、4 个 `app:*` 节点与执行器（launch/script 非幂等 + 危险节点，wait/collect 幂等）、工具网关 `app` provider、Gateway `GET /api/apps`+`/api/apps/sessions`、运行期会话管理器注入、前端节点目录/表单/校验/i18n 全部落地。**app 驱动运行在宿主**——「命令必须走 sandbox」的显式例外（GUI/长驻进程无法进容器沙箱）。Unity 驱动经决定本切片跳过；会话暂为进程内内存态（DB 持久化随 N6）。切片 2+（N6–N11）各自独立计划。
 
+> **进度（切片 2：N6 长期实例管理已落地）**：新表 `app_instances`（`persistence/app_instances/`，迁移 `0017`）+ `AppInstanceRepository`（CRUD / 条件状态转移 / archive / delete / cleanup / `mark_orphaned` / `count_by_status`）；异步执行器与工具网关 `app` provider 经 `apps/persistence.py` **best-effort 写穿透**（失败仅告警，不回滚 live 操作；memory 后端 / `apps.persist_sessions=false` 自动退化为 no-op），repo 经 `APP_INSTANCE_REPO_CONTEXT_KEY` 注入；Gateway 启动把上一进程遗留的 `ready`/`busy` 行标为 `orphaned`（不自动重连）；`/api/apps/sessions` 扩展为持久化列表（`status`/`include_archived`/`include_orphaned` 过滤）+ 详情 / close / archive / delete / cleanup（管理端点在 memory 后端 503）；每实例轻量资源累计（`scripts_run`/`artifacts`/`busy_seconds`/`last_error`）。`config_version` 34→35（`apps.persist_sessions` / `apps.session_retention_days`）。N7（触发调度）/N8（资源治理）待做；前端本切片未改。
+
 1. **N4 本地软件接入层**（应用注册表 / 实例会话 / 驱动矩阵 / 共享）。— ◐ 切片 1 完成主体
 2. **N5 `app` 类节点**（launch/script/wait/collect）+ tool 网关 `app` provider。— ✅ 切片 1
-3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。— ⬜
+3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。— ◐ N6 切片 2 完成主体（持久化/恢复/归档/清理/资源累计）；N7 待做
 4. **N8 本地资源治理**（GPU/内存/磁盘、License 并发、独占锁）。— ⬜
 5. **N9 文件/资产 + 跨软件契约**。— ⬜
 6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。— ⬜
@@ -158,7 +160,7 @@
 | M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 | ✅ 达成（C4 版本范围校验顺延） |
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
-| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 完成；N6/N7/N8 待做 |
+| M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 完成；N7/N8 待做 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ⬜ 未开始 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |

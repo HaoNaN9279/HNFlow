@@ -46,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0016_drop_feedback_table"
+HEAD = "0017_app_instances"
 BASELINE = "0001_baseline"
 
 

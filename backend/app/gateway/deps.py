@@ -423,6 +423,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
 
         app.state.thread_store = make_thread_store(sf, app.state.store)
         if sf is not None:
+            from deerflow.persistence.app_instances import AppInstanceRepository
             from deerflow.persistence.human_tasks import HumanTaskRepository
             from deerflow.persistence.mcp_tasks import McpTaskRepository
             from deerflow.persistence.scheduled_task_runs import (
@@ -436,12 +437,32 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
             app.state.human_task_repo = HumanTaskRepository(sf)
+            # Durable local-application instance records (N6). Honors the
+            # ``apps.persist_sessions`` kill switch; live sessions still work
+            # without it (the executors' write-through becomes a no-op).
+            if getattr(getattr(config, "apps", None), "persist_sessions", True):
+                app.state.app_instance_repo = AppInstanceRepository(sf)
+            else:
+                app.state.app_instance_repo = None
         else:
             app.state.mcp_task_repo = None
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
             app.state.workflow_definition_repo = None
             app.state.human_task_repo = None
+            app.state.app_instance_repo = None
+
+        # Startup recovery (N6): instances left active by a previous process are
+        # marked ``orphaned`` — the process-local session map is gone, so a
+        # persisted ``ready``/``busy`` row can no longer be trusted. No automatic
+        # re-attach (that needs the driver and belongs to N7).
+        if getattr(app.state, "app_instance_repo", None) is not None:
+            try:
+                orphaned = await app.state.app_instance_repo.mark_orphaned()
+                if orphaned:
+                    logger.info("Startup recovery: marked %d app instance(s) orphaned", orphaned)
+            except Exception:  # noqa: BLE001 - recovery is best-effort
+                logger.warning("Startup recovery: app instance orphan marking failed", exc_info=True)
 
         # Run event store. The store and the matching ``run_events_config`` are
         # both frozen at startup so ``get_run_context`` does not combine a
@@ -589,6 +610,19 @@ def get_human_task_repo(request: Request):
     return val
 
 
+def get_app_instance_repo(request: Request):
+    """Return the durable app-instance repository, or 503 on the memory backend.
+
+    Required by the instance *management* routes (detail/close/archive/delete/
+    cleanup). Read-only ``GET /api/apps/sessions`` falls back to the live
+    in-memory sessions when the repository is absent.
+    """
+    val = getattr(request.app.state, "app_instance_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="App instance repo not available")
+    return val
+
+
 def get_mcp_task_repo(request: Request):
     val = getattr(request.app.state, "mcp_task_repo", None)
     if val is None:
@@ -624,6 +658,7 @@ def get_run_context(request: Request) -> RunContext:
         app_config=get_config(),
         extensions=getattr(request.app.state, "extensions", None),
         on_run_completed=getattr(request.app.state, "scheduled_task_service", None).handle_run_completion if getattr(request.app.state, "scheduled_task_service", None) is not None else None,
+        app_instance_repo=getattr(request.app.state, "app_instance_repo", None),
     )
 
 

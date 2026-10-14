@@ -55,3 +55,39 @@ def test_app_tool_invocation_runs_script_and_collects(tmp_path: Path):
 def test_disabled_apps_expose_no_tools():
     gateway = build_default_tool_gateway(app_config=AppsConfig(enabled=False))
     assert gateway.resolve("app_demo") is None
+
+
+def test_app_tool_writes_through_instance_repo(tmp_path: Path):
+    load_apps_config_from_dict(
+        {
+            "enabled": True,
+            "definitions": {"demo": {"driver": "mock", "description": "demo app", "working_dir": str(tmp_path)}},
+        }
+    )
+    reset_session_manager()
+
+    class _Repo:
+        def __init__(self):
+            self.created: list[dict] = []
+            self.operations: list[dict] = []
+
+        async def create(self, **kwargs):
+            self.created.append(kwargs)
+            return {"id": kwargs["session_id"]}
+
+        async def record_operation(self, session_id, **kwargs):
+            self.operations.append({"session_id": session_id, **kwargs})
+            return {"id": session_id}
+
+    repo = _Repo()
+    config = AppsConfig(enabled=True, definitions={"demo": AppDefinition(driver="mock", description="demo app", working_dir=str(tmp_path))})
+    gateway = build_default_tool_gateway(app_config=config, instance_repo=repo, user_id="user-7")
+    tool = gateway.resolve("app_demo")
+    assert tool is not None
+
+    asyncio.run(tool.ainvoke({"script": "render", "args": []}))
+    assert repo.created[0]["user_id"] == "user-7"
+    assert repo.created[0]["app_name"] == "demo"
+    deltas = [op["resource_deltas"] for op in repo.operations]
+    assert {"scripts_run": 1} in deltas
+    assert {"artifacts": 1} in deltas

@@ -237,3 +237,79 @@ async def test_sqlite_runtime_does_not_mark_thread_error_when_newer_run_is_succe
     assert thread_store.status_updates == []
     assert stream_bridge.publish_end_calls == ["old-running"]
     assert stream_bridge.cleanup_calls == [("old-running", 60.0)]
+
+
+@pytest.mark.anyio
+async def test_sqlite_runtime_marks_orphaned_app_instances_on_startup(monkeypatch, tmp_path):
+    """N6: an instance left ``ready`` by a previous process is marked orphaned."""
+    from deerflow.config.database_config import DatabaseConfig
+    from deerflow.persistence.app_instances import AppInstanceRepository
+    from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
+
+    # Simulate a previous process: seed a live instance, then shut the engine down.
+    await init_engine_from_config(DatabaseConfig(backend="sqlite", sqlite_dir=str(tmp_path)))
+    seeded_sf = get_session_factory()
+    assert seeded_sf is not None
+    await AppInstanceRepository(seeded_sf).create(session_id="app-1", user_id="default", app_name="demo", driver="mock", status="ready")
+    await close_engine()
+
+    app = FastAPI()
+    config = SimpleNamespace(
+        database=SimpleNamespace(backend="sqlite", checkpoint_channel_mode="full", checkpoint_delta=SimpleNamespace(snapshot_frequency=10)),
+        run_events=SimpleNamespace(backend="memory"),
+        stream_bridge=SimpleNamespace(recovered_stream_cleanup_delay_seconds=60.0),
+        apps=SimpleNamespace(persist_sessions=True),
+    )
+
+    async def fake_init_engine_from_config(_database):
+        await init_engine_from_config(DatabaseConfig(backend="sqlite", sqlite_dir=str(tmp_path)))
+
+    monkeypatch.setattr(engine_module, "init_engine_from_config", fake_init_engine_from_config)
+    monkeypatch.setattr(engine_module, "close_engine", close_engine)
+    monkeypatch.setattr(runtime_module, "make_stream_bridge", lambda _config: _fake_context(_FakeStreamBridge()))
+    monkeypatch.setattr(checkpointer_module, "make_checkpointer", lambda _config: _fake_context(object()))
+    monkeypatch.setattr(runtime_module, "make_store", lambda _config: _fake_context(object()))
+    monkeypatch.setattr(thread_meta_module, "make_thread_store", lambda _sf, _store: _FakeThreadStore())
+    monkeypatch.setattr(event_store_module, "make_run_event_store", lambda _config: object())
+    monkeypatch.setattr(gateway_deps, "RunManager", _FakeRunManager)
+    _FakeRunManager.instances.clear()
+    _FakeRunManager.recovered_runs = []
+
+    async with gateway_deps.langgraph_runtime(app, config):
+        assert app.state.app_instance_repo is not None
+        row = await app.state.app_instance_repo.get("app-1", user_id="default")
+        assert row is not None
+        assert row["status"] == "orphaned"
+
+
+@pytest.mark.anyio
+async def test_runtime_omits_app_instance_repo_when_persist_disabled(monkeypatch):
+    """N6: ``apps.persist_sessions=false`` opts the instance store out."""
+    app = FastAPI()
+    config = SimpleNamespace(
+        database=SimpleNamespace(backend="sqlite", checkpoint_channel_mode="full", checkpoint_delta=SimpleNamespace(snapshot_frequency=10)),
+        run_events=SimpleNamespace(backend="memory"),
+        stream_bridge=SimpleNamespace(recovered_stream_cleanup_delay_seconds=60.0),
+        apps=SimpleNamespace(persist_sessions=False),
+    )
+
+    async def fake_init_engine_from_config(_database):
+        return None
+
+    async def fake_close_engine():
+        return None
+
+    monkeypatch.setattr(engine_module, "init_engine_from_config", fake_init_engine_from_config)
+    monkeypatch.setattr(engine_module, "get_session_factory", lambda: object())
+    monkeypatch.setattr(engine_module, "close_engine", fake_close_engine)
+    monkeypatch.setattr(runtime_module, "make_stream_bridge", lambda _config: _fake_context(_FakeStreamBridge()))
+    monkeypatch.setattr(checkpointer_module, "make_checkpointer", lambda _config: _fake_context(object()))
+    monkeypatch.setattr(runtime_module, "make_store", lambda _config: _fake_context(object()))
+    monkeypatch.setattr(thread_meta_module, "make_thread_store", lambda _sf, _store: _FakeThreadStore())
+    monkeypatch.setattr(event_store_module, "make_run_event_store", lambda _config: object())
+    monkeypatch.setattr(gateway_deps, "RunManager", _FakeRunManager)
+    _FakeRunManager.instances.clear()
+    _FakeRunManager.recovered_runs = []
+
+    async with gateway_deps.langgraph_runtime(app, config):
+        assert app.state.app_instance_repo is None

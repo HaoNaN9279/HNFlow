@@ -49,6 +49,7 @@ from deerflow.runtime.checkpoint_state import (
     graph_writable_channels,
 )
 from deerflow.runtime.context_keys import (
+    APP_INSTANCE_REPO_CONTEXT_KEY,
     APP_RUNTIME_CONTEXT_KEY,
     CURRENT_RUN_PRE_EXISTING_MESSAGE_IDS_KEY,
     WORKFLOW_RUNTIME_CONTEXT_KEY,
@@ -377,6 +378,7 @@ def _build_runtime_context(
     task_store: Any | None = None,
     extensions: Any | None = None,
     workflow_runtime: dict[str, Any] | None = None,
+    app_instance_repo: Any | None = None,
 ) -> dict[str, Any]:
     """Build the dict that becomes ``ToolRuntime.context`` for the run.
 
@@ -433,6 +435,14 @@ def _build_runtime_context(
     from deerflow.apps.session import get_session_manager
 
     runtime_ctx[APP_RUNTIME_CONTEXT_KEY] = get_session_manager()
+    # Publish the durable instance repository (N6) so the app:* executors write
+    # instance records through it. Set after the caller merge and popped when
+    # absent, because a caller-supplied value for this host-internal key is
+    # never authoritative.
+    if app_instance_repo is not None:
+        runtime_ctx[APP_INSTANCE_REPO_CONTEXT_KEY] = app_instance_repo
+    else:
+        runtime_ctx.pop(APP_INSTANCE_REPO_CONTEXT_KEY, None)
     return runtime_ctx
 
 
@@ -457,6 +467,9 @@ class RunContext:
     # this process" (embedded/tests) and resolves to the config default.
     checkpoint_snapshot_frequency: int | None = None
     on_run_completed: Any | None = field(default=None)
+    #: Durable local-application instance repository (N6); ``None`` on the
+    #: memory backend or when ``apps.persist_sessions`` is off.
+    app_instance_repo: Any | None = field(default=None)
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:
@@ -815,6 +828,7 @@ async def run_agent(
                 "stream_bridge": bridge,
                 "run_ctx": ctx,
             },
+            app_instance_repo=ctx.app_instance_repo,
         )
         incoming_metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
         deerflow_trace_id = resolve_deerflow_trace_id(incoming_metadata.get(DEERFLOW_TRACE_METADATA_KEY))

@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from deerflow.config.agents_config import load_agent_config
+from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.registry import WorkflowExecutionError
@@ -55,20 +56,22 @@ def _resolve_node_tools(
     *,
     user_id: str | None,
     app_config: Any,
+    instance_repo: Any = None,
 ) -> list[Any]:
     """Resolve the AI node's tool set from its capability groups (C1).
 
     Delegates to the tool gateway (N1), which maps the groups' ``allowed-tools``
     union to concrete ``BaseTool`` objects.  Fail-open: a gateway/skill-storage
     failure degrades to an empty tool set rather than failing the node (the
-    three-layer prompt still executes).
+    three-layer prompt still executes).  ``instance_repo`` (N6) is forwarded so
+    the gateway's ``app`` provider writes instance records through.
     """
     if not capability_groups:
         return []
     try:
         from deerflow.workflow.tool_gateway import resolve_capability_tools
 
-        return resolve_capability_tools(capability_groups, user_id=user_id, app_config=app_config)
+        return resolve_capability_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
     except Exception:
         logger.warning("ai:llm_agent failed to resolve capability-group tools; continuing without tools", exc_info=True)
         return []
@@ -112,6 +115,7 @@ async def exec_llm_agent(
     context = runtime.context
     user_id = context.get("user_id")
     app_config = context.get("app_config")
+    instance_repo = context.get(APP_INSTANCE_REPO_CONTEXT_KEY)
     thread_id = context.get("thread_id")
     delegation_depth = context.get("delegation_depth", 0)
 
@@ -175,7 +179,7 @@ async def exec_llm_agent(
 
     # C1: assemble the node's real tool set from its capability groups' union of
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
-    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config)
+    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
 
     subagent_config = SubagentConfig(
         name=f"ai:{node_id}" if node_id else "ai:node",
