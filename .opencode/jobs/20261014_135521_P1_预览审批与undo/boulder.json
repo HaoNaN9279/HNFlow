@@ -2,8 +2,8 @@
   "job": "P1_预览审批与undo",
   "plan": "plan.md",
   "started_at": "2026-10-14T13:55:21",
-  "status": "in_progress",
-  "commit": null,
+  "status": "completed",
+  "commit": "b226e89",
   "scope": "P1 切片 6 = N10：不可逆操作的预览（纯函数）/ 审批（复用 HumanTask + interrupt，节点内两阶段）/ 执行前指纹复验 / 补偿与撤销（驱动原生 undo 优先，文件级备份回滚后备）。不含共享工作区治理（建议 N10b）、不含应用原生命中率实现、不含前端审批 UI",
   "resolved_questions": [
     "Q1 范围：只做 §21 后两点（预览/审批/undo），共享工作区治理独立为 N10b —— 用户确认按建议",
@@ -91,7 +91,10 @@
     "S7：get_app_config() 有副作用——它会重新加载 apps/assets 配置单例；预览路由**不能**把它放进 runtime context，否则一次只读预览会改写全局配置（测试当场抓到：assets.roots 被真实 config.yaml 覆盖）。",
     "S7：undo 记录里 backup_paths 必须与 targets **一一对齐**（None 表示「原本不存在」），否则 run 级撤销无法知道哪个备份对应哪个文件；已改 UndoRecord.backup_paths 为 list[str|None]。",
     "S7：run 级撤销里沙箱目标需要按 run 的 thread 取沙箱；取不到时宿主文件仍照常恢复，沙箱目标单独报 failed（诚实降级）。",
-    "S7：\test_workflow_undo_repository::test_list_by_run_is_oldest_first 依赖 created_at 严格递增，而 id 是随机 uuid——同微秒会变成随机序。已加微小 sleep 并在断言里显式校验时间戳非降序（同类 flake 在 test_human_task_repository 已存在，属既有问题）。"
+    "S7：\test_workflow_undo_repository::test_list_by_run_is_oldest_first 依赖 created_at 严格递增，而 id 是随机 uuid——同微秒会变成随机序。已加微小 sleep 并在断言里显式校验时间戳非降序（同类 flake 在 test_human_task_repository 已存在，属既有问题）。",
+    "S8：全量离线回归 77 failed / 10300 passed（对比 N9 基线 75 failed / 10160 passed）：75 项为既有平台/环境失败逐项一致；+2 为 flake——test_human_task_repository::test_list_by_user_scopes_and_orders（同微秒并列 + 随机 uuid 决胜导致顺序随机，已加时间间隔并显式校验时间戳非降序，属本切片可修的既有 flake）与 test_extension_task_lifecycle（10-40ms 预算的时序敏感测试，隔离运行 3 次即 0/1/2 失败波动，与 N10 无关）。",
+    "S8：前端本切片零改动；仍跑通 pnpm test（全绿）与 pnpm check（eslint + tsc 全绿）作为守门。",
+    "S8：文档同步：根 AGENTS.md（workflow 子系统新增 preview/approval/compensation/undo bullets）、backend/AGENTS.md（新增「Action Preview, Approval & Undo」小节 + Routers 表补 Workflows/Human tasks 两行 + 迁移 0019 条目）、HNFlow 开发规划.md（N10 行/P1 第 6 项/M4 行/切片 6 进度注）。"
   ],
   "baseline": {
     "backend_full_regression": "75 failed / 10160 passed / 104 skipped (N9)",
