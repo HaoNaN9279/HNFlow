@@ -1,0 +1,69 @@
+{
+  "job": "P1_环境探测与数据目录",
+  "plan": "plan.md",
+  "started_at": "2026-10-14T17:59:47",
+  "status": "completed",
+  "commit": "ae8128e",
+  "scope": "P1 切片 7 = N11 前两条：§22 环境探测（软件/插件/语言运行时/路径，与能力包绑定并在加载时校验）+ §22 数据目录规范（单机布局列表化 + 校验 + 只读报告）。不做 §22 第三条（备份/导出导入/迁移，N11b）",
+  "resolved_questions": [
+    "Q1 范围：本切片 = §22 前两条（环境探测 + 数据目录规范），备份/迁移列 N11b —— 用户确认（按建议）",
+    "Q2 探测失败语义：默认 warn-only（fail-open）+ 三态（ok/missing/mismatch）+ unknown 不算失败不算通过，apps.environment.require_on_load: true 为启动硬门 —— 用户确认（按建议）",
+    "Q3 需求声明：app 用 AppDefinition.requires（command 为 argv 列表）、能力包用 SKILL.md requires:（同一模型），接上悬空字段 version_command，只校验 enabled 技能 —— 用户确认（按建议）"
+  ],
+  "open_questions": [],
+  "steps": [
+    { "id": "S1", "name": "探测纯原语 environment/{spec,version,evaluate}.py（RequirementSpec / 三态 / 版本比较纯函数）", "status": "completed" },
+    { "id": "S2", "name": "探测执行器 environment/probe.py（which/路径/子进程 + 永不抛 + 短 TTL 缓存）", "status": "completed" },
+    { "id": "S3", "name": "配置 apps.environment + AppDefinition.requires + 接上 version_command（config_version 40）", "status": "completed" },
+    { "id": "S4", "name": "与能力包绑定：SKILL.md requires: 解析 + environment/requirements.py 校验（仅 enabled）", "status": "completed" },
+    { "id": "S5", "name": "数据目录规范：Paths.data_dirs()/check_data_dirs()/ensure_data_dirs()", "status": "completed" },
+    { "id": "S6", "name": "报告：启动校验 + GET /api/environment + python -m deerflow.environment（退出码）", "status": "completed" },
+    { "id": "S7", "name": "文档同步 + 全量回归 + ruff + 提交", "status": "completed" }
+  ],
+  "decisions": [
+    "D1 范围 = §22 前两条；备份/迁移（第三条）独立 N11b",
+    "D2 探测只读：不安装/不下载/不改环境/不写宿主；唯一创建动作是显式 ensure_data_dirs() 且只在 base_dir 内",
+    "D3 三态 + unknown：ok/missing/mismatch，unknown 既不算通过也不算失败（optional 项失败只降级不失败）",
+    "D4 版本比较纯函数：>= > <= < == = != ^ ~ * 与逗号组合；容忍 v 前缀/非数字后缀/段数不等；不可解析 → None → unknown，绝不猜 ok；不引入 packaging",
+    "D5 需求是声明式数据：RequirementSpec{kind,name,command,expect,optional}，kind ∈ executable/version/path/runtime/plugin；command 为 argv 列表（避免自造引号规则）；plugin 的相对路径相对该 app 的 working_dir，path 的相对路径相对进程 cwd；command/expect 落在存在性 kind 上是配置错误",
+    "D6 加载时校验但默认 fail-open：apps.environment.require_on_load=false → 只诊断；true → 必需项确定性失败让 Gateway 启动失败（unknown 永不阻塞，即使开了硬门）",
+    "D7 绑定能力包：SKILL.md requires:（同一模型）→ Skill.requirements；只校验 enabled 技能；报告按 app:/skill: 分组",
+    "D8 探测结果不是持久事实：不写库不写文件，进程内短 TTL 缓存 + ?force=true 现场重探，缓存结果 source=cache",
+    "D9 数据目录 = 列表 + 访问器 + 校验，不改任何现有路径：data_dirs()/check_data_dirs()(不创建，缺失目录 writable=None)/ensure_data_dirs()(只建必需项，幂等)",
+    "D10 覆盖 base/users/skills_view/integrations/locks/undo/(memory 开启时的 .retrieval)/(file SQLite 时的 database 目录)/legacy threads；逐项 purpose/scope(global|per-user)/required(按配置推导)；§22 四类数据落点写明（definitions/checkpoints/app sessions 在 SQL 库，assets 在 assets.roots）",
+    "D11 API 只读 additive：GET /api/environment[?force=true]；不加写端点；features 增 environment.enabled",
+    "D12 前端零改动",
+    "D13 CLI 可进 CI：python -m deerflow.environment [--json] [--force]；退出码 0=无必需项失败 / 1=有 missing|mismatch 必需项 / 2=自身错误",
+    "D14 不加依赖：版本比较自写；子进程探测 subprocess.run(argv, timeout, check=False, capture_output=True, text=True)，不经 shell",
+    "D15 config_version 39→40；无迁移、无新表；environment 挂 apps 段故沿用 apps 的 startup-only 注册"
+  ],
+  "findings": [
+    "勘察：`AppDefinition.version_command` 已声明（apps_config.py:148）但全仓库**从未被读取** —— N11 把它接上（与 presence_command/script 同 argv 位置），是零成本补齐既有的悬空声明。",
+    "勘察：仓库已有成熟的宿主环境检查（`scripts/doctor.py` 804 行 24 项检查）与脱敏 bundle（`scripts/support_bundle.py` 923 行），但**都在根 scripts/ 下、harness 无法导入**（不存在 harness→scripts 依赖边）。N11 的运行时探测因此是**新的 harness 包**，不是搬运 doctor；doctor 仍负责「开发机环境」，N11 负责「运行时要什么」，边界写进文档。",
+    "勘察：数据目录目前散在 `config/paths.py::Paths` 的几十个属性里，无集中列表、无存在/可写校验；启动不做目录体检（thread 目录由 ThreadDataMiddleware 惰性创建）。N11 只做「列表化 + 校验」，不动任何既有路径。",
+    "勘察：能力包（capability group）在 schema 层就是 **skill 名**（`Node.capability_groups` → `collect_resolved_groups`/`validate_capability_groups`），所以「与能力包绑定并在加载时校验」的自然落点是 SKILL.md 的 `requires:` + 已有的 fail-soft frontmatter 解析器（`parse_required_secrets` 模式）。",
+    "S1：版本比较必须**数字比较**（`4.10 >= 4.9` 为真），且 `^`/`~` 语义写死并逐行测（`^0.2.1 → <0.3`、`^0.0.3 → <0.0.4`、`~4.2.1 → <4.3`）；裸版本/`=` 是**精确匹配**，刻意不做 npm 的隐式 caret（把字面版本悄悄放大成区间正是校验层不该做的猜测）。测试当场抓到我自己的错误预期（`=4.2` vs `4.2.1`）。",
+    "S1：`version_satisfies` 三值返回（True/False/**None**）—— 不可解析的约束（`>=`、`>=4,`、`bogus`）与不可解析的观测都返回 None，映射到 `unknown`；把笔误读成 `mismatch` 是「误指控」，读成 `ok` 是「静默放过」，两者都错。",
+    "S1：`RequirementSpec` 上 `command`/`expect` 出现在存在性 kind 是**校验错误**——那是意图写错（`path` + `command` 意味着作者想跑命令却写了存在性检查），静默忽略会让人等一个永不执行的探测。",
+    "S2：`probe.py` 复用 `cli` 驱动的可达性规则（含分隔符→路径存在性；裸名→`shutil.which`），使「应用自己的可用性检查」与「环境对同一二进制的需求」不可能互相矛盾。",
+    "S2：非 0 退出**不采信 stdout**（即使它看起来像版本号）——失败的命令没有回答那个问题；stdout 优先、stderr 兜底（少数工具把版本打到 stderr）。",
+    "S2：`plugin` 相对路径相对 `working_dir`、`path` 相对进程 cwd —— 这是两者唯一但真实的语义差别，已用「同一 spec、给不给 working_dir」的对照测试钉住。",
+    "S5：`ensure_data_dirs` 只建 **required** 项（派生索引与 legacy threads 根按需/永不创建），避免新装机器长出一堆没人用的目录；`check_data_dirs` 缺失目录的 `writable` 是 **None**（无法判断不存在的目录）而非 False。",
+    "S6：**可选目录缺失不降级**整体状态——派生检索索引与 legacy threads 根是按需创建，把它们的缺席算成 `degraded` 会让每台健康机器常年 degraded（永远亮着的信号不是信号）。可选**需求**不同：那是操作员对机器的声明，未满足值得浮出。",
+    "S6：启动钩子 `_bootstrap_environment` 读 section 一律 getattr 兜底——它是**诊断**，诊断绝不能把 Gateway 挡在门外；实测 11 个既有 lifespan 测试（SimpleNamespace 假配置缺 `apps`/`skills`）因此暴露，改为兜底后全绿（目录创建仍然是硬失败，那是应用自己的路径）。",
+    "S6：`GET /api/environment` 用**请求作用域**的 `AppRegistry.from_config(config.apps)` 而非进程单例，报告描述的是操作员当下在跑的配置；探测与目录检查都经 `asyncio.to_thread` 离开事件循环。",
+    "S6：`features.enabled` 读取同样 getattr 兜底（只读可用性端点不该因缺 section 500），并把 5 个既有 features 形状断言补上新字段。",
+    "S7：全量离线回归首轮 93 failed（75 基线 + features_router 5 + gateway_lifespan_shutdown 9 + monocle_tracing 2 + flake）——**16 项是自己引入的回归，已全部修复**；末轮 **75 failed / 10650 passed / 104 skipped**（25 个既有平台失败族逐一一致、无新增），通过数 10436→10650（+214）。",
+    "S7：ruff check + format --check 全绿（1083 文件）；前端零改动仍跑通 pnpm test（全绿）与 pnpm check（eslint + tsc 全绿）作守门。",
+    "S7：文档同步：根 AGENTS.md（`../environment/` 条目）、backend/AGENTS.md（新节 + Routers 表 Environment 行 + Features 行补 environment + apps Config 的 config_version 40）、HNFlow 开发规划.md（N11 行 ◐、P1 第 7 项、M4 行、切片 7 进度注）、config.example.yaml。"
+  ],
+  "baseline": {
+    "head_commit": "ae8128e",
+    "backend_full_regression": "N10b: 75 failed / 10436 passed / 104 skipped  ->  N11: 75 failed / 10650 passed / 104 skipped",
+    "head_migration": "0019_human_task_kind_and_undo",
+    "migrations_added": 0,
+    "config_version": 40,
+    "pre_existing_platform_failure_families": 25,
+    "frontend": "all passed (N11, zero frontend changes)"
+  }
+}
