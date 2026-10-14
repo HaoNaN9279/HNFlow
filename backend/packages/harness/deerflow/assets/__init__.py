@@ -1,0 +1,51 @@
+"""Asset references and cross-software data contracts (N9, plan §20)."""
+
+from deerflow.assets.contracts import (
+    AssetContract,
+    AssetContractError,
+    AssetConverter,
+    normalize_extension,
+)
+from deerflow.assets.ref import (
+    ASSET_SCHEME,
+    SCOPE_VIRTUAL_PREFIXES,
+    AssetRef,
+    AssetScope,
+    asset_ref_from_stat,
+    asset_uri,
+    extension_of,
+    fingerprint_bytes,
+    fingerprint_file,
+    make_ref,
+    media_type_for,
+    normalize_host_path,
+    parse_asset_uri,
+    ref_from_port,
+    refs_from_port,
+    scope_for_virtual_path,
+    validate_asset_against_contract,
+)
+
+__all__ = [
+    "ASSET_SCHEME",
+    "SCOPE_VIRTUAL_PREFIXES",
+    "AssetContract",
+    "AssetContractError",
+    "AssetConverter",
+    "AssetRef",
+    "AssetScope",
+    "asset_ref_from_stat",
+    "asset_uri",
+    "extension_of",
+    "fingerprint_bytes",
+    "fingerprint_file",
+    "make_ref",
+    "media_type_for",
+    "normalize_extension",
+    "normalize_host_path",
+    "parse_asset_uri",
+    "ref_from_port",
+    "refs_from_port",
+    "scope_for_virtual_path",
+    "validate_asset_against_contract",
+]

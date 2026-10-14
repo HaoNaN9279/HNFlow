@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 37
+config_version: 38
 
 # ============================================================================
 # Logging
@@ -2088,6 +2088,54 @@ apps:
   #     command: blender
   #     resources: { gpu: 1, memory_mb: 4096, license: blender_render }
   definitions: {}
+
+# ============================================================================
+# N9: assets — host <-> sandbox asset transfer, cross-software data contracts
+#      and declarative format conversion.
+# ----------------------------------------------------------------------------
+# Workflow data nodes read and write sandbox virtual paths
+# (/mnt/user-data/{workspace,uploads,outputs}/...), while local-application
+# drivers produce host absolute paths. `data:asset` moves files across that
+# boundary and `app:collect` reports its artifacts as first-class asset refs.
+#
+# SECURITY: `roots` is the allow-list of host directories the workflow may
+# read from / write to. It is EMPTY by default, which disables host transfer
+# entirely (import/export are rejected). Add explicit roots to enable it:
+#
+# roots:
+#   - C:/Work/Models
+#   - C:/Work/Renders
+#
+# max_bytes caps a single transferred file (default 512 MiB).
+# max_bytes: 536870912
+#
+# Contracts declare the shape other software must agree on. `data:asset` can
+# validate an asset against one by name (`contract: blender_scene`):
+#
+# contracts:
+#   blender_scene:
+#     description: Blender scene handed to the render farm
+#     extensions: [".blend"]
+#     media_type: application/x-blender
+#     unit: m
+#     up_axis: Z
+#
+# Converters are the declarative format conversions. The command runs INSIDE
+# the sandbox; `{in}` / `{out}` are replaced with the source / target sandbox
+# paths. No converter declared = conversion unavailable.
+#
+# converters:
+#   fbx_to_obj:
+#     from: .fbx
+#     to: .obj
+#     command: assimp
+#     args: ["export", "{in}", "{out}"]
+#     timeout_seconds: 300
+assets:
+  roots: []
+  max_bytes: 536870912
+  contracts: {}
+  converters: {}
 
 # ============================================================================
 # Stream Bridge Configuration

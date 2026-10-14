@@ -67,6 +67,10 @@ STARTUP_ONLY_FIELDS: dict[str, str] = {
         "and max_concurrent_polls are captured into the service instance and the background poller task is not rebuilt on config.yaml edits."
     ),
     "apps": ("The local-application registry (deerflow.config.apps_config) is loaded once at startup and its drivers own child-process / HTTP-client lifecycles; adding, removing or reconfiguring an app definition requires a restart."),
+    "assets": (
+        "The asset layer (deerflow.config.assets_config) is loaded once at startup: host roots define which directories the sandbox may exchange assets with "
+        "(a security boundary captured by the executors) and converters/contracts are snapshot into the same singleton; changing any of them requires a restart."
+    ),
 }
 
 

@@ -110,6 +110,20 @@ export const NODE_CATALOG = [
     description: "Type conversion (bool/int/float/string).",
   },
   {
+    type: "data:asset",
+    label: "Asset",
+    category: "data",
+    defaultInputs: [{ name: "in", type: "data", required: false }],
+    defaultOutputs: [
+      { name: "out", type: "data", required: true },
+      { name: "asset", type: "data", required: false },
+      { name: "assets", type: "array", required: false },
+    ],
+    defaultParams: { operation: "inspect", path: "", hash: true },
+    description:
+      "Inspect / import / export / convert a file as an asset (host ↔ sandbox).",
+  },
+  {
     type: "data:file",
     label: "File",
     category: "data",
@@ -258,6 +272,7 @@ export const NODE_CATALOG = [
     defaultOutputs: [
       { name: "session", type: "data", required: true },
       { name: "out", type: "file", required: true },
+      { name: "assets", type: "array", required: false },
     ],
     defaultParams: { app: "" },
     description: "Collect files produced by a local application session.",

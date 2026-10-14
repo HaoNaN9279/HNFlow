@@ -19,7 +19,7 @@ describe("workflow type constants", () => {
     ]);
   });
 
-  test("NODE_TYPES has exactly the 23 backend values", () => {
+  test("NODE_TYPES has exactly the 24 backend values", () => {
     expect(NODE_TYPES).toEqual([
       "flow:start",
       "flow:end",
@@ -30,6 +30,7 @@ describe("workflow type constants", () => {
       "flow:wait",
       "data:assign",
       "data:convert",
+      "data:asset",
       "data:file",
       "data:json",
       "data:regex",
@@ -47,10 +48,10 @@ describe("workflow type constants", () => {
     ]);
   });
 
-  test("NODE_TYPES covers 7 flow / 5 data / 4 tool / 4 app categories plus AI, human, nested", () => {
-    expect(NODE_TYPES).toHaveLength(23);
+  test("NODE_TYPES covers 7 flow / 6 data / 4 tool / 4 app categories plus AI, human, nested", () => {
+    expect(NODE_TYPES).toHaveLength(24);
     expect(NODE_TYPES.filter((n) => n.startsWith("flow:"))).toHaveLength(7);
-    expect(NODE_TYPES.filter((n) => n.startsWith("data:"))).toHaveLength(5);
+    expect(NODE_TYPES.filter((n) => n.startsWith("data:"))).toHaveLength(6);
     expect(NODE_TYPES.filter((n) => n.startsWith("tool:"))).toHaveLength(4);
     expect(NODE_TYPES.filter((n) => n.startsWith("app:"))).toHaveLength(4);
   });

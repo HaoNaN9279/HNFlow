@@ -95,7 +95,7 @@
 | N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ◐ P1 切片 2：持久化实例记录（`app_instances`）+ 列表/详情/close/archive/delete/cleanup + 启动孤儿标记 + 资源累计已落地 |
 | N7 | 触发与调度 | §18 | cron/文件监视/应用事件/空闲 + 幂等/去重/退避/DLQ | ◐ P1 切片 3：`file`/`event`/`idle` 触发 + 载荷→端口映射（workflow 目标）+ 触发去重 + 退避重试/死信（`dead_lettered` + requeue）已落地 |
 | N8 | 本地资源治理 | §19 | GPU/CPU/内存/磁盘、License 并发、独占锁 | ◐ P1 切片 4：声明式配额 + 准入闸门（排队/fail/degrade）+ License slots + 跨进程可重入文件锁 + `GET /api/apps/resources` 已落地 |
-| N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 | ⬜ P1 |
+| N9 | 文件/资产/跨软件契约 | §20 | 资产建模、格式转换、跨软件引用约定 | ◐ P1 切片 5：`AssetRef` 资产建模（`asset://` URI + 指纹 + 契约校验）+ `data:asset` 节点（inspect/import/export/convert）+ `assets` 配置段 + `app:collect` 资产输出 已落地 |
 | N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ⬜ P1 |
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范 | ⬜ P1 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ⬜ P2 |
@@ -134,11 +134,13 @@
 
 > **进度（切片 4：N8 本地资源治理已落地）**：新增 `deerflow/resources/governor.py::ResourceGovernor`——**声明式**配额（`apps.definitions.<name>.resources` 声明 gpu/cpu/memory_mb/disk_mb/license，未声明维度不占额）+ 全局上限 `apps.resources`（`None` = 不限）+ License 池 `apps.licenses.<group>.slots`（默认 1 = 互斥）；一个 `threading.Condition` 下多维度 + License **一次性原子申请**（无部分持有/无加锁顺序死锁）+ FIFO 票号排队；冲突策略 `apps.on_conflict` = `wait`(默认，`acquire_timeout_seconds` 超时转 `ResourceUnavailableError`)/`fail`/`degrade`（放行 + 告警 + `degraded` 标记）。准入挂在唯一咽喉 `AppSessionManager`：**实例级** License（`launch` 持有 → `close` 释放，`exclusive` 复用不重复占）+ **操作级** 数值配额（`run_script`/`wait`/`collect`，`try/finally` 含驱动失败释放），因此工作流 `app:*` 执行器与工具网关 `app` provider 都自动受治理（后者把配额失败作为 `status: resource_unavailable` 数据返回给模型）；`app:*` 节点把失败翻译为带维度的 `WorkflowExecutionError`，可直接被 N7 的退避重试/DLQ 消费。新增 `deerflow/locks/file_lock.py`（可重入 + `fcntl`/`msvcrt` 跨进程文件锁 + `acquire_many` 统一加锁顺序）；`flow:parallel` 不改（靠闸门限流，不造新调度器）。`GET /api/apps/resources` 暴露 配额/占用/排队/License，`GET /api/apps` 描述补 `resources`/`license`。无迁移（占用态在内存，`app_instances.resources` 承载计数）；`config_version` 36→37；前端本切片未改。多 worker 全局配额与真实 GPU 计量记为后续增量。
 
+> **进度（切片 5：N9 文件/资产与跨软件数据契约已落地）**：新增 `deerflow/assets/`——`ref.py` 的 `AssetRef`（规范 `asset://` URI + scope 内可用 `path` + 指纹 `size`/`mtime`/`sha256`/`extension`/`media_type`/`contract`/`source`，经 `data` 端口以 dict 流转，**不新增 PortType**）与 `contracts.py` 的 `AssetContract`（扩展名/media_type/单位与坐标约定）与 `AssetConverter`（`from`/`to`/`command`/`args` 模板，必须含 `{in}`/`{out}`）。新增 `data:asset` 节点（`workflow/executors/asset.py`）：`inspect`（只读读指纹，注册幂等）/`import`（宿主→沙箱）/`export`（沙箱→宿主，临时文件 + `os.replace` 原子写）/`convert`（声明式转换器，命令**走 sandbox**）；三个写操作在**执行器内部**要求 `crash_confirm=true`（同 `data:file` write 先例，不打成 pending_review 危险节点）。宿主访问受 `config.yaml assets.roots` 白名单约束（**默认空 = 禁用往返**，三重校验：归一化包含 + 源文件拒 symlink + `resolve()` 后复核防父目录 symlink 逃逸）并受 `assets.max_bytes` 上限约束；`assets.contracts` 命中即校验（报错携带期望/实际）。`app:collect` 增量输出 `assets`（每产物一个 `scope="host"` 的 `AssetRef`，`params.hash` 可选 SHA-256），`artifacts`/`out` 原样保留 → 旧工作流零破坏。`config_version` 37→38；**无迁移**（资产不落库）；前端只同步节点目录/类型（新增 `data:asset` 条目 + `app:collect` 的 `assets` 端口），无新页面。真实软件格式互转脚本本体、资产版本库/溯源历史、资产 UI 记为后续增量。
+
 1. **N4 本地软件接入层**（应用注册表 / 实例会话 / 驱动矩阵 / 共享）。— ◐ 切片 1 完成主体
 2. **N5 `app` 类节点**（launch/script/wait/collect）+ tool 网关 `app` provider。— ✅ 切片 1
 3. **N6 长期实例管理** + **N7 触发与调度**（cron/文件监视/应用事件，幂等/DLQ）。— ◐ N6（持久化/恢复/归档/清理/资源累计）+ N7（触发源/载荷映射/去重/退避/DLQ）主体完成；N7 前端 UI 待做
 4. **N8 本地资源治理**（GPU/内存/磁盘、License 并发、独占锁）。— ◐ 声明式配额 + 准入闸门 + License slots + 跨进程文件锁主体完成；真实 GPU 计量/多 worker 全局配额待做
-5. **N9 文件/资产 + 跨软件契约**。— ⬜
+5. **N9 文件/资产 + 跨软件契约**。— ◐ 资产识别/宿主↔沙箱往返/声明式转换/契约校验主体完成；真实软件格式互转脚本与资产版本库待做
 6. **N10 人机共享工作区 + 预览 undo**（对接应用原生 undo）。— ⬜
 7. **N11 环境探测 / 数据目录 / 备份迁移**。— ⬜
 
@@ -165,7 +167,7 @@
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
-| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ⬜ 未开始 |
+| M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ◐ N9 切片 5 完成（资产建模/往返/转换/契约）；N10/N11 未开始 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 

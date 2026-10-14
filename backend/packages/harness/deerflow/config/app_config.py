@@ -13,6 +13,7 @@ from deerflow.config.acp_config import ACPAgentConfig, load_acp_config_from_dict
 from deerflow.config.agent_storage_config import AgentStorageConfig
 from deerflow.config.agents_api_config import AgentsApiConfig, load_agents_api_config_from_dict
 from deerflow.config.apps_config import AppsConfig, load_apps_config_from_dict
+from deerflow.config.assets_config import AssetsConfig, load_assets_config_from_dict
 from deerflow.config.checkpointer_config import CheckpointerConfig, load_checkpointer_config_from_dict
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.config.extensions_config import ExtensionsConfig
@@ -242,6 +243,13 @@ class AppConfig(BaseModel):
             field_doc="Local professional-software application registry (drivers: cli / unity / mock).",
         ),
     )
+    assets: AssetsConfig = Field(
+        default_factory=AssetsConfig,
+        description=format_field_description(
+            "assets",
+            field_doc="Asset transfer + cross-software data contracts for local-application workflows (host roots, size cap, contracts, converters).",
+        ),
+    )
     acp_agents: dict[str, ACPAgentConfig] = Field(default_factory=dict, description="ACP-compatible agent configuration")
     subagents: SubagentsAppConfig = Field(default_factory=SubagentsAppConfig, description="Subagent runtime configuration")
     circuit_breaker: CircuitBreakerConfig = Field(default_factory=CircuitBreakerConfig, description="LLM circuit breaker configuration")
@@ -437,6 +445,7 @@ class AppConfig(BaseModel):
         load_stream_bridge_config_from_dict(config.stream_bridge.model_dump() if config.stream_bridge is not None else None)
         load_acp_config_from_dict({name: agent.model_dump() for name, agent in acp_agents.items()})
         load_apps_config_from_dict(config.apps.model_dump())
+        load_assets_config_from_dict(config.assets.model_dump())
 
         if previous_checkpointer_config != config.checkpointer:
             # These runtime singletons derive their backend from checkpointer config.

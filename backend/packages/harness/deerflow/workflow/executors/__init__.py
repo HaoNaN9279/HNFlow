@@ -21,6 +21,7 @@ from deerflow.workflow.schema import NodeType  # noqa: E402
 
 # ── Import public executor functions ─────────────────────────────────────────
 from .ai import exec_llm_agent  # noqa: E402
+from .asset import exec_asset  # noqa: E402
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex  # noqa: E402
 from .flow import exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
@@ -54,6 +55,7 @@ def build_default_registry() -> ExecutorRegistry:
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_ASSIGN, executor=exec_assign, idempotent=True, description="Static assignment or passthrough"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_CONVERT, executor=exec_convert, idempotent=True, description="Type conversion executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_FILE, executor=exec_file, idempotent=True, description="File read / write executor (sandboxed)"))
+    reg.register(ExecutorRegistration(node_type=NodeType.DATA_ASSET, executor=exec_asset, idempotent=True, description="Asset inspect / import / export / convert executor (N9)"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_JSON, executor=exec_json, idempotent=True, description="JSON stringify / parse executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_REGEX, executor=exec_regex, idempotent=True, description="Regex search executor"))
 
@@ -127,6 +129,8 @@ __all__ = [
     "exec_file",
     "exec_json",
     "exec_regex",
+    # Assets (N9)
+    "exec_asset",
     # Flow
     "exec_if",
     "exec_wait",

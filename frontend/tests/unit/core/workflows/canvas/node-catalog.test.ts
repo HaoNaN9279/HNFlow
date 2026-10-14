@@ -10,9 +10,9 @@ import {
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
 describe("node catalog", () => {
-  test("covers exactly the 23 backend node types", () => {
+  test("covers exactly the 24 backend node types", () => {
     const catalog = getNodeCatalog();
-    expect(catalog).toHaveLength(23);
+    expect(catalog).toHaveLength(24);
     expect(catalog.map((e) => e.type).sort()).toEqual([...NODE_TYPES].sort());
   });
 
@@ -32,11 +32,11 @@ describe("node catalog", () => {
     }
   });
 
-  test("category counts match the backend split (7 flow / 5 data / 4 tool / 4 app + singles)", () => {
+  test("category counts match the backend split (7 flow / 6 data / 4 tool / 4 app + singles)", () => {
     const byCategory = (category: string) =>
       getNodeCatalog().filter((e) => e.category === category).length;
     expect(byCategory("flow")).toBe(7);
-    expect(byCategory("data")).toBe(5);
+    expect(byCategory("data")).toBe(6);
     expect(byCategory("tool")).toBe(4);
     expect(byCategory("ai")).toBe(1);
     expect(byCategory("app")).toBe(4);
@@ -62,6 +62,24 @@ describe("node catalog", () => {
     const file = getNodeCatalogEntry("data:file")!;
     expect(file.defaultInputs.map((p) => p.type)).toEqual(["file"]);
     expect(file.defaultOutputs.map((p) => p.type)).toEqual(["file"]);
+
+    const asset = getNodeCatalogEntry("data:asset")!;
+    expect(asset.defaultInputs.map((p) => p.name)).toEqual(["in"]);
+    expect(asset.defaultInputs[0]).toMatchObject({
+      name: "in",
+      type: "data",
+      required: false,
+    });
+    expect(asset.defaultOutputs.map((p) => p.name)).toEqual([
+      "out",
+      "asset",
+      "assets",
+    ]);
+    expect(asset.defaultOutputs.map((p) => p.type)).toEqual([
+      "data",
+      "data",
+      "array",
+    ]);
   });
 
   test("ai:llm_agent declares optional template_prompt/continue_prompt input ports", () => {
@@ -98,6 +116,11 @@ describe("node catalog", () => {
     expect(getNodeCatalogEntry("data:file")!.defaultParams).toEqual({
       operation: "read",
       path: "",
+    });
+    expect(getNodeCatalogEntry("data:asset")!.defaultParams).toEqual({
+      operation: "inspect",
+      path: "",
+      hash: true,
     });
     expect(getNodeCatalogEntry("data:json")!.defaultParams).toEqual({
       operation: "stringify",
@@ -181,7 +204,16 @@ describe("node catalog", () => {
     expect(script.defaultParams).toEqual({ app: "", script: "" });
 
     const collect = getNodeCatalogEntry("app:collect")!;
-    expect(collect.defaultOutputs.map((p) => p.type)).toEqual(["data", "file"]);
+    expect(collect.defaultOutputs.map((p) => p.type)).toEqual([
+      "data",
+      "file",
+      "array",
+    ]);
+    expect(collect.defaultOutputs.map((p) => p.name)).toEqual([
+      "session",
+      "out",
+      "assets",
+    ]);
     expect(collect.defaultParams).toEqual({ app: "" });
   });
 

@@ -89,6 +89,7 @@ class NodeType(StrEnum):
     DATA_ASSIGN = "data:assign"
     DATA_CONVERT = "data:convert"
     DATA_FILE = "data:file"
+    DATA_ASSET = "data:asset"
     DATA_JSON = "data:json"
     DATA_REGEX = "data:regex"
 

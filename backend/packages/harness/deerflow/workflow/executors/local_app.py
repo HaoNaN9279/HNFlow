@@ -26,11 +26,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
 from deerflow.apps.persistence import record_launch, record_operation
 from deerflow.apps.session import AppError, AppSessionManager, get_session_manager
+from deerflow.assets.ref import fingerprint_file, make_ref
 from deerflow.resources.governor import ResourceUnavailableError
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUNTIME_CONTEXT_KEY
 from deerflow.runtime.user_context import DEFAULT_USER_ID
@@ -217,11 +219,38 @@ async def exec_app_wait(runtime: WorkflowRuntime, params: dict[str, Any], inputs
 # ── app:collect ──────────────────────────────────────────────────────────────
 
 
+def _artifact_refs(paths: list[str], *, want_hash: bool) -> list[dict[str, Any]]:
+    """Wrap collected host artifact paths as asset references (N9).
+
+    Fingerprinting is best-effort: an artifact may already be gone (rotated,
+    deleted by the application) and that must not fail the collect node — the
+    path is still reported, just without size/mtime.
+    """
+    refs: list[dict[str, Any]] = []
+    for path in paths:
+        size: int | None = None
+        mtime: float | None = None
+        sha256: str | None = None
+        try:
+            stat_result = os.stat(path)
+            size = int(stat_result.st_size)
+            mtime = float(stat_result.st_mtime)
+            if want_hash:
+                sha256 = fingerprint_file(path)
+        except OSError:
+            logger.debug("app artifact vanished before fingerprinting: %s", path)
+        refs.append(make_ref(path, scope="host", size=size, sha256=sha256, mtime=mtime, source="app:collect").to_port())
+    return refs
+
+
 async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
     """Collect artifacts produced by the application.
 
     The ``out`` port carries the first artifact path (or ``None`` when nothing
-    matched); the complete list is available on ``artifacts``.
+    matched); the complete list is available on ``artifacts``, and since N9 the
+    same list is also reported as first-class asset references on ``assets``
+    (``scope="host"``, with size/mtime and — when ``params.hash`` is true — a
+    SHA-256), so an ``app:collect`` result can feed ``data:asset`` directly.
     """
     app = _require_app(params, "app:collect")
     globs = params.get("globs")
@@ -238,6 +267,8 @@ async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inp
     except AppError as exc:
         raise WorkflowExecutionError(f"app:collect: {exc}") from exc
 
+    assets = await asyncio.to_thread(_artifact_refs, artifacts, want_hash=params.get("hash") is True)
+
     collect_deltas: dict[str, Any] = {"artifacts": len(artifacts)}
     degraded = _degraded_delta(before, session)
     if degraded:
@@ -250,7 +281,7 @@ async def exec_app_collect(runtime: WorkflowRuntime, params: dict[str, Any], inp
         resource_deltas=collect_deltas,
     )
 
-    return {"session": session.to_port(), "out": artifacts[0] if artifacts else None, "artifacts": artifacts}
+    return {"session": session.to_port(), "out": artifacts[0] if artifacts else None, "artifacts": artifacts, "assets": assets}
 
 
 __all__ = [

@@ -488,6 +488,7 @@ class TestRegistry:
             NodeType.FLOW_WAIT,
             NodeType.DATA_ASSIGN,
             NodeType.DATA_CONVERT,
+            NodeType.DATA_ASSET,
             NodeType.DATA_FILE,
             NodeType.DATA_JSON,
             NodeType.DATA_REGEX,
@@ -506,14 +507,14 @@ class TestRegistry:
     )
 
     def test_default_registry_has_all_types(self) -> None:
-        """build_default_registry() registers all 19 expected NodeType values."""
+        """build_default_registry() registers all 20 expected NodeType values."""
         reg = build_default_registry()
         registered = set(reg.keys())
         assert registered == self._EXPECTED_EXECUTOR_TYPES
 
-    def test_registry_length_is_19(self) -> None:
+    def test_registry_length_is_20(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 19
+        assert len(reg) == 20
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""

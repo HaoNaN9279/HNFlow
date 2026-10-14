@@ -189,6 +189,7 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         (NodeType.DATA_ASSIGN, "Static assignment or passthrough"),
         (NodeType.DATA_CONVERT, "Type conversion executor"),
         (NodeType.DATA_FILE, "File read / write executor"),
+        (NodeType.DATA_ASSET, "Asset inspect / import / export / convert executor"),
         (NodeType.DATA_JSON, "JSON stringify / parse executor"),
         (NodeType.DATA_REGEX, "Regex search / replace executor"),
         # External tools
