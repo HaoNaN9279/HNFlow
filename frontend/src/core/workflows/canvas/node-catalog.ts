@@ -71,8 +71,11 @@ export const NODE_CATALOG = [
     defaultOutputs: [
       { name: "iteration", type: "data", required: true },
       { name: "out", type: "data", required: true },
+      { name: "results", type: "array", required: false },
+      { name: "last", type: "data", required: false },
     ],
-    description: "Repeated execution — emits the iteration counter.",
+    description:
+      "Repeated execution — emits the iteration counter, the collected per-round results, and the last one.",
   },
   {
     type: "flow:parallel",

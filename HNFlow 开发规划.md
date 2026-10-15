@@ -17,7 +17,7 @@
 | 定义层 | `workflow/schema.py` | Port/Node/Edge/WorkflowDefinition/Metadata；NodeType 六类（flow/data/tool/ai/human/nested） |
 | 校验与序列化 | `workflow/workflow_io.py` | 无环 DFS、单起止、端口引用/类型、params JSON 兼容、subworkflow spec 形状；`SCHEMA_VERSION=1` |
 | 依赖图/循环检测 | `workflow/dependency_graph.py`、`check_cycles.py` | 三类引用聚合 + 全局 DFS |
-| 编译层 | `workflow/compiler.py` | 定义→StateGraph；start/end 映射；if/switch 条件边；loop（简单版）；parallel；子图编译展开 + 运行期委派；编译缓存 |
+| 编译层 | `workflow/compiler.py` | 定义→StateGraph；start/end 映射；if/switch 条件边；loop（正宗版：`results`/`last` 聚合 + `continue_on` 条件退出）；parallel；子图编译展开 + 运行期委派；编译缓存 |
 | 执行器 | `workflow/executors/` | flow(if/switch/wait)、data(assign/convert/file/json/regex)、tool(bash/http/log)、ai(llm_agent)、human(task) |
 | AI 节点 | `executors/ai.py` + `workflow/prompts.py` | 三层提示词（身份/能力/任务）；template/continue 双模式；经 `SubagentExecutor` 执行；token 用量聚合 |
 | 人类节点 | `executors/human.py`、`human_task_state.py` | `interrupt()` 挂起 + `Command(resume=)` 恢复；状态机；幂等复用 |
@@ -36,7 +36,7 @@
 |---|---|---|
 | `tool:notify` | 抛 `NotImplementedError`（T10 占位） | 本机通知（§18） |
 | `nested:subworkflow`（无 spec 路径） | 抛错 | 编译展开/委派（已有 spec 路径） |
-| `flow:loop` | 简单版：`iteration` + `out` 透传 | 正宗版：子图展开 + `results`/`last` 聚合 |
+| `flow:loop` | ✅ 正宗版已落地（C5）：`iteration` + `out` 透传 + `results`/`last` 聚合 + `continue_on` 条件退出 | 子图展开（body 隔离，后续增量） |
 | `resolved_groups` | 仅收集，未校验/加载；无 lockfile | 全量能力快照 lockfile（§5.6） |
 | 能力包契约 | 无 permissions/evals/tool_schema_version/context_budget | §5.5 |
 | 工具网关 | 无；AI 节点 `tools=[]` | 统一描述符 + provider（§9） |
@@ -73,7 +73,7 @@
 | C2 | **流式执行对齐** | `workflow/worker.py` | 方案 §12 为 `astream(stream_mode=["updates","custom"])`；现状 `astream_events(v2)`。统一为方案语义，保留节点级事件。**核心** | ✅ 已落地：compiler 发射节点自定义事件（带 `depth`），worker 消费 |
 | C3 | **lockfile 落元数据** | `schema.py`(`WorkflowMetadata`)、保存路径 | 新增 `lockfile` 字段（模型/prompt/tool schema/MCP 版本/采样参数）。**核心** | ✅ 已落地：保存时固化能力快照 + 默认模型 |
 | C4 | **能力组解析→校验→加载** | `schema.collect_resolved_groups` + 新增服务 | `resolved_groups` 目前只收集；补存在性/版本范围校验与执行期加载。 | ◐ `validate_capability_groups` + 执行期加载已落地；保存仍 fail-open（版本范围校验随 lockfile 后续） |
-| C5 | **循环正宗版** | `compiler.py`(`_loop_node_fn`) | 由简单计数改为子图展开 + 条件边 + `results`/`last` 聚合输出。 | ⏸ 顺延后续（改动编译期语义，需单独设计 + 迁移） |
+| C5 | **循环正宗版** | `compiler.py`(`_loop_node_fn`) | 由简单计数改为子图展开 + 条件边 + `results`/`last` 聚合输出。 | ✅ 已落地（Option A：原位聚合 `results`/`last` + `params.continue_on` 条件早退；body 子图展开列为后续增量，无迁移） |
 | C6 | **端口类型扩展** | `schema.PortType` | 增 `number`/`array`/`record`，同步 `workflow_io.ports_compatible` 与前端 `types.ts`/校验。 | ✅ 已落地（前端 `types.ts`、端口颜色映射已同步） |
 | C7 | **通知执行器补齐** | `executors/tool.py`(`exec_notify`) | 落地本机通知（长期运行需要）。 | ✅ 已落地：`runtime.context["notifier"]` 钩子 + 日志兜底 |
 | C8 | **schema 迁移钩子** | `workflow_io._migrate_schema` | 现抛 `NotImplementedError`；建立 v→v+1 迁移链。 | ✅ 已落地：`register_migration` 逐版本链 |
@@ -115,12 +115,14 @@
    - 先落地工具网关最小版（N1：描述符 + builtin/sandbox provider 分派），再让 `exec_llm_agent` 按 `capability_groups` 的 allowed-tools 并集装配 `tools`。
 2. **C2 执行流对齐**：worker 改用 `astream(stream_mode=["updates","custom"])`，节点事件语义与方案一致。— ✅ 完成
 3. **C3 lockfile + C4 能力组校验/加载**：`WorkflowMetadata.lockfile`；保存时固化、执行时按 lockfile 恢复。— ✅ 完成（C4 版本范围校验留待 lockfile 深化）
-4. **C5 循环正宗版 + C6 端口类型扩展 + C11 前端同步**。— C6/C11 ✅；**C5 ⏸ 顺延后续**
+4. **C5 循环正宗版 + C6 端口类型扩展 + C11 前端同步**。— C6/C11 ✅；**C5 ✅**（Option A：聚合 + 条件退出；body 子图展开为后续增量）
 5. **C7 通知执行器 + C8 schema 迁移钩子 + C10 幂等标注复核**。— ✅ 完成
 
 验收：一个含 AI 节点调用工具、含循环聚合、含端口类型校验的端到端工作流可编译、执行、断点、恢复。
 
-> **本轮进度（P0）**：C1/C2/C3/C6/C7/C8/C10/C11 已完成，C4 部分完成，C5 顺延。后端 workflow 套件 504 passed / 1 skipped；前端 lint + typecheck + prettier + 单测（1254 passed）全绿。
+> **本轮进度（P0）**：C1/C2/C3/C5/C6/C7/C8/C10/C11 已完成，C4 部分完成。后端 workflow 套件 504 passed / 1 skipped；前端 lint + typecheck + prettier + 单测（1254 passed）全绿。
+>
+> **C5 切片（循环正宗版，Option A）**：`flow:loop` 由「简单计数」升级为「聚合 + 条件驱动」——节点声明 `results`(array)/`last` 时，loop fn 从第 2 轮起把经回边回流的 body 产物逐轮收进 `results`（顺序 = 迭代序，末元素即 `last`，种子不计入），仅在声明端口时写（旧定义零破坏）；路由新增 `params.continue_on`（命名某条入边的 `source_port`，读 `wf:<source>:<port>`，falsy 即早退；键缺失 = 继续，第 1 轮不判条件，`iterations` 仍为硬上限）。聚合走保留通道 `wf:<loop_id>:__results`，故只声明 `last` 的节点也能拿到全量历史。**不改图拓扑**（body 仍在主图），因此 body 节点 SSE 事件、loop 内 `interrupt`/审批、checkpointer 命名空间、子工作流嵌套、`validate_definition` 环豁免**全部不受影响**；无 schema 迁移、无新表、无新配置段、无新依赖。前端仅同步 `node-catalog.ts` 的 `flow:loop` 端口（+`results`/`last`）。测试：`tests/test_workflow_loop_ports.py`（聚合 4 条）+ 新增 `tests/test_workflow_loop_condition.py`（条件/硬上限/缺键安全 4 条）；全量离线 A/B 对拍失败集合逐条一致（77），+8 passed。「子图展开（body 隔离）」按方案原文列为后续增量（与 §24.6a 评审回环联动）。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -173,7 +175,7 @@
 |---|---|---|---|
 | M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 | ✅ 达成（C4 版本范围校验顺延） |
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
-| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ⏸ C5 顺延，N12/N13 未开始 |
+| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出，无迁移）；N12/N13 未开始 |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
@@ -185,7 +187,7 @@
 
 - **AI 节点工具装配（C1）依赖工具网关（N1）**：若 N1 完整实现耗时，先做「描述符 + builtin/sandbox 分派」最小版解 C1，MCP/app provider 后续增量。
 - **LLM 中间层（N2）**：现状经 `SubagentExecutor`/`create_chat_model` 已能调模型，N2 应渐进抽层，不推倒重来，避免阻塞 P0。
-- **循环正宗版（C5）**：改动编译期语义，需保证既有简单版工作流向后兼容（schema 迁移钩子 C8 配合）。
+- **循环正宗版（C5）**：~~改动编译期语义，需保证既有简单版工作流向后兼容（schema 迁移钩子 C8 配合）。~~ **已缓解**：以 Option A（原位聚合 + `continue_on` 条件退出）落地，不改图拓扑、纯增量端口/参数，旧定义字节不变，**无需迁移**；「body 子图展开」作为后续增量单独评估（会触及 body 事件 depth / loop 内中断语义）。
 - **安全低优先级**：本地单机、数据不出本机的前提下可延后；但「不可逆本地操作确认」与 P1 的 N10 强绑定，需随 N10 落地，不能等到 P3。
 - **多用户隔离收缩（C9）**：涉及持久化与路由，属破坏性改动，建议放在 P1 末尾独立小步，避免影响 P0/P1 主线。
 

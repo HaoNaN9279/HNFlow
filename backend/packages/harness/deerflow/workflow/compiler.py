@@ -17,6 +17,11 @@ Key constraints:
 - ``flow:loop`` compiles to a counting executor with conditional back-edge
   to body entry + default exit edge.  State schema declares
   ``wf:<loop_id>:__count`` so LangGraph persists the iteration counter.
+  C5 (正宗版) additionally aggregates each round's body output into the
+  ``results`` output port (and ``last`` = the newest one) when the node
+  declares them, and supports an optional data-driven early exit through
+  ``params.continue_on`` (names a source-port on an incoming edge; a falsy
+  value there exits the loop, bounded by ``iterations``).
 - ``flow:parallel`` compiles to a pass-through node — multiple regular
   out edges produce LangGraph native fan-out parallelism.
 - Compile cache keys combine the definition hash *and* the set of
@@ -266,7 +271,9 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
     fields declared here — undeclared writes are silently dropped.
 
     Additionally, every ``flow:loop`` node gets a ``wf:<loop_id>:__count``
-    field for the loop iteration counter.
+    field for the loop iteration counter, and — when it declares the ``results``
+    / ``last`` output ports (C5) — a reserved ``wf:<loop_id>:__results`` field
+    that accumulates each round's body output.
     """
     fields: dict[str, Any] = {}
     for node in def_.nodes:
@@ -274,6 +281,9 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             fields[f"wf:{node.id}:{port.name}"] = Any
         if node.type == NodeType.FLOW_LOOP:
             fields[f"wf:{node.id}:__count"] = Any
+            loop_ports = {port.name for port in node.outputs}
+            if "results" in loop_ports or "last" in loop_ports:
+                fields[f"wf:{node.id}:__results"] = Any
         if node.type == NodeType.AI_LLM_AGENT:
             # Reserved observability channel: the sub-agent's aggregated token
             # usage, lifted from the executor result's reserved key by
@@ -1050,12 +1060,16 @@ def _compile_impl(
             # Build the input-port → state-key mapping from incoming edges.
             # A tuple of pairs keeps the closure default immutable (B006).
             loop_in_edges: tuple[tuple[str, str], ...] = tuple((edge.target_port, f"wf:{edge.source}:{edge.source_port}") for edge in incoming_edges.get(node.id, []))
+            # Declared output-port names — the aggregation writes ``results`` /
+            # ``last`` only when the node actually declares them (C5).
+            loop_out_ports: frozenset[str] = frozenset(port.name for port in node.outputs)
 
             async def _loop_node_fn(
                 state: dict[str, Any],
                 *,
                 _lid: str = loop_id,
                 _in_edges: tuple[tuple[str, str], ...] = loop_in_edges,
+                _out_ports: frozenset[str] = loop_out_ports,
             ) -> dict[str, Any]:
                 count_key = f"wf:{_lid}:__count"
                 current: int = state.get(count_key, 0)
@@ -1071,7 +1085,25 @@ def _compile_impl(
                 for port, key in _in_edges:
                     if port == "in":
                         in_state_key = key
-                outputs[f"wf:{_lid}:out"] = state.get(in_state_key) if in_state_key is not None else None
+                in_value = state.get(in_state_key) if in_state_key is not None else None
+                outputs[f"wf:{_lid}:out"] = in_value
+                # C5 aggregation: from round 2 on, the loop fn sees the previous
+                # round's body output on its ``in`` port (the dataflow ring), so
+                # collect those into ``results`` in iteration order and expose
+                # ``last``.  The seed value (round 1) is not a body output and is
+                # not collected.  Accumulation lives on a reserved channel so a
+                # node declaring only ``last`` still gets the full history.
+                if "results" in _out_ports or "last" in _out_ports:
+                    acc_key = f"wf:{_lid}:__results"
+                    prior = state.get(acc_key)
+                    results: list[Any] = list(prior) if isinstance(prior, list) else []
+                    if current >= 1:
+                        results.append(in_value)
+                    outputs[acc_key] = results
+                    if "results" in _out_ports:
+                        outputs[f"wf:{_lid}:results"] = results
+                    if "last" in _out_ports:
+                        outputs[f"wf:{_lid}:last"] = results[-1] if results else None
                 return outputs
 
             _register(node.id, _loop_node_fn)
@@ -1214,21 +1246,40 @@ def _compile_impl(
         # default_target is guaranteed non-None here (guarded above)
         _default: str = cast(str, default_target)
 
-        # For loop nodes: build a route function that compares the
-        # iteration counter against the configured ``iterations``.
+        # For loop nodes: build a route function that (a) compares the
+        # iteration counter against the configured ``iterations`` and (b)
+        # honours an optional data-driven early exit via ``params.continue_on``.
         if node.type == NodeType.FLOW_LOOP:
             loop_id = node.id
             max_iterations: int = node.params.get("iterations", 1)
+
+            # C5: ``continue_on`` names a source-port on one of the loop's
+            # incoming edges (typically the body back-edge).  The route reads
+            # ``wf:<source>:<port>`` and exits when that value is falsy.  The
+            # check only applies from round 2 on, and an *absent* key means "no
+            # opinion" (keep looping) — so a signal the body has not produced
+            # yet cannot cut the loop short on round 1.  ``iterations`` stays a
+            # hard ceiling regardless.  A ``continue_on`` naming no edge is a
+            # safe no-op (count-only loop).
+            continue_on = node.params.get("continue_on")
+            continue_key: str | None = None
+            if isinstance(continue_on, str) and continue_on:
+                for edge in incoming_edges.get(node.id, []):
+                    if edge.source_port == continue_on:
+                        continue_key = f"wf:{edge.source}:{edge.source_port}"
 
             def _make_loop_route(
                 lid: str,
                 max_it: int,
                 conds: list[tuple[str, str]],
                 dflt: str,
+                cont_key: str | None,
             ) -> Callable[[dict[str, Any]], str]:
                 def _route(state: dict[str, Any]) -> str:
                     count = state.get(f"wf:{lid}:__count", 0)
                     if count <= max_it:
+                        if cont_key is not None and count >= 1 and cont_key in state and not state.get(cont_key):
+                            return dflt
                         # Route to the body entry (the conditional edge target)
                         for _condition_port, body_target in conds:
                             return body_target
@@ -1236,7 +1287,7 @@ def _compile_impl(
 
                 return _route
 
-            loop_route = _make_loop_route(loop_id, max_iterations, cond_edges, _default)
+            loop_route = _make_loop_route(loop_id, max_iterations, cond_edges, _default, continue_key)
             path_map: dict[str, str] = {}
             for _, target in cond_edges:
                 path_map[target] = target

@@ -56,6 +56,21 @@ def _loop_node(id_: str = "loop", iterations: int = 3) -> Node:
     )
 
 
+def _loop_node_agg(id_: str = "loop", iterations: int = 3, *, with_results: bool = True, with_last: bool = True) -> Node:
+    outputs = [Port(name="iteration", type=PortType.DATA), Port(name="out", type=PortType.DATA)]
+    if with_results:
+        outputs.append(Port(name="results", type=PortType.ARRAY))
+    if with_last:
+        outputs.append(Port(name="last", type=PortType.DATA))
+    return Node(
+        id=id_,
+        type=NodeType.FLOW_LOOP,
+        params={"iterations": iterations},
+        inputs=[Port(name="in", type=PortType.DATA)],
+        outputs=outputs,
+    )
+
+
 def _data_node(id_: str) -> Node:
     return Node(id=id_, type=NodeType.DATA_ASSIGN, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)])
 
@@ -174,6 +189,94 @@ class TestLoopPortOutputs:
         assert state.get("wf:loop:out") == "seed-value"
         assert state.get("wf:loop:iteration") == 1
         assert state.get("wf:loop:__count") == 1
+
+    @pytest.mark.asyncio
+    async def test_results_accumulate_in_iteration_order(self) -> None:
+        """C5: ``results`` collects each round's body output in order; ``last``
+        is the newest entry."""
+
+        def _body_exec(_rt: Any, _p: dict, _i: dict) -> dict[str, Any]:
+            it = _rt.state.get("wf:loop:iteration")
+            return {"out": f"v{it}"}
+
+        nodes = [
+            _start_node(),
+            _loop_node_agg("loop", iterations=3),
+            _data_node("body"),
+            _end_node(),
+        ]
+        edges = [
+            Edge(source="start", source_port="input", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="body", target_port="in", condition="loop_body"),
+            Edge(source="body", source_port="out", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="end", target_port="in"),
+        ]
+        ctx = _make_context()
+        ctx.executors[NodeType.DATA_ASSIGN] = _body_exec
+        graph = compile_definition(_make_def(nodes, edges), context=ctx)
+        state = await _run(graph, {"wf:start:input": "seed"})
+
+        assert state.get("wf:loop:results") == ["v1", "v2", "v3"]
+        assert state.get("wf:loop:last") == "v3"
+        assert state.get("wf:loop:iteration") == 4
+
+    @pytest.mark.asyncio
+    async def test_results_empty_when_zero_iterations(self) -> None:
+        """``iterations=0`` → no body run → ``results=[]``, ``last=None``."""
+        nodes = [_start_node(), _loop_node_agg("loop", iterations=0), _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="end", target_port="in"),
+        ]
+        graph = compile_definition(_make_def(nodes, edges), context=_make_context())
+        state = await _run(graph, {"wf:start:input": "seed"})
+
+        assert state.get("wf:loop:results") == []
+        assert state.get("wf:loop:last") is None
+
+    @pytest.mark.asyncio
+    async def test_last_only_port_still_accumulates(self) -> None:
+        """A node declaring only ``last`` still sees the full history — the
+        accumulation rides the reserved ``__results`` channel."""
+
+        def _body_exec(_rt: Any, _p: dict, _i: dict) -> dict[str, Any]:
+            return {"out": _rt.state.get("wf:loop:iteration")}
+
+        nodes = [
+            _start_node(),
+            _loop_node_agg("loop", iterations=3, with_results=False, with_last=True),
+            _data_node("body"),
+            _end_node(),
+        ]
+        edges = [
+            Edge(source="start", source_port="input", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="body", target_port="in", condition="loop_body"),
+            Edge(source="body", source_port="out", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="end", target_port="in"),
+        ]
+        ctx = _make_context()
+        ctx.executors[NodeType.DATA_ASSIGN] = _body_exec
+        graph = compile_definition(_make_def(nodes, edges), context=ctx)
+        state = await _run(graph, {"wf:start:input": "seed"})
+
+        assert state.get("wf:loop:last") == 3
+        assert state.get("wf:loop:__results") == [1, 2, 3]
+
+    @pytest.mark.asyncio
+    async def test_legacy_loop_writes_no_aggregation_channels(self) -> None:
+        """A loop declaring only ``iteration``/``out`` (pre-C5) writes neither
+        ``results`` nor the reserved accumulator."""
+        nodes = [_start_node(), _loop_node("loop", iterations=2), _end_node()]
+        edges = [
+            Edge(source="start", source_port="input", target="loop", target_port="in"),
+            Edge(source="loop", source_port="out", target="end", target_port="in"),
+        ]
+        graph = compile_definition(_make_def(nodes, edges), context=_make_context())
+        state = await _run(graph, {"wf:start:input": "seed"})
+
+        assert state.get("wf:loop:results") is None
+        assert state.get("wf:loop:last") is None
+        assert state.get("wf:loop:__results") is None
 
     @pytest.mark.asyncio
     async def test_out_none_when_upstream_produced_nothing(self) -> None:

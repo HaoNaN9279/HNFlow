@@ -57,6 +57,8 @@ describe("node catalog", () => {
     expect(loop.defaultOutputs.map((p) => p.name)).toEqual([
       "iteration",
       "out",
+      "results",
+      "last",
     ]);
 
     const file = getNodeCatalogEntry("data:file")!;
