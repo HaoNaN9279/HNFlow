@@ -1,0 +1,35 @@
+{
+  "slice": "N14i",
+  "title": "节点级模型路由（§24.10）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "53be8a8",
+  "commit": null,
+  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树。",
+  "steps": [
+    { "id": "S1", "name": "[A] workflow/routing.py（parse_routing_policy / model_infos / select_model）", "status": "completed" },
+    { "id": "S2", "name": "[A] executors/ai.py 接入 params.model_policy → SubagentConfig.model（require_local 失败 loud）", "status": "completed" },
+    { "id": "S3", "name": "测试 tests/test_workflow_routing.py（23 条）+ workflow 套件 + 全量 A/B + ruff", "status": "completed" },
+    { "id": "S4", "name": "文档同步 + boulder", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "纯决策核心；模型元数据走 config.models[*] 额外字段（ModelConfig extra-allowed，无 schema 变更）",
+    "D2": "prefer=local/cheap/quality/default；确定性名称 tie-break（缓存纪律）",
+    "D3": "require_local 无法满足 = 节点失败，绝不静默回退远程",
+    "D4": "与 continue 模式互斥（会话已固定模型，运行期报错）",
+    "D5": "三级预算强制/成本报表 = 后续；节点级 token 上限由 §24.5 autonomy 承担",
+    "D6": "无迁移/无新表/无新配置段/无新依赖；前端零改动"
+  },
+  "baseline": {
+    "backend_full_regression": "N14h 75 failed / 10932 passed -> N14i 75 failed / 10985 passed（104 skipped）；**失败集合逐条一致**；新增 23 条测试全过",
+    "workflow_suite": "938 passed / 4 skipped -> 961 passed / 4 skipped",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "SubagentConfig.model='inherit' 为缺省，无 policy 节点零破坏。",
+    "app_config 经 runtime.context 注入（既有 AI 节点路径），routing 读取 app_config.models。"
+  ]
+}

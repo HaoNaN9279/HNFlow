@@ -18,6 +18,7 @@ from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.prompts import build_ai_node_buckets, build_task_layer
 from deerflow.workflow.registry import WorkflowExecutionError
+from deerflow.workflow.routing import RoutingError, model_infos, parse_routing_policy, select_model
 
 logger = logging.getLogger(__name__)
 
@@ -227,6 +228,16 @@ async def exec_llm_agent(
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': context_policy is not supported with session continuation (continue mode)")
     context_usage: dict[str, Any] | None = None
 
+    # N14 §24.10 model routing: a node can prefer a local / cheap / high-quality
+    # model.  Rejected with session continuation — the session was created under
+    # one model, and switching mid-session would not reproduce deterministically.
+    try:
+        routing_policy = parse_routing_policy(params)
+    except RoutingError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_policy: {exc}") from exc
+    if routing_policy is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is not supported with session continuation (continue mode)")
+
     # Continue mode: identity/capability are already in the session's first
     # turn, so the executed task is only the new task layer.  A missing
     # checkpointer (memory backend) or an unresolvable session key fails
@@ -305,6 +316,19 @@ async def exec_llm_agent(
         max_turns=autonomy_max_turns,
         token_budget=autonomy_token_budget,
     )
+
+    # N14 §24.10: resolve the node's model from its routing policy against the
+    # configured model metadata.  A privacy constraint that cannot be met (a
+    # required local model that is not configured) fails the node loudly; it must
+    # never silently fall back to a remote model.
+    if routing_policy is not None:
+        try:
+            selected_model = select_model(model_infos(getattr(app_config, "models", None)), routing_policy)
+        except RoutingError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+        if selected_model is None:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is set but no models are configured")
+        subagent_config.model = selected_model.name
 
     executor_kwargs: dict[str, Any] = {
         "config": subagent_config,
