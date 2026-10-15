@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from deerflow.environment.spec import RequirementSpec
 
+from .contract import CAPABILITY_PERMISSIONS
 from .types import SKILL_MD_FILE, DependencySpec, GroupManifest, SecretRequirement, Skill, SkillCategory
 from .versions import parse_version
 
@@ -205,6 +206,59 @@ def parse_requirements(raw: object, skill_file: Path) -> tuple[RequirementSpec, 
     return tuple(requirements)
 
 
+def parse_permissions(raw: object, skill_file: Path) -> tuple[str, ...]:
+    """Parse the optional ``permissions`` frontmatter field (N14 §5.5).
+
+    A list drawn from {``fs``, ``net``, ``exec``, ``secrets``}.  Unknown entries
+    are dropped with a warning (a typo in an optional declaration must not make
+    the package unloadable), and a non-list value is ignored entirely.  A missing
+    field yields ``()``.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        logger.warning("Ignoring non-list permissions in %s: %r", skill_file, raw)
+        return ()
+    permissions: list[str] = []
+    for item in raw:
+        name = str(item).strip().lower()
+        if name not in CAPABILITY_PERMISSIONS:
+            logger.warning("Ignoring unknown permission %r in %s; allowed: %s", item, skill_file, sorted(CAPABILITY_PERMISSIONS))
+            continue
+        if name not in permissions:
+            permissions.append(name)
+    return tuple(permissions)
+
+
+def parse_tool_schema_version(raw: object, skill_file: Path) -> str | None:
+    """Parse the optional ``tool-schema-version`` frontmatter field (N14 §5.5)."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        logger.warning("Ignoring empty tool-schema-version in %s", skill_file)
+        return None
+    return text
+
+
+def parse_context_budget(raw: object, skill_file: Path) -> int | None:
+    """Parse the optional ``context-budget`` frontmatter field (N14 §5.5)."""
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        logger.warning("Ignoring non-integer context-budget in %s: %r", skill_file, raw)
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring non-integer context-budget in %s: %r", skill_file, raw)
+        return None
+    if value <= 0:
+        logger.warning("Ignoring non-positive context-budget in %s: %r", skill_file, raw)
+        return None
+    return value
+
+
 def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: Path | None = None) -> Skill | None:
     """Parse a SKILL.md file and extract metadata.
 
@@ -307,6 +361,11 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
         # --- environment requirements (N11) ---
         requirements = parse_requirements(metadata.get("requires"), skill_file)
 
+        # --- capability contract (N14 §5.5) ---
+        permissions = parse_permissions(metadata.get("permissions"), skill_file)
+        tool_schema_version = parse_tool_schema_version(metadata.get("tool-schema-version"), skill_file)
+        context_budget = parse_context_budget(metadata.get("context-budget"), skill_file)
+
         return Skill(
             name=name,
             description=description,
@@ -324,6 +383,9 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             skill_id=skill_id,
             dependencies=dependencies,
             requirements=requirements,
+            permissions=permissions,
+            tool_schema_version=tool_schema_version,
+            context_budget=context_budget,
         )
 
     except Exception:

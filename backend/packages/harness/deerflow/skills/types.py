@@ -90,6 +90,14 @@ class Skill:
     # runtimes, plugins). Probed and reported by ``deerflow.environment``; an
     # empty tuple means the skill declares nothing and is never gated.
     requirements: tuple[RequirementSpec, ...] = ()
+    # N14 §5.5 capability contract. ``permissions`` is a declared minimal-purpose
+    # subset of {fs, net, exec, secrets} (runtime adjudication by the tool gateway
+    # is a follow-up); ``tool_schema_version`` flags a structural tool-schema
+    # change; ``context_budget`` is the tool-description token budget. Unknown
+    # values are dropped at parse time (see ``skills.parser``).
+    permissions: tuple[str, ...] = ()
+    tool_schema_version: str | None = None
+    context_budget: int | None = None
 
     @property
     def skill_path(self) -> str:
