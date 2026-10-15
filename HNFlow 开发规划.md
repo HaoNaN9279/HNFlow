@@ -21,7 +21,7 @@
 | 执行器 | `workflow/executors/` | flow(if/switch/wait)、data(assign/convert/file/json/regex)、tool(bash/http/log)、ai(llm_agent)、human(task) |
 | AI 节点 | `executors/ai.py` + `workflow/prompts.py` | 三层提示词（身份/能力/任务）；template/continue 双模式；经 `SubagentExecutor` 执行；token 用量聚合 |
 | 人类节点 | `executors/human.py`、`human_task_state.py` | `interrupt()` 挂起 + `Command(resume=)` 恢复；状态机；幂等复用 |
-| 执行 worker | `workflow/worker.py` | 复用 run 生命周期；`wf:node:started/completed/failed` 事件；run.end token_usage |
+| 执行 worker | `workflow/worker.py` | 复用 run 生命周期；`wf:node:started/completed/failed` 事件（失败带 `error_class` 稳定失败码）；run.end token_usage |
 | 对话侧调度 | `workflow/dispatch.py` | start/resume/continue/cancel/get/list_events；运行单例注入 |
 | 生成/编辑工具 | `tools/builtins/workflow_tools.py`、`workflow_runtime_tools.py` | generate/edit/run/get/pause/cancel/continue + human task 工具 |
 | 危险节点 | `workflow/danger.py` | bash/http → `pending_review_nodes` |
@@ -100,7 +100,7 @@
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）已落地；其余分批 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）已落地；其余分批 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -133,6 +133,8 @@
 > **N14 切片B（§24.5 自主度预算）**：`ai:llm_agent` 增 `params.autonomy = {mode: template|bounded, budgets: {max_turns, max_tokens}}`。`template`（默认）= 现状**零变化**；`bounded` 把硬预算落到 subagent 执行体：`max_turns` → `SubagentConfig.max_turns`（既已直连 `recursion_limit`），`max_tokens` → `SubagentConfig.token_budget`（`TokenBudgetConfig`）经**新增** `build_subagent_runtime_middlewares(token_budget_override=...)` 优先于 config 查询、由 `executor._create_agent` 透传（None=现状）。`stop_reason`（`token_capped`/`turn_capped`/`loop_capped`，`SubagentResult` 现成）经保留结果键 `__stop_reason` 由 `_make_node_fn` 提升到 reserved 通道 `wf:<node_id>:__stop_reason`（同 `__token_usage` 先例）。**`bounded` 保持 `allow_recursion=False`**（受限**工具**循环，非委派）。**`max_tool_calls` 无引擎机制，提供即编译期报错**（需新预算中间件 + `stop_reason` 契约新增值，列后续）；`delegated` 档、有界评审回环、受控动态 handoff 亦列后续。**无迁移、无新表、无新配置、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_autonomy.py`（13 条：预算解析 template/bounded/max_tokens、stop_reason 落通道/缺省不写、mode 非法/max_tool_calls/非正预算/未知键校验、SubagentConfig 字段）。全量离线 A/B 对拍：新增 13 全过；唯一新增失败为既有**时序 flake** `test_extension_task_lifecycle`（该文件 budget 计时测试，单跑 3/3 通过、与本改动无关）。
 >
 > **N14 切片C（§24.4 结构化输出契约）**：新增 `deerflow/workflow/structured_output.py`（**纯逻辑**：`parse_output_schema` / `extract_json_object`（裸/围栏/嵌入式 JSON）/ `validate_payload`（类型校验）/ `schema_instruction`，零新依赖——用**字段→`PortType` 映射**而非完整 JSON Schema，与端口词汇天然对齐）。`ai:llm_agent` 增 `params.output_schema = {fields: {name: PortType}, required?, enum_values?, max_repairs?}`：任务提示追加「输出单个 JSON 对象」指令 → 剥围栏/`json.loads` → 校验；失败**有界修复**（≤ `max_repairs`，默认 1，带错误重试），耗尽即**节点失败**（`WorkflowExecutionError`）；成功把字段值写**已声明输出端口**（保留 `out` 原始文本）。**编译期绑定校验**：每字段须有同名输出端口且**类型一致**、`required`/`enum_values` 指向已知字段、`max_repairs` 0..5、仅 AI 节点——把「模型输出与图不符」前移到定义期。**可观测**：reserved 通道 `wf:<node>:__schema_repairs`（0 也写）。仅 template 模式；与 continue 组合 → **运行期**报错（continue 由运行期输入决定，无法编译期静态判定，故较原 D7 的「编译期」改为运行期，已记入 boulder）。`file` 字段类型、完整 JSON Schema、失败转人工列后续。**无迁移、无新表、无新配置、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_structured_output.py`（23 条：解析/提取/校验/修复循环/绑定校验/通道）。全量离线 A/B 对拍：新增 23 全过，**失败集合无新增**（且上两轮的 `test_extension_task_lifecycle` 时序 flake 本轮自行通过，进一步证实抖动）。
+>
+> **N14 切片D（§24.9 端到端可观测：失败分类）**：新增 `deerflow/workflow/failure_taxonomy.py`——`FAILURE_CODES`（`timeout|rate_limit|model|validation|tool|budget|resource|conflict|config|unknown`）+ 纯函数 `classify_failure(exc, *, node_type=None)`（**best-effort 确定性**：超时/校验/冲突/锁/限流/资源/工具节点各自归码，其余 `unknown` 兜底，绝不猜测；对 compiler/registry/conflict/structured_output/locks 全部**函数内 deferred import** 以免循环）。`compiler._with_node_events` 增 `node_type` 形参并在 `wf:node:failed` payload 加 **`error_class`**；`worker` 消费时透传、**外层兜底路径**对冒泡异常分类并写入 `wf:node:failed`（content+metadata）、`run.error`（metadata）与 bridge `error` 事件（`class`）。**trace 贯通与成本归因经核对已具备**（Langfuse/Smith 回调在 graph 根部；W1C `__token_usage`→run.end 每节点明细 + console 聚合/cache-aware 计价），本切片仅补失败分类并文档标注。`budget` 码保留（预算以 `stop_reason` 表达、不抛异常，故节点级暂不可达）。**无迁移、无新表、无新配置、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_failure_taxonomy.py`（13 条：各码映射/工具节点/unknown 兜底/事件 `error_class`）。全量离线 A/B 对拍：新增 13 全过、**失败集合无新增**（仅两条 `test_extension_task_lifecycle` 时序 flake 本轮复现，单跑均过）。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -188,7 +190,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A（共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）已落地 |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A（共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）已落地 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 
 ---

@@ -58,6 +58,7 @@ from langgraph.errors import GraphBubbleUp, GraphInterrupt, GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
@@ -344,11 +345,13 @@ def _emit_node_event(event_type: str, node_id: str, depth: int, **extra: Any) ->
         return
 
 
-def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any]) -> Callable[..., Any]:
+def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any], node_type: NodeType | None = None) -> Callable[..., Any]:
     """Wrap a compiled-graph node fn to emit started / completed / failed events.
 
     ``depth`` is the subgraph nesting depth baked into this graph's compilation
     (0 = top-level), so the worker can filter out child-subgraph node events.
+    On failure the event carries a stable ``error_class`` (N14 §24.9) alongside
+    the raw ``error`` / ``error_type``.
     """
 
     async def _wrapped(state: dict[str, Any]) -> dict[str, Any]:
@@ -356,7 +359,7 @@ def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any]) -> Calla
         try:
             result = await fn(state)
         except Exception as exc:
-            _emit_node_event("failed", node_id, depth, error=str(exc), error_type=type(exc).__name__)
+            _emit_node_event("failed", node_id, depth, error=str(exc), error_type=type(exc).__name__, error_class=classify_failure(exc, node_type=node_type))
             raise
         _emit_node_event("completed", node_id, depth, output=result if isinstance(result, dict) else {})
         return result
@@ -1449,7 +1452,7 @@ def _compile_impl(
         node = node_map.get(node_id)
         if node is not None:
             node_fn = _maybe_wrap_resource_lock(node, node_fn)
-        builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn))
+        builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn, node.type if node is not None else None))
 
     # Build lookup maps
     node_map: dict[str, Node] = {n.id: n for n in def_.nodes}

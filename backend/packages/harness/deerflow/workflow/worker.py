@@ -18,6 +18,7 @@ from deerflow.runtime.stream_bridge.base import StreamBridge
 from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import CompileContext, compile_definition
 from deerflow.workflow.executors import build_default_registry
+from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
 
 logger = logging.getLogger(__name__)
@@ -314,7 +315,7 @@ async def run_workflow(
                         await _persist_node_event(
                             "wf:node:failed",
                             {"node_id": _name, "step": _step, "error": data.get("error", "")},
-                            {"node_id": _name, "error_type": data.get("error_type", "Exception")},
+                            {"node_id": _name, "error_type": data.get("error_type", "Exception"), "error_class": data.get("error_class", "unknown")},
                         )
 
                 elif mode == "updates":
@@ -437,6 +438,10 @@ async def run_workflow(
 
     except Exception as exc:
         error_msg = f"{exc}"
+        # N14 §24.9 stable failure code for the node that was executing (the
+        # compiler's per-node event already carries one; this is the fallback
+        # when the exception bubbled out before that event was emitted).
+        failure_class = classify_failure(exc)
         logger.exception("Run %s failed: %s", run_id, error_msg)
 
         # ── Compensation (T13-4) ────────────────────────────────────────
@@ -458,6 +463,7 @@ async def run_workflow(
                 "node_id": recent_node_id,
                 "step": recent_step,
                 "error": error_msg,
+                "error_class": failure_class,
             }
             await bridge.publish(run_id, "wf:node:failed", failed_content)
             if event_store is not None:
@@ -468,7 +474,7 @@ async def run_workflow(
                         event_type="wf:node:failed",
                         category="workflow",
                         content=failed_content,
-                        metadata={"node_id": recent_node_id, "error_type": type(exc).__name__},
+                        metadata={"node_id": recent_node_id, "error_type": type(exc).__name__, "error_class": failure_class},
                     )
                 except Exception:
                     logger.warning(
@@ -487,7 +493,7 @@ async def run_workflow(
         await bridge.publish(
             run_id,
             "error",
-            {"message": error_msg, "name": type(exc).__name__},
+            {"message": error_msg, "name": type(exc).__name__, "class": failure_class},
         )
 
         if event_store is not None:
@@ -498,7 +504,7 @@ async def run_workflow(
                     event_type="run.error",
                     category="error",
                     content=error_msg,
-                    metadata={"error_type": type(exc).__name__},
+                    metadata={"error_type": type(exc).__name__, "error_class": failure_class},
                 )
             except Exception:
                 logger.warning("Failed to persist run.error for run %s (non-fatal)", run_id, exc_info=True)
