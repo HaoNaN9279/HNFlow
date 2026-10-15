@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
 from deerflow.workflow.context_policy import estimate_tokens
+from deerflow.workflow.sanitize import neutralize_untrusted
 
 #: The four scopes from §24.1.
 MEMORY_SCOPES: frozenset[str] = frozenset({"session", "node", "workflow", "long_term"})
@@ -149,6 +150,9 @@ def format_memory_block(records: list[MemoryRecord], *, budget: int | None = Non
         text = (record.text or "").strip()
         if not text:
             continue
+        # N14 §24.12: stored memory that contains a framework tag must not be able
+        # to forge a trusted block inside this one.
+        text = neutralize_untrusted(text)
         cost = estimate_tokens(text)
         if budget is not None and used + cost > budget:
             break

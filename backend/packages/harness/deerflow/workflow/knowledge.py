@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 from deerflow.workflow.context_policy import estimate_tokens
+from deerflow.workflow.sanitize import neutralize_untrusted
 
 #: Runtime-context key carrying the knowledge store adapter.
 KNOWLEDGE_STORE_CONTEXT_KEY = "knowledge_store"
@@ -277,6 +278,9 @@ def format_retrieval_block(records: list[RetrievalRecord], *, budget: int | None
         text = (record.text or "").strip()
         if not text:
             continue
+        # N14 §24.12: neutralized untrusted-content text cannot forge a framework
+        # block (the surrounding <context> tag is ours, the contents are not).
+        text = neutralize_untrusted(text)
         header = f"--- {record.citation} {record.source or record.doc_id} ---"
         cost = estimate_tokens(header) + estimate_tokens(text)
         if budget is not None and used + cost > budget:
