@@ -42,6 +42,7 @@ Key constraints:
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import inspect
@@ -386,16 +387,39 @@ def _make_node_fn(
     running and re-verifies the approved preview afterwards (N10, see
     :mod:`deerflow.workflow.approval`).
     """
-    # Build input-port → state-key mapping from incoming edges
-    input_key_map: dict[str, str] = {}
+    from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    # Build input-port → *ordered list* of upstream state keys from incoming
+    # edges.  A list-per-port (rather than a single key) is what lets a fan-in
+    # port fed by several parallel branches merge per ``params.merge`` (N13)
+    # instead of silently keeping only the last edge (pre-N13 behavior).
+    merge_raw = node.params.get("merge") or {}
+    merge_policies: dict[str, str] = dict(merge_raw) if isinstance(merge_raw, dict) else {}
+    port_keys: dict[str, list[str]] = {}
     for edge in incoming_edges:
-        input_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+        port_keys.setdefault(edge.target_port, []).append(f"wf:{edge.source}:{edge.source_port}")
+
+    def _resolve_input(state: dict[str, Any], port_name: str) -> Any:
+        keys = port_keys.get(port_name)
+        if not keys:
+            return state.get(f"wf:{node.id}:{port_name}")
+        policy = merge_policies.get(port_name, "overwrite")
+        if policy == "array":
+            # Collect every upstream value that was actually produced, in edge
+            # order.  A producer that never ran is skipped; none → empty list.
+            return [state.get(k) for k in keys if k in state]
+        if policy == "error":
+            present = [k for k in keys if k in state and state.get(k) is not None]
+            if len(present) > 1:
+                raise WorkflowExecutionError(f"node '{node.id}': input port '{port_name}' received conflicting values from multiple branches {present} (merge policy 'error')")
+            return state.get(present[0]) if present else None
+        # ``overwrite`` (default): last edge wins, matching pre-N13 behavior.
+        return state.get(keys[-1])
 
     async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
         inputs: dict[str, Any] = {}
         for p in node.inputs:
-            state_key = input_key_map.get(p.name, f"wf:{node.id}:{p.name}")
-            inputs[p.name] = state.get(state_key)
+            inputs[p.name] = _resolve_input(state, p.name)
 
         # Build WorkflowRuntime from LangGraph's runnable config context.
         # get_config() is available inside LangGraph node execution.
@@ -459,8 +483,6 @@ def _make_node_fn(
                     inputs=inputs,
                 )
                 if not decision.approved:
-                    from deerflow.workflow.registry import WorkflowExecutionError
-
                     note = f": {decision.note}" if decision.note else ""
                     if on_reject_policy(executor_params) == ON_REJECT_FAIL:
                         raise WorkflowExecutionError(f"node '{node.id}': rejected by the approver{note}")
@@ -1041,6 +1063,121 @@ def _validate_approval_nodes(def_: WorkflowDefinition, ctx: CompileContext) -> N
             raise WorkflowCompileError(f"node '{node.id}': on_reject must be 'fail' or 'skip', got {on_reject!r}")
 
 
+#: Fan-in merge policies accepted by ``params.merge`` (N13).
+_MERGE_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "error"})
+
+
+def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
+    """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
+
+    Both are author-facing knobs on arbitrary nodes, so a typo'd port name,
+    an unknown merge policy, or a lock name that cannot become a filename is
+    reported here (definition compile) rather than silently ignored at runtime.
+    """
+    from deerflow.locks.file_lock import LOCK_NAME_PATTERN
+
+    for node in def_.nodes:
+        params = node.params or {}
+
+        merge = params.get("merge")
+        if merge is not None:
+            if not isinstance(merge, dict):
+                raise WorkflowCompileError(f"node '{node.id}': params.merge must be an object mapping input ports to one of {sorted(_MERGE_POLICIES)}")
+            input_names = {p.name for p in node.inputs}
+            for port, policy in merge.items():
+                if port not in input_names:
+                    raise WorkflowCompileError(f"node '{node.id}': params.merge references unknown input port '{port}' (available: {sorted(input_names)})")
+                if policy not in _MERGE_POLICIES:
+                    raise WorkflowCompileError(f"node '{node.id}': params.merge['{port}'] must be one of {sorted(_MERGE_POLICIES)}, got {policy!r}")
+
+        lock_param = params.get("resource_lock")
+        if lock_param is not None:
+            if isinstance(lock_param, str):
+                lock_names: tuple[Any, ...] = (lock_param,)
+            elif isinstance(lock_param, (list, tuple)):
+                lock_names = tuple(lock_param)
+            else:
+                raise WorkflowCompileError(f"node '{node.id}': params.resource_lock must be a string or a list of strings")
+            for name in lock_names:
+                if not isinstance(name, str) or not LOCK_NAME_PATTERN.match(name):
+                    raise WorkflowCompileError(f"node '{node.id}': invalid resource_lock name {name!r}; expected {LOCK_NAME_PATTERN.pattern!r}")
+
+        timeout = params.get("resource_lock_timeout")
+        if timeout is not None:
+            try:
+                float(timeout)
+            except (TypeError, ValueError) as exc:
+                raise WorkflowCompileError(f"node '{node.id}': params.resource_lock_timeout must be a number, got {timeout!r}") from exc
+
+
+def _resource_lock_names(node: Node) -> tuple[str, ...]:
+    """Extract the (validated) ``params.resource_lock`` names for *node*."""
+    raw = node.params.get("resource_lock")
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return (raw,)
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(x) for x in raw)
+    return ()
+
+
+def _maybe_wrap_resource_lock(node: Node, node_fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap *node_fn* to hold ``params.resource_lock`` around its whole execution (N13).
+
+    The N8 lock is reentrant via a ``threading.RLock`` whose acquire/release must
+    happen on the **same thread**, and a blocking acquire must not run on the
+    event loop (blocking-io gate).  So a dedicated holder thread takes the lock
+    (single ``resource_lock`` or ``acquire_many``) and holds it until the node
+    finishes; the event loop only waits on a handshake event.  A timeout surfaces
+    as a ``WorkflowExecutionError`` naming the lock; the lock is released in a
+    ``finally`` even when the node raises or is cancelled.
+    """
+    names = _resource_lock_names(node)
+    if not names:
+        return node_fn
+    timeout = float(node.params.get("resource_lock_timeout", 60.0))
+    node_id = node.id
+
+    async def _locked(state: dict[str, Any]) -> dict[str, Any]:
+        from deerflow.locks.file_lock import LockError, acquire_many, resource_lock
+
+        acquired = threading.Event()
+        release = threading.Event()
+        errors: list[BaseException] = []
+
+        def _holder() -> None:
+            try:
+                holder_ctx = resource_lock(names[0], timeout=timeout) if len(names) == 1 else acquire_many(names, timeout=timeout)
+                with holder_ctx:
+                    acquired.set()
+                    release.wait()
+            except BaseException as exc:  # noqa: BLE001 — surfaced to the awaiting node
+                errors.append(exc)
+                acquired.set()
+
+        holder = threading.Thread(target=_holder, name=f"wf-lock-{node_id}", daemon=True)
+        holder.start()
+        try:
+            await asyncio.to_thread(acquired.wait)
+            if errors:
+                from deerflow.workflow.registry import WorkflowExecutionError
+
+                failure = errors[0]
+                if isinstance(failure, LockError):
+                    raise WorkflowExecutionError(f"node '{node_id}': resource lock {list(names)} unavailable: {failure}") from failure
+                raise failure
+            return await node_fn(state)
+        finally:
+            # Releases the holder's ``with`` block; the daemon thread then exits
+            # on its own.  Deliberately not joined here: joining while the holder
+            # is still waiting to acquire could block, and the lock is released
+            # regardless as soon as the holder wakes.
+            release.set()
+
+    return _locked
+
+
 def _make_route_fn(
     if_node: Node,
     conditional_edges: list[tuple[str, str]],  # [(condition_port, target), ...]
@@ -1128,6 +1265,7 @@ def _compile_impl(
     if errors:
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
     _validate_approval_nodes(def_, ctx)
+    _validate_concurrency_params(def_)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)
@@ -1141,7 +1279,14 @@ def _compile_impl(
         ``_compile_impl``'s ``depth`` starts at 1 for the top-level graph, so the
         event depth is ``depth - 1`` (0 = top level) — the value the worker uses
         to filter out child-subgraph node events.
+
+        A node declaring ``params.resource_lock`` (N13) is additionally wrapped so
+        its whole execution holds the cross-process lock; the wrap is a no-op
+        otherwise.
         """
+        node = node_map.get(node_id)
+        if node is not None:
+            node_fn = _maybe_wrap_resource_lock(node, node_fn)
         builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn))
 
     # Build lookup maps

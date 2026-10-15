@@ -99,7 +99,7 @@
 | N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ✅ P1 切片 6：预览/审批/undo（N10）+ 人机共享治理（N10b：presence 探测 / 准入决策 / 抢占声明 / 冲突检测 / 归属可见性）全部落地 |
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
-| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ⬜ P2 |
+| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ◐ 已落地 并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）；共享变量（`wf:shared:*` 黑板）延后（与 §24.6a 协作原语合并） |
 | N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ⬜ P2 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
@@ -125,6 +125,8 @@
 > **C5 切片（循环正宗版，Option A）**：`flow:loop` 由「简单计数」升级为「聚合 + 条件驱动」——节点声明 `results`(array)/`last` 时，loop fn 从第 2 轮起把经回边回流的 body 产物逐轮收进 `results`（顺序 = 迭代序，末元素即 `last`，种子不计入），仅在声明端口时写（旧定义零破坏）；路由新增 `params.continue_on`（命名某条入边的 `source_port`，读 `wf:<source>:<port>`，falsy 即早退；键缺失 = 继续，第 1 轮不判条件，`iterations` 仍为硬上限）。聚合走保留通道 `wf:<loop_id>:__results`，故只声明 `last` 的节点也能拿到全量历史。**不改图拓扑**（body 仍在主图），因此 body 节点 SSE 事件、loop 内 `interrupt`/审批、checkpointer 命名空间、子工作流嵌套、`validate_definition` 环豁免**全部不受影响**；无 schema 迁移、无新表、无新配置段、无新依赖。前端仅同步 `node-catalog.ts` 的 `flow:loop` 端口（+`results`/`last`）。测试：`tests/test_workflow_loop_ports.py`（聚合 4 条）+ 新增 `tests/test_workflow_loop_condition.py`（条件/硬上限/缺键安全 4 条）；全量离线 A/B 对拍失败集合逐条一致（77），+8 passed。「子图展开（body 隔离）」按方案原文列为后续增量（与 §24.6a 评审回环联动）。
 >
 > **N12 切片（容错编排，`flow:try`）**：新增流程控制节点 `flow:try`，**复用 `nested:subworkflow` 的子图展开机制**承载受保护 body（`params.subworkflow`，inline/template + `mapping`）。try 节点 fn `ainvoke` body 子图：成功→按 mapping 回写 `out`、`error=False`；抛错→写 `error`(bool)/`error_message`/`error_type` 并**继续**（run 不炸），由下游已有 `flow:if` 读 `error` 分流到 catch 分支（**不新增条件边机制**）；`on_error="fail"` 恢复今天的上抛行为。**控制流信号永不吞**：`_control_flow_should_propagate` 排除 `GraphInterrupt`（HITL 挂起）与 `GraphBubbleUp` 其他子类，`GraphRecursionError` 默认上抛（`catch_recursion=true` 可选捕获）；`CancelledError` 属 `BaseException` 天然不捕。可选 `params.finally_subworkflow` 在 `finally:` 块执行（成败都跑；无输入注入，侧效应收尾）。**不改条件边/事件/checkpointer 主路径**；无迁移、无新表、无新配置、无新依赖；前端同步 `types.ts`/`node-catalog.ts`（+`flow:try`）。测试：新增 `tests/test_workflow_try.py`（12 条：分类 4 + 成功/捕获/fail 上抛/中断不吞/递归默认上抛/递归可选捕获/finally 成败都跑/缺 spec 编译错）。全量离线 A/B 对拍失败集合逐条一致（77），+12 passed。已知边界：body 内 `require_approval`/`human:task` 沿用子图限制（暂不支持）；body 节点 SSE 事件不发（depth>0）。「平铺区域 + 显式 `flow:finally` 节点」列为后续增量。
+>
+> **N13 切片（并发治理，合并规则 + 资源锁）**：① **Fan-in 合并规则**——`_make_node_fn` 此前用 `dict[target_port]=key` 建输入映射，**同端口多入边后者覆盖前者、静默丢失并行分支产物**；改为 `dict[port, list[key]]` 并按节点 `params.merge`（`{port: overwrite|array|error}`，默认 `overwrite`=最后边胜）合并：`array` 按边顺序收集该端口**已产出**的上游值成 list（未产出跳过、全未产出=`[]`），`error` 在 >1 个非 None 源时抛 `WorkflowExecutionError`。读侧小改、**不动 state schema/无迁移**；编译期校验策略与端口名。② **节点级资源锁**——节点 `params.resource_lock`(str|list) + `resource_lock_timeout`（默认 60）经 `_register` 统一包装**所有**声明锁的节点，复用 N8 `locks/file_lock.py` 的 `resource_lock`/`acquire_many` 把整段执行置于**跨进程**锁下（GPU/项目文件/license 串行化）。因 N8 in-process 可重入是 `threading.RLock`（acquire/release 必须同线程）且阻塞获取不能在事件循环上跑，采用**「锁持有线程 + 握手」**：daemon 线程内 `with lock:` 获取并等 `release` 事件，事件循环只 `await` 握手；超时→带锁名的 `WorkflowExecutionError`；`finally` 置 `release` 保证异常/取消都释放。**无迁移、无新表、无新配置、无新依赖**；前端零改动（参数级）。测试：新增 `tests/test_workflow_concurrency.py`（9 条：overwrite/array 保序/array 跳过未产出/error 冲突/非法端口/非法策略、锁串行化/超时/非法锁名）。全量离线 A/B 对拍失败集合逐条一致（77），+9 passed。**共享变量（`wf:shared:*` 黑板）延后**：需 workflow 级共享通道 + reducer（并发写同一通道否则 `InvalidUpdateError`）+ 写策略，与 §24.6a 协作原语 / N14 #6a 强重叠，应一起设计。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -161,7 +163,7 @@
 ### P2 — 编排增强 + Agent 能力（分批）
 
 1. **N12 容错编排**（Try-Catch/Finally、降级/回调）。— ✅ 已落地（`flow:try`，见上）
-2. **N13 并发治理**（并行合并规则、共享变量、资源锁）。
+2. **N13 并发治理**（并行合并规则、共享变量、资源锁）。— ◐ 已落地 合并规则 + 资源锁主体；共享变量延后
 3. **N14 §24 中与定位强相关项优先**：上下文策略(#3)、结构化输出(#4)、自主度预算(#5)、协作原语(#6a)、事务/undo(#7)、确定性重放(#11)、可观测(#9)、成本治理(#10)、记忆(#1)、检索(#2)、协作拓扑模板(#6b)。
 
 ### P3 — 低优先级
@@ -177,7 +179,7 @@
 |---|---|---|---|
 | M0 现状对齐 | C2/C3/C4/C6/C8/C10/C11 | 执行流、元数据、端口类型、迁移钩子与方案一致；测试全绿 | ✅ 达成（C4 版本范围校验顺延） |
 | M1 工具可用 | N1 最小版 + C1 + C7 | AI 节点可调用能力组工具；notify 可用 | ✅ 达成（N1 为最小版） |
-| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）；N13 未开始 |
+| M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
 | M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
