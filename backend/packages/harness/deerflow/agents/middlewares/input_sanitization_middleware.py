@@ -97,6 +97,12 @@ _BLOCKED_TAG_NAMES: frozenset[str] = frozenset(
         "guidelines",
         "output_format",
         "working_directory",
+        # N14 §24.3 AI-node context policy blocks (workflow/prompts.py): the
+        # declared few-shot set and the named input ports mounted as the node's
+        # retrieved context. Both land in the AI node's system prompt, so forging
+        # either in untrusted input mimics trusted node context.
+        "examples",
+        "context",
         # Subagent system-prompt block (general_purpose.py): declares the task
         # tool off-limits. Forging this in untrusted input could trick the
         # model into believing it has (or lacks) tool restrictions it does not.

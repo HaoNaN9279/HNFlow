@@ -100,7 +100,7 @@
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）已落地；其余分批 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）已落地；其余分批 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -135,6 +135,8 @@
 > **N14 切片C（§24.4 结构化输出契约）**：新增 `deerflow/workflow/structured_output.py`（**纯逻辑**：`parse_output_schema` / `extract_json_object`（裸/围栏/嵌入式 JSON）/ `validate_payload`（类型校验）/ `schema_instruction`，零新依赖——用**字段→`PortType` 映射**而非完整 JSON Schema，与端口词汇天然对齐）。`ai:llm_agent` 增 `params.output_schema = {fields: {name: PortType}, required?, enum_values?, max_repairs?}`：任务提示追加「输出单个 JSON 对象」指令 → 剥围栏/`json.loads` → 校验；失败**有界修复**（≤ `max_repairs`，默认 1，带错误重试），耗尽即**节点失败**（`WorkflowExecutionError`）；成功把字段值写**已声明输出端口**（保留 `out` 原始文本）。**编译期绑定校验**：每字段须有同名输出端口且**类型一致**、`required`/`enum_values` 指向已知字段、`max_repairs` 0..5、仅 AI 节点——把「模型输出与图不符」前移到定义期。**可观测**：reserved 通道 `wf:<node>:__schema_repairs`（0 也写）。仅 template 模式；与 continue 组合 → **运行期**报错（continue 由运行期输入决定，无法编译期静态判定，故较原 D7 的「编译期」改为运行期，已记入 boulder）。`file` 字段类型、完整 JSON Schema、失败转人工列后续。**无迁移、无新表、无新配置、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_structured_output.py`（23 条：解析/提取/校验/修复循环/绑定校验/通道）。全量离线 A/B 对拍：新增 23 全过，**失败集合无新增**（且上两轮的 `test_extension_task_lifecycle` 时序 flake 本轮自行通过，进一步证实抖动）。
 >
 > **N14 切片D（§24.9 端到端可观测：失败分类）**：新增 `deerflow/workflow/failure_taxonomy.py`——`FAILURE_CODES`（`timeout|rate_limit|model|validation|tool|budget|resource|conflict|config|unknown`）+ 纯函数 `classify_failure(exc, *, node_type=None)`（**best-effort 确定性**：超时/校验/冲突/锁/限流/资源/工具节点各自归码，其余 `unknown` 兜底，绝不猜测；对 compiler/registry/conflict/structured_output/locks 全部**函数内 deferred import** 以免循环）。`compiler._with_node_events` 增 `node_type` 形参并在 `wf:node:failed` payload 加 **`error_class`**；`worker` 消费时透传、**外层兜底路径**对冒泡异常分类并写入 `wf:node:failed`（content+metadata）、`run.error`（metadata）与 bridge `error` 事件（`class`）。**trace 贯通与成本归因经核对已具备**（Langfuse/Smith 回调在 graph 根部；W1C `__token_usage`→run.end 每节点明细 + console 聚合/cache-aware 计价），本切片仅补失败分类并文档标注。`budget` 码保留（预算以 `stop_reason` 表达、不抛异常，故节点级暂不可达）。**无迁移、无新表、无新配置、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_failure_taxonomy.py`（13 条：各码映射/工具节点/unknown 兜底/事件 `error_class`）。全量离线 A/B 对拍：新增 13 全过、**失败集合无新增**（仅两条 `test_extension_task_lifecycle` 时序 flake 本轮复现，单跑均过）。
+>
+> **N14 切片E（§24.3 上下文工程策略）**：新增 `deerflow/workflow/context_policy.py`——纯函数 `estimate_tokens`（CJK-aware 字符估算，离线无依赖、**标注为估算**而非精确，与既有 `memory.token_counting: char` 同哲学）+ `parse_context_policy`（规范化 `params.context_policy` = `examples` 声明式 few-shot / `include` 按名挂载输入端口 / `budget.total_tokens`，坏形状 fail-loud）+ `apply_context_budget`（**固定顺序** `identity→capability→task→examples→context→schema`；预算**只约束可截断桶** `examples`/`context`，按 `examples` 优先贪婪填装、`context` 先被丢弃或截断，骨架超预算记 `over_budget` **不静默截断 instruction**）。`prompts.py` 增 `build_examples_layer`（`<examples>`）/`build_context_layer`（`<context>`，按 `include` 顺序、缺键跳过）/`build_ai_node_buckets`（桶顺序单一来源）。`ai.py` 接入 policy 并把用量写入保留通道 `wf:<node>:__context_usage`（各桶估算 token / dropped / truncated / over_budget，additive；未声明 policy 的节点不写该键）。`compiler._validate_context_policy` 编译期校验 `include` ⊆ 已声明输入端口 + shape。**诚实取舍**：工具结果外置/历史压缩仍由**全局**中间件负责（`ToolOutputBudgetMiddleware`/`DeerFlowSummarizationMiddleware`），节点级 override 延后；与 continue 模式互斥（运行期报错）；不引 tiktoken。**无迁移、无新表、无新配置段、无新依赖**；前端零改动。测试：新增 `tests/test_workflow_context_policy.py`（45 条：估算/解析形状/层渲染/预算丢弃截断/执行器集成/编译期校验）+ denylist 护栏参数化 +4。全量离线 A/B 对拍：passed 10812→10865、**失败集合无新增**（`test_input_sanitization_middleware` 的框架块 denylist 扫描护栏一度捕获新增的 `<examples>`/`<context>` 提示块，已同步加入 `_BLOCKED_TAG_NAMES` 并纳入该护栏的参数化列表）。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -190,7 +192,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A（共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）已落地 |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A（共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）已落地 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 
 ---

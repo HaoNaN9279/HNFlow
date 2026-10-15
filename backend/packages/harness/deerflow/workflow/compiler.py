@@ -58,6 +58,7 @@ from langgraph.errors import GraphBubbleUp, GraphInterrupt, GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
@@ -317,6 +318,9 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             if node.params.get("output_schema") is not None:
                 # N14 §24.4 structured-output repair count.
                 fields[f"wf:{node.id}:__schema_repairs"] = Any
+            if node.params.get("context_policy") is not None:
+                # N14 §24.3 per-bucket context usage (estimates + dropped buckets).
+                fields[f"wf:{node.id}:__context_usage"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -534,6 +538,11 @@ def _make_node_fn(
             schema_repairs = result.get("__schema_repairs")
             if isinstance(schema_repairs, int) and not isinstance(schema_repairs, bool):
                 outputs[f"wf:{node.id}:__schema_repairs"] = schema_repairs
+            # N14 §24.3: per-bucket context usage, present only for a node that
+            # declared a context_policy.
+            context_usage = result.get(CONTEXT_USAGE_RESULT_KEY)
+            if isinstance(context_usage, dict):
+                outputs[f"wf:{node.id}:__context_usage"] = context_usage
 
         # N14 shared workspace: an executor may request writes to shared
         # variables through the reserved ``__shared_writes`` result key; lift
@@ -1229,6 +1238,35 @@ def _validate_output_schema(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': output_schema.max_repairs must be between 0 and {MAX_REPAIRS_LIMIT}")
 
 
+def _validate_context_policy(def_: WorkflowDefinition) -> None:
+    """Compile-time validation for ``ai:llm_agent`` ``params.context_policy`` (N14 §24.3).
+
+    Two things the runtime cannot check are checked here: the policy shape itself
+    (delegated to the pure parser, so compile and runtime agree), and the port
+    binding — every ``include`` name must be a declared **input** port of that
+    node, turning "the mounted context was silently empty" into a definition
+    error at save/compile time.
+    """
+    from deerflow.workflow.context_policy import ContextPolicyError, parse_context_policy
+
+    for node in def_.nodes:
+        if (node.params or {}).get("context_policy") is None:
+            continue
+        if node.type != NodeType.AI_LLM_AGENT:
+            raise WorkflowCompileError(f"node '{node.id}': params.context_policy is only supported on 'ai:llm_agent' nodes")
+        try:
+            policy = parse_context_policy(node.params)
+        except ContextPolicyError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': invalid context_policy: {exc}") from exc
+        if policy is None:  # pragma: no cover - guarded by the None check above
+            continue
+
+        input_ports = {port.name for port in node.inputs}
+        for name in policy.include:
+            if name not in input_ports:
+                raise WorkflowCompileError(f"node '{node.id}': context_policy.include names undeclared input port '{name}'")
+
+
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
 
@@ -1431,6 +1469,7 @@ def _compile_impl(
     _validate_shared_nodes(def_)
     _validate_autonomy(def_)
     _validate_output_schema(def_)
+    _validate_context_policy(def_)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)

@@ -15,7 +15,8 @@ from typing import Any
 from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
-from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
+from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
+from deerflow.workflow.prompts import build_ai_node_buckets, build_task_layer
 from deerflow.workflow.registry import WorkflowExecutionError
 
 logger = logging.getLogger(__name__)
@@ -213,6 +214,19 @@ async def exec_llm_agent(
     if output_schema is not None and is_continue:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': output_schema is not supported with session continuation (continue mode)")
 
+    # N14 §24.3 context policy: same fail-loud normalization as output_schema so a
+    # malformed policy never silently no-ops.  Rejected with session continuation
+    # for the same reason as output_schema — identity/capability/examples are
+    # frozen in the session's first turn, so mounting them again would duplicate
+    # them rather than augment the prompt.
+    try:
+        context_policy = parse_context_policy(params)
+    except ContextPolicyError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid context_policy: {exc}") from exc
+    if context_policy is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': context_policy is not supported with session continuation (continue mode)")
+    context_usage: dict[str, Any] | None = None
+
     # Continue mode: identity/capability are already in the session's first
     # turn, so the executed task is only the new task layer.  A missing
     # checkpointer (memory backend) or an unresolvable session key fails
@@ -243,15 +257,25 @@ async def exec_llm_agent(
         agent_config = load_agent_config(agent_name, user_id=user_id) if agent_name else None
         agent_skills = agent_config.skills if agent_config is not None else None
 
-        sections = [
-            build_identity_layer(agent_name, user_id=user_id),
-            build_capability_layer(capability_groups, agent_skills=agent_skills),
-            build_task_layer(instruction, inputs),
-        ]
+        # N14 §24.3: build the named buckets in the fixed order, then apply the
+        # node's context budget.  The structured-output schema instruction is the
+        # last bucket, so it is part of the non-truncatable scaffold.
+        buckets = build_ai_node_buckets(
+            agent_name=agent_name,
+            capability_groups=capability_groups,
+            instruction=instruction,
+            inputs=inputs,
+            user_id=user_id,
+            agent_skills=agent_skills,
+            policy=context_policy,
+        )
         if output_schema is not None:
-            sections.append(schema_instruction(output_schema))
-        system_prompt = "\n\n".join(section for section in sections if section)
+            buckets["schema"] = schema_instruction(output_schema)
+        budget_result = apply_context_budget(buckets, context_policy.budget if context_policy else None)
+        system_prompt = "\n\n".join(budget_result.buckets[name] for name in BUCKET_ORDER if budget_result.buckets.get(name))
         task_prompt = system_prompt
+        if context_policy is not None:
+            context_usage = budget_result.to_payload()
 
     # Deferred imports: ``SubagentExecutor`` lives behind a lazy package export,
     # and importing it at module scope would pull the agent graph into the
@@ -320,4 +344,9 @@ async def exec_llm_agent(
     stop_reason = getattr(result, "stop_reason", None)
     if stop_reason:
         output[STOP_REASON_RESULT_KEY] = stop_reason
+    # N14 §24.3: per-bucket context usage (estimates + what the budget dropped).
+    # Only present when the node declared a context_policy — an untouched node
+    # keeps the pre-§24.3 output shape (absent, never zero).
+    if context_usage is not None:
+        output[CONTEXT_USAGE_RESULT_KEY] = context_usage
     return output

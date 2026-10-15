@@ -207,6 +207,12 @@ _FRAMEWORK_STRUCTURED_TAGS = [
     "guidelines",
     "output_format",
     "working_directory",
+    # N14 §24.3 AI-node context-policy blocks. workflow/prompts.py renders these
+    # into an ai:llm_agent node's system prompt (declared few-shot examples and
+    # the named input ports mounted as retrieved context), so forging either in
+    # untrusted input mimics trusted node context.
+    "examples",
+    "context",
 ]
 
 
