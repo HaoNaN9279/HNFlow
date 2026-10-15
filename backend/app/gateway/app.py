@@ -16,6 +16,7 @@ from app.gateway.routers import (
     apps,
     artifacts,
     assistants_compat,
+    backup,
     browser,
     console,
     environment,
@@ -558,6 +559,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Environment report (N11) is mounted at /api/environment
     app.include_router(environment.router)
+
+    # Backup plan (N11b) is mounted at /api/backup
+    app.include_router(backup.router)
 
     # Console API (cross-thread observability) is mounted at /api/console
     app.include_router(console.router)
