@@ -1,0 +1,31 @@
+{
+  "slice": "N14q",
+  "title": "评测 CLI（§24.8 CI 接入）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "4d4670e",
+  "commit": "a099128",
+  "steps": [
+    { "id": "S1", "name": "workflow/eval_cli.py（加载 → 回放执行 → 报告；退出码 0/1/2）", "status": "completed" },
+    { "id": "S2", "name": "测试 tests/test_workflow_eval_cli.py（4 条）+ workflow 套件 + 全量 A/B + ruff", "status": "completed" },
+    { "id": "S3", "name": "文档同步 + boulder", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "CLI 可挂 CI；能力包导入/定义保存自动挂载 = 后续增量",
+    "D2": "用例文件为 JSON 列表 → EvalCase/NodeAssertion",
+    "D3": "退出码 0（全过）/1（有失败）/2（加载或运行失败）",
+    "D4": "无迁移/无新表/无新配置段/无新依赖；前端零改动"
+  },
+  "baseline": {
+    "backend_full_regression": "N14p 75 failed / 11135 passed -> N14q 76 failed / 11138 passed（104 skipped）；新增 4 条全过；**唯一新增「失败」为既有时序 flake** test_extension_task_lifecycle::test_budget_exhaustion_mid_hook_logs_a_warning_not_a_traceback（隔离运行通过）",
+    "workflow_suite": "1090 passed -> 1094 passed",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "asyncio.run 不能在已有事件循环中调用——测试改为同步调用 main 并 asyncio.run 录制。",
+    "剩余：DeerMem memory_store 适配器、向量后端适配器、模板画布 UI、§24.12 深化、成本报表、嵌入式 eval 挂载。"
+  ]
+}
