@@ -313,6 +313,9 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             # content / get_workflow_run.
             fields[f"wf:{node.id}:__token_usage"] = Any
             fields[f"wf:{node.id}:__stop_reason"] = Any
+            if node.params.get("output_schema") is not None:
+                # N14 §24.4 structured-output repair count.
+                fields[f"wf:{node.id}:__schema_repairs"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -524,6 +527,10 @@ def _make_node_fn(
             stop_reason = result.get("__stop_reason")
             if stop_reason is not None:
                 outputs[f"wf:{node.id}:__stop_reason"] = stop_reason
+            # N14 §24.4: repair count for a structured-output node.
+            schema_repairs = result.get("__schema_repairs")
+            if isinstance(schema_repairs, int) and not isinstance(schema_repairs, bool):
+                outputs[f"wf:{node.id}:__schema_repairs"] = schema_repairs
 
         # N14 shared workspace: an executor may request writes to shared
         # variables through the reserved ``__shared_writes`` result key; lift
@@ -1178,6 +1185,47 @@ def _validate_autonomy(def_: WorkflowDefinition) -> None:
                     raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets.{key} must be a positive integer, got {value!r}")
 
 
+def _validate_output_schema(def_: WorkflowDefinition) -> None:
+    """Compile-time binding validation for ``ai:llm_agent`` ``params.output_schema`` (N14 §24.4).
+
+    The schema's fields must each map to a declared output port of the matching
+    type — turning the runtime "the model output did not match the graph"
+    surprise into a definition error at save/compile time.
+    """
+    from deerflow.workflow.structured_output import MAX_REPAIRS_LIMIT, SCHEMA_FIELD_TYPES, StructuredOutputError, parse_output_schema
+
+    for node in def_.nodes:
+        if (node.params or {}).get("output_schema") is None:
+            continue
+        if node.type != NodeType.AI_LLM_AGENT:
+            raise WorkflowCompileError(f"node '{node.id}': params.output_schema is only supported on 'ai:llm_agent' nodes")
+        try:
+            schema = parse_output_schema(node.params)
+        except StructuredOutputError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': invalid output_schema: {exc}") from exc
+        if schema is None:  # pragma: no cover - guarded by the None check above
+            continue
+
+        ports = {p.name: p.type.value for p in node.outputs}
+        for name, field_type in schema["fields"].items():
+            if field_type not in SCHEMA_FIELD_TYPES:
+                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' has unknown type {field_type!r} (allowed: {sorted(SCHEMA_FIELD_TYPES)})")
+            if name not in ports:
+                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' has no matching output port")
+            if ports[name] != field_type:
+                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' is {field_type} but output port '{name}' is {ports[name]}")
+        for name in schema["required"]:
+            if name not in schema["fields"]:
+                raise WorkflowCompileError(f"node '{node.id}': output_schema.required names unknown field '{name}'")
+        for name in schema["enum_values"]:
+            if name not in schema["fields"]:
+                raise WorkflowCompileError(f"node '{node.id}': output_schema.enum_values names unknown field '{name}'")
+            if schema["fields"][name] != "enum":
+                raise WorkflowCompileError(f"node '{node.id}': output_schema.enum_values['{name}'] requires an 'enum' field")
+        if schema["max_repairs"] < 0 or schema["max_repairs"] > MAX_REPAIRS_LIMIT:
+            raise WorkflowCompileError(f"node '{node.id}': output_schema.max_repairs must be between 0 and {MAX_REPAIRS_LIMIT}")
+
+
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
 
@@ -1379,6 +1427,7 @@ def _compile_impl(
     _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
     _validate_autonomy(def_)
+    _validate_output_schema(def_)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)
