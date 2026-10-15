@@ -1,0 +1,47 @@
+{
+  "job": "N14-切片C 结构化输出契约（§24.4）",
+  "source": "HNFlow 开发方案 §24.4（line 673-690）；规划 N14 / M5",
+  "status": "completed",
+  "created": "2026-10-15T14:13:59+08:00",
+  "head_commit": "fafaa1d",
+  "commit": "efee843",
+  "scope": "Option A（ai:llm_agent params.output_schema：字段→PortType + 有界修复 + 端口绑定 + 可观测）待确认；JSON Schema/转人工/评审回环列后续",
+  "steps": [
+    { "id": "P0", "name": "勘察 ai 执行体/端口绑定/依赖（无 jsonschema）", "status": "completed" },
+    { "id": "P1", "name": "出方案 plan.md（Option A/B + D1–D8）", "status": "completed" },
+    { "id": "P2", "name": "用户确认 D1–D8（按建议）", "status": "completed" },
+    { "id": "S1", "name": "[A] 结构化输出解析+校验+修复循环（exec_llm_agent）", "status": "completed" },
+    { "id": "S2", "name": "[A] 编译期绑定校验 + __schema_repairs 通道", "status": "completed" },
+    { "id": "S3", "name": "测试 TDD + 全量 A/B 对拍", "status": "completed" },
+    { "id": "S4", "name": "文档同步 + 提交", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "Option A §24.4 结构化输出契约",
+    "D2": "schema = 字段→PortType 映射（零新依赖）",
+    "D3": "类型 data|number|array|record|bool|enum（file 后续）",
+    "D4": "max_repairs 默认 1（0..5），耗尽即节点失败",
+    "D5": "字段须在 outputs 声明且类型一致（编译期）；保留 out",
+    "D6": "可观测 wf:<node>:__schema_repairs",
+    "D7": "仅 template；与 continue 组合 → **运行期**报错（continue 由运行期输入决定，无法编译期静态判定；较原提案的『编译期』调整为『运行期』）",
+    "D8": "无迁移/无新表/无新配置/无新依赖；前端零改动"
+  },
+  "findings": [
+    "AI 节点自由文本直写 out，端口类型不约束模型输出（现状缺陷）。",
+    "repo 无 jsonschema 依赖、有 pydantic；无 structured-output 用法 → 字段→PortType 映射零依赖最合适。",
+    "_make_node_fn 只写已声明输出端口 → schema 字段需在节点 outputs 声明。",
+    "reserved 通道先例 __token_usage/__stop_reason/__shared_writes 可直接复用于 __schema_repairs。"
+  ],
+  "baseline": {
+    "backend_full_regression": "A/B 对拍：N14b（9415ff6）79 failed / 10776 passed  ->  N14c 77 failed / 10801 passed（新增 23 全过；失败集合**无新增**，且前两轮的 test_extension_task_lifecycle 时序 flake 本轮自行通过 → 再次证实为抖动）",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "pnpm test 全绿 + pnpm check 绿（零前端改动）",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "structured_output.py 为纯逻辑模块，compiler（编译期绑定校验）与 executors/ai.py（运行期解析/校验/修复）共用，避免重复。",
+    "D7 偏差：continue 模式由运行期输入（continue_prompt/__ai_continue）决定，无法编译期静态判定 → 改为**运行期**报错（output_schema 与 continue 组合）。",
+    "复用 reserved 通道先例：__schema_repairs 由 _make_node_fn 提升到 wf:<node>:__schema_repairs（仅 int 非 bool）。",
+    "AI 节点默认输出端口仍为 out；schema 字段由作者加端口（画布支持自定义端口），前端零改动。"
+  ]
+}
