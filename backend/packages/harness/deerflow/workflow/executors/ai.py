@@ -16,6 +16,14 @@ from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
+from deerflow.workflow.knowledge import (
+    KNOWLEDGE_STORE_CONTEXT_KEY,
+    KnowledgeError,
+    aquery,
+    format_retrieval_block,
+    parse_retrieval_params,
+)
+from deerflow.workflow.knowledge import render_query as render_retrieval_query
 from deerflow.workflow.memory import (
     MEMORY_STORE_CONTEXT_KEY,
     MemoryPolicyError,
@@ -196,6 +204,7 @@ async def exec_llm_agent(
     thread_id = context.get("thread_id")
     delegation_depth = context.get("delegation_depth", 0)
     memory_store = context.get(MEMORY_STORE_CONTEXT_KEY)
+    knowledge_store = context.get(KNOWLEDGE_STORE_CONTEXT_KEY)
 
     continue_prompt = inputs.get("continue_prompt")
     # W2B cross-run continuation: when no ``continue_prompt`` arrives on the
@@ -258,6 +267,14 @@ async def exec_llm_agent(
     if memory_policy is not None and is_continue:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': memory is not supported with session continuation (continue mode)")
 
+    # N14 §24.2 knowledge retrieval: same fail-loud parse; rejected with continue.
+    try:
+        retrieval_policy = parse_retrieval_params(params)
+    except KnowledgeError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid retrieval: {exc}") from exc
+    if retrieval_policy is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': retrieval is not supported with session continuation (continue mode)")
+
     # Continue mode: identity/capability are already in the session's first
     # turn, so the executed task is only the new task layer.  A missing
     # checkpointer (memory backend) or an unresolvable session key fails
@@ -319,6 +336,21 @@ async def exec_llm_agent(
                 logger.warning("ai:llm_agent memory read failed; continuing without memory", exc_info=True)
                 records = []
             block = format_memory_block(records, budget=memory_policy.inject_budget)
+            if block:
+                system_prompt = f"{block}\n\n{system_prompt}"
+                task_prompt = system_prompt
+
+        # N14 §24.2: prepend retrieved knowledge (with citations) as a budgeted
+        # ``<context>`` block.  A retrieval failure degrades to no context rather
+        # than failing the node.
+        if retrieval_policy is not None and knowledge_store is not None:
+            rquery = render_retrieval_query(retrieval_policy.query, inputs, default=instruction)
+            try:
+                records = await aquery(knowledge_store, retrieval_policy, query=rquery)
+            except Exception:
+                logger.warning("ai:llm_agent knowledge retrieval failed; continuing without retrieval", exc_info=True)
+                records = []
+            block = format_retrieval_block(records, budget=retrieval_policy.ctx_budget)
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
                 task_prompt = system_prompt
