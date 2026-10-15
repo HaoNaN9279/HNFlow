@@ -26,6 +26,31 @@ logger = logging.getLogger(__name__)
 #: node's declared output ports.
 TOKEN_USAGE_RESULT_KEY = "__workflow_token_usage"
 
+#: Reserved executor-result key carrying the sub-agent's ``stop_reason`` when a
+#: guardrail cap ended its run (N14 §24.5).  ``_make_node_fn`` lifts it onto a
+#: declared/reserved state channel ``wf:<node_id>:__stop_reason``.
+STOP_REASON_RESULT_KEY = "__stop_reason"
+
+
+def _autonomy_settings(params: dict[str, Any]) -> tuple[int, Any]:
+    """Resolve ``(max_turns, token_budget)`` from ``params.autonomy`` (N14 §24.5).
+
+    ``template`` (or absent ``autonomy``) keeps the pre-§24.5 defaults:
+    ``(50, None)`` — the ``SubagentConfig`` defaults.  ``bounded`` reads
+    ``budgets.max_turns`` (default 50) and, when ``budgets.max_tokens`` is set, a
+    ``TokenBudgetConfig`` override for this node's run.
+    """
+    autonomy = params.get("autonomy") or {}
+    budgets = autonomy.get("budgets") or {}
+    max_turns = int(budgets.get("max_turns", 50))
+    token_budget = None
+    if budgets.get("max_tokens") is not None:
+        from deerflow.config.token_budget_config import TokenBudgetConfig
+
+        token_budget = TokenBudgetConfig(enabled=True, max_tokens=int(budgets["max_tokens"]))
+    return max_turns, token_budget
+
+
 # ── ai:llm_agent ─────────────────────────────────────────────────────────────
 
 
@@ -181,6 +206,12 @@ async def exec_llm_agent(
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
     node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
 
+    # N14 §24.5: an explicit autonomy budget pins this node's hard limits
+    # (max_turns -> recursion_limit, max_tokens -> TokenBudgetConfig).  The
+    # default ``template`` mode resolves to the SubagentConfig defaults, so a
+    # node without ``params.autonomy`` behaves exactly as before.
+    autonomy_max_turns, autonomy_token_budget = _autonomy_settings(params)
+
     subagent_config = SubagentConfig(
         name=f"ai:{node_id}" if node_id else "ai:node",
         description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
@@ -189,6 +220,8 @@ async def exec_llm_agent(
         disallowed_tools=["ask_clarification", "present_files"],
         checkpointer=is_continue,
         allow_recursion=False,
+        max_turns=autonomy_max_turns,
+        token_budget=autonomy_token_budget,
     )
 
     executor_kwargs: dict[str, Any] = {
@@ -228,4 +261,9 @@ async def exec_llm_agent(
     token_usage = _aggregate_subagent_token_usage(getattr(result, "token_usage_records", None))
     if token_usage is not None:
         output[TOKEN_USAGE_RESULT_KEY] = token_usage
+    # N14 §24.5: surface which guardrail cap (if any) ended the run so the node
+    # is observable as capped rather than silently "completed".
+    stop_reason = getattr(result, "stop_reason", None)
+    if stop_reason:
+        output[STOP_REASON_RESULT_KEY] = stop_reason
     return output

@@ -599,6 +599,10 @@ class SubagentExecutor:
             middleware_kwargs["extensions"] = extensions
         if mcp_routing_middleware is not None:
             middleware_kwargs["mcp_routing_middleware"] = mcp_routing_middleware
+        # N14 §24.5: a per-subagent token budget (set by a workflow AI node's
+        # ``params.autonomy.budgets.max_tokens``) wins over the config lookup.
+        if self.config.token_budget is not None:
+            middleware_kwargs["token_budget_override"] = self.config.token_budget
         middlewares = build_subagent_runtime_middlewares(**middleware_kwargs)
         # Collect every guard middleware that exposes ``consume_stop_reason``
         # (TokenBudgetMiddleware, LoopDetectionMiddleware) so _aexecute can read

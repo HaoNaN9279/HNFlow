@@ -3,6 +3,8 @@
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from deerflow.config.token_budget_config import TokenBudgetConfig
+
 if TYPE_CHECKING:
     from deerflow.config.app_config import AppConfig
 
@@ -51,6 +53,13 @@ class SubagentConfig:
     model: str = "inherit"
     max_turns: int = 50
     timeout_seconds: int = 900
+    token_budget: TokenBudgetConfig | None = None
+    """Optional per-subagent token budget override (N14 §24.5).
+
+    When set, ``build_subagent_runtime_middlewares`` uses it verbatim instead of
+    resolving ``subagents.token_budget`` / ``subagents.agents.<name>.token_budget``
+    from config.  ``None`` (default) keeps the config-driven behavior.
+    """
 
 
 def _default_model_name(app_config: "AppConfig") -> str:

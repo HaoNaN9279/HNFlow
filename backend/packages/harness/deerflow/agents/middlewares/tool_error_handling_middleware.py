@@ -23,6 +23,7 @@ from deerflow.agents.middlewares.tool_result_meta import (
 )
 from deerflow.config.app_config import AppConfig
 from deerflow.config.summarization_config import DEFAULT_SKILL_FILE_READ_TOOL_NAMES
+from deerflow.config.token_budget_config import TokenBudgetConfig
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
 from deerflow.subagents.status_contract import (
     format_subagent_result_message,
@@ -261,8 +262,14 @@ def build_subagent_runtime_middlewares(
     available_skills: set[str] | None = None,
     user_id: str | None = None,
     extensions=None,
+    token_budget_override: TokenBudgetConfig | None = None,
 ) -> list[AgentMiddleware]:
-    """Middlewares shared by subagent runtime before subagent-only middlewares."""
+    """Middlewares shared by subagent runtime before subagent-only middlewares.
+
+    ``token_budget_override`` (N14 §24.5) lets a caller (e.g. a workflow AI node
+    declaring ``params.autonomy``) pin this run's token budget verbatim; it wins
+    over the ``subagents`` config lookup.  ``None`` keeps the config-driven path.
+    """
     if app_config is None:
         from deerflow.config import get_app_config
 
@@ -368,7 +375,11 @@ def build_subagent_runtime_middlewares(
     # per-agent) always wins, so a deployment that pinned a value is never
     # silently changed by flipping the summarization switch.
     summarization_enabled = app_config.summarization.enabled
-    if agent_name is not None:
+    if token_budget_override is not None:
+        # N14 §24.5: an explicit caller-supplied budget (a workflow AI node's
+        # ``params.autonomy.budgets``) wins over the config lookup.
+        token_budget_config = token_budget_override
+    elif agent_name is not None:
         token_budget_config = app_config.subagents.get_token_budget_for(agent_name, summarization_enabled=summarization_enabled)
     else:
         token_budget_config = app_config.subagents.token_budget

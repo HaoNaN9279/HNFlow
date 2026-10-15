@@ -305,11 +305,14 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
                 shared_key = f"{SHARED_CHANNEL_PREFIX}{shared_name}"
                 fields[shared_key] = Annotated[list, _shared_array_reducer] if shared_policies.get(shared_name, "overwrite") == "array" else Any
         if node.type == NodeType.AI_LLM_AGENT:
-            # Reserved observability channel: the sub-agent's aggregated token
-            # usage, lifted from the executor result's reserved key by
-            # ``_make_node_fn``.  Declared here so LangGraph persists the write
-            # into the final state → run.end content / get_workflow_run.
+            # Reserved observability channels: the sub-agent's aggregated token
+            # usage (W1C) and, when a guardrail cap ended the run, its
+            # ``stop_reason`` (N14 §24.5).  Both lifted from the executor
+            # result's reserved keys by ``_make_node_fn``.  Declared here so
+            # LangGraph persists the writes into the final state → run.end
+            # content / get_workflow_run.
             fields[f"wf:{node.id}:__token_usage"] = Any
+            fields[f"wf:{node.id}:__stop_reason"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -517,6 +520,10 @@ def _make_node_fn(
             token_usage = result.get("__workflow_token_usage")
             if isinstance(token_usage, dict):
                 outputs[f"wf:{node.id}:__token_usage"] = token_usage
+            # N14 §24.5: only present when a guardrail cap ended the run.
+            stop_reason = result.get("__stop_reason")
+            if stop_reason is not None:
+                outputs[f"wf:{node.id}:__stop_reason"] = stop_reason
 
         # N14 shared workspace: an executor may request writes to shared
         # variables through the reserved ``__shared_writes`` result key; lift
@@ -1129,6 +1136,48 @@ def _validate_shared_nodes(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': data:shared requires a valid params.name; got {name!r}")
 
 
+#: Autonomy vocabulary for ``ai:llm_agent`` ``params.autonomy`` (N14 §24.5).
+_AUTONOMY_MODES: frozenset[str] = frozenset({"template", "bounded"})
+_AUTONOMY_BUDGET_KEYS: frozenset[str] = frozenset({"max_turns", "max_tokens", "max_tool_calls"})
+
+
+def _validate_autonomy(def_: WorkflowDefinition) -> None:
+    """Compile-time validation for ``ai:llm_agent`` ``params.autonomy`` (N14 §24.5).
+
+    ``mode`` must be ``template``/``bounded``; ``budgets`` may carry only
+    ``max_turns``/``max_tokens`` (positive ints).  ``max_tool_calls`` has no
+    engine mechanism yet, so it fails loud here rather than being silently
+    ignored.
+    """
+    for node in def_.nodes:
+        autonomy = (node.params or {}).get("autonomy")
+        if autonomy is None:
+            continue
+        if node.type != NodeType.AI_LLM_AGENT:
+            raise WorkflowCompileError(f"node '{node.id}': params.autonomy is only supported on 'ai:llm_agent' nodes")
+        if not isinstance(autonomy, dict):
+            raise WorkflowCompileError(f"node '{node.id}': params.autonomy must be an object")
+        mode = autonomy.get("mode", "template")
+        if mode not in _AUTONOMY_MODES:
+            raise WorkflowCompileError(f"node '{node.id}': autonomy.mode must be one of {sorted(_AUTONOMY_MODES)}, got {mode!r}")
+
+        budgets = autonomy.get("budgets")
+        if budgets is None:
+            continue
+        if not isinstance(budgets, dict):
+            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets must be an object")
+        unknown = set(budgets) - _AUTONOMY_BUDGET_KEYS
+        if unknown:
+            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets has unknown keys {sorted(unknown)} (allowed: {sorted(_AUTONOMY_BUDGET_KEYS)})")
+        if "max_tool_calls" in budgets:
+            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets.max_tool_calls is not supported yet")
+        for key in ("max_turns", "max_tokens"):
+            if key in budgets:
+                value = budgets[key]
+                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+                    raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets.{key} must be a positive integer, got {value!r}")
+
+
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
 
@@ -1329,6 +1378,7 @@ def _compile_impl(
     _validate_approval_nodes(def_, ctx)
     _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
+    _validate_autonomy(def_)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)

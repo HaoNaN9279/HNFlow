@@ -20,7 +20,7 @@ HNFlow 是**图驱动的确定性编排引擎**。它以 DeerFlow harness（Lang
 - **流程控制**（`flow`）：start / end / if / switch / loop / parallel / wait / try（try 为 N12 容错容器）。
 - **数据操作**（`data`）：assign / convert / file / json / regEx / shared（N14 共享工作区黑板）。
 - **工具调用**（`tool`）：bash / http / notify / log——bash 必须走 sandbox，禁止直连宿主 shell。
-- **AI 节点**（`ai`）：llm_agent，三层提示词组装 + 受限 SubagentExecutor，非自由 ReAct loop。
+- **AI 节点**（`ai`）：llm_agent，三层提示词组装 + 受限 SubagentExecutor，非自由 ReAct loop；可声明自主度档位与硬预算（N14 §24.5）。
 - **本地应用**（`app`）：launch / script / wait / collect——经应用接入层（`deerflow/apps/`）驱动本机专业软件，**运行在宿主**（GUI/长驻进程无法进沙箱），是「命令必须走 sandbox」的显式例外。
 - **人工与嵌套**（`human` / `nested`）：human_task 挂起、subworkflow 子图/委派。
 
@@ -76,7 +76,7 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
   - `data.py` — assign/convert/file/json/regEx 数据操作；`data:shared`（N14）共享工作区黑板 read/write/append（写策略 `metadata.shared`，`array` 走 reducer）。
   - `asset.py` — `data:asset` 资产节点（N9）：inspect（读指纹）/ import（宿主→沙箱）/ export（沙箱→宿主）/ convert（声明式转换器），宿主访问受 `assets.roots` 白名单约束。
   - `tool.py` — bash/http/log/notify 工具节点；bash 必须走 sandbox（`Sandbox.execute_command`），禁止直连宿主 shell；notify 经 `runtime.context["notifier"]` 钩子（缺省回落日志）发出本机通知。
-  - `ai.py` — AI 节点模板模式：三层提示词组装 + 受限 SubagentExecutor；工具集 = 关联能力包 `allowed-tools` 并集，经 `tool_gateway.resolve_capability_tools` 装配（有序去重），`instruction` 模板必填。
+  - `ai.py` — AI 节点模板模式：三层提示词组装 + 受限 SubagentExecutor；工具集 = 关联能力包 `allowed-tools` 并集，经 `tool_gateway.resolve_capability_tools` 装配（有序去重），`instruction` 模板必填。N14 §24.5 自主度预算：`params.autonomy = {mode: template|bounded, budgets: {max_turns, max_tokens}}`（`bounded` 把预算落到 `SubagentConfig.max_turns`/`token_budget`；`stop_reason` 经 reserved 通道 `wf:<node>:__stop_reason` 暴露；`max_tool_calls`/`delegated` 尚无机制，提供即编译期报错）。
   - `local_app.py` — 本地应用节点（N4/N5）：`app:launch`/`app:script`/`app:wait`/`app:collect`，经 `deerflow/apps/` 接入层驱动本机专业软件；launch/script 非幂等且 crash-confirm 门，wait/collect 幂等；驱动调用经 `asyncio.to_thread` 离事件循环。
   - `human.py` — HumanTask 挂起。
 - `tool_gateway.py` — 工具网关最小版：`ToolDescriptor` + `ToolGateway`（provider 优先级分派）+ builtin/sandbox/app provider，`resolve_capability_tools` 供 AI 节点装配工具；MCP/skill provider 为后续增量。
