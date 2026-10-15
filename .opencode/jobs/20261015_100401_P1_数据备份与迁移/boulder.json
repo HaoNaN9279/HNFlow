@@ -1,0 +1,60 @@
+{
+  "job": "P1_数据备份与迁移",
+  "plan": "plan.md",
+  "started_at": "2026-10-15T10:04:01",
+  "status": "completed",
+  "commit": "5b91c83",
+  "scope": "P1 切片 8 = N11b：§22 第三条「备份与迁移」——导出（数据目录 + SQL 库一致快照 → 单文件归档 + manifest）、导入/恢复（离线 CLI，空目标默认 / --force 覆盖 / --dry-run）、只读预览端点 GET /api/backup。不做加密/签名/增量/云同步/HTTP 导入/前端，不做 Postgres 库内容打包。",
+  "resolved_questions": [
+    "Q1 归档格式：单文件 zip + 根 manifest.json，逻辑布局 dirs/<name>/ + database/<file> + assets/<idx>/ —— 按建议",
+    "Q2 恢复语义：目标非空默认拒绝、--force 覆盖、--dry-run 预览；导入仅 CLI 离线，不加 HTTP 导入端点 —— 按建议",
+    "Q3 库快照：sqlite 用 sqlite3 Connection.backup() 一致性快照；postgres 由 pg_dump 承担（manifest 记 database_included=false） —— 按建议",
+    "Q4 切片划分：一个切片含导出+导入+CLI+只读端点；不做加密/增量/云同步/HTTP 导入/前端 —— 按建议"
+  ],
+  "open_questions": [],
+  "steps": [
+    { "id": "S1", "name": "portability/spec.py 归档模型（format_version / ManifestEntry / BackupManifest / check_import_compatible，纯）", "status": "completed" },
+    { "id": "S2", "name": "portability/select.py 计划纯函数（plan_backup / plan_restore / 排除项）", "status": "completed" },
+    { "id": "S3", "name": "portability/archive.py 安全 zip I/O（写/读 manifest/安全解包）", "status": "completed" },
+    { "id": "S4", "name": "portability/snapshot.py sqlite 一致性快照 + 指纹", "status": "completed" },
+    { "id": "S5", "name": "portability/service.py + __main__.py（export/inspect/import + CLI 退出码）", "status": "completed" },
+    { "id": "S6", "name": "Gateway GET /api/backup + 文档 + 全量回归 + 提交", "status": "completed" }
+  ],
+  "decisions": [
+    "D1 范围 = §22 第三条（导出/导入/只读预览）；环境探测与数据目录规范不动",
+    "D2 归档 = 单文件 zip + manifest.json；逻辑布局 dirs/<name>/、database/<file>、assets/<idx>/；不写绝对路径",
+    "D3 sqlite 库用 Connection.backup() 一致性快照；postgres 库内容不入包（pg_dump 承担）；memory 无库",
+    "D4 导入仅 CLI（离线）；目标非空默认拒绝，--force 覆盖，--dry-run 预览；库被占用则明确报错",
+    "D5 排除项 locks（瞬态）/retrieval（派生可重建），manifest 记原因；其余默认入包",
+    "D6 assets opt-in（--include-assets）；恢复需 --assets-dest，缺失则报告 skip（不猜绝对路径）",
+    "D7 恢复按 DataDir.name → 当前配置路径映射；database 特例映射 DatabaseConfig.sqlite_path",
+    "D8 format_version 不匹配 = 硬拒；config_version/schema_head 漂移 = 警告（alembic 启动迁移）",
+    "D9 无新配置段、不 bump config_version（归档格式版本独立于配置 schema）",
+    "D10 无迁移、无新表",
+    "D11 API 只读 additive：GET /api/backup（计划预览）；不加写端点；前端零改动",
+    "D12 CLI 退出码 0 成功 / 1 拒绝 / 2 自身错误；--json",
+    "D13 不加依赖（zipfile/sqlite3/json 标准库）",
+    "D14 解包拒绝绝对路径、..、符号链接条目；不信任 manifest 内路径"
+  ],
+  "findings": [
+    "勘察：N11 已把 `Paths.data_dirs()` 定为规范本身，并写明「完整备份 = 一组路径 + 那个数据库文件」——N11b 直接消费它，不另列目录。`data_dirs()` 里的 `database` 条目是**目录**，真数据是其中的 `deerflow.db` 文件，故 select 里 database 成员与其它目录成员分开处理。",
+    "S2：`base` 必须**浅打包**——它是包含 users/skills_view/locks 等的根，同时也是 `memory.json`/`USER.md` 的落点；递归打包会把整棵树收两遍。`shallow=True` 只收顶层文件。",
+    "S3：归档只信任自己构造的名字（`<archive_path>/<相对路径>`），解包对每个成员重做安全检查（相对/无 `..`/无盘符 UNC/拒符号链接）——恶意 zip 不能写到恢复根之外或植入链接。",
+    "S4：**快照摘要 ≠ 源文件摘要**（backup API 写出的是新库，不带源库 freelist/WAL），但两次快照同一已提交库**逐字节一致**，故 manifest 记录快照摘要是有意义的；测试当场纠正了我的错误预期（写成 `snapshot == sha256(src)`）。",
+    "S4：`Connection.backup()` 在只读源连接上跑，WAL 下在线且不含未提交事务——测试用「插入不提交 → 快照无该行」钉住。",
+    "S5：Windows 下 `str(Path('/x/y'))` 会把分隔符改写为反斜杠；计划里全部用**逻辑名**（`dirs/<name>`），测试断言也用逻辑名或原样字符串，避免平台相关断言。",
+    "S5：导入默认拒绝非空目标（`_target_has_data` 只认**真实文件/库文件**，空目录不计——否则 `ensure_data_dirs` 建出的空目录会让每台新机都要求 `--force`）。",
+    "S6：新增 `backup.py` 路由后 `test_thread_id_route_contract` 仍失败，但根因是它按字母序读 routers 时在 `agents.py` 上撞到 **GBK 解码**（locale 编码）——是既有平台失败，与本切片无关（baseline 同样失败）。",
+    "S6：全量离线回归**先 A/B 对拍**（stash 本切片改动再跑一次）——发现真实 baseline 是 **77 failed**（N11 boulder 记的 75 是运行抖动）。两次失败集合**完全一致**（Compare-Object 空差集），本切片新增 **+80 passed**（10648→10728），零回归。",
+    "S6：ruff check（全 backend）+ ruff format --check（1117 文件）全绿；前端零改动仍跑通 `pnpm test`（1165 passed）+ `pnpm check`。"
+  ],
+  "baseline": {
+    "head_commit": "ebf7fbd",
+    "backend_full_regression": "本切片 A/B 对拍：baseline（stash 后）77 failed / 10648 passed / 104 skipped  ->  N11b 77 failed / 10728 passed / 104 skipped（失败集合逐条一致，新增 80 全通过）",
+    "note": "N11 boulder 记录的 75 failed 为运行抖动；本切片以同机 A/B 对拍为准",
+    "head_migration": "0019_human_task_kind_and_undo",
+    "migrations_added": 0,
+    "config_version": 40,
+    "frontend": "all passed (N11b, zero frontend changes): pnpm test 1165 passed, pnpm check green"
+  }
+}
