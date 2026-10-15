@@ -16,6 +16,16 @@ from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
+from deerflow.workflow.memory import (
+    MEMORY_STORE_CONTEXT_KEY,
+    MemoryPolicyError,
+    acollect_memory,
+    awrite_memory,
+    format_memory_block,
+    output_text,
+    parse_memory_policy,
+    render_query,
+)
 from deerflow.workflow.prompts import build_ai_node_buckets, build_task_layer
 from deerflow.workflow.registry import WorkflowExecutionError
 from deerflow.workflow.routing import RoutingError, model_infos, parse_routing_policy, select_model
@@ -185,6 +195,7 @@ async def exec_llm_agent(
     instance_repo = context.get(APP_INSTANCE_REPO_CONTEXT_KEY)
     thread_id = context.get("thread_id")
     delegation_depth = context.get("delegation_depth", 0)
+    memory_store = context.get(MEMORY_STORE_CONTEXT_KEY)
 
     continue_prompt = inputs.get("continue_prompt")
     # W2B cross-run continuation: when no ``continue_prompt`` arrives on the
@@ -238,6 +249,15 @@ async def exec_llm_agent(
     if routing_policy is not None and is_continue:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is not supported with session continuation (continue mode)")
 
+    # N14 §24.1 node-level memory: same fail-loud parse; rejected with session
+    # continuation (identity/capability/memory are frozen in the first turn).
+    try:
+        memory_policy = parse_memory_policy(params)
+    except MemoryPolicyError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid memory: {exc}") from exc
+    if memory_policy is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': memory is not supported with session continuation (continue mode)")
+
     # Continue mode: identity/capability are already in the session's first
     # turn, so the executed task is only the new task layer.  A missing
     # checkpointer (memory backend) or an unresolvable session key fails
@@ -287,6 +307,21 @@ async def exec_llm_agent(
         task_prompt = system_prompt
         if context_policy is not None:
             context_usage = budget_result.to_payload()
+
+        # N14 §24.1: prepend the node's memory as a budgeted ``<memory>`` block.
+        # A read failure degrades to no memory rather than failing the node (the
+        # §24.1 "write/read failure does not block the main flow" rule).
+        if memory_policy is not None and memory_store is not None:
+            query = render_query(memory_policy.query, inputs, default=instruction)
+            try:
+                records = await acollect_memory(memory_store, memory_policy, query=query)
+            except Exception:
+                logger.warning("ai:llm_agent memory read failed; continuing without memory", exc_info=True)
+                records = []
+            block = format_memory_block(records, budget=memory_policy.inject_budget)
+            if block:
+                system_prompt = f"{block}\n\n{system_prompt}"
+                task_prompt = system_prompt
 
     # Deferred imports: ``SubagentExecutor`` lives behind a lazy package export,
     # and importing it at module scope would pull the agent graph into the
@@ -373,4 +408,11 @@ async def exec_llm_agent(
     # keeps the pre-§24.3 output shape (absent, never zero).
     if context_usage is not None:
         output[CONTEXT_USAGE_RESULT_KEY] = context_usage
+    # N14 §24.1: write the node's output back into memory when declared.  A write
+    # failure is logged and swallowed — it must never fail a successful node.
+    if memory_policy is not None and memory_policy.write and memory_store is not None:
+        try:
+            await awrite_memory(memory_store, scope=memory_policy.write_scope, text=output_text(output), key=node_id)
+        except Exception:
+            logger.warning("ai:llm_agent memory write failed", exc_info=True)
     return output
