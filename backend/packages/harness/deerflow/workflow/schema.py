@@ -92,6 +92,7 @@ class NodeType(StrEnum):
     DATA_FILE = "data:file"
     DATA_ASSET = "data:asset"
     DATA_SHARED = "data:shared"
+    DATA_KNOWLEDGE = "data:knowledge"
     DATA_JSON = "data:json"
     DATA_REGEX = "data:regex"
 

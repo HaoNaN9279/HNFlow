@@ -490,6 +490,7 @@ class TestRegistry:
             NodeType.DATA_CONVERT,
             NodeType.DATA_ASSET,
             NodeType.DATA_SHARED,
+            NodeType.DATA_KNOWLEDGE,
             NodeType.DATA_FILE,
             NodeType.DATA_JSON,
             NodeType.DATA_REGEX,
@@ -515,7 +516,7 @@ class TestRegistry:
 
     def test_registry_length_is_21(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 21
+        assert len(reg) == 22
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""

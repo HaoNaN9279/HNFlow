@@ -151,6 +151,19 @@ export const NODE_CATALOG = [
       "Read / write / append a workflow-level shared variable (blackboard).",
   },
   {
+    type: "data:knowledge",
+    label: "Knowledge",
+    category: "data",
+    defaultInputs: [{ name: "in", type: "data", required: false }],
+    defaultOutputs: [
+      { name: "out", type: "data", required: true },
+      { name: "records", type: "array", required: false },
+    ],
+    defaultParams: { operation: "retrieve", collection: "", top_k: 5 },
+    description:
+      "Ingest or retrieve local knowledge with citations (RAG).",
+  },
+  {
     type: "data:file",
     label: "File",
     category: "data",
