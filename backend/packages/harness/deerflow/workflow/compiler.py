@@ -47,6 +47,7 @@ import copy
 import hashlib
 import inspect
 import json
+import logging
 import re
 import threading
 from collections.abc import Awaitable, Callable
@@ -58,6 +59,15 @@ from langgraph.errors import GraphBubbleUp, GraphInterrupt, GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from deerflow.workflow.budgets import (
+    ON_EXCEED_ABORT,
+    RunBudget,
+    aggregate_token_usage,
+    evaluate_budget,
+    parse_run_budget,
+    usage_total,
+)
+from deerflow.workflow.budgets import BudgetError as _BudgetError
 from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.preview import Previewer
@@ -76,6 +86,8 @@ from deerflow.workflow.replay import MODE_REPLAY as REPLAY_MODE_REPLAY
 from deerflow.workflow.replay import REPLAY_CONTEXT_KEY
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
+
+logger = logging.getLogger(__name__)
 
 # ── Public types ───────────────────────────────────────────────────────────
 
@@ -422,6 +434,7 @@ def _make_node_fn(
     previewer: Previewer | None = None,
     *,
     idempotent: bool = False,
+    run_budget: RunBudget | None = None,
 ) -> Callable[..., Any]:
     """Build an async node wrapper that reads inputs from state, calls the
     executor, and writes outputs back to state.
@@ -644,6 +657,19 @@ def _make_node_fn(
         # write), on the reserved channel declared in ``_build_state_schema``.
         if attempt > 1:
             outputs[f"wf:{node.id}:__retry"] = attempt - 1
+
+        # N14 §24.10: run-level budget.  Aggregate every node's reserved usage
+        # channel in the current state plus this node's own usage, and act on the
+        # policy.  ``abort`` fails the node so the run stops with an actionable
+        # error; ``warn`` logs and continues.
+        if run_budget is not None:
+            totals = aggregate_token_usage(state)
+            combined_total = usage_total(totals) + usage_total(outputs.get(f"wf:{node.id}:__token_usage"))
+            decision = evaluate_budget(combined_total, run_budget)
+            if decision.exceeded:
+                if decision.action == ON_EXCEED_ABORT:
+                    raise WorkflowExecutionError(f"node '{node.id}': run budget exceeded ({decision.observed} > {decision.limit} tokens); aborting")
+                logger.warning("workflow run budget exceeded (%d > %d tokens) at node '%s'; continuing (on_exceed=warn)", decision.observed, decision.limit, node.id)
 
         return outputs
 
@@ -1425,6 +1451,14 @@ def _validate_retry(def_: WorkflowDefinition, ctx: CompileContext) -> None:
             raise WorkflowCompileError(f"node '{node.id}': params.retry is only allowed on idempotent node types; '{node.type.value}' is non-idempotent (retrying it would repeat its side effect)")
 
 
+def _validate_run_budget(def_: WorkflowDefinition) -> None:
+    """Compile-time validation for the N14 §24.10 ``metadata.budget``."""
+    try:
+        parse_run_budget(def_.metadata.model_dump())
+    except _BudgetError as exc:
+        raise WorkflowCompileError(f"metadata.budget: {exc}") from exc
+
+
 def _resource_lock_names(node: Node) -> tuple[str, ...]:
     """Extract the (validated) ``params.resource_lock`` names for *node*."""
     raw = node.params.get("resource_lock")
@@ -1586,6 +1620,8 @@ def _compile_impl(
     _validate_output_schema(def_)
     _validate_context_policy(def_)
     _validate_retry(def_, ctx)
+    _validate_run_budget(def_)
+    run_budget = parse_run_budget(def_.metadata.model_dump())
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)
@@ -1712,7 +1748,7 @@ def _compile_impl(
             # route always falls through to default).
             executor = ctx.executors.get(node.type)
             if executor is not None:
-                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False))
+                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False), run_budget=run_budget)
                 _register(node.id, node_fn)
             else:
 
@@ -1776,7 +1812,7 @@ def _compile_impl(
         if executor is None:
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
 
-        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False))
+        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False), run_budget=run_budget)
         _register(node.id, node_fn)
 
     # Determine whether the end node is a registered pass-through (subgraph

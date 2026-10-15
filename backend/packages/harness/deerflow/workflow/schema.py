@@ -191,6 +191,10 @@ class WorkflowMetadata(BaseModel):
     # ``conflict``（默认 overwrite）。声明是全局的，避免同一 ``wf:shared:<name>``
     # 通道出现两种语义。None = 无共享变量。
     shared: dict[str, str] | None = None
+    # N14 §24.10 运行级预算：``{max_total_tokens: int, on_exceed: warn|abort}``。
+    # 由 compiler 节点包装层聚合每个节点的保留通道 ``wf:<node>:__token_usage``
+    # 后强制；None = 不设运行级上限（节点级上限由 §24.5 autonomy 承担）。
+    budget: dict[str, Any] | None = None
 
 
 class WorkflowDefinition(BaseModel):
