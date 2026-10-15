@@ -1,0 +1,31 @@
+{
+  "slice": "N14s",
+  "title": "模板端点（§24.6b）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "b367d11",
+  "commit": "7b84912",
+  "steps": [
+    { "id": "S1", "name": "patterns.py：build_template + template_catalog", "status": "completed" },
+    { "id": "S2", "name": "workflow_routes.py：GET /workflows/templates", "status": "completed" },
+    { "id": "S3", "name": "测试 + workflow 套件 + 全量 A/B + ruff", "status": "completed" },
+    { "id": "S4", "name": "文档同步 + boulder", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "端点声明在 /workflows/{definition_id} 之前，避免动态段吞 literal 路径",
+    "D2": "返回 name/description/序列化 skeleton（占位 instruction）",
+    "D3": "前端画布插入按钮 = 后续增量",
+    "D4": "无迁移/无新表/无新配置段/无新依赖；前端零改动"
+  },
+  "baseline": {
+    "backend_full_regression": "N14r 77 failed / 11149 passed -> N14s 75 failed / 11155 passed（104 skipped）；**失败集合逐条一致基线**（时序 flake 自行通过）",
+    "workflow_suite": "1106 passed -> 1110 passed",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "剩余可选增量：前端模板插入 UI、worker 自动注入 memory_store、向量后端适配器、§24.12 深化、成本报表、嵌入式 eval 挂载。"
+  ]
+}
