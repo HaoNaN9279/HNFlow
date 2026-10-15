@@ -1,0 +1,42 @@
+{
+  "slice": "N14e",
+  "title": "上下文工程策略（§24.3）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "e4d0fb4",
+  "commit": "cce3435",
+  "steps": [
+    { "id": "P1", "name": "勘察 §24.3 现状（三层提示词 / 工具结果预算 / 历史压缩 / 检索挂载 / token 计量）", "status": "completed" },
+    { "id": "P2", "name": "出 plan.md + boulder.json，用户确认 D1–D7（按建议）", "status": "completed" },
+    { "id": "S1", "name": "[A] workflow/context_policy.py（estimate_tokens / parse_context_policy / apply_context_budget）", "status": "completed" },
+    { "id": "S2", "name": "[A] prompts.py 增 examples/context 层 + 固定顺序", "status": "completed" },
+    { "id": "S3", "name": "[A] executors/ai.py 接入 policy + __context_usage（+continue 报错）", "status": "completed" },
+    { "id": "S4", "name": "[A] compiler._validate_context_policy 编译期校验 + 通道声明", "status": "completed" },
+    { "id": "S5", "name": "测试 TDD + 全量 A/B 对拍 + ruff + 前端守门", "status": "completed" },
+    { "id": "S6", "name": "文档同步 + 提交", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "Option A 节点级 context_policy",
+    "D2": "桶与顺序 identity→capability→task→examples→context→schema；预算仅约束 examples/context",
+    "D3": "预算度量 = 无依赖 CJK-aware 字符估算（标注为估算）",
+    "D4": "截断 = context 先、examples 后；骨架超预算记 over_budget 不截断",
+    "D5": "观测 = 保留通道 wf:<node>:__context_usage",
+    "D6": "工具结果外置/历史压缩沿用全局中间件，节点级 override 延后",
+    "D7": "无迁移/无新表/无新配置/无新依赖；前端零改动"
+  },
+  "baseline": {
+    "backend_full_regression": "A/B 对拍：N14d（132a8f3）79 failed / 10812 passed  ->  N14e 77 failed / 10865 passed（**失败集合无新增**；两条 extension 时序 flake 本轮自行通过；新增 45 条测试 + denylist 参数化 +4）",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "pnpm test 全绿 + pnpm check 绿（零前端改动）",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "护栏捕获：新增 <examples>/<context> 提示块被 test_input_sanitization_middleware::test_denylist_covers_framework_authority_blocks 的源码扫描门捕获（框架提示块必须 blocked 或显式 exempt）——已加入 _BLOCKED_TAG_NAMES 并纳入 _FRAMEWORK_STRUCTURED_TAGS 参数化列表。",
+    "estimate_tokens 采用向上取整的非空≥1 变体（与 memory char 估算略有出入）以保证单调性，供截断的二分查找使用。",
+    "apply_context_budget 返回 kept/dropped/truncated；examples 优先于 context（声明的 few-shot 属节点意图，挂载上下文是批量输入）。",
+    "build_ai_node_buckets 收 primitives（非 Node），成为 executor 与 assemble_ai_node_prompt 的桶顺序单一来源，避免两处漂移。",
+    "compile 期校验 include ⊆ 已声明输入端口；policy + continue 运行期报错。",
+    "工具结果外置/历史压缩的节点级 override 需把配置下沉到 subagent runtime middlewares，另立切片。"
+  ]
+}
