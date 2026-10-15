@@ -89,7 +89,7 @@
 |---|---|---|---|---|
 | N1 | 工具网关 | §9 | 统一描述符 + 调用信封 + provider（builtin/skill/sandbox/mcp/app） | ◐ 最小版（builtin/sandbox + 描述符/分派）；skill/mcp/app provider 后续 |
 | N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 | ⬜ 未开始（现状经 SubagentExecutor 间接调用，建议渐进抽层） |
-| N3 | 能力包契约 | §5.5 | permissions/evals/tool_schema_version/context_budget/required-secrets | ⬜ 未开始 |
+| N3 | 能力包契约 | §5.5 | permissions/schema 版本/context_budget（required-secrets 已有）；`evals` 后续 | ◐ `permissions`/`tool-schema-version`/`context-budget` 声明+解析+校验已落地；`evals` 契约与运行时权限裁决待做 |
 | N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ◐ P1 切片 1：注册表/会话/驱动（cli/mock）已落地；驱动矩阵扩展、共享/抢占、DB 持久化随后续切片 |
 | N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ✅ P1 切片 1 已落地（+ 工具网关 `app` provider） |
 | N6 | 长期实例管理 | §18 | 实例列表/状态/恢复/归档/清理 | ◐ P1 切片 2：持久化实例记录（`app_instances`）+ 列表/详情/close/archive/delete/cleanup + 启动孤儿标记 + 资源累计已落地 |
