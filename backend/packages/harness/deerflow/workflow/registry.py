@@ -126,7 +126,8 @@ class ExecutorRegistry:
         """
         executors: dict[NodeType, Executor] = {nt: reg.executor for nt, reg in self._registrations.items()}
         previews: dict[NodeType, Previewer] = {nt: reg.preview for nt, reg in self._registrations.items() if reg.preview is not None}
-        return CompileContext(executors=executors, previews=previews)
+        idempotent_by_type: dict[NodeType, bool] = {nt: reg.idempotent for nt, reg in self._registrations.items()}
+        return CompileContext(executors=executors, previews=previews, idempotent_by_type=idempotent_by_type)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

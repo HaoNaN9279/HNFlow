@@ -17,6 +17,7 @@ import httpx
 from deerflow.sandbox import tools as sandbox_tools
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.executors import WorkflowExecutionError
+from deerflow.workflow.reliability import IDEMPOTENCY_ENV, IDEMPOTENCY_HEADER, IDEMPOTENCY_PARAM
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,15 @@ def exec_bash(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str
 
     env: dict[str, str] | None = params.get("env")
     timeout: float | None = params.get("timeout")
+
+    # N14 §24.7: forward the stable idempotency key (injected by the compiler
+    # when the node declares ``params.idempotency``) as an env var so a retried
+    # script can recognise a repeat.  An explicitly configured value wins.
+    idempotency_key = params.get(IDEMPOTENCY_PARAM)
+    if idempotency_key:
+        merged_env = dict(env or {})
+        merged_env.setdefault(IDEMPOTENCY_ENV, str(idempotency_key))
+        env = merged_env
 
     # Acquire sandbox through the standard lazy-init path.
     # WorkflowRuntime is duck-type compatible with the Runtime expected
@@ -93,6 +103,16 @@ async def exec_http(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
     json_body: Any = params.get("json")
     query_params: dict[str, str] | None = params.get("params")
     timeout: float = float(params.get("timeout", 30))
+
+    # N14 §24.7: forward the stable idempotency key (injected by the compiler
+    # when the node declares ``params.idempotency``) as an ``Idempotency-Key``
+    # request header so a retried request can be deduped by the server.  An
+    # explicitly configured header wins.
+    idempotency_key = params.get(IDEMPOTENCY_PARAM)
+    if idempotency_key:
+        merged_headers = dict(headers or {})
+        merged_headers.setdefault(IDEMPOTENCY_HEADER, str(idempotency_key))
+        headers = merged_headers
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
         response = await client.request(

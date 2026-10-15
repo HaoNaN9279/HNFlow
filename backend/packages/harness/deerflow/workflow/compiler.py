@@ -62,6 +62,15 @@ from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
+from deerflow.workflow.reliability import (
+    IDEMPOTENCY_PARAM,
+    RetryPolicy,
+    RetryPolicyError,
+    parse_retry_policy,
+    resolve_idempotency_key,
+    should_retry,
+    validate_idempotency_param,
+)
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
@@ -189,6 +198,10 @@ class CompileContext:
             plain callables (not registry objects) so the compiler never
             imports :mod:`deerflow.workflow.registry` — which imports this
             module — and no import cycle forms.
+        idempotent_by_type: ``NodeType`` → whether repeated execution is safe.
+            The compiler reads this to gate ``params.retry`` (N14 §24.7): a
+            retry is allowed only on an idempotent node type.  Kept as a plain
+            mapping so the compiler never imports the registry.
         checkpointer: Optional LangGraph checkpointer for the top-level graph.
             Subgraphs are always compiled with ``checkpointer=None`` so their
             channels never pollute the parent thread checkpoint.
@@ -208,6 +221,7 @@ class CompileContext:
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
     previews: dict[NodeType, Previewer] = field(default_factory=dict)
+    idempotent_by_type: dict[NodeType, bool] = field(default_factory=dict)
     checkpointer: Any | None = None
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
     max_nesting_depth: int = 10
@@ -257,6 +271,12 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
         # previewers must not share a cache entry.
         preview_fp = "|".join(sorted(t.value for t in context.previews))
         digest.update(f"\0previews:{preview_fp}".encode())
+    if context is not None and context.idempotent_by_type:
+        # Whether a node type is idempotent decides if ``params.retry`` is a
+        # compile error (N14 §24.7), so an idempotency difference must not reuse
+        # a cache entry.
+        idem_fp = "|".join(f"{t.value}:{int(bool(v))}" for t, v in sorted(context.idempotent_by_type.items(), key=lambda kv: kv[0].value))
+        digest.update(f"\0idempotent:{idem_fp}".encode())
     if context is not None and context.checkpointer is not None:
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     if context is not None and context.definition_resolver is not None:
@@ -292,6 +312,10 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
     for node in def_.nodes:
         for port in node.outputs:
             fields[f"wf:{node.id}:{port.name}"] = Any
+        if node.params.get("retry") is not None:
+            # N14 §24.7 bounded retry: reserved channel carrying the number of
+            # retries actually performed (declared only for a retry node).
+            fields[f"wf:{node.id}:__retry"] = Any
         if node.type == NodeType.FLOW_LOOP:
             fields[f"wf:{node.id}:__count"] = Any
             loop_ports = {port.name for port in node.outputs}
@@ -393,6 +417,8 @@ def _make_node_fn(
     executor: Executor,
     incoming_edges: list[Edge],
     previewer: Previewer | None = None,
+    *,
+    idempotent: bool = False,
 ) -> Callable[..., Any]:
     """Build an async node wrapper that reads inputs from state, calls the
     executor, and writes outputs back to state.
@@ -410,8 +436,29 @@ def _make_node_fn(
     ``params.require_approval``, the node suspends for human approval before
     running and re-verifies the approved preview afterwards (N10, see
     :mod:`deerflow.workflow.approval`).
+
+    When the node declares ``params.retry`` and *idempotent* is true, the
+    executor call is retried up to the policy's bound with an optional backoff
+    (N14 §24.7).  Retries wrap only the executor — the approval gate runs once,
+    and a control-flow exception is never retried.  The retry count is written
+    to the reserved ``wf:<node_id>:__retry`` channel.  When the node requests an
+    idempotency key (``params.idempotency``) it is injected into the executor
+    params as ``__idempotency_key`` for the tool executors to forward.
     """
     from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    # Parse the retry policy at build time (not per call).  Malformed shapes are
+    # a compile-time error via ``_validate_retry``; a direct node-fn build in a
+    # test is defended against here.
+    retry_policy: RetryPolicy | None
+    try:
+        retry_policy = parse_retry_policy(node.params)
+    except RetryPolicyError:
+        retry_policy = None
+    if retry_policy is not None and not idempotent:
+        # Should never happen (compile-time validation rejects it); refuse to
+        # silently retry a non-idempotent node.
+        retry_policy = None
 
     # Build input-port → *ordered list* of upstream state keys from incoming
     # edges.  A list-per-port (rather than a single key) is what lets a fan-in
@@ -452,10 +499,13 @@ def _make_node_fn(
         # LangGraph moves a top-level ``config["context"]`` into
         # ``config["configurable"]["context"]`` before a node runs, so read
         # both locations (top-level first for forward-compatibility).
+        runtime_context: dict[str, Any] = {}
         try:
             config = get_config()
             configurable = config.get("configurable", {}) or {}
             context = config.get("context") or configurable.get("context") or {}
+            if isinstance(context, dict):
+                runtime_context = context
             runtime = WorkflowRuntime(
                 context=context,
                 config=config,
@@ -514,7 +564,28 @@ def _make_node_fn(
                     # exactly like a skipped ``human:task``.
                     return {}
 
-        result = await _resolve_executor(executor, runtime, executor_params, inputs)
+        # N14 §24.7: a node that asks for an idempotency key gets a stable one
+        # (per run+node) injected for the tool executors to forward, so a retry
+        # presents the same key and an external system can dedupe it.
+        idempotency = resolve_idempotency_key(node.params, run_id=str(runtime_context.get("run_id") or ""), node_id=node.id)
+        if idempotency is not None:
+            executor_params = dict(executor_params)
+            executor_params[IDEMPOTENCY_PARAM] = idempotency
+
+        # N14 §24.7: bounded retry.  Only the executor call is retried (the
+        # approval gate above ran once), and ``should_retry`` refuses to retry a
+        # control-flow signal so an interrupt is never swallowed.
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await _resolve_executor(executor, runtime, executor_params, inputs)
+                break
+            except Exception as exc:
+                if retry_policy is None or not should_retry(retry_policy, attempt=attempt, exc=exc, node_type=node.type):
+                    raise
+                if retry_policy.backoff_seconds > 0:
+                    await asyncio.sleep(retry_policy.backoff_seconds)
 
         outputs: dict[str, Any] = {}
         for p in node.outputs:
@@ -552,6 +623,11 @@ def _make_node_fn(
         if isinstance(shared_writes, dict):
             for shared_name, shared_value in shared_writes.items():
                 outputs[f"{SHARED_CHANNEL_PREFIX}{shared_name}"] = shared_value
+
+        # N14 §24.7: surface how many retries the node needed (0 retries = no
+        # write), on the reserved channel declared in ``_build_state_schema``.
+        if attempt > 1:
+            outputs[f"wf:{node.id}:__retry"] = attempt - 1
 
         return outputs
 
@@ -1310,6 +1386,29 @@ def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
                 raise WorkflowCompileError(f"node '{node.id}': params.resource_lock_timeout must be a number, got {timeout!r}") from exc
 
 
+def _validate_retry(def_: WorkflowDefinition, ctx: CompileContext) -> None:
+    """Compile-time validation for the N14 §24.7 ``params.retry`` / ``params.idempotency``.
+
+    A retry is only safe on an **idempotent** node type — retrying a
+    non-idempotent node repeats its side effect.  The registered idempotency of
+    each type reaches the compiler through ``ctx.idempotent_by_type`` (the
+    registry owns the source of truth); an unregistered type (a compiler-native
+    control-flow node) is treated as non-idempotent.  A malformed policy or an
+    empty idempotency string is reported here rather than silently ignored.
+    """
+    for node in def_.nodes:
+        params = node.params or {}
+        try:
+            validate_idempotency_param(params)
+            policy = parse_retry_policy(params)
+        except RetryPolicyError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
+        if policy is None:
+            continue
+        if not ctx.idempotent_by_type.get(node.type, False):
+            raise WorkflowCompileError(f"node '{node.id}': params.retry is only allowed on idempotent node types; '{node.type.value}' is non-idempotent (retrying it would repeat its side effect)")
+
+
 def _resource_lock_names(node: Node) -> tuple[str, ...]:
     """Extract the (validated) ``params.resource_lock`` names for *node*."""
     raw = node.params.get("resource_lock")
@@ -1470,6 +1569,7 @@ def _compile_impl(
     _validate_autonomy(def_)
     _validate_output_schema(def_)
     _validate_context_policy(def_)
+    _validate_retry(def_, ctx)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)
@@ -1596,7 +1696,7 @@ def _compile_impl(
             # route always falls through to default).
             executor = ctx.executors.get(node.type)
             if executor is not None:
-                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type))
+                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False))
                 _register(node.id, node_fn)
             else:
 
@@ -1660,7 +1760,7 @@ def _compile_impl(
         if executor is None:
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
 
-        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type))
+        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False))
         _register(node.id, node_fn)
 
     # Determine whether the end node is a registered pass-through (subgraph

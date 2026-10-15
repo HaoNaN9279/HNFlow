@@ -1,0 +1,39 @@
+{
+  "slice": "N14f",
+  "title": "工作流事务与自愈（§24.7 幂等键 + 有界节点重试）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "53be8a8",
+  "commit": null,
+  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树，待用户批准后再提交。",
+  "steps": [
+    { "id": "S1", "name": "[A] workflow/reliability.py（parse_retry_policy / is_retryable_exception / should_retry / idempotency_key / resolve_idempotency_key）", "status": "completed" },
+    { "id": "S2", "name": "[A] compiler：CompileContext.idempotent_by_type + _validate_retry + _build_state_schema(__retry) + _make_node_fn 有界重试/幂等键注入", "status": "completed" },
+    { "id": "S3", "name": "[A] registry.build_context 填充 idempotent_by_type", "status": "completed" },
+    { "id": "S4", "name": "[A] executors/tool.py：tool:http Idempotency-Key / tool:bash DEERFLOW_IDEMPOTENCY_KEY", "status": "completed" },
+    { "id": "S5", "name": "测试 tests/test_workflow_reliability.py（41 条）+ 全量 A/B 对拍 + ruff", "status": "completed" },
+    { "id": "S6", "name": "文档同步（AGENTS.md / HNFlow 开发规划.md）+ 提交", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "重试仅幂等节点（非幂等 params.retry = 编译期错误）；idempotency_by_type 由 registry 提供、经 CompileContext 传入",
+    "D2": "幂等键稳定 = run_id:node_id（不含 attempt）——重试复用同键才能被外部去重",
+    "D3": "重试只包裹 executor 调用（审批门之后），控制流/取消永不重试",
+    "D4": "观测 = 保留通道 wf:<node>:__retry（0 不写）",
+    "D5": "effect journal/补偿沿用 N10 workflow_undo_records + undo_service；AI 诊断式自愈列后续",
+    "D6": "无迁移/无新表/无新配置/无新依赖；前端零改动"
+  },
+  "baseline": {
+    "backend_full_regression": "A/B 对拍：53be8a8 基线 75 failed / 10867 passed（104 skipped） -> N14f 75 failed / 10908 passed（104 skipped）；**失败集合逐条一致**（Compare-Object 无差异）；新增 41 条测试全过",
+    "workflow_suite": "843 passed / 4 skipped -> 884 passed / 4 skipped",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "CompileContext.idempotent_by_type 进编译缓存指纹，避免仅幂等性不同的两个 context 复用缓存。",
+    "is_retryable_exception 排除 GraphBubbleUp（含 GraphInterrupt）与 BaseException 子类，保证挂起/取消不被吞。",
+    "tool:http/bash 用 setdefault 尊重调用方显式配置的同名头/env。",
+    "后续切片：§24.11 重放 / §24.8 评测 / §24.10 成本 / §24.1 记忆 / §24.2 检索 / §24.6b 拓扑模板 / §24.12 注入防御。"
+  ]
+}
