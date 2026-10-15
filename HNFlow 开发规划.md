@@ -100,7 +100,7 @@
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）已落地；切片 L–M 见「P2 续」 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）+ 切片L（§24.6a/b 拓扑模板）已落地；切片 M 见「P2 续」 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -190,7 +190,7 @@
 | N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ◐ 模型路由已落地；三级预算强制待做 |
 | N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ◐ 策略/格式化/store 协议 + AI 节点接线已落地；DeerMem 适配器待做 |
 | N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ◐ 纯检索核心 + AI 节点注入已落地；`data:knowledge` 节点待做 |
-| N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ⬜ |
+| N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 拓扑模板 builder（评审回环 + supervisor）已落地；画布插入 UI/动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ⬜ P3 |
 
 > **N14f 目标**：把「节点级副作用」纳入事务语义——重试只对**幂等**节点开放（非幂等自动重试 = 重复副作用，编译期拒绝），重试携带**稳定幂等键**让外部系统（HTTP 服务、脚本）能识别重复；实际重试次数经保留通道可观测。AI 诊断式自愈（模型建议→有界重试）与多步 saga 的 effect journal 独立成刀，D 项已由 N10 的 `undo_service`（逆序补偿）覆盖。
@@ -206,6 +206,8 @@
 > **进度（切片 J：§24.1 节点级记忆）**：新增 `deerflow/workflow/memory.py`（纯逻辑 + 参考 store）——四级记忆作用域 `session`/`node`/`workflow`/`long_term`；`parse_memory_policy`（`params.memory = {scopes, query?, inject_budget?, write?, write_scope?}`，坏形状 `MemoryPolicyError`）、`render_query`（`{{port}}` 插值，缺键→空）、`format_memory_block`（`<memory>` 块，按 `estimate_tokens` 预算**顺序**填装、超限停止）、`MemoryStore` 协议（`search(scope, query, limit)`/`put(scope, text, key)`）+ `InMemoryMemoryStore`（子串检索参考实现）+ `collect_memory`/`acollect_memory`/`awrite_memory`（同步/异步 store 双支持）、`output_text`。`ai:llm_agent` 从 `runtime.context["memory_store"]` 取 store：**读**命中拼进提示词（`<memory>` 前置于 system prompt）、**写**在成功后把节点输出写回 `write_scope`；**读写失败仅告警不阻塞节点**（§24.1）；与 continue 模式互斥（运行期报错）。`<memory>` 是既有框架权威块（已在 sanitization denylist 内，护栏自检通过）。**诚实取舍**：本切片落地**节点级策略 + 注入/写回 + store 协议**；**DeerMem 适配器**（把现有 `MemoryManager` 包成 `MemoryStore` 并注入运行上下文）为后续增量（不引新依赖、不动全局记忆中间件）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_memory.py`（32 条：解析/形状/插值/块渲染与预算/store/collect 同步异步/输出文本 + 执行器：读注入、写回、无 store 不注入、continue 拒绝、坏 memory 失败）。全量离线 A/B：10985→11017 passed、**失败集合逐条一致**；workflow 套件 961→993 passed；ruff 干净。
 >
 > **进度（切片 K：§24.2 知识检索）**：新增 `deerflow/workflow/knowledge.py`（纯逻辑 + 参考 store）——`chunk_text`（确定性重叠分块，段落窗口 + overlap）、`tokenize`（ASCII 词 + CJK 逐字）、`rank_chunks`（**BM25-lite 确定性排序** `(-score, citation)` + top_k + 可注入 `reranker`；空 query 保序、reranker 异常忽略）、`Document`/`Chunk`/`RetrievalRecord`（稳定 `cite:<chunk_id>` 引用）、`KnowledgeStore` 协议（`upsert`/`query`，支持异步）+ `InMemoryKnowledgeStore` + `ingest_document`、`parse_retrieval_params`（`params.retrieval = {collection, query?, top_k? (1..20), ctx_budget?, rerank?}`，坏形状 `KnowledgeError`）、`render_query`（`{{port}}`）、`format_retrieval_block`（`<context>` 块 + `--- cite ... ---` 头，按 `estimate_tokens` 预算顺序填装）、`aquery`。`ai:llm_agent` 从 `runtime.context["knowledge_store"]` 检索并前置 `<context>` 块，**失败仅告警**；与 continue 模式互斥。**诚实取舍**：复用**已 sanitize 的 `<context>` 标签**（不引入新框架标签、无需改 denylist）；默认关键词排序（离线无依赖），**embedding/向量后端为可插拔 store**；rerank 为可注入 callable；**专用 `data:knowledge` 节点 + 前端 palette 列为后续增量**（避免 schema/前端计数改动，核心能力已可由 AI 节点消费）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_knowledge.py`（42 条：分块/分词/排序/reranker/store/摄入/参数/渲染/asyncio + 执行器：检索注入、无 store 不注入、continue 拒绝、坏 retrieval 失败）。全量离线 A/B：11017→11059 passed、**失败集合逐条一致**；workflow 套件 993→1035 passed；ruff 干净。
+>
+> **进度（切片 L：§24.6a/§24.6b 多智能体拓扑模板）**：新增 `deerflow/workflow/patterns.py`（**纯 builder**，返回可序列化 `WorkflowDefinition`，无新引擎行为）——`critic_review_loop`（producer↔critic **有界评审回环**：用 `flow:loop` + `params.continue_on="needs_revision"` 读 critic 判定 + `iterations` 硬上限，回边携带 criti 结论，仅复用既有 C5 机制）、`supervisor_topology`（supervisor `ai` 节点写 `decision` 端口 → `flow:switch` 按 `params.cases` **运行期分派到已注册专家节点**，无匹配则默认直通 end）、`TEMPLATES` 命名表。两 builder 产出的定义均过 `validate_definition` 且可 `compile_definition`；`critic_review_loop` 运行验证（critic 批准即退出 / 迭代上限硬停）。**诚实取舍**：本切片落地**拓扑模板 builder**（画布可作为起点插入的「UX 糖」后端）；**前端「插入模板」按钮 + 受控动态 handoff 的结构化消息契约列为后续增量**。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_patterns.py`（10 条：定义校验/编译/回环批准退出/迭代上限/supervisor 参数校验与分派/模板表）。全量离线 A/B：11059→11068 passed、**唯一新增「失败」为既有**时序 flake `test_extension_task_lifecycle::test_notification_timeout_is_one_shared_budget`（单跑通过、与纯新增模块无关，N14a 已记录该 flake）；workflow 套件 1035→1045 passed；ruff 干净。
 
 ---
 
@@ -225,7 +227,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A–K 已落地；切片 L–M 见「P2 续」 |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A–L 已落地；切片 M 见「P2 续」 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 
 ---
