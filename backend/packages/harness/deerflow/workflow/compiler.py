@@ -71,6 +71,9 @@ from deerflow.workflow.reliability import (
     should_retry,
     validate_idempotency_param,
 )
+from deerflow.workflow.replay import MODE_RECORD as REPLAY_MODE_RECORD
+from deerflow.workflow.replay import MODE_REPLAY as REPLAY_MODE_REPLAY
+from deerflow.workflow.replay import REPLAY_CONTEXT_KEY
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
@@ -572,20 +575,33 @@ def _make_node_fn(
             executor_params = dict(executor_params)
             executor_params[IDEMPOTENCY_PARAM] = idempotency
 
-        # N14 §24.7: bounded retry.  Only the executor call is retried (the
-        # approval gate above ran once), and ``should_retry`` refuses to retry a
-        # control-flow signal so an interrupt is never swallowed.
+        # N14 §24.11: a replay session on the run context can serve this node's
+        # recorded result (replay mode) or capture it (record mode).  A replay
+        # hit skips the executor entirely, so no live model/tool call happens.
+        replay_session = runtime_context.get(REPLAY_CONTEXT_KEY) if isinstance(runtime_context, dict) else None
+        replay_mode = getattr(replay_session, "mode", None)
+
+        result: dict[str, Any] | None = None
+        if replay_session is not None and replay_mode == REPLAY_MODE_REPLAY:
+            result = replay_session.replay(node_id=node.id, node_type=node.type.value, inputs=inputs)
+
         attempt = 0
-        while True:
-            attempt += 1
-            try:
-                result = await _resolve_executor(executor, runtime, executor_params, inputs)
-                break
-            except Exception as exc:
-                if retry_policy is None or not should_retry(retry_policy, attempt=attempt, exc=exc, node_type=node.type):
-                    raise
-                if retry_policy.backoff_seconds > 0:
-                    await asyncio.sleep(retry_policy.backoff_seconds)
+        if result is None:
+            # N14 §24.7: bounded retry.  Only the executor call is retried (the
+            # approval gate above ran once), and ``should_retry`` refuses to retry
+            # a control-flow signal so an interrupt is never swallowed.
+            while True:
+                attempt += 1
+                try:
+                    result = await _resolve_executor(executor, runtime, executor_params, inputs)
+                    break
+                except Exception as exc:
+                    if retry_policy is None or not should_retry(retry_policy, attempt=attempt, exc=exc, node_type=node.type):
+                        raise
+                    if retry_policy.backoff_seconds > 0:
+                        await asyncio.sleep(retry_policy.backoff_seconds)
+            if replay_session is not None and replay_mode == REPLAY_MODE_RECORD:
+                replay_session.record(node_id=node.id, node_type=node.type.value, inputs=inputs, outputs=result)
 
         outputs: dict[str, Any] = {}
         for p in node.outputs:
