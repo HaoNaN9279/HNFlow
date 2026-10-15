@@ -100,7 +100,7 @@
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）+ 切片L（§24.6a/b 拓扑模板）+ 切片M（§24.12 注入防御）已落地；N14 各切片主体完成 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）+ 切片L（§24.6a/b 拓扑模板）+ 切片M（§24.12 注入防御）+ 切片N（§24.10 运行级预算）已落地；N14 各切片主体完成 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -187,11 +187,12 @@
 | N14f | §24.7 工作流事务与自愈 | 幂等键端到端（`tool:http` 请求头 / `tool:bash` 环境变量）+ 有界节点重试（**仅幂等节点** `params.retry`，保留通道 `wf:<node>:__retry`）；effect journal 复用既有 `workflow_undo_records`（补偿/回滚 N10 已落地） | ✅ 已落地 |
 | N14g | §24.11 确定性重放 | run 级 record/replay fixture（节点输出粒度）+ 回放执行 + 脱敏；与 lockfile 关联 | ✅ 已落地 |
 | N14h | §24.8 评测/回归 | golden traces + 确定性/语义断言 + runner（可挂能力包导入与定义保存） | ◐ 断言核心已落地；runner/CI 挂载待做 |
-| N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ◐ 模型路由已落地；三级预算强制待做 |
+| N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ◐ 模型路由（N14i）+ 运行级预算（N14n）已落地；成本报表待做 |
 | N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ◐ 策略/格式化/store 协议 + AI 节点接线已落地；DeerMem 适配器待做 |
 | N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ◐ 纯检索核心 + AI 节点注入已落地；`data:knowledge` 节点待做 |
 | N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 拓扑模板 builder（评审回环 + supervisor）已落地；画布插入 UI/动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ◐ AI 节点注入块未信任中和已落地；威胁模型/权限裁决深化待做 |
+| N14n | §24.10 运行级预算 | node/run/workflow 三级预算 + warn/degrade/abort | ✅ 运行级（`metadata.budget` warn/abort）已落地；节点级由 autonomy；成本报表待做 |
 
 > **N14f 目标**：把「节点级副作用」纳入事务语义——重试只对**幂等**节点开放（非幂等自动重试 = 重复副作用，编译期拒绝），重试携带**稳定幂等键**让外部系统（HTTP 服务、脚本）能识别重复；实际重试次数经保留通道可观测。AI 诊断式自愈（模型建议→有界重试）与多步 saga 的 effect journal 独立成刀，D 项已由 N10 的 `undo_service`（逆序补偿）覆盖。
 >
@@ -210,6 +211,8 @@
 > **进度（切片 L：§24.6a/§24.6b 多智能体拓扑模板）**：新增 `deerflow/workflow/patterns.py`（**纯 builder**，返回可序列化 `WorkflowDefinition`，无新引擎行为）——`critic_review_loop`（producer↔critic **有界评审回环**：用 `flow:loop` + `params.continue_on="needs_revision"` 读 critic 判定 + `iterations` 硬上限，回边携带 criti 结论，仅复用既有 C5 机制）、`supervisor_topology`（supervisor `ai` 节点写 `decision` 端口 → `flow:switch` 按 `params.cases` **运行期分派到已注册专家节点**，无匹配则默认直通 end）、`TEMPLATES` 命名表。两 builder 产出的定义均过 `validate_definition` 且可 `compile_definition`；`critic_review_loop` 运行验证（critic 批准即退出 / 迭代上限硬停）。**诚实取舍**：本切片落地**拓扑模板 builder**（画布可作为起点插入的「UX 糖」后端）；**前端「插入模板」按钮 + 受控动态 handoff 的结构化消息契约列为后续增量**。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_patterns.py`（10 条：定义校验/编译/回环批准退出/迭代上限/supervisor 参数校验与分派/模板表）。全量离线 A/B：11059→11068 passed、**唯一新增「失败」为既有**时序 flake `test_extension_task_lifecycle::test_notification_timeout_is_one_shared_budget`（单跑通过、与纯新增模块无关，N14a 已记录该 flake）；workflow 套件 1035→1045 passed；ruff 干净。
 >
 > **进度（切片 M：§24.12 注入防御）**：新增 `deerflow/workflow/sanitize.py`（纯助手）——`neutralize_untrusted(text)` **复用输入净化中间件的 `neutralize_untrusted_tags`**（框架权威标签 denylist 的**单一来源**，延迟导入避免重依赖/循环），把 AI 节点**自行拉入提示词**的未信任内容中的框架标签（`<system-reminder>`/`<memory>`/`<context>`/`<available_skills>` 等）中和，使其**无法伪造框架块**。接入点：`knowledge.format_retrieval_block`（§24.2 检索块）与 `memory.format_memory_block`（§24.1 记忆块）的**正文**经此处理——外围 `<context>`/`<memory>` 包裹仍是引擎自己生成的，内部正文里的同名标签被中和。**诚实取舍**：§24.12 的其余项**已由既有机制承担**（沙箱隔离、危险节点审核、依赖静态校验、请求级密钥隔离 `required-secrets`、记忆提取 scope/durability/authority 门、N10 不可逆操作预览/确认边界）——本切片只补「AI 节点注入块」这一新暴露面；**完整威胁模型/工具级权限裁决深化仍为后续**（P3）。失败降级为原文（**纵深防御，非硬边界**）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_sanitize.py`（8 条：空/良性不变/框架标签中和/检索块与记忆块防伪造）。全量离线 A/B：11068→11074 passed、新增 8 条测试全过；**唯一新增「失败」为既有**时序 flake 文件 `test_extension_task_lifecycle.py` 的两条（整文件单跑 12 passed×3、与纯新增模块无关，N14a 已记录该 flake）；workflow 套件 1045→1052 passed；ruff 干净。
+>
+> **进度（切片 N：§24.10 运行级预算）**：新增 `deerflow/workflow/budgets.py`（纯逻辑）——`RunBudget` + `parse_run_budget`（`WorkflowDefinition.metadata.budget = {max_total_tokens, on_exceed: warn|abort}`，坏形状 `BudgetError`）、`usage_total`（`total_tokens` 优先，坏值回退 input+output）、`aggregate_token_usage`（聚合各节点保留通道 `wf:<node>:__token_usage`）、`evaluate_budget`。`schema.WorkflowMetadata` 增可选 `budget` 字段（additive，旧定义零破坏）。`compiler`：`_validate_run_budget` 编译期校验 + `_make_node_fn` 每节点后聚合 state（含本节点用量）并按策略强制——`abort` 抛 `WorkflowExecutionError` 停止 run，`warn` 记日志继续。**三级预算落点**：节点级 = §24.5 `params.autonomy.budgets.max_tokens`（`TokenBudgetConfig`）；运行/工作流级 = 本切片 `metadata.budget`。**诚实取舍**：`degrade` 刻意不设（token 已花，无法退回），只支持 `warn`/`abort`；**成本/花费报表（按 node/model 归因 + currency 计价）列为后续增量**（`models[*].pricing` 元数据与 console 计价已有底座）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_budgets.py`（23 条：解析/用量/聚合/决策 + 编译期坏预算报错 + abort 失败/warn 继续/无预算不受影响/额度内通过）。全量离线 A/B：11097→11117 passed、新增 23 条全过；**唯一新增「失败」为既有**时序 flake（`test_extension_task_lifecycle.py` 两条 + `test_sandbox_orphan_reconciliation.py` 一条，隔离运行 13 passed，均与纯新增模块无关）；workflow 套件 1052→1075 passed；ruff 干净。
 
 ---
 
@@ -229,7 +232,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ✅ 切片A–M 已落地（各项后续增量见对应进度注） |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ✅ 切片A–N 已落地（各项后续增量见对应进度注） |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ◐ §24.12 注入防御切片M 已落地（AI 节点注入块未信任中和）；威胁模型/权限裁决深化待做 |
 
 ---
@@ -436,5 +439,6 @@
 | `6e3fa23` | N14l | §24.6a/b 拓扑模板（评审回环 + supervisor） |
 | `5b58642` | N14m | §24.12 AI 节点注入块未信任中和 |
 | `a215a69` | N3 | §5.5 能力包契约（permissions / schema 版本 / context_budget） |
+| `0ae610f` | N14n | §24.10 运行级预算强制（`metadata.budget` warn/abort） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。
