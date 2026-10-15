@@ -142,8 +142,39 @@ def supervisor_topology(
     return WorkflowDefinition(id=definition_id, name=name, nodes=nodes, edges=edges)
 
 
-#: The named templates the canvas can offer.
+#: The named templates the canvas can offer (name → builder function).
 TEMPLATES: dict[str, object] = {
     "critic_review_loop": critic_review_loop,
     "supervisor_topology": supervisor_topology,
 }
+
+#: One-line descriptions surfaced alongside the templates.
+TEMPLATE_DESCRIPTIONS: dict[str, str] = {
+    "critic_review_loop": "A producer drafts, a critic reviews, and the loop repeats until the critic stops asking for revision (bounded).",
+    "supervisor_topology": "A supervisor picks one of several expert nodes at runtime and dispatches to it.",
+}
+
+
+def build_template(name: str) -> WorkflowDefinition:
+    """Build a ready-to-insert template definition (with placeholder instructions).
+
+    The canvas inserts the returned skeleton and the author fills in the
+    instructions/experts; the graph shape (nodes, edges, loop cap) is already
+    valid and compiles.
+    """
+    if name == "critic_review_loop":
+        return critic_review_loop(
+            producer_instruction="Produce a draft of the artifact.",
+            critic_instruction="Review the draft. Set needs_revision=true if it needs another pass, otherwise false.",
+        )
+    if name == "supervisor_topology":
+        return supervisor_topology(
+            supervisor_instruction="Decide which expert should handle the task and write its id to the 'decision' port.",
+            experts=[("expert_a", "Handle the task as expert A."), ("expert_b", "Handle the task as expert B.")],
+        )
+    raise KeyError(f"unknown template {name!r}; known: {sorted(TEMPLATES)}")
+
+
+def template_catalog() -> list[dict[str, str]]:
+    """List the available templates as ``{name, description}`` entries."""
+    return [{"name": name, "description": TEMPLATE_DESCRIPTIONS.get(name, "")} for name in sorted(TEMPLATES)]

@@ -143,6 +143,21 @@ async def list_workflows(request: Request):
     return await repo.list_by_user(str(user.id))
 
 
+@router.get("/workflows/templates")
+async def list_workflow_templates():
+    """List the built-in collaboration templates the canvas can insert (N14 §24.6b).
+
+    Declared before ``/workflows/{definition_id}`` so the literal path is matched
+    first. Returns each template's name/description plus its serialized
+    ``WorkflowDefinition`` skeleton (valid, compilable; instructions are
+    placeholders for the author to fill in).
+    """
+    from deerflow.workflow.patterns import build_template, template_catalog
+    from deerflow.workflow.workflow_io import serialize
+
+    return [{"name": entry["name"], "description": entry["description"], "definition": serialize(build_template(entry["name"]))} for entry in template_catalog()]
+
+
 @router.post("/workflows")
 @require_permission("threads", "write")
 async def create_workflow(request: Request, body: WorkflowCreateRequest):
