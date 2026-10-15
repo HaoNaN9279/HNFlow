@@ -88,7 +88,7 @@
 | # | 新增项 | 对应方案 | 说明 | 状态 |
 |---|---|---|---|---|
 | N1 | 工具网关 | §9 | 统一描述符 + 调用信封 + provider（builtin/skill/sandbox/mcp/app） | ◐ 最小版（builtin/sandbox + 描述符/分派）；skill/mcp/app provider 后续 |
-| N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 | ⬜ 未开始（现状经 SubagentExecutor 间接调用，建议渐进抽层） |
+| N2 | LLM 中间层 | §8 | 统一模型接口/厂商适配/能力归一/路由/计量 | ✅ 既有 `deerflow.models`（`create_chat_model` + providers + 厂商适配器）即统一访问层：核实 `workflow/`、`agents/lead_agent/` **无厂商 SDK 直连 import**，AI 节点经 `SubagentExecutor` → `create_chat_model`、lead agent 同源；能力归一经 middleware（thinking/vision/stream/tool）、计量经 token collector、路由由 §24.10 节点级 `model_policy` 补强。无需另立模块（渐进抽层原则） |
 | N3 | 能力包契约 | §5.5 | permissions/schema 版本/context_budget（required-secrets 已有）；`evals` 后续 | ◐ `permissions`/`tool-schema-version`/`context-budget` 声明+解析+校验已落地；`evals` 契约与运行时权限裁决待做 |
 | N4 | **本地软件接入层** | §17 | 应用注册表 + 实例/会话管理 + 驱动矩阵 + 人机共享 | ◐ P1 切片 1：注册表/会话/驱动（cli/mock）已落地；驱动矩阵扩展、共享/抢占、DB 持久化随后续切片 |
 | N5 | `app` 类节点 | §6.7 | `app:launch/script/wait/collect` | ✅ P1 切片 1 已落地（+ 工具网关 `app` provider） |
@@ -420,3 +420,21 @@
 - **定位核心（P1）** 是区别于 n8n/Coze 的关键，但必须在 P0 引擎可信之后启动。
 - **安全与 SaaS 类沉底**，仅保留与 P1 强绑定的「不可逆操作确认」。
 - **上游裁剪与 P1 同步起步**：deerflow 的 IM 渠道、多用户鉴权/RBAC、多 worker 分布式、TUI、运营类能力按第八节分批**移除/隔离**——先删「默认关闭 + 主路径零依赖」的模块，[隔离] 项待 P1 稳定后转删。裁剪服务定位、不改运行语义。
+
+## 十、本轮批次小结（N14f–m + N3）
+
+一次连续执行落地 9 个切片，逐切片 TDD + 全量离线 A/B 对拍（失败集与基线逐条一致）+ ruff + 归档：
+
+| 提交 | 切片 | 内容 |
+|---|---|---|
+| `7cf2a5f` | N14f | §24.7 幂等键端到端（http 头 / bash env）+ 有界节点重试（仅幂等，`__retry`） |
+| `033ddbc` | N14g | §24.11 确定性重放（节点级 record/replay + 脱敏 + 原子 JSON） |
+| `55602bb` | N14h | §24.8 评测/回归断言核心（精确 + 语义断言 + 报告） |
+| `cb025b6` | N14i | §24.10 节点级模型路由（local/cheap/quality，隐私优先） |
+| `a6f1aff` | N14j | §24.1 节点级记忆（四级作用域 + store 协议 + 注入/写回） |
+| `a96d03d` | N14k | §24.2 知识检索（分块/排序/引用/预算 + AI 节点注入） |
+| `6e3fa23` | N14l | §24.6a/b 拓扑模板（评审回环 + supervisor） |
+| `5b58642` | N14m | §24.12 AI 节点注入块未信任中和 |
+| `a215a69` | N3 | §5.5 能力包契约（permissions / schema 版本 / context_budget） |
+
+**盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。
