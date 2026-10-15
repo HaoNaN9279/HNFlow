@@ -4,8 +4,8 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "53be8a8",
-  "commit": null,
-  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树。",
+  "commit": "a6f1aff",
+  "commit_note": "已提交 a6f1aff",
   "steps": [
     { "id": "S1", "name": "[A] workflow/memory.py（策略/插值/块格式化/store 协议 + InMemory + async 助手）", "status": "completed" },
     { "id": "S2", "name": "[A] executors/ai.py 接入 params.memory（读注入 + 写回 + 失败告警）", "status": "completed" },

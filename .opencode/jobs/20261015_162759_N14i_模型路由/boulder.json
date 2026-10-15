@@ -4,8 +4,8 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "53be8a8",
-  "commit": null,
-  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树。",
+  "commit": "cb025b6",
+  "commit_note": "已提交 cb025b6",
   "steps": [
     { "id": "S1", "name": "[A] workflow/routing.py（parse_routing_policy / model_infos / select_model）", "status": "completed" },
     { "id": "S2", "name": "[A] executors/ai.py 接入 params.model_policy → SubagentConfig.model（require_local 失败 loud）", "status": "completed" },

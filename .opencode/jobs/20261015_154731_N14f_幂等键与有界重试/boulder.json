@@ -4,8 +4,8 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "53be8a8",
-  "commit": null,
-  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树，待用户批准后再提交。",
+  "commit": "7cf2a5f",
+  "commit_note": "已提交 7cf2a5f",
   "steps": [
     { "id": "S1", "name": "[A] workflow/reliability.py（parse_retry_policy / is_retryable_exception / should_retry / idempotency_key / resolve_idempotency_key）", "status": "completed" },
     { "id": "S2", "name": "[A] compiler：CompileContext.idempotent_by_type + _validate_retry + _build_state_schema(__retry) + _make_node_fn 有界重试/幂等键注入", "status": "completed" },

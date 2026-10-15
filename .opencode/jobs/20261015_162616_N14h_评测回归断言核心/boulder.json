@@ -4,8 +4,8 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "53be8a8",
-  "commit": null,
-  "commit_note": "未提交——全局规则要求「除非用户明确要求，否则绝不提交代码」；改动留在工作树。",
+  "commit": "55602bb",
+  "commit_note": "已提交 55602bb",
   "steps": [
     { "id": "S1", "name": "[A] workflow/evals.py（extract_node_outputs / NodeAssertion / evaluate / report / suite）", "status": "completed" },
     { "id": "S2", "name": "测试 tests/test_workflow_evals.py（30 条）+ ruff", "status": "completed" },
