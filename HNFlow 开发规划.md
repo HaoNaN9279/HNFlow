@@ -99,8 +99,8 @@
 | N10 | 人机共享工作区 + 预览 undo | §21 | 状态同步/抢占、不可逆操作确认、应用原生 undo | ✅ P1 切片 6：预览/审批/undo（N10）+ 人机共享治理（N10b：presence 探测 / 准入决策 / 抢占声明 / 冲突检测 / 归属可见性）全部落地 |
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
-| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ◐ 已落地 并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）；共享变量（`wf:shared:*` 黑板）延后（与 §24.6a 协作原语合并） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ⬜ P2 |
+| N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 协作原语：共享工作区黑板）已落地；其余分批 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -127,6 +127,8 @@
 > **N12 切片（容错编排，`flow:try`）**：新增流程控制节点 `flow:try`，**复用 `nested:subworkflow` 的子图展开机制**承载受保护 body（`params.subworkflow`，inline/template + `mapping`）。try 节点 fn `ainvoke` body 子图：成功→按 mapping 回写 `out`、`error=False`；抛错→写 `error`(bool)/`error_message`/`error_type` 并**继续**（run 不炸），由下游已有 `flow:if` 读 `error` 分流到 catch 分支（**不新增条件边机制**）；`on_error="fail"` 恢复今天的上抛行为。**控制流信号永不吞**：`_control_flow_should_propagate` 排除 `GraphInterrupt`（HITL 挂起）与 `GraphBubbleUp` 其他子类，`GraphRecursionError` 默认上抛（`catch_recursion=true` 可选捕获）；`CancelledError` 属 `BaseException` 天然不捕。可选 `params.finally_subworkflow` 在 `finally:` 块执行（成败都跑；无输入注入，侧效应收尾）。**不改条件边/事件/checkpointer 主路径**；无迁移、无新表、无新配置、无新依赖；前端同步 `types.ts`/`node-catalog.ts`（+`flow:try`）。测试：新增 `tests/test_workflow_try.py`（12 条：分类 4 + 成功/捕获/fail 上抛/中断不吞/递归默认上抛/递归可选捕获/finally 成败都跑/缺 spec 编译错）。全量离线 A/B 对拍失败集合逐条一致（77），+12 passed。已知边界：body 内 `require_approval`/`human:task` 沿用子图限制（暂不支持）；body 节点 SSE 事件不发（depth>0）。「平铺区域 + 显式 `flow:finally` 节点」列为后续增量。
 >
 > **N13 切片（并发治理，合并规则 + 资源锁）**：① **Fan-in 合并规则**——`_make_node_fn` 此前用 `dict[target_port]=key` 建输入映射，**同端口多入边后者覆盖前者、静默丢失并行分支产物**；改为 `dict[port, list[key]]` 并按节点 `params.merge`（`{port: overwrite|array|error}`，默认 `overwrite`=最后边胜）合并：`array` 按边顺序收集该端口**已产出**的上游值成 list（未产出跳过、全未产出=`[]`），`error` 在 >1 个非 None 源时抛 `WorkflowExecutionError`。读侧小改、**不动 state schema/无迁移**；编译期校验策略与端口名。② **节点级资源锁**——节点 `params.resource_lock`(str|list) + `resource_lock_timeout`（默认 60）经 `_register` 统一包装**所有**声明锁的节点，复用 N8 `locks/file_lock.py` 的 `resource_lock`/`acquire_many` 把整段执行置于**跨进程**锁下（GPU/项目文件/license 串行化）。因 N8 in-process 可重入是 `threading.RLock`（acquire/release 必须同线程）且阻塞获取不能在事件循环上跑，采用**「锁持有线程 + 握手」**：daemon 线程内 `with lock:` 获取并等 `release` 事件，事件循环只 `await` 握手；超时→带锁名的 `WorkflowExecutionError`；`finally` 置 `release` 保证异常/取消都释放。**无迁移、无新表、无新配置、无新依赖**；前端零改动（参数级）。测试：新增 `tests/test_workflow_concurrency.py`（9 条：overwrite/array 保序/array 跳过未产出/error 冲突/非法端口/非法策略、锁串行化/超时/非法锁名）。全量离线 A/B 对拍失败集合逐条一致（77），+9 passed。**共享变量（`wf:shared:*` 黑板）延后**：需 workflow 级共享通道 + reducer（并发写同一通道否则 `InvalidUpdateError`）+ 写策略，与 §24.6a 协作原语 / N14 #6a 强重叠，应一起设计。
+>
+> **N14 切片A（协作原语：共享工作区/黑板）**：§24.6a 的共享变量地基落地（承接 N13 延后项）。新增 `data:shared` 节点（`params.operation: read|write|append` + `params.name`）读写 **workflow 级共享通道 `wf:shared:<name>`**；写策略在 workflow 顶层 **`metadata.shared: {name: overwrite|array|conflict}`**（默认 `overwrite`）：`overwrite` 用默认 LastValue 通道（**跨步覆盖、同一 super-step 并行同写→LangGraph `InvalidUpdateError` 即冲突报错**），`array` 给通道挂 **reducer**（`_shared_array_reducer`，并行 append 合并成列表；已用测试钉住 LangGraph 动态 TypedDict 的 `Annotated` reducer 生效），`conflict` 走默认。读写经保留结果键 `__shared_writes` 由 `_make_node_fn` 提升到共享通道；`_build_state_schema` 按节点引用汇总声明共享通道。**无迁移、无新表、无新配置、无新依赖**；前端接入目录（`types.ts`/`node-catalog.ts`，计数 25→26 / data 6→7）；`build_default_registry` 21 项。测试：新增 `tests/test_workflow_shared_workspace.py`（8 条：往返/未初始化 None/array 并行合并/overwrite 顺序覆盖/overwrite 并行冲突/非法 operation/非法名/非法策略）。全量离线 A/B 对拍：失败集合一致（77 平台族 + 1 个既有**时序 flake** `test_notification_timeout_is_one_shared_budget`，单跑 3/3 过，与本改动无关），+8 passed。**§24.6a 其余（有界评审回环 / 受控动态 handoff）与 §24.5 自主度预算列为后续增量**（§24.5 需先补 subagent 预算管道：token/tool_calls 现无 per-node 通道）。
 
 > 注：N2（LLM 中间层）与 N1（工具网关）是上层一切能力的地基。建议 **N2/N1 最小版并入 P0**，完整 provider/适配器随用随扩。
 
@@ -182,7 +184,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ⬜ 未开始 |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ◐ 切片A（协作原语：共享工作区黑板）已落地 |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ⬜ 未开始 |
 
 ---

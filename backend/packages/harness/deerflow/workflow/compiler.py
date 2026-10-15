@@ -47,10 +47,11 @@ import copy
 import hashlib
 import inspect
 import json
+import re
 import threading
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, cast
+from typing import Annotated, Any, cast
 
 from langgraph.config import get_config  # type: ignore[import-untyped]
 from langgraph.errors import GraphBubbleUp, GraphInterrupt, GraphRecursionError
@@ -285,6 +286,7 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
     that accumulates each round's body output.
     """
     fields: dict[str, Any] = {}
+    shared_policies: dict[str, str] = def_.metadata.shared or {}
     for node in def_.nodes:
         for port in node.outputs:
             fields[f"wf:{node.id}:{port.name}"] = Any
@@ -293,6 +295,15 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             loop_ports = {port.name for port in node.outputs}
             if "results" in loop_ports or "last" in loop_ports:
                 fields[f"wf:{node.id}:__results"] = Any
+        if node.type == NodeType.DATA_SHARED:
+            # N14 shared workspace: declare the ``wf:shared:<name>`` channel an
+            # ``array``-policy variable needs a reducer for (parallel appends
+            # merge instead of colliding); other policies use the default
+            # LastValue channel (overwrite across steps, conflict within one).
+            shared_name = node.params.get("name")
+            if isinstance(shared_name, str) and shared_name:
+                shared_key = f"{SHARED_CHANNEL_PREFIX}{shared_name}"
+                fields[shared_key] = Annotated[list, _shared_array_reducer] if shared_policies.get(shared_name, "overwrite") == "array" else Any
         if node.type == NodeType.AI_LLM_AGENT:
             # Reserved observability channel: the sub-agent's aggregated token
             # usage, lifted from the executor result's reserved key by
@@ -506,6 +517,15 @@ def _make_node_fn(
             token_usage = result.get("__workflow_token_usage")
             if isinstance(token_usage, dict):
                 outputs[f"wf:{node.id}:__token_usage"] = token_usage
+
+        # N14 shared workspace: an executor may request writes to shared
+        # variables through the reserved ``__shared_writes`` result key; lift
+        # each onto its ``wf:shared:<name>`` channel (declared in
+        # ``_build_state_schema``, reducer attached for ``array`` policy).
+        shared_writes = result.get("__shared_writes")
+        if isinstance(shared_writes, dict):
+            for shared_name, shared_value in shared_writes.items():
+                outputs[f"{SHARED_CHANNEL_PREFIX}{shared_name}"] = shared_value
 
         return outputs
 
@@ -1066,6 +1086,48 @@ def _validate_approval_nodes(def_: WorkflowDefinition, ctx: CompileContext) -> N
 #: Fan-in merge policies accepted by ``params.merge`` (N13).
 _MERGE_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "error"})
 
+#: Shared-workspace (N14) vocabulary: variable-name grammar + write policies.
+SHARED_CHANNEL_PREFIX = "wf:shared:"
+_SHARED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+_SHARED_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "conflict"})
+
+
+def _shared_array_reducer(current: Any, update: Any) -> list[Any]:
+    """Reducer for an ``array`` shared variable: concatenate into one list.
+
+    LangGraph hands this ``(existing, incoming)``; either side may be a scalar
+    (a single writer) or a list (a merged batch), and ``None``/missing counts as
+    empty.  Never raises on scalar input, so one writer and a parallel burst go
+    through the same reducer.
+    """
+    base = list(current) if isinstance(current, list) else ([] if current is None else [current])
+    extra = list(update) if isinstance(update, list) else [update]
+    return base + extra
+
+
+def _validate_shared_nodes(def_: WorkflowDefinition) -> None:
+    """Compile-time validation for the N14 shared workspace.
+
+    Checks the global ``metadata.shared`` policy map and every ``data:shared``
+    node's ``operation`` / ``name``.
+    """
+    for name, policy in (def_.metadata.shared or {}).items():
+        if not isinstance(name, str) or not _SHARED_NAME_PATTERN.match(name):
+            raise WorkflowCompileError(f"metadata.shared: invalid shared variable name {name!r}; expected {_SHARED_NAME_PATTERN.pattern!r}")
+        if policy not in _SHARED_POLICIES:
+            raise WorkflowCompileError(f"metadata.shared['{name}'] must be one of {sorted(_SHARED_POLICIES)}, got {policy!r}")
+
+    for node in def_.nodes:
+        if node.type != NodeType.DATA_SHARED:
+            continue
+        params = node.params or {}
+        operation = params.get("operation")
+        if operation not in ("read", "write", "append"):
+            raise WorkflowCompileError(f"node '{node.id}': data:shared requires params.operation in ('read', 'write', 'append'), got {operation!r}")
+        name = params.get("name")
+        if not isinstance(name, str) or not _SHARED_NAME_PATTERN.match(name):
+            raise WorkflowCompileError(f"node '{node.id}': data:shared requires a valid params.name; got {name!r}")
+
 
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
@@ -1266,6 +1328,7 @@ def _compile_impl(
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
     _validate_approval_nodes(def_, ctx)
     _validate_concurrency_params(def_)
+    _validate_shared_nodes(def_)
 
     # ── 2. Build dynamic state schema ──────────────────────────────────
     state_schema = _build_state_schema(def_)

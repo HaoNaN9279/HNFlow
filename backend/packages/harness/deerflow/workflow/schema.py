@@ -91,6 +91,7 @@ class NodeType(StrEnum):
     DATA_CONVERT = "data:convert"
     DATA_FILE = "data:file"
     DATA_ASSET = "data:asset"
+    DATA_SHARED = "data:shared"
     DATA_JSON = "data:json"
     DATA_REGEX = "data:regex"
 
@@ -186,6 +187,10 @@ class WorkflowMetadata(BaseModel):
     # 全量能力快照（§5.6）：一次运行的可复现依据。保存时固化，包含能力包
     # ``guid@v<version>``、模型 id/版本、采样参数等。None = 尚未固化。
     lockfile: dict[str, Any] | None = None
+    # N14 共享工作区（黑板）：共享变量名 → 写策略 ``overwrite`` | ``array`` |
+    # ``conflict``（默认 overwrite）。声明是全局的，避免同一 ``wf:shared:<name>``
+    # 通道出现两种语义。None = 无共享变量。
+    shared: dict[str, str] | None = None
 
 
 class WorkflowDefinition(BaseModel):

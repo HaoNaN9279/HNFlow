@@ -41,6 +41,39 @@ def exec_assign(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[s
     return {"out": inputs.get("in")}
 
 
+# ── data:shared ──────────────────────────────────────────────────────────────
+
+#: Reserved executor-result key: the compiler lifts each entry onto the
+#: ``wf:shared:<name>`` channel (N14 shared workspace).
+SHARED_WRITES_RESULT_KEY = "__shared_writes"
+
+
+def exec_shared(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """Read / write / append a workflow-level shared variable (N14 blackboard).
+
+    ``params.operation`` is ``read`` / ``write`` / ``append`` and ``params.name``
+    names the variable.  A ``read`` exposes the current value on ``out``.  A
+    ``write`` / ``append`` puts the value into the reserved ``__shared_writes``
+    result key (lifted by the compiler onto ``wf:shared:<name>``); the value is
+    ``params.value`` when that key is present, else the ``in`` input port.  The
+    variable's ``array`` / ``overwrite`` / ``conflict`` policy is applied by the
+    channel (reducer vs default), not here.
+    """
+    operation = params.get("operation")
+    name = params.get("name")
+    if operation not in ("read", "write", "append"):
+        raise WorkflowExecutionError(f"data:shared: unsupported operation {operation!r}")
+    if not isinstance(name, str) or not name:
+        raise WorkflowExecutionError("data:shared: missing required param 'name'")
+
+    shared_key = f"wf:shared:{name}"
+    if operation == "read":
+        return {"out": runtime.state.get(shared_key)}
+
+    value = params["value"] if "value" in params else inputs.get("in")
+    return {"out": value, SHARED_WRITES_RESULT_KEY: {name: value}}
+
+
 # ── data:convert ─────────────────────────────────────────────────────────────
 
 

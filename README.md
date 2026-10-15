@@ -244,7 +244,7 @@ make down       # 停止并移除容器
 | 概念 | 说明 |
 | --- | --- |
 | **工作流（Workflow）** | 节点与连线组成的有向无环图，可独立执行、可嵌套调用；定义即 `WorkflowDefinition` 纯 JSON |
-| **节点（Node）** | 最小执行单元，含输入/输出端口、参数、能力组声明；类型分 `flow`（start/end/if/switch/loop/parallel/wait）、`data`（assign/convert/file/json/regEx）、`tool`（bash/http/notify/log）、`ai`（llm_agent）、`human`（human_task）、`nested`（subworkflow） |
+| **节点（Node）** | 最小执行单元，含输入/输出端口、参数、能力组声明；类型分 `flow`（start/end/if/switch/loop/parallel/wait）、`data`（assign/convert/file/json/regEx/shared）、`tool`（bash/http/notify/log）、`ai`（llm_agent）、`human`（human_task）、`nested`（subworkflow） |
 | **端口（Port）** | 数据输入/输出接口，类型用枚举（data/file/bool/enum），连线时做类型校验；节点间仅通过端口传递数据 |
 | **功能组（Capability Group）** | 按领域划分的能力声明集合（GUID + 语义版本 + 不可变版本目录），AI 节点的能力供给来源 |
 | **人工任务（HumanTask）** | 挂起工作流等待人工处理的节点，支持提交/跳过/打回重交，状态机 `pending → submitted / skipped / reopened / expired` |

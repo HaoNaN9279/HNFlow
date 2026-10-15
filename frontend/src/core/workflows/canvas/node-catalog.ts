@@ -141,6 +141,16 @@ export const NODE_CATALOG = [
       "Inspect / import / export / convert a file as an asset (host ↔ sandbox).",
   },
   {
+    type: "data:shared",
+    label: "Shared",
+    category: "data",
+    defaultInputs: [{ name: "in", type: "data", required: false }],
+    defaultOutputs: [{ name: "out", type: "data", required: false }],
+    defaultParams: { operation: "read", name: "" },
+    description:
+      "Read / write / append a workflow-level shared variable (blackboard).",
+  },
+  {
     type: "data:file",
     label: "File",
     category: "data",

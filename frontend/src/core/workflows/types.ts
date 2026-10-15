@@ -34,6 +34,7 @@ export const NODE_TYPES = [
   "data:assign",
   "data:convert",
   "data:asset",
+  "data:shared",
   "data:file",
   "data:json",
   "data:regex",
