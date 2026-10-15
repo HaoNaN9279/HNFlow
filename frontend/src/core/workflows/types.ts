@@ -29,6 +29,7 @@ export const NODE_TYPES = [
   "flow:loop",
   "flow:parallel",
   "flow:wait",
+  "flow:try",
   // Data transformation
   "data:assign",
   "data:convert",

@@ -10,9 +10,9 @@ import {
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
 describe("node catalog", () => {
-  test("covers exactly the 24 backend node types", () => {
+  test("covers exactly the 25 backend node types", () => {
     const catalog = getNodeCatalog();
-    expect(catalog).toHaveLength(24);
+    expect(catalog).toHaveLength(25);
     expect(catalog.map((e) => e.type).sort()).toEqual([...NODE_TYPES].sort());
   });
 
@@ -32,10 +32,10 @@ describe("node catalog", () => {
     }
   });
 
-  test("category counts match the backend split (7 flow / 6 data / 4 tool / 4 app + singles)", () => {
+  test("category counts match the backend split (8 flow / 6 data / 4 tool / 4 app + singles)", () => {
     const byCategory = (category: string) =>
       getNodeCatalog().filter((e) => e.category === category).length;
-    expect(byCategory("flow")).toBe(7);
+    expect(byCategory("flow")).toBe(8);
     expect(byCategory("data")).toBe(6);
     expect(byCategory("tool")).toBe(4);
     expect(byCategory("ai")).toBe(1);

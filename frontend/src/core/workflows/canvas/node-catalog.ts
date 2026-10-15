@@ -78,6 +78,20 @@ export const NODE_CATALOG = [
       "Repeated execution — emits the iteration counter, the collected per-round results, and the last one.",
   },
   {
+    type: "flow:try",
+    label: "Try",
+    category: "flow",
+    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultOutputs: [
+      { name: "out", type: "data", required: false },
+      { name: "error", type: "bool", required: false },
+      { name: "error_message", type: "data", required: false },
+      { name: "error_type", type: "data", required: false },
+    ],
+    description:
+      "Protected sub-workflow (try/catch) — a body failure is reported on error ports instead of aborting the run.",
+  },
+  {
     type: "flow:parallel",
     label: "Parallel",
     category: "flow",

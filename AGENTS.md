@@ -17,7 +17,7 @@ HNFlow 是**图驱动的确定性编排引擎**。它以 DeerFlow harness（Lang
 
 工作流图由节点与边构成，节点按类型分六类：
 
-- **流程控制**（`flow`）：start / end / if / switch / loop / parallel / wait。
+- **流程控制**（`flow`）：start / end / if / switch / loop / parallel / wait / try（try 为 N12 容错容器）。
 - **数据操作**（`data`）：assign / convert / file / json / regEx。
 - **工具调用**（`tool`）：bash / http / notify / log——bash 必须走 sandbox，禁止直连宿主 shell。
 - **AI 节点**（`ai`）：llm_agent，三层提示词组装 + 受限 SubagentExecutor，非自由 ReAct loop。
@@ -69,10 +69,10 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 
 - `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`Port`、`Node`、`Edge`、`WorkflowDefinition`。`PortType` 含 `data/file/bool/enum/number/array/record`（严格同类型匹配）。`Node` 含 `agent_name` 主身份绑定（`None` = 默认 lead 身份）与 `capability_groups`（能力供给组，allowed-tools 并集 + rules 并入 prompt）。`WorkflowMetadata` 含 `resolved_groups`、`pending_review_nodes` 与 `lockfile`（全量能力快照）。`id` 校验为稳定标识（uuid/slug），禁止路径字符。`collect_resolved_groups`（解析）+ `validate_capability_groups`（存在性校验）为纯函数。
 - `workflow_io.py` — 定义校验器 + JSON 序列化：`validate_definition`（无环 DFS、单起点单终点、端口类型匹配，报错携带完整环路路径 `A→B→C→A`）、`serialize`/`deserialize`（schema version + `register_migration`/`_migrate_schema` 逐版本迁移链）。纯函数，前端画布复用同一套端口匹配规则。
-- `compiler.py` — `compile_definition(def, context) -> CompiledStateGraph`：节点映射为 LangGraph 节点函数，边映射为普通边/条件边；端口→state 字段绑定（`wf:<node_id>:<port>`）；每个节点函数被包一层生命周期事件发射（`wf:node:started|completed|failed` 自定义事件，携带 `depth`，顶层为 0）；子图展开（嵌套 StateGraph，边界 `_copy_on_write` 浅复制）；`flow:loop` 计数环 + C5 正宗版（节点声明 `results`/`last` 时逐轮聚合 body 产物，`params.continue_on` 为可选的 data 条件早退，`iterations` 仍是硬上限）；编译产物按 definition 哈希缓存，变更自动失效。
+- `compiler.py` — `compile_definition(def, context) -> CompiledStateGraph`：节点映射为 LangGraph 节点函数，边映射为普通边/条件边；端口→state 字段绑定（`wf:<node_id>:<port>`）；每个节点函数被包一层生命周期事件发射（`wf:node:started|completed|failed` 自定义事件，携带 `depth`，顶层为 0）；子图展开（嵌套 StateGraph，边界 `_copy_on_write` 浅复制）；`flow:loop` 计数环 + C5 正宗版（节点声明 `results`/`last` 时逐轮聚合 body 产物，`params.continue_on` 为可选的 data 条件早退，`iterations` 仍是硬上限）；`flow:try`（N12）把 `params.subworkflow` 展开为受保护子图，捕获 body 失败（**排除** `GraphInterrupt`/`GraphBubbleUp` 等 LangGraph 控制流信号）写成 `error`/`error_message`/`error_type` 端口供下游 `flow:if` 分流到 catch 分支，可选 `finally_subworkflow` 在 `finally` 块执行；编译产物按 definition 哈希缓存，变更自动失效。
 - `worker.py` — 编排入口：接收 definition id + 输入参数，调 compiler 编译，`graph.astream(..., stream_mode=["updates","custom"])` 执行；消费 compiler 的节点级自定义事件（仅 `depth == 0`）转 `wf:node:started|completed|failed` 到 SSE bridge + run events，`updates` 分块提供无 checkpointer 路径的 run.end 兜底；复用 run 生命周期（RunRecord、checkpointer、run events）。
 - `executors/` — 节点执行器，统一签名 `executor(runtime, params, inputs) -> outputs`：
-  - `flow.py` — if/switch/wait 流程控制（loop/parallel 为编译器原生：loop 输出 `iteration`/`out` + C5 的 `results`/`last`）。
+  - `flow.py` — if/switch/wait 流程控制（loop/parallel/try 为编译器原生：loop 输出 `iteration`/`out` + C5 的 `results`/`last`；try 展开 `params.subworkflow` body 子图并捕获失败到 `error`/`error_message`/`error_type` 端口，可选 `finally_subworkflow`）。
   - `data.py` — assign/convert/file/json/regEx 数据操作。
   - `asset.py` — `data:asset` 资产节点（N9）：inspect（读指纹）/ import（宿主→沙箱）/ export（沙箱→宿主）/ convert（声明式转换器），宿主访问受 `assets.roots` 白名单约束。
   - `tool.py` — bash/http/log/notify 工具节点；bash 必须走 sandbox（`Sandbox.execute_command`），禁止直连宿主 shell；notify 经 `runtime.context["notifier"]` 钩子（缺省回落日志）发出本机通知。

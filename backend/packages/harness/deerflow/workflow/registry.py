@@ -181,8 +181,9 @@ def _build_placeholder_registry() -> ExecutorRegistry:
     """Build a skeleton registry with placeholder executors (internal).
 
     Every ``NodeType`` that requires an executor (everything except
-    the four control-flow types handled natively by the compiler:
-    ``flow:start``, ``flow:end``, ``flow:loop``, ``flow:parallel``)
+    the control-flow types handled natively by the compiler:
+    ``flow:start``, ``flow:end``, ``flow:loop``, ``flow:parallel``,
+    ``flow:try``)
     gets a placeholder that raises ``NotImplementedError``.
 
     The public entry point is :func:`deerflow.workflow.executors.build_default_registry`

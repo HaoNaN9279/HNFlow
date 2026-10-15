@@ -24,6 +24,13 @@ Key constraints:
   value there exits the loop, bounded by ``iterations``).
 - ``flow:parallel`` compiles to a pass-through node — multiple regular
   out edges produce LangGraph native fan-out parallelism.
+- ``flow:try`` compiles natively (no executor): it expands ``params.subworkflow``
+  (inline/template) as a child graph via the ``nested:subworkflow`` machinery,
+  catches the body's failure (except LangGraph control-flow signals such as
+  ``GraphInterrupt``), and writes ``error`` / ``error_message`` / ``error_type``
+  so a downstream ``flow:if`` can route to a catch branch.  Optional
+  ``params.finally_subworkflow`` runs in a ``finally`` block; ``on_error="fail"``
+  restores abort-the-run behavior.
 - Compile cache keys combine the definition hash *and* the set of
   registered ``NodeType`` values from ``CompileContext.executors``.
   Two calls with the same definition but different executor sets
@@ -45,6 +52,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from langgraph.config import get_config  # type: ignore[import-untyped]
+from langgraph.errors import GraphBubbleUp, GraphInterrupt, GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -623,6 +631,119 @@ def _make_subworkflow_node_fn(
     return _node_fn
 
 
+def _control_flow_should_propagate(exc: BaseException, *, catch_recursion: bool) -> bool:
+    """Return ``True`` when *exc* must escape a ``flow:try`` body unchanged.
+
+    LangGraph signals control flow through ``GraphBubbleUp`` subclasses that use
+    the exception channel as ordinary transport: ``GraphInterrupt`` carries a
+    human-in-the-loop suspension and ``GraphRecursionError`` marks the recursion
+    limit.  Swallowing either would break suspension/resume or hide a runaway
+    graph, so they are never caught.  ``GraphRecursionError`` is the one
+    exception — an author who opts in with ``catch_recursion=True`` may treat
+    hitting the limit as a catchable failure.  ``asyncio.CancelledError`` is
+    deliberately absent: it derives from ``BaseException`` and never reaches an
+    ``except Exception`` clause.
+    """
+    if isinstance(exc, GraphInterrupt):
+        return True
+    if isinstance(exc, GraphRecursionError):
+        return not catch_recursion
+    if isinstance(exc, GraphBubbleUp):
+        return True  # any other LangGraph control-flow signal (e.g. ParentCommand)
+    return False
+
+
+def _make_try_node_fn(
+    node: Node,
+    body: CompiledStateGraph,
+    body_def: WorkflowDefinition,
+    body_start_id: str,
+    body_end_id: str,
+    finally_graph: CompiledStateGraph | None,
+    incoming_edges: list[Edge],
+) -> Callable[..., Any]:
+    """Build the parent-graph node fn for a ``flow:try`` node (N12).
+
+    The protected body is a sub-workflow (``params.subworkflow``, inline or
+    template) expanded by :func:`_expand_subworkflow` — the same machinery
+    ``nested:subworkflow`` uses, so the body runs in an isolated child graph.
+    The node invokes the body and:
+
+    - on success, writes the mapped body outputs to their parent ports and
+      ``error=False``;
+    - on a caught failure, writes ``error=True`` / ``error_message`` /
+      ``error_type`` and **continues** (the run does not abort), so a downstream
+      ``flow:if`` can route to a catch branch;
+    - ``on_error="fail"`` re-raises instead (today's abort-the-run behavior).
+
+    LangGraph control-flow exceptions always propagate — see
+    :func:`_control_flow_should_propagate`.
+
+    An optional ``params.finally_subworkflow`` runs in a ``finally`` block, so it
+    executes whether the body succeeded or failed.  It receives no injected
+    inputs (a side-effect-only cleanup / notification step); its own outputs are
+    discarded.
+    """
+    from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    input_key_map: dict[str, str] = {}
+    for edge in incoming_edges:
+        input_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+
+    mapping = node.params.get("mapping") or {}
+    map_inputs = (mapping or {}).get("inputs") or {}
+    map_outputs = (mapping or {}).get("outputs") or {}
+    on_error = node.params.get("on_error", "catch")
+    catch_recursion = bool(node.params.get("catch_recursion", False))
+
+    async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
+        inputs: dict[str, Any] = {}
+        for p in node.inputs:
+            state_key = input_key_map.get(p.name, f"wf:{node.id}:{p.name}")
+            inputs[p.name] = state.get(state_key)
+
+        # Build the body's initial state — same mapping semantics as
+        # ``_make_subworkflow_node_fn`` (wf: reference / input port / literal),
+        # every value crossing through ``_copy_on_write``.
+        sub_input: dict[str, Any] = {}
+        for child_port, parent_ref in map_inputs.items():
+            if isinstance(parent_ref, str) and parent_ref.startswith("wf:"):
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(state.get(parent_ref))
+            elif isinstance(parent_ref, str) and parent_ref in inputs:
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(inputs[parent_ref])
+            else:
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(parent_ref)
+
+        try:
+            config = get_config()
+        except Exception:
+            config = {}
+
+        outputs: dict[str, Any] = {}
+        try:
+            result = await body.ainvoke(sub_input, config)
+        except Exception as exc:  # noqa: BLE001 — catching is the whole point
+            if _control_flow_should_propagate(exc, catch_recursion=catch_recursion):
+                raise
+            if on_error == "fail":
+                if isinstance(exc, WorkflowExecutionError):
+                    raise
+                raise WorkflowExecutionError(f"node '{node.id}': try body failed: {exc}") from exc
+            outputs[f"wf:{node.id}:error"] = True
+            outputs[f"wf:{node.id}:error_message"] = str(exc)
+            outputs[f"wf:{node.id}:error_type"] = type(exc).__name__
+        else:
+            for child_port, parent_port in map_outputs.items():
+                outputs[f"wf:{node.id}:{parent_port}"] = result.get(f"wf:{body_end_id}:{child_port}")
+            outputs[f"wf:{node.id}:error"] = False
+        finally:
+            if finally_graph is not None:
+                await finally_graph.ainvoke({}, config)
+        return outputs
+
+    return _node_fn
+
+
 def _make_delegate_node_fn(
     node: Node,
     child_graph: CompiledStateGraph,
@@ -1140,6 +1261,31 @@ def _compile_impl(
             # FLOW_WAIT is a normal node that gets resolved via executor
             # lookup (T5-3 registers the actual wait executor).
             pass
+
+        if node.type == NodeType.FLOW_TRY:
+            # N12: a protected sub-workflow body.  Reuse the nested-subworkflow
+            # expansion machinery (inline/template spec + mapping); the node fn
+            # catches the body's failure and surfaces it on ``error`` ports so a
+            # downstream ``flow:if`` can route to a catch branch.  Compiler-native
+            # (no registry executor), exactly like ``flow:loop`` / ``flow:parallel``.
+            if parse_subworkflow_spec(node) is None:
+                raise WorkflowCompileError(f"node '{node.id}': flow:try requires a 'subworkflow' body spec")
+            body_graph, body_def = _expand_subworkflow(node, ctx, depth=depth, visiting=visiting, chain_path=chain_path)
+            body_start_id = next((n.id for n in body_def.nodes if n.type == NodeType.FLOW_START), "")
+            body_end_id = next((n.id for n in body_def.nodes if n.type == NodeType.FLOW_END), "")
+
+            finally_graph: CompiledStateGraph | None = None
+            finally_spec = node.params.get("finally_subworkflow")
+            if finally_spec is not None:
+                # Synthesize an inline subworkflow node so the finally block rides
+                # the same expansion + mapping-validation path.  No mapping:
+                # finally is a side-effect-only cleanup step.
+                finally_node = Node(id=f"{node.id}__finally", type=NodeType.NESTED_SUBWORKFLOW, params={"subworkflow": finally_spec})
+                finally_graph, _finally_def = _expand_subworkflow(finally_node, ctx, depth=depth, visiting=visiting, chain_path=chain_path)
+
+            node_fn = _make_try_node_fn(node, body_graph, body_def, body_start_id, body_end_id, finally_graph, incoming_edges.get(node.id, []))
+            _register(node.id, node_fn)
+            continue
 
         if node.type == NodeType.NESTED_SUBWORKFLOW:
             spec = parse_subworkflow_spec(node)
