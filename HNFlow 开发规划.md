@@ -100,7 +100,7 @@
 | N11 | 环境探测 / 备份迁移 | §22 | 软件/插件/运行时探测、数据目录规范、备份/导出导入/换机迁移 | ✅ P1 切片 7（环境探测 + 数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部落地 |
 | N12 | 容错编排 | 后续规划 | Try-Catch/Finally 节点、失败降级/回调 | ✅ 已落地（`flow:try`：受保护子工作流 body + `error`/`error_message`/`error_type` 端口 + 可选 `finally_subworkflow`；路由经 `flow:if`；无迁移） |
 | N13 | 并发治理 | 后续规划 | 并行分支合并规则、共享变量、资源锁 | ✅ 已落地：并行分支合并规则（`params.merge`：overwrite/array/error）+ 节点级资源锁（`params.resource_lock`）+ 共享变量（`data:shared` + `wf:shared:*` 黑板 + `metadata.shared` 写策略） |
-| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）+ 切片L（§24.6a/b 拓扑模板）+ 切片M（§24.12 注入防御）+ 切片N（§24.10 运行级预算）+ 切片O（`data:knowledge` 节点）+ 切片P（评测 runner）+ 切片Q（评测 CLI/CI）已落地；N14 各切片主体完成 |
+| N14 | §24 Agent 能力补强 | §24 | 记忆/RAG/上下文策略/结构化输出/自主度/协作/事务/评测/可观测/重放/成本 | ◐ 切片A（§24.6a 共享工作区黑板）+ 切片B（§24.5 自主度预算）+ 切片C（§24.4 结构化输出契约）+ 切片D（§24.9 失败分类）+ 切片E（§24.3 上下文工程策略）+ 切片F（§24.7 幂等键 + 有界节点重试）+ 切片G（§24.11 确定性重放）+ 切片H（§24.8 评测核心）+ 切片I（§24.10 模型路由）+ 切片J（§24.1 节点级记忆）+ 切片K（§24.2 知识检索）+ 切片L（§24.6a/b 拓扑模板）+ 切片M（§24.12 注入防御）+ 切片N（§24.10 运行级预算）+ 切片O（`data:knowledge` 节点）+ 切片P（评测 runner）+ 切片Q（评测 CLI/CI）+ 切片R（DeerMem 适配器）已落地；N14 各切片主体完成 |
 | N15 | 安全基线与注入防御 | §24.12 | 注入防御、权限裁决、密钥隔离（低优先级） | ⬜ P3 |
 
 ---
@@ -188,7 +188,7 @@
 | N14g | §24.11 确定性重放 | run 级 record/replay fixture（节点输出粒度）+ 回放执行 + 脱敏；与 lockfile 关联 | ✅ 已落地 |
 | N14h | §24.8 评测/回归 | golden traces + 确定性/语义断言 + runner（可挂能力包导入与定义保存） | ✅ 断言核心 + runner + CI CLI 已落地；能力包导入/定义保存自动挂载待做 |
 | N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ◐ 模型路由（N14i）+ 运行级预算（N14n）已落地；成本报表待做 |
-| N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ◐ 策略/格式化/store 协议 + AI 节点接线已落地；DeerMem 适配器待做 |
+| N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ✅ 策略/格式化/store 协议 + AI 节点接线 + DeerMem 适配器已落地（仅 long_term 作用域） |
 | N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ✅ 纯检索核心 + AI 节点注入 + `data:knowledge` 节点（前端 palette）已落地；向量后端适配器待做 |
 | N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 拓扑模板 builder（评审回环 + supervisor）已落地；画布插入 UI/动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ◐ AI 节点注入块未信任中和已落地；威胁模型/权限裁决深化待做 |
@@ -219,6 +219,8 @@
 > **进度（切片 P：§24.8 评测 runner）**：新增 `deerflow/workflow/eval_runner.py`——`evaluate_replayed_run(definition, fixture, cases, ...)` 把 N14g 回放与 N14h 断言串成 runner：编译定义 → 以 **replay 模式**对 golden fixture 执行（**无真实模型/工具调用**）→ `extract_node_outputs` 抽取 → 逐 case `evaluate_case` → `EvalReport`。可传 `judge`（语义断言）与自定义 `compile_context`；未录制节点默认 **fail-loud**（`on_miss=error`），`live` 可选回退（仅当评测确实想要真实路径）。**诚实取舍**：本切片交付**库级 runner**；**CI 挂载**（能力包导入 / 工作流保存时自动跑 suite）与**金标录制 CLI** 列为后续增量。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_eval_runner.py`（6 条：pass/fail、replay 跳过真实 executor、miss error、miss live 回退、语义 judge）。全量离线 A/B：11129→11135 passed、**失败集合逐条一致**（75）；workflow 套件 1084→1090 passed；ruff 干净。
 >
 > **进度（切片 Q：§24.8 评测 CLI / CI 接入）**：新增 `deerflow/workflow/eval_cli.py`——`python -m deerflow.workflow.eval_cli --definition d.json --fixture f.json --cases c.json [--on-miss error|live] [--json]`：加载序列化定义（`workflow_io.deserialize`）+ 回放夹具（`load_fixture`）+ 用例文件（JSON 列表 → `EvalCase`/`NodeAssertion`），经 `evaluate_replayed_run` 回放执行后打印报告。**退出码 `0`（全过）/`1`（有失败）/`2`（输入加载或运行失败）可进 CI**。**诚实取舍**：本切片交付 **CLI**（可挂 CI）；**「能力包导入 / 工作流保存时自动跑 suite」的嵌入式挂载**列为后续增量（需定义持久层钩子）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_eval_cli.py`（4 条：pass→0 / fail→1 / bad inputs→2 / `--json` 输出）。全量离线 A/B：11135→11138 passed、新增 4 条全过；**唯一新增「失败」为既有**时序 flake `test_extension_task_lifecycle::test_budget_exhaustion_mid_hook_logs_a_warning_not_a_traceback`（隔离运行通过、与纯新增模块无关）；workflow 套件 1090→1094 passed；ruff 干净。
+>
+> **进度（切片 R：§24.1 DeerMem `memory_store` 适配器）**：新增 `deerflow/workflow/memory_backends.py::MemoryManagerStore`——把既有 `MemoryManager` 包成 N14j 的 `MemoryStore` 协议：`search(scope, query, limit)` 把 manager 排序后的 facts 映射为 `MemoryRecord`（**仅当后端 `supports_search`**；`NotImplementedError` 降级为空而非抛入节点），`put(scope, text)` 经 manager 的**正常提取管线**（`add_nowait` + `HumanMessage`）排队（不裸追加 fact，故 scope/durability/authority 门照旧生效）。**诚实作用域映射**：DeerMem 是**长期用户/agent 记忆**，故适配器**仅服务 `long_term`**；`session`/`node`/`workflow` 非其模型 → 返回空/不做（需要者自行实现协议），并在 docstring 明写。fact 文本/键读取容错（`fact`/`content`/`text`/`summary` + `id`/`fact_id`）。**部署方**将其注入 `runtime.context["memory_store"]`（worker 注入为可选后续）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_memory_backends.py`（12 条：搜索映射/桶与 top_k 透传/非 long_term 空/不支持搜索空/NotImplemented 空/fact 文本回退/put 排队与默认 thread/非 long_term 与空文本 no-op/supports_search）。全量离线 A/B：11138→11149 passed、新增 12 条全过；**唯一新增「失败」为既有**时序 flake 文件 `test_extension_task_lifecycle.py` 两条（隔离运行通过、与纯新增模块无关）；workflow 套件 1094→1106 passed；ruff 干净。
 
 ---
 
@@ -238,7 +240,7 @@
 | M2 编排成熟 | C5 + N12 + N13 | 循环聚合、容错分支、并行合并可用 | ◐ C5 ✅（聚合 + 条件退出）+ N12 ✅（`flow:try` 容错容器）+ N13 ◐（并行合并 `params.merge` + 资源锁 `params.resource_lock` 已落地；共享变量延后至协作原语） |
 | M3 定位落地 | N4/N5/N6/N7/N8 | 本地软件可编排、长时可触发与恢复 | ◐ N4/N5 切片 1 + N6 切片 2 + N7 切片 3 + N8 切片 4 完成 |
 | M4 资产与协同 | N9/N10/N11 | 资产流转、共享工作区、预览确认与迁移 | ✅ 切片 5（N9 资产建模/往返/转换/契约）+ 切片 6（N10 预览/审批/undo + N10b 人机共享治理）+ 切片 7（N11 环境探测/数据目录规范）+ 切片 8（N11b 备份/导出导入/换机迁移）全部完成 |
-| M5 能力补强 | N14 分批 | 逐项验收 §24 | ✅ 切片A–Q 已落地（各项后续增量见对应进度注） |
+| M5 能力补强 | N14 分批 | 逐项验收 §24 | ✅ 切片A–R 已落地（各项后续增量见对应进度注） |
 | M6 安全基线 | N15 | 注入防御与权限裁决（最低优先级） | ◐ §24.12 注入防御切片M 已落地（AI 节点注入块未信任中和）；威胁模型/权限裁决深化待做 |
 
 ---
@@ -449,5 +451,6 @@
 | `f2a1493` | N14o | §24.2 `data:knowledge` 节点 + 前端 palette |
 | `b3d8c97` | N14p | §24.8 评测 runner（回放 golden + 断言） |
 | `a099128` | N14q | §24.8 评测 CLI（`python -m deerflow.workflow.eval_cli`） |
+| `cdd6cc3` | N14r | §24.1 DeerMem `memory_store` 适配器 |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。
