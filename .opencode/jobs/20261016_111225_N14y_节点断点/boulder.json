@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "91cf636",
-  "commit": "(pending)",
+  "commit": "7bf2519",
   "steps": [
     { "id": "S1", "name": "workflow/breakpoint.py（谓词 / 任务 / 决策 / 挂起）", "status": "completed" },
     { "id": "S2", "name": "compiler 接入（审批门之前）+ _validate_breakpoints", "status": "completed" },
