@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "2dff084",
-  "commit": "(pending)",
+  "commit": "9708d6f",
   "steps": [
     { "id": "S1", "name": "human-tasks.ts：解析/选择器/继续/跳过/列出", "status": "completed" },
     { "id": "S2", "name": "startRun({debugStep}) + WorkflowRunPayload.debug_step", "status": "completed" },
