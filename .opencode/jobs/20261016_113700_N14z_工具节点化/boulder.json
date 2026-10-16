@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "6d6fec3",
-  "commit": "(pending)",
+  "commit": "72c7fd6",
   "steps": [
     { "id": "S1", "name": "schema: NodeType.TOOL_INVOKE", "status": "completed" },
     { "id": "S2", "name": "tool_gateway: provider 作用域解析（additive）", "status": "completed" },
