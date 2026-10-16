@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "c587e7f",
-  "commit": "(pending)",
+  "commit": "2e2208f",
   "steps": [
     { "id": "S1", "name": "api.ts：fetchWorkflowTemplates + WorkflowTemplate", "status": "completed" },
     { "id": "S2", "name": "canvas/templates.ts：纯插入变换（id 重映射 + 位置偏移）", "status": "completed" },

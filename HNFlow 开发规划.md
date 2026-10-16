@@ -190,7 +190,7 @@
 | N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ✅ 模型路由（N14i）+ 运行级预算（N14n）+ 运行成本报表（N14t）已落地 |
 | N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ✅ 策略/格式化/store 协议 + AI 节点接线 + DeerMem 适配器已落地（仅 long_term 作用域） |
 | N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ✅ 纯检索核心 + AI 节点注入 + `data:knowledge` 节点（前端 palette）已落地；向量后端适配器待做 |
-| N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 模板 builder + `GET /api/workflows/templates` 已落地；画布插入 UI/动态 handoff 待做 |
+| N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 模板 builder + 端点 + 画布插入 UI 已落地；动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ◐ AI 节点注入块未信任中和已落地；威胁模型/权限裁决深化待做 |
 | N14n | §24.10 运行级预算 | node/run/workflow 三级预算 + warn/degrade/abort | ✅ 运行级（`metadata.budget` warn/abort）+ 运行成本报表（N14t）已落地；节点级由 autonomy |
 
@@ -227,6 +227,8 @@
 > **进度（切片 T：§24.10 运行成本报表）**：新增 `deerflow/workflow/costs.py`（**纯逻辑**）——`build_pricing_map(models)`（读 `models[*].pricing` 的 `currency`/`input_per_million`/`output_per_million`/`input_cache_hit_per_million`，与 console 计价**同一约定**；无价或**混合币种**一律返回 `{}` = 关闭计价，避免产出非法聚合）、`node_usage_from_state(state)`（只抽 `wf:<node>:__token_usage` 保留通道，容忍非 dict/坏字段）、`token_cost`（**cache-aware**：缓存命中按命中价、其余按未命中价，命中数钳到 `[0, input]`）、`build_run_cost_report(state, models, default_model=..., model_by_node=...)`。Gateway 增 `GET /api/workflows/{id}/runs/{rid}/cost`（`workflow_run_routes.py`，在 state 路由之后）。**诚实取舍**：用量通道只记 token 不记模型，故**按 `default_model` 计价并在每个节点回报所用模型**（与 console 对无 per-model 拆分行情的既有回退一致，`model_by_node` 可覆盖）；未定价模型 `cost: null`（不伪造 0），全未定价则 `total_cost: null`；无 checkpointer → 503；配置读取失败**不 500**（降级为无价报表）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动（`models[*].pricing` 走 extra 字段）。测试：新增 `tests/test_workflow_costs.py`（32 条：定价表/大小写键/零价跳过/坏值容忍/混合币种关闭/取价/缓存计价与钳位/用量抽取 + 报表（默认模型、per-node 覆盖、未定价 null、无价、部分定价、混合币种、空用量、JSON 可序列化）+ 路由（503/404/有价报表/空 checkpoint/配置失败降级））。全量离线 A/B：11155→11187 passed、**失败集合逐条一致**（75）；workflow 套件 1110→1142 passed；ruff check/format 干净。
 
 > **进度（切片 U：§24.8 定义内嵌评测套件 + opt-in 保存门）**：新增 `deerflow/workflow/definition_evals.py`——把声明式 `metadata.evals`（`{fixture: ReplayFixture, cases, require_pass?, on_miss?: error|live, initial_state?}`）解析为 N14g 回放夹具 + N14h 断言，`evaluate_definition_evals` 复用 N14p runner **离线确定性**回放（无真实模型/工具调用），`eval_gate_errors` 产出逐条断言失败文案。`schema.WorkflowMetadata` 增可选 `evals` 字段（additive，旧定义零破坏）。**保存门 opt-in**：Gateway 的创建/更新在 `require_pass: true` 时运行套件，失败即 422 拒绝保存；仅「记录期望」的套件永不阻塞保存；规格非法一律 422（fail-loud，绝不静默关掉门）。Gateway 增 `POST /api/workflows/{definition_id}/evaluate` **按需回放**（无套件返回 `ran:false` 200，规格非法 422，未找到 404）。**诚实取舍**：本切片闭合「定义保存」一侧；**能力包（skill）导入时自动挂载套件列为后续增量**（需 SKILL.md frontmatter 契约）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_definition_evals.py`（35 条：解析/14 种坏形状/有无套件判定/通过/失败文案/未录制 fail-loud/`on_miss=live`/保存门 no-op 与 422/路由 ran-false、有报告、404、require_pass 拦保存、非必需套件可保存）。全量离线 A/B：11187→11222 passed、**失败集合逐条一致**（75）；workflow 套件 1142→1177 passed；ruff check/format 干净。
+
+> **进度（切片 V：§24.6b 画布插入模板）**：前端落地 N14s 端点的消费侧。`core/workflows/api.ts` 增 `fetchWorkflowTemplates()`（把后端序列化的 `definition` 解析回 `WorkflowDefinition`）；新增 `core/workflows/canvas/templates.ts`（**纯变换**）——`uniqueNodeId`（空画布保留可读 id，冲突才加 `-2/-3` 后缀）、`templateAnchor`（显式 position > 现有内容右侧 `maxX + 320` 且与最上节点对齐 > 原点）、`insertTemplateFlow`（**两遍**：先分配全部新 id 再重映射边，边 id 用 `makeEdgeId` 重算，`data.workflow.id` 同步、位置按锚点偏移；**确定性**、不改入参）；`workflow-toolbar.tsx` 增「模板」按钮 + 下拉列表（`enabled: templatesOpen` **按需拉取**，插入后 `markDirty`，失败 toast）；i18n en-US/zh-CN + `types.ts` 增 `workflows.templates.{label,hint,empty,insertFailed,loadFailed}`。**诚实取舍**：本切片只做**插入**（骨架落画布后由用户编辑保存），模板仍是后端权威（`patterns.py`），画布不硬编码拓扑；§24.6b 的**受控动态 handoff** 仍为后续增量。**无后端改动/无新依赖**；顺带修复 N14o 遗留的 `node-catalog.ts` 一行 prettier 格式。测试：新增 `tests/unit/core/workflows/canvas/templates.test.ts`（15 条：id 去重/锚点三态/空画布原样/冲突重映射与 payload 同步/边重映射与条件保留/偏移与显式位置/无存储位置的网格回退/不改入参/确定性）+ 更新工具栏 DOM 测试文案 mock。`pnpm test` 1165→1180 passed；`pnpm check`（eslint + tsc）与 `pnpm format` 全绿。
 
 ---
 
@@ -461,5 +463,6 @@
 | `7b84912` | N14s | §24.6b `GET /api/workflows/templates` 模板端点 |
 | `c8e3ffa` | N14t | §24.10 运行成本报表（`workflow/costs.py` + `GET /runs/{rid}/cost`） |
 | `0e25ab8` | N14u | §24.8 定义内嵌评测套件 + opt-in 保存门（`definition_evals.py` + `POST /workflows/{id}/evaluate`） |
+| （N14v） | N14v | §24.6b 画布「插入模板」（`fetchWorkflowTemplates` + `canvas/templates.ts` + 工具栏下拉） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。

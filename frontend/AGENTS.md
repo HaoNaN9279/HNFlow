@@ -132,6 +132,7 @@ Edit-and-rerun is deliberately latest-turn-only. `core/messages/utils.ts::getLat
 
 ### Interaction Ownership
 
+- `src/components/workspace/workflows/workflow-toolbar.tsx` owns template insertion (N14 §24.6b): it fetches `GET /api/workflows/templates` lazily (only once the picker opens), then inserts through the pure `src/core/workflows/canvas/templates.ts` transform — which remaps colliding node ids, remaps the template's edges onto them, and offsets the layout beside the existing content — and marks the document dirty. Templates are backend-owned skeletons (`workflow/patterns.py`), so the canvas never hardcodes a topology.
 - `src/app/workspace/chats/[thread_id]/page.tsx` owns composer busy-state wiring.
 - `src/app/workspace/chats/[thread_id]/page.tsx` owns branch-from-turn submission and navigation; sidecar `MessageList` instances do not receive the branch action.
 - `src/app/workspace/chats/[thread_id]/page.tsx` and `src/app/workspace/agents/[agent_name]/chats/[thread_id]/page.tsx` own edit-and-rerun submission wiring because the page must preserve normal/custom-agent run context; `MessageList` only detects the latest editable user turn and renders the inline editor.
