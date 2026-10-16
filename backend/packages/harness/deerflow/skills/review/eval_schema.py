@@ -69,20 +69,30 @@ def analyze_eval_manifests(snapshot: dict[str, Any]) -> tuple[dict[str, Any], li
     return aggregate, findings
 
 
-def _classify_manifest(payload: Any) -> dict[str, Any]:
+def iter_manifest_cases(payload: Any) -> tuple[str, list[Any]] | None:
+    """Recognize an eval manifest and return ``(schema, cases)``.
+
+    The single source of truth for the manifest vocabulary: the review analyzer
+    needs the *stats* while the install-time eval gate (§24.8,
+    ``deerflow.skills.eval_gate``) needs the *cases*, and a package must not be
+    readable by one and invisible to the other.
+    """
     if isinstance(payload, dict) and isinstance(payload.get("schema_version"), str):
         cases = payload.get("cases")
-        if isinstance(cases, list):
-            return _case_stats("versioned", cases)
-        return {"schema": "versioned", "valid": True, "case_count": 0, "positive_trigger_cases": 0, "negative_trigger_cases": 0}
-
+        return ("versioned", cases if isinstance(cases, list) else [])
     if isinstance(payload, dict) and isinstance(payload.get("evals"), list):
-        return _case_stats("skill-creator-evals", payload["evals"])
-
+        return ("skill-creator-evals", payload["evals"])
     if isinstance(payload, list):
-        return _case_stats("trigger-eval-list", payload)
+        return ("trigger-eval-list", payload)
+    return None
 
-    return {"schema": "unknown", "valid": True, "case_count": 0, "positive_trigger_cases": 0, "negative_trigger_cases": 0}
+
+def _classify_manifest(payload: Any) -> dict[str, Any]:
+    recognized = iter_manifest_cases(payload)
+    if recognized is None:
+        return {"schema": "unknown", "valid": True, "case_count": 0, "positive_trigger_cases": 0, "negative_trigger_cases": 0}
+    schema, cases = recognized
+    return _case_stats(schema, cases)
 
 
 def _case_stats(schema: str, cases: list[Any]) -> dict[str, Any]:

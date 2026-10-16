@@ -353,6 +353,7 @@ class UserScopedSkillStorage(LocalSkillStorage):
     # ------------------------------------------------------------------
 
     async def ainstall_skill_from_archive(self, archive_path: str | Path) -> dict:
+        from deerflow.skills.eval_gate import enforce_skill_eval_gate
         from deerflow.skills.installer import _scan_skill_archive_contents_or_raise
 
         logger.info("Installing skill from %s for user %s", archive_path, self._user_id)
@@ -369,6 +370,10 @@ class UserScopedSkillStorage(LocalSkillStorage):
             skill_dir, skill_name, target = await asyncio.to_thread(self._prepare_skill_archive, path, Path(tmp), custom_dir, archive_path)
 
             await _scan_skill_archive_contents_or_raise(skill_dir, skill_name)
+
+            # §24.8 capability-package eval gate (report-only unless the package
+            # declares `require_pass` on one of its eval manifests).
+            await enforce_skill_eval_gate(skill_dir, skill_name=skill_name)
 
             skill_id = await asyncio.to_thread(self._commit_skill_install, skill_dir, skill_name, custom_dir, target)
             logger.info("Skill %r installed to %s for user %s", skill_name, target, self._user_id)
