@@ -30,6 +30,7 @@ export const NODE_TYPES = [
   "flow:parallel",
   "flow:wait",
   "flow:try",
+  "flow:handoff",
   // Data transformation
   "data:assign",
   "data:convert",

@@ -202,6 +202,7 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         # Flow control (routing / delay)
         (NodeType.FLOW_IF, "Conditional branch executor"),
         (NodeType.FLOW_SWITCH, "Multi-case switch executor"),
+        (NodeType.FLOW_HANDOFF, "Controlled dynamic handoff router (N14)"),
         (NodeType.FLOW_WAIT, "Delay / sleep executor"),
         # Data transformation
         (NodeType.DATA_ASSIGN, "Static assignment or passthrough"),

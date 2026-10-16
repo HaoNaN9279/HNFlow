@@ -23,7 +23,7 @@ from deerflow.workflow.schema import NodeType  # noqa: E402
 from .ai import exec_llm_agent  # noqa: E402
 from .asset import exec_asset, preview_asset  # noqa: E402
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex, exec_shared, preview_file  # noqa: E402
-from .flow import exec_if, exec_switch, exec_wait  # noqa: E402
+from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
 from .knowledge import exec_knowledge  # noqa: E402
 from .local_app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
@@ -50,6 +50,11 @@ def build_default_registry() -> ExecutorRegistry:
     # ── Flow-control ─────────────────────────────────────────────────────
     reg.register(ExecutorRegistration(node_type=NodeType.FLOW_IF, executor=exec_if, idempotent=True, description="Conditional branch evaluator"))
     reg.register(ExecutorRegistration(node_type=NodeType.FLOW_SWITCH, executor=exec_switch, idempotent=True, description="Multi-case switch evaluator"))
+    # §24.6a controlled dynamic handoff: routes to a whitelisted expert node and
+    # fails on a selection outside it.  Idempotent — the executor only maps a
+    # value onto a declared candidate (the run budget it counts is carried by
+    # state, so a retry cannot double-spend it).
+    reg.register(ExecutorRegistration(node_type=NodeType.FLOW_HANDOFF, executor=exec_handoff, idempotent=True, description="Controlled dynamic handoff router (whitelisted experts, budgeted)"))
     reg.register(ExecutorRegistration(node_type=NodeType.FLOW_WAIT, executor=exec_wait, idempotent=True, description="Delay / sleep executor"))
 
     # ── Data transformation ───────────────────────────────────────────────
@@ -154,6 +159,7 @@ __all__ = [
     "exec_if",
     "exec_wait",
     "exec_switch",
+    "exec_handoff",
     # Tool
     "exec_bash",
     "exec_http",

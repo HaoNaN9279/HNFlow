@@ -10,6 +10,8 @@ import asyncio
 from typing import Any
 
 from deerflow.workflow.compiler import WorkflowRuntime
+from deerflow.workflow.handoff import DECISION_PORT, HANDOFF_COUNT_CHANNEL, TARGET_PORT, handoff_count_key, parse_handoff, resolve_handoff_target
+from deerflow.workflow.registry import WorkflowExecutionError
 
 # ── flow:wait ────────────────────────────────────────────────────────────────
 
@@ -72,3 +74,46 @@ def exec_if(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, 
     for port in ports:
         result[port] = input_val
     return result
+
+
+# ── flow:handoff ─────────────────────────────────────────────────────────────
+
+
+def exec_handoff(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
+    """Resolve a supervisor's selection onto a whitelisted expert node (§24.6a).
+
+    Reads ``inputs.decision`` and maps it through ``params.candidates``
+    (``[{value, node}, ...]``) onto the target node id — the compiler turns that
+    into the routing edge.  An unknown or missing selection **fails** rather
+    than falling through: a switch's default edge is exactly the silent
+    wrong-branch behaviour a handoff must not have.
+
+    ``params.max_handoffs`` bounds how often this node may route within a run;
+    the count is carried on the reserved ``wf:<node_id>:__handoffs`` channel
+    (the compiler injects ``node_id`` into the params).  Every declared input
+    other than ``decision`` is forwarded to the same-named output port, which is
+    how a handoff carries its structured message (task / constraints / context
+    references) inline with the routing decision.
+    """
+    spec = parse_handoff(params)
+    target = resolve_handoff_target(spec, inputs.get(DECISION_PORT))
+
+    node_id = params.get("node_id")
+    if not isinstance(node_id, str) or not node_id:
+        # Should not happen — the compiler injects it.  Refuse rather than
+        # pretend the budget is enforced when no counter can be read.
+        raise WorkflowExecutionError("flow:handoff requires a 'node_id' (injected by the compiler) to enforce its budget")
+
+    used = runtime.state.get(handoff_count_key(node_id), 0)
+    used_count = used if isinstance(used, int) and not isinstance(used, bool) else 0
+    if used_count >= spec.max_handoffs:
+        raise WorkflowExecutionError(f"node '{node_id}': handoff budget exhausted ({used_count} >= {spec.max_handoffs}); raise 'params.max_handoffs' or restructure the routing")
+
+    outputs: dict[str, Any] = {
+        TARGET_PORT: target,
+        HANDOFF_COUNT_CHANNEL: used_count + 1,
+    }
+    for name, value in inputs.items():
+        if name != DECISION_PORT:
+            outputs[name] = value
+    return outputs

@@ -71,6 +71,17 @@ from deerflow.workflow.budgets import (
 from deerflow.workflow.budgets import BudgetError as _BudgetError
 from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
+from deerflow.workflow.handoff import (
+    DECISION_PORT as HANDOFF_DECISION_PORT,
+)
+from deerflow.workflow.handoff import (
+    HANDOFF_COUNT_CHANNEL,
+    HandoffError,
+    parse_handoff,
+)
+from deerflow.workflow.handoff import (
+    TARGET_PORT as HANDOFF_TARGET_PORT,
+)
 from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.reliability import (
@@ -337,6 +348,12 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             loop_ports = {port.name for port in node.outputs}
             if "results" in loop_ports or "last" in loop_ports:
                 fields[f"wf:{node.id}:__results"] = Any
+        if node.type == NodeType.FLOW_HANDOFF:
+            # §24.6a controlled dynamic handoff: reserved channel carrying how
+            # often this node has routed within the run.  It is what the
+            # executor's ``max_handoffs`` budget reads, and it is engine
+            # bookkeeping — never a declared port.
+            fields[f"wf:{node.id}:{HANDOFF_COUNT_CHANNEL}"] = Any
         if node.type == NodeType.DATA_SHARED:
             # N14 shared workspace: declare the ``wf:shared:<name>`` channel an
             # ``array``-policy variable needs a reducer for (parallel appends
@@ -566,6 +583,12 @@ def _make_node_fn(
             from deerflow.workflow.human_task_state import derive_output_spec  # deferred import — keeps the compiler's import graph free of a human-task cycle
 
             executor_params.setdefault("output_spec", derive_output_spec(node))
+        if node.type == NodeType.FLOW_HANDOFF:
+            # §24.6a: the handoff executor needs its own node id to read the
+            # reserved handoff counter (its budget) — a definition cannot know
+            # which run it is in, and there is no other channel for that.
+            executor_params = dict(node.params)
+            executor_params.setdefault("node_id", node.id)
 
         # §25 debugging: an explicit breakpoint suspends the node *before* it
         # executes, so an operator can inspect state and then resume (or skip).
@@ -715,6 +738,16 @@ def _make_node_fn(
         # write), on the reserved channel declared in ``_build_state_schema``.
         if attempt > 1:
             outputs[f"wf:{node.id}:__retry"] = attempt - 1
+
+        # §24.6a controlled dynamic handoff: the executor reports its cumulative
+        # handoff count on the reserved channel declared in
+        # ``_build_state_schema``.  That is what its own ``max_handoffs`` budget
+        # reads on the next visit, so the count must round-trip through state
+        # rather than living in the executor.
+        if node.type == NodeType.FLOW_HANDOFF:
+            handoff_count = result.get(HANDOFF_COUNT_CHANNEL)
+            if isinstance(handoff_count, int) and not isinstance(handoff_count, bool):
+                outputs[f"wf:{node.id}:{HANDOFF_COUNT_CHANNEL}"] = handoff_count
 
         # N14 §24.10: run-level budget.  Aggregate every node's reserved usage
         # channel in the current state plus this node's own usage, and act on the
@@ -1304,6 +1337,55 @@ def _validate_breakpoints(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': breakpoint is not supported on '{node.type.value}' (the node never executes)")
 
 
+def _validate_handoff(def_: WorkflowDefinition) -> None:
+    """Validate every ``flow:handoff`` node (§24.6a) at compile time.
+
+    A handoff's routing comes from ``params.candidates`` rather than from
+    definition edges, so everything that would otherwise be caught by the
+    generic edge validation has to be checked here — and fail-loud, because a
+    candidate list that silently lost an entry would route a supervisor's choice
+    somewhere the author never listed:
+
+    * the declaration itself parses (non-empty, unique values, budget range);
+    * every candidate names a node **in this definition** ("registered experts");
+    * a candidate is never the graph sentinels or the handoff itself;
+    * the ``decision`` input and ``target`` output are declared, since the
+      executor and the route function rely on both;
+    * no definition edge leaves the handoff — params are the single source of
+      routing truth (a drawn edge would otherwise become a second, conflicting
+      route).
+    """
+    node_map = {node.id: node for node in def_.nodes}
+    for node in def_.nodes:
+        if node.type != NodeType.FLOW_HANDOFF:
+            if node.params.get("candidates") is not None or node.params.get("max_handoffs") is not None:
+                raise WorkflowCompileError(f"node '{node.id}': 'candidates'/'max_handoffs' are only supported on 'flow:handoff' (got '{node.type.value}')")
+            continue
+        try:
+            spec = parse_handoff(node.params)
+        except HandoffError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
+
+        for candidate in spec.candidates:
+            if candidate.node not in node_map:
+                raise WorkflowCompileError(f"node '{node.id}': handoff candidate '{candidate.value}' targets unknown node '{candidate.node}' (a handoff can only route to a node in this definition)")
+            if candidate.node == node.id:
+                raise WorkflowCompileError(f"node '{node.id}': handoff candidate '{candidate.value}' targets the handoff itself")
+            if node_map[candidate.node].type in (NodeType.FLOW_START, NodeType.FLOW_END):
+                raise WorkflowCompileError(f"node '{node.id}': handoff candidate '{candidate.value}' targets '{candidate.node}' ({node_map[candidate.node].type.value}); route to an expert and gate completion with a separate 'flow:if'")
+
+        input_names = {port.name for port in node.inputs}
+        if HANDOFF_DECISION_PORT not in input_names:
+            raise WorkflowCompileError(f"node '{node.id}': flow:handoff requires an input port named '{HANDOFF_DECISION_PORT}' (the supervisor's selection)")
+        output_names = {port.name for port in node.outputs}
+        if HANDOFF_TARGET_PORT not in output_names:
+            raise WorkflowCompileError(f"node '{node.id}': flow:handoff requires an output port named '{HANDOFF_TARGET_PORT}' (the resolved expert)")
+
+        for edge in def_.edges:
+            if edge.source == node.id:
+                raise WorkflowCompileError(f"node '{node.id}': flow:handoff routes through 'params.candidates'; edge '{edge.source}'→'{edge.target}' must be removed")
+
+
 #: Fan-in merge policies accepted by ``params.merge`` (N13).
 _MERGE_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "error"})
 
@@ -1636,6 +1718,26 @@ def _make_route_fn(
 # ── Compile entry point ───────────────────────────────────────────────────
 
 
+def _make_handoff_route_fn(node_id: str, targets: tuple[str, ...]) -> Callable[[dict[str, Any]], str]:
+    """Build the routing function for a ``flow:handoff`` node (§24.6a).
+
+    The executor writes the resolved expert id to ``wf:<node>:target``; the
+    route returns it.  Unlike ``flow:switch`` there is deliberately **no**
+    default: an unset target (the executor never ran, e.g. a node that was
+    skipped) or a target outside the whitelist is a ``WorkflowRouteError``
+    rather than a silent route — running an expert the supervisor did not pick
+    is exactly the failure this primitive exists to prevent.
+    """
+
+    def _route(state: dict[str, Any]) -> str:
+        target = state.get(f"wf:{node_id}:{HANDOFF_TARGET_PORT}")
+        if isinstance(target, str) and target in targets:
+            return target
+        raise WorkflowRouteError(f"handoff node '{node_id}': no valid expert selected (got {target!r}; registered: {list(targets)})")
+
+    return _route
+
+
 def compile_definition(
     def_: WorkflowDefinition,
     *,
@@ -1692,6 +1794,7 @@ def _compile_impl(
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
     _validate_approval_nodes(def_, ctx)
     _validate_breakpoints(def_)
+    _validate_handoff(def_)
     _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
     _validate_autonomy(def_)
@@ -1919,12 +2022,12 @@ def _compile_impl(
             builder.add_edge(START, target)
             continue
 
-        # All edges from conditional nodes (if / switch / loop) are
+        # All edges from conditional nodes (if / switch / loop / handoff) are
         # handled in Pass B — both conditional AND default edges.
         # Adding the default edge here would unconditionally fire the
         # default target alongside any routed branch.
         src_node = node_map[source]
-        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP):
+        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF):
             continue
 
         # Non-conditional source node: conditional edges are NOT allowed.
@@ -1939,12 +2042,24 @@ def _compile_impl(
         # Ordinary edge
         builder.add_edge(source, target)
 
-    # Pass B: conditional edges from if / switch / loop nodes
+    # Pass B: conditional edges from if / switch / loop / handoff nodes
     for node in def_.nodes:
-        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP):
+        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF):
             continue
 
         cond_id = node.id
+
+        # §24.6a: a handoff's routes come from ``params.candidates`` (validated
+        # in ``_validate_handoff``), not from definition edges — the candidate
+        # list is the single source of routing truth, so it has no default edge
+        # and no drawn edges to interpret.
+        if node.type == NodeType.FLOW_HANDOFF:
+            spec = parse_handoff(node.params)
+            targets = spec.targets()
+            handoff_path_map = {target: target for target in targets}
+            builder.add_conditional_edges(cond_id, _make_handoff_route_fn(cond_id, targets), handoff_path_map)
+            continue
+
         out_edges = [e for e in def_.edges if e.source == cond_id]
 
         cond_edges: list[tuple[str, str]] = []  # [(condition_port, target), ...]

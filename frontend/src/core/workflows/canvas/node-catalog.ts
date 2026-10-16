@@ -109,6 +109,28 @@ export const NODE_CATALOG = [
     description: "Sleep for a duration (seconds), then pass the value through.",
   },
   {
+    type: "flow:handoff",
+    label: "Handoff",
+    category: "flow",
+    // The structured message fields are declared by default so the forwarding
+    // contract is visible; extra fields can be added like any other port.
+    defaultInputs: [
+      { name: "decision", type: "data", required: true },
+      { name: "task", type: "data", required: false },
+      { name: "constraints", type: "data", required: false },
+      { name: "context", type: "data", required: false },
+    ],
+    defaultOutputs: [
+      { name: "target", type: "data", required: true },
+      { name: "task", type: "data", required: false },
+      { name: "constraints", type: "data", required: false },
+      { name: "context", type: "data", required: false },
+    ],
+    defaultParams: { candidates: [] },
+    description:
+      "Dynamic handoff — route to a whitelisted expert node by value; an unlisted selection fails.",
+  },
+  {
     type: "data:assign",
     label: "Assign",
     category: "data",

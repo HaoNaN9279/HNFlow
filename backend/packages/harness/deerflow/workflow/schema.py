@@ -85,6 +85,7 @@ class NodeType(StrEnum):
     FLOW_PARALLEL = "flow:parallel"
     FLOW_WAIT = "flow:wait"
     FLOW_TRY = "flow:try"
+    FLOW_HANDOFF = "flow:handoff"
 
     # Data transformation
     DATA_ASSIGN = "data:assign"
