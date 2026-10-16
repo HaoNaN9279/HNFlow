@@ -20,6 +20,8 @@ from app.gateway.deps import get_current_user, get_optional_user_from_request, g
 from app.gateway.permissions import require_permission
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import sse_consumer, start_workflow_run, wait_for_run_completion
+from deerflow.config import get_app_config
+from deerflow.workflow.costs import build_run_cost_report
 
 logger = logging.getLogger(__name__)
 
@@ -344,6 +346,51 @@ async def get_workflow_run_state(definition_id: str, run_id: str, request: Reque
         return {}
 
     return {k: v for k, v in values.items() if k.startswith("wf:")}
+
+
+@router.get("/{definition_id}/runs/{run_id}/cost")
+@require_permission("runs", "read")
+async def get_workflow_run_cost(definition_id: str, run_id: str, request: Request) -> dict[str, Any]:
+    """N14 §24.10: estimate this run's spend from its per-node token usage.
+
+    Prices the reserved ``wf:<node>:__token_usage`` channels against the
+    optional ``models[*].pricing`` metadata (the same convention the console
+    cost display uses). The usage channels record tokens but not the model
+    that spent them, so each node is priced with the deployment's default
+    model unless a per-node override is supplied — documented, and reported
+    per node. Returns ``503`` when ``models[*].pricing`` is unconfigured or
+    mixes currencies (unpriced nodes carry ``cost: null``, and the whole
+    report is still returned rather than a fabricated zero).
+    """
+    run_mgr = get_run_manager(request)
+    record = await _require_run_owner(request, run_mgr, run_id)
+
+    ctx = get_run_context(request)
+    if ctx.checkpointer is None:
+        raise HTTPException(status_code=503, detail="Checkpointer not configured — cost is unavailable")
+
+    try:
+        snapshot = await ctx.checkpointer.aget_tuple(
+            config={"configurable": {"thread_id": record.thread_id}},
+        )
+    except Exception:
+        logger.exception("Failed to fetch checkpoint state for cost of run %s (thread %s)", run_id, record.thread_id)
+        raise HTTPException(status_code=500, detail="Failed to read checkpoint state")
+
+    values = getattr(snapshot, "channel_values", None) if snapshot is not None else None
+    state = values if isinstance(values, dict) else {}
+
+    try:
+        models = get_app_config().models
+    except Exception:  # pragma: no cover - defensive: cost reporting must not 500
+        logger.warning("workflow cost: failed to load model pricing from config", exc_info=True)
+        models = []
+
+    default_model = getattr(models[0], "name", None) if models else None
+    report = build_run_cost_report(state, models, default_model=default_model)
+    report["run_id"] = run_id
+    report["definition_id"] = definition_id
+    return report
 
 
 # ── N10: action preview + run-level undo ──────────────────────────────────────
