@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "c516852",
-  "commit": "(pending)",
+  "commit": "77172e4",
   "steps": [
     { "id": "S1", "name": "handoff.py：纯逻辑（解析/选择解析/计数键）", "status": "completed" },
     { "id": "S2", "name": "schema + registry + exec_handoff 执行器", "status": "completed" },
