@@ -1,17 +1,20 @@
 "use client";
 
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
 import {
+  fetchWorkflowTemplates,
   updateWorkflow,
   type UpdateWorkflowPayload,
+  type WorkflowTemplate,
 } from "@/core/workflows/api";
 import { flowToDefinition } from "@/core/workflows/canvas/mapping";
+import { insertTemplateFlow } from "@/core/workflows/canvas/templates";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
 
 import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
@@ -39,12 +42,55 @@ export function WorkflowToolbar() {
     positions,
     errors,
     setErrors,
+    setNodes,
+    setEdges,
+    updatePositions,
     dirty,
+    markDirty,
     markSaved,
     readonly,
   } = useWorkflowEditor();
   const { isRunning, startRun, cancelRun } = useWorkflowRun();
   const runLabels = t.workflows.run;
+  const templateLabels = t.workflows.templates;
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+
+  // Templates are fetched only once the picker is opened — a workflow editor
+  // that never inserts one makes no request.
+  const templatesQuery = useQuery({
+    queryKey: ["workflowTemplates"],
+    queryFn: fetchWorkflowTemplates,
+    enabled: templatesOpen,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+
+  const handleInsertTemplate = useCallback(
+    (template: WorkflowTemplate) => {
+      try {
+        const insertion = insertTemplateFlow(template.definition, {
+          existingNodes: nodes,
+        });
+        setNodes((current) => [...current, ...insertion.nodes]);
+        setEdges((current) => [...current, ...insertion.edges]);
+        updatePositions({ ...positions, ...insertion.positions });
+        markDirty();
+        setTemplatesOpen(false);
+      } catch (error) {
+        toast.error(
+          `${templateLabels.insertFailed}: ${(error as Error).message}`,
+        );
+      }
+    },
+    [
+      markDirty,
+      nodes,
+      positions,
+      setEdges,
+      setNodes,
+      templateLabels.insertFailed,
+      updatePositions,
+    ],
+  );
 
   const saveMutation = useMutation({
     mutationFn: (payload: UpdateWorkflowPayload) =>
@@ -84,6 +130,55 @@ export function WorkflowToolbar() {
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
       {errors.length > 0 && <WorkflowErrorList errors={errors} />}
       <div className="flex-1" />
+      {templatesOpen && (
+        <div
+          className="bg-popover text-popover-foreground absolute z-10 mt-10 max-h-72 w-72 overflow-auto rounded-md border p-2 shadow-md"
+          role="menu"
+        >
+          <p className="text-muted-foreground px-2 pb-1 text-xs">
+            {templateLabels.hint}
+          </p>
+          {templatesQuery.isPending && (
+            <p className="text-muted-foreground px-2 py-1 text-xs">
+              {templateLabels.label}…
+            </p>
+          )}
+          {templatesQuery.isError && (
+            <p className="text-destructive px-2 py-1 text-xs">
+              {templateLabels.loadFailed}
+            </p>
+          )}
+          {templatesQuery.data?.length === 0 && (
+            <p className="text-muted-foreground px-2 py-1 text-xs">
+              {templateLabels.empty}
+            </p>
+          )}
+          {templatesQuery.data?.map((template) => (
+            <Button
+              key={template.name}
+              className="flex h-auto w-full flex-col items-start gap-0.5 py-2"
+              size="sm"
+              variant="ghost"
+              onClick={() => handleInsertTemplate(template)}
+            >
+              <span className="text-sm font-medium">{template.name}</span>
+              <span className="text-muted-foreground text-left text-xs whitespace-normal">
+                {template.description}
+              </span>
+            </Button>
+          ))}
+        </div>
+      )}
+      {!readonly && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setTemplatesOpen((current) => !current)}
+          title={templateLabels.hint}
+        >
+          {templateLabels.label}
+        </Button>
+      )}
       {dirty && !readonly && (
         <span className="text-muted-foreground text-xs">
           {t.workflows.unsaved}

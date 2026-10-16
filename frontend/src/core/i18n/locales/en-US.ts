@@ -438,6 +438,13 @@ export const enUS: Translations = {
     saving: "Saving...",
     unsaved: "Unsaved",
     readonly: "Read only",
+    templates: {
+      label: "Templates",
+      hint: "Insert a collaboration template skeleton onto the canvas",
+      empty: "No templates available",
+      insertFailed: "Failed to insert template",
+      loadFailed: "Failed to load templates",
+    },
     canvas: {
       paletteTitle: "Palette",
       searchPlaceholder: "Search nodes...",

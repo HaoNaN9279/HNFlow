@@ -421,6 +421,13 @@ export const zhCN: Translations = {
     saving: "正在保存...",
     unsaved: "未保存",
     readonly: "只读",
+    templates: {
+      label: "模板",
+      hint: "把协作模板骨架插入画布",
+      empty: "暂无可用模板",
+      insertFailed: "插入模板失败",
+      loadFailed: "加载模板失败",
+    },
     canvas: {
       paletteTitle: "物料面板",
       searchPlaceholder: "搜索节点...",

@@ -347,6 +347,13 @@ export interface Translations {
     saving: string;
     unsaved: string;
     readonly: string;
+    templates: {
+      label: string;
+      hint: string;
+      empty: string;
+      insertFailed: string;
+      loadFailed: string;
+    };
     canvas: {
       paletteTitle: string;
       searchPlaceholder: string;

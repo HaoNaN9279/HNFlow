@@ -160,8 +160,7 @@ export const NODE_CATALOG = [
       { name: "records", type: "array", required: false },
     ],
     defaultParams: { operation: "retrieve", collection: "", top_k: 5 },
-    description:
-      "Ingest or retrieve local knowledge with citations (RAG).",
+    description: "Ingest or retrieve local knowledge with citations (RAG).",
   },
   {
     type: "data:file",

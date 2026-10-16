@@ -17,11 +17,15 @@ import { WorkflowValidationErrors } from "@/core/workflows/errors";
 import { streamWorkflowRun } from "@/core/workflows/runs";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
-const apiMock = rs.hoisted(() => ({ updateWorkflow: rs.fn() }));
+const apiMock = rs.hoisted(() => ({
+  updateWorkflow: rs.fn(),
+  fetchWorkflowTemplates: rs.fn(),
+}));
 const toastMock = rs.hoisted(() => ({ success: rs.fn(), error: rs.fn() }));
 
 rs.mock("@/core/workflows/api", () => ({
   updateWorkflow: apiMock.updateWorkflow,
+  fetchWorkflowTemplates: apiMock.fetchWorkflowTemplates,
 }));
 
 rs.mock("sonner", () => ({
@@ -43,6 +47,13 @@ rs.mock("@/core/i18n/hooks", () => ({
         readonly: "Read only",
         save: "Save",
         saving: "Saving...",
+        templates: {
+          label: "Templates",
+          hint: "Insert a collaboration template skeleton onto the canvas",
+          empty: "No templates available",
+          insertFailed: "Failed to insert template",
+          loadFailed: "Failed to load templates",
+        },
         run: {
           run: "Run",
           runDisabled: "Save unsaved changes first",

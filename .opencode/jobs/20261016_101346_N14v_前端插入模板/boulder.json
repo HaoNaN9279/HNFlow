@@ -1,0 +1,30 @@
+{
+  "slice": "N14v",
+  "title": "前端画布「插入模板」（§24.6b）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "c587e7f",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "api.ts：fetchWorkflowTemplates + WorkflowTemplate", "status": "completed" },
+    { "id": "S2", "name": "canvas/templates.ts：纯插入变换（id 重映射 + 位置偏移）", "status": "completed" },
+    { "id": "S3", "name": "workflow-toolbar.tsx 模板按钮 + i18n", "status": "completed" },
+    { "id": "S4", "name": "单测 + pnpm test/check/format + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "插入是纯函数（确定性；同画布 + 同模板恒等），绝不修改入参",
+    "D2": "空画布原样插入（保留可读 id）；冲突才加 -2/-3 后缀",
+    "D3": "位置：显式 position > 现有内容右侧（maxX+320，与最上节点对齐）> 原点",
+    "D4": "模板列表按需拉取（enabled: templatesOpen）+ staleTime Infinity"
+  },
+  "baseline": {
+    "frontend_tests": "1165 passed -> 1180 passed（+15 新增）",
+    "frontend_check": "pnpm check（eslint + tsc）exit 0",
+    "frontend_format": "pnpm format 全绿（含顺带修复 N14o 遗留的 node-catalog.ts 一行格式）",
+    "backend": "零后端改动（后端端点为 N14s 已提交）",
+    "frontend_agents_doc": "frontend/AGENTS.md 已同步"
+  },
+  "extra_findings": [
+    "剩余可选增量：能力包（skill）导入时自动挂载 eval 套件、worker 自动注入 memory_store、向量后端适配器、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff。"
+  ]
+}
