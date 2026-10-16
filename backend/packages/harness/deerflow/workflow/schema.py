@@ -236,30 +236,43 @@ def collect_resolved_groups(
 
     Walks every node's ``capability_groups`` (skill names at authoring time),
     maps each name to its skill via the catalog, and emits ``<guid>@v<version>``
-    strings.  Names that do not resolve to an installed skill are skipped
+    strings.  N14 §5.5: a referenced group's ``extends`` closure is included too,
+    so the recorded snapshot covers the packages the node actually depends on by
+    inheritance.  Names that do not resolve to an installed skill are skipped
     (backward compatible — a node may reference a not-yet-installed skill).
     Results are deduplicated and order-stable.
     """
     raw_entries: list[str] = []
     name_to_skill: dict[str, Any] = {s.name: s for s in catalog.skills}
 
+    def _record(name: str, node_id: str, *, via: str | None = None) -> None:
+        skill = name_to_skill.get(name)
+        if skill is None:
+            logger.warning(
+                "Workflow node %r references unknown capability group %r%s — skipping",
+                node_id,
+                name,
+                f" (via extends {via!r})" if via else "",
+            )
+            return
+        if not skill.skill_id:
+            logger.warning(
+                "Skill %r has no skill_id (public/legacy), skipping resolved group",
+                skill.name,
+            )
+            return
+        raw_entries.append(f"{skill.skill_id}@v{skill.version}")
+
     for node in definition.nodes:
         for name in node.capability_groups:
+            _record(name, node.id)
+            # §5.5: the inherited packages are dependencies too.  A broken
+            # ``extends`` (cycle/unknown base) is reported by
+            # ``skills.composition.validate_composition``; here the closure is
+            # best-effort so metadata resolution never fails a save.
             skill = name_to_skill.get(name)
-            if skill is None:
-                logger.warning(
-                    "Workflow node %r references unknown capability group %r — skipping",
-                    node.id,
-                    name,
-                )
-                continue
-            if not skill.skill_id:
-                logger.warning(
-                    "Skill %r has no skill_id (public/legacy), skipping resolved group",
-                    skill.name,
-                )
-                continue
-            raw_entries.append(f"{skill.skill_id}@v{skill.version}")
+            for base in getattr(skill, "extends", ()) or () if skill is not None else ():
+                _record(str(base), node.id, via=name)
 
     return list(dict.fromkeys(raw_entries))
 

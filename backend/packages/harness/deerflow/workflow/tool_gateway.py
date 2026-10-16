@@ -426,29 +426,38 @@ def resolve_capability_tools(
 ) -> list[BaseTool]:
     """Resolve an AI node's tool set from its capability groups (C1).
 
-    The tool set is the **union of the selected groups' ``allowed-tools``
-    declarations**, resolved through the gateway.  A node with no capability
-    groups — or whose groups declare no ``allowed-tools`` — gets no tools,
-    matching the "an AI node can only call capabilities its groups declare"
-    boundary (§7.1).  Tool order is sorted by name for prompt-cache stability
-    (§5.9).
+    The tool set is the **union of the selected groups' effective
+    ``allowed-tools`` declarations** (§5.5: a group that inherits tools through
+    ``extends`` contributes them here too), resolved through the gateway.  A
+    node with no capability groups — or whose groups declare no
+    ``allowed-tools`` — gets no tools, matching the "an AI node can only call
+    capabilities its groups declare" boundary (§7.1).  Tool order is sorted by
+    name for prompt-cache stability (§5.9).
     """
     if not capability_groups:
         return []
 
     selected_names = set(capability_groups)
-    skills = [skill for skill in _load_enabled_skills(user_id) if getattr(skill, "name", None) in selected_names]
 
-    # Reuse the shared skill-policy union helper (None = legacy allow-all,
-    # returned only when no selected skill declares allowed-tools).
-    from deerflow.skills.tool_policy import allowed_tool_names_for_skills
+    # N14 §5.5 composition: resolve through the *catalog* so ``extends`` is
+    # honoured.  A broken composition (unknown base / cycle / self-extension) is
+    # fail-closed for tools — the node gets none rather than a silently smaller
+    # set than its author declared — and is logged, not raised: an uninstalled
+    # base must not make an otherwise valid workflow unrunnable.
+    from deerflow.skills.composition import CompositionError, resolve_allowed_tools
 
-    allowed = allowed_tool_names_for_skills(skills)
+    try:
+        catalog = {getattr(skill, "name", ""): skill for skill in _load_enabled_skills(user_id)}
+        allowed = resolve_allowed_tools(selected_names, catalog)
+    except CompositionError as exc:
+        logger.warning("AI node capability groups %s have a broken composition (%s); node gets no tools", sorted(selected_names), exc)
+        return []
+
+    if allowed is None:
+        logger.info("AI node capability groups %s declare no allowed-tools; node gets no tools", sorted(selected_names))
+        return []
     if not allowed:
-        logger.info(
-            "AI node capability groups %s declare no allowed-tools; node gets no tools",
-            sorted(selected_names),
-        )
+        logger.info("AI node capability groups %s declare empty allowed-tools; node gets no tools", sorted(selected_names))
         return []
 
     gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)

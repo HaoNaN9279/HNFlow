@@ -230,6 +230,45 @@ def parse_permissions(raw: object, skill_file: Path) -> tuple[str, ...]:
     return tuple(permissions)
 
 
+def parse_extends(raw: object, skill_file: Path) -> tuple[str, ...]:
+    """Parse the optional ``extends`` frontmatter field (N14 §5.5).
+
+    A capability group name or a list of them: the packages this one builds on.
+    Names are trimmed and deduplicated.  A malformed entry, or a non-string /
+    non-list value, **raises** — unlike a cosmetic optional field, dropping it
+    would load the package without the tools it declared it inherits, which is
+    the one failure mode a capability declaration must never have (the caller
+    mirrors ``dependencies``: a broken declaration makes the file unloadable).
+    """
+    if raw is None:
+        return ()
+    values = raw if isinstance(raw, list) else [raw]
+    extends: list[str] = []
+    for item in values:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"extends in {skill_file} must be a capability group name or a list of them, got {item!r}")
+        name = item.strip()
+        if name not in extends:
+            extends.append(name)
+    return tuple(extends)
+
+
+def parse_overlay(raw: object, skill_file: Path) -> bool:
+    """Parse the optional ``overlay`` frontmatter field (N14 §5.5).
+
+    ``True`` means the package's own ``allowed-tools`` **replace** the inherited
+    list instead of adding to it. Only a real boolean is accepted, and anything
+    else **raises**: reading ``"true"`` as truthy would quietly turn an additive
+    declaration into a narrowing one, and reading it as false would quietly
+    widen the tool set beyond what the author wrote.
+    """
+    if raw is None:
+        return False
+    if not isinstance(raw, bool):
+        raise ValueError(f"overlay in {skill_file} must be a boolean, got {raw!r}")
+    return raw
+
+
 def parse_tool_schema_version(raw: object, skill_file: Path) -> str | None:
     """Parse the optional ``tool-schema-version`` frontmatter field (N14 §5.5)."""
     if raw is None:
@@ -365,6 +404,16 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
         permissions = parse_permissions(metadata.get("permissions"), skill_file)
         tool_schema_version = parse_tool_schema_version(metadata.get("tool-schema-version"), skill_file)
         context_budget = parse_context_budget(metadata.get("context-budget"), skill_file)
+        # --- composition (N14 §5.5) ---
+        # A malformed composition declaration makes the file unloadable, exactly
+        # like ``dependencies``: loading it without the inheritance would ship a
+        # package with fewer (or wider) capabilities than its author declared.
+        try:
+            extends = parse_extends(metadata.get("extends"), skill_file)
+            overlay = parse_overlay(metadata.get("overlay"), skill_file)
+        except ValueError as exc:
+            logger.error("Invalid composition declaration in %s: %s", skill_file, exc)
+            return None
 
         return Skill(
             name=name,
@@ -386,6 +435,8 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             permissions=permissions,
             tool_schema_version=tool_schema_version,
             context_budget=context_budget,
+            extends=extends,
+            overlay=overlay,
         )
 
     except Exception:

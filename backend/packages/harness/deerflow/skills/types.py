@@ -98,6 +98,13 @@ class Skill:
     permissions: tuple[str, ...] = ()
     tool_schema_version: str | None = None
     context_budget: int | None = None
+    # N14 §5.5 composition: capability groups this package builds on
+    # (``extends``) and whether the package's own ``allowed-tools`` **replace**
+    # the inherited list instead of adding to it (``overlay``). Resolved by
+    # ``deerflow.skills.composition``; a base that is not installed is reported
+    # there rather than silently dropping the inherited tools.
+    extends: tuple[str, ...] = ()
+    overlay: bool = False
 
     @property
     def skill_path(self) -> str:
