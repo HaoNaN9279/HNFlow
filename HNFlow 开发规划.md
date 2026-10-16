@@ -260,6 +260,10 @@
 
 ---
 
+> **进度（切片 AK：`flow:loop` 声明式 body）**：§25 路线图最后一项。此前 loop body 只能手画（loop→body 条件边 + body→loop 回边）；本切片让 body 成为 `params.subworkflow` 声明的子图（inline/template 皆可，与 `flow:try`/`nested:subworkflow` 同一套 spec），于是可复用模板、不必重画。**语义与内联 body 等价，不是新语义**：编译器生成 body 节点（id `<loop>.body`——`.` 不在定义 id 文法 `[A-Za-z0-9_-]` 内故不会撞名，也不是 LangGraph 保留的 `:`/`|`；**不发射节点事件**，它是引擎产物而非画布节点）与回边；每轮的输入（第 1 轮=种子，其后=上一轮结果，即 ring）经保留通道 `wf:<loop>:__ring` 往返（`params.seed_input`/`params.ring_port` 默认 `in`/`out`）——这正是内联回边扮演的角色，只是改由引擎接线，因此 `results`/`last`/`continue_on` 三种语义**一行都不用改**。三条设计取舍：**params 是路由唯一真相**（声明式 body 下画条件出边=编译期报错，与 `flow:handoff` 同理；必须且只能有一条无条件出边=出口，0 条出不去、2 条出口歧义，都报错而不是任选一个）；**默认可缺省、显式必校验**（两个默认端口不存在=合法的「跑 N 次」无 ring body，此时聚合为空——而不是把种子当成 body 产物每轮记一次；显式写错的端口名=编译期报错）；**body 失败不是 try**（`<loop> > body > ...` 直接失败，`interrupt` 等控制流信号照常透传——想在 body 内容忍失败就把 `flow:try` 放进去）。顺带修一个既有潜在缺陷：编译缓存键过去只折叠 `nested:subworkflow` 的模板内容，`flow:try`（含 finally）与 loop 的模板改动不会失效父图缓存——现改为递归折叠全部 subworkflow 引用。**无迁移/无新表/无新配置/无前端改动**（loop 是既有节点类型，端口未变；画布参数编辑本就自由格式），故不需全量前端回归。测试：新增 `tests/test_workflow_loop_body.py` 22 条（ring 种子→上轮结果→聚合/`out`/`last`、`iterations` 硬上限与 0 轮、无 ring 纯计数 body、`mapping.outputs` 独立汇报端口、body 失败与消息路径、`continue_on` 三种合法拼写与坏名报错、模板展开与缓存键、条件出边/缺出口/多出口/坏 `ring_port`/坏 `seed_input`/`delegate` 被拒、纯校验器形状检查、生成节点是引擎产物且内联路径逐字未变）。后端全量 A/B 11485 → **11507 passed**，失败集合与基线逐条一致（零新增；本轮 2 条已知时序 flake 恰好通过）。
+
+---
+
 ### P3 — 低优先级
 
 1. **N15 安全**：注入防御、威胁模型、权限裁决、密钥隔离、供应链（沙箱执行 + 静态扫描）。
@@ -506,5 +510,6 @@
 | `301f0ed` | N14ah | §25 回退重跑（`checkpoint_id` 续跑 + `/rewind` 路由 + 画布按钮） |
 | `0ca11a8` | N14ai | §24.12 工具级权限裁决（能力包 `permissions` 运行时过滤 + `tool-permissions` 覆盖） |
 | `2ade1e2` | N14aj | 通用 `human:task` / approval 提交表单（画布可批准/提交，含预览） |
+| （N14ak） | N14ak | `flow:loop` 声明式 body（`params.subworkflow`，ring/`results`/`last`/`continue_on` 与内联一致） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。

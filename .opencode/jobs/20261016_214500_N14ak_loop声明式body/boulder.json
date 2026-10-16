@@ -1,0 +1,37 @@
+{
+  "slice": "N14ak",
+  "title": "flow:loop 声明式 body（params.subworkflow）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "de1694a",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "parse_loop_body_spec + _validate_loop_bodies（参数化路由唯一真相）", "status": "completed" },
+    { "id": "S2", "name": "生成 body 节点/回边 + ring 通道（seed/ring 端口解析）", "status": "completed" },
+    { "id": "S3", "name": "loop 节点函数 ring 感知 + 聚合门（无 ring 不聚合）", "status": "completed" },
+    { "id": "S4", "name": "continue_on 三种合法拼写解析（声明式 body 下坏名报错）", "status": "completed" },
+    { "id": "S5", "name": "缓存键递归折叠全部 subworkflow 引用（顺带修复 try/finally）", "status": "completed" },
+    { "id": "S6", "name": "纯校验器扩展到 try/loop 的 body 与 finally 形状", "status": "completed" },
+    { "id": "S7", "name": "22 条测试 + ruff + 全量 A/B + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "params 是路由唯一真相：声明式 body 下画条件出边=编译期报错；必须且只能有一条无条件出边（出口）",
+    "D2": "body 节点 id 用 <loop>.body：. 不在定义 id 文法内（不会撞名），也不是 LangGraph 保留的 : 与 |",
+    "D3": "生成节点不发射节点事件：它不是画布节点，wf:node:* 命名它映射不到任何东西",
+    "D4": "默认可缺省（in/out）、显式必校验：默认端口缺失 = 合法的无 ring body（聚合为空），显式写错 = 编译期报错",
+    "D5": "无 ring 的 body 不聚合任何东西：把种子当成 body 产物每轮记一次是错的",
+    "D6": "body 失败直传（<loop> > body > ...），控制流信号照常透传：要容错就把 flow:try 放进 body",
+    "D7": "continue_on 在声明式 body 下必须命中入边源端口/映射汇报端口/ring 端口三者之一，否则编译期报错（合法名是已知的）",
+    "D8": "mode: delegate 被拒：loop body 每轮在图中执行，不是一次性任务"
+  },
+  "baseline": {
+    "full_suite": "11485 -> 11507 passed（+22 新测试）",
+    "failures": "75 failed = 基线集合逐条一致，零新增（本轮 2 条已知时序 flake 恰好通过）",
+    "lint": "ruff check 全部通过；ruff format 干净"
+  },
+  "extra_findings": [
+    "顺带修复：编译缓存键过去只折叠 nested:subworkflow 的模板内容，flow:try（含 finally）与 loop 的模板改动不会失效父图缓存；现递归折叠全部 subworkflow 引用。",
+    "边界（继承自 nested:subworkflow/flow:try 的既有契约）：展开的 body 跑在独立子图里（checkpointer=None），所以 body 内的 interrupt 不可续跑；需要 HITL 的循环请用内联 body。",
+    "剩余可选增量：worker 自动注入 memory_store（风险高，建议加显式配置开关后再做）、成本感知规划器（方案明确待 benchmark，建议不做）。"
+  ]
+}
