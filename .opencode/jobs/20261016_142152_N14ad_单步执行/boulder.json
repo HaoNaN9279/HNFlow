@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "c55eb0b",
-  "commit": "(pending)",
+  "commit": "23b88f0",
   "steps": [
     { "id": "S1", "name": "breakpoint.py：step kind + 谓词 + kind 参数", "status": "completed" },
     { "id": "S2", "name": "compiler：step 门（一次访问一次暂停）", "status": "completed" },
