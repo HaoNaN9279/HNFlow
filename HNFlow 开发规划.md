@@ -187,12 +187,12 @@
 | N14f | §24.7 工作流事务与自愈 | 幂等键端到端（`tool:http` 请求头 / `tool:bash` 环境变量）+ 有界节点重试（**仅幂等节点** `params.retry`，保留通道 `wf:<node>:__retry`）；effect journal 复用既有 `workflow_undo_records`（补偿/回滚 N10 已落地） | ✅ 已落地 |
 | N14g | §24.11 确定性重放 | run 级 record/replay fixture（节点输出粒度）+ 回放执行 + 脱敏；与 lockfile 关联 | ✅ 已落地 |
 | N14h | §24.8 评测/回归 | golden traces + 确定性/语义断言 + runner（可挂能力包导入与定义保存） | ✅ 断言核心 + runner + CI CLI 已落地；能力包导入/定义保存自动挂载待做 |
-| N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ◐ 模型路由（N14i）+ 运行级预算（N14n）已落地；成本报表待做 |
+| N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ✅ 模型路由（N14i）+ 运行级预算（N14n）+ 运行成本报表（N14t）已落地 |
 | N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ✅ 策略/格式化/store 协议 + AI 节点接线 + DeerMem 适配器已落地（仅 long_term 作用域） |
 | N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ✅ 纯检索核心 + AI 节点注入 + `data:knowledge` 节点（前端 palette）已落地；向量后端适配器待做 |
 | N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 模板 builder + `GET /api/workflows/templates` 已落地；画布插入 UI/动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ◐ AI 节点注入块未信任中和已落地；威胁模型/权限裁决深化待做 |
-| N14n | §24.10 运行级预算 | node/run/workflow 三级预算 + warn/degrade/abort | ✅ 运行级（`metadata.budget` warn/abort）已落地；节点级由 autonomy；成本报表待做 |
+| N14n | §24.10 运行级预算 | node/run/workflow 三级预算 + warn/degrade/abort | ✅ 运行级（`metadata.budget` warn/abort）+ 运行成本报表（N14t）已落地；节点级由 autonomy |
 
 > **N14f 目标**：把「节点级副作用」纳入事务语义——重试只对**幂等**节点开放（非幂等自动重试 = 重复副作用，编译期拒绝），重试携带**稳定幂等键**让外部系统（HTTP 服务、脚本）能识别重复；实际重试次数经保留通道可观测。AI 诊断式自愈（模型建议→有界重试）与多步 saga 的 effect journal 独立成刀，D 项已由 N10 的 `undo_service`（逆序补偿）覆盖。
 >
@@ -223,6 +223,8 @@
 > **进度（切片 R：§24.1 DeerMem `memory_store` 适配器）**：新增 `deerflow/workflow/memory_backends.py::MemoryManagerStore`——把既有 `MemoryManager` 包成 N14j 的 `MemoryStore` 协议：`search(scope, query, limit)` 把 manager 排序后的 facts 映射为 `MemoryRecord`（**仅当后端 `supports_search`**；`NotImplementedError` 降级为空而非抛入节点），`put(scope, text)` 经 manager 的**正常提取管线**（`add_nowait` + `HumanMessage`）排队（不裸追加 fact，故 scope/durability/authority 门照旧生效）。**诚实作用域映射**：DeerMem 是**长期用户/agent 记忆**，故适配器**仅服务 `long_term`**；`session`/`node`/`workflow` 非其模型 → 返回空/不做（需要者自行实现协议），并在 docstring 明写。fact 文本/键读取容错（`fact`/`content`/`text`/`summary` + `id`/`fact_id`）。**部署方**将其注入 `runtime.context["memory_store"]`（worker 注入为可选后续）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_memory_backends.py`（12 条：搜索映射/桶与 top_k 透传/非 long_term 空/不支持搜索空/NotImplemented 空/fact 文本回退/put 排队与默认 thread/非 long_term 与空文本 no-op/supports_search）。全量离线 A/B：11138→11149 passed、新增 12 条全过；**唯一新增「失败」为既有**时序 flake 文件 `test_extension_task_lifecycle.py` 两条（隔离运行通过、与纯新增模块无关）；workflow 套件 1094→1106 passed；ruff 干净。
 >
 > **进度（切片 S：§24.6b 模板端点）**：`patterns.py` 增 `build_template(name)`（返回带**占位 instruction** 的可编译骨架：critic_review_loop / supervisor_topology）与 `template_catalog()`；Gateway 增 `GET /api/workflows/templates`（`workflow_routes.py`，**声明在 `/workflows/{definition_id}` 之前**避免被动态段吞掉），返回每个模板的 `name`/`description`/序列化 `definition`，供画布一键插入。**诚实取舍**：本切片交付**后端模板目录 API**；**前端画布「插入模板」按钮**列为后续增量。**无迁移/无新表/无新配置段/无新依赖**。测试：新增 `tests/test_workflow_templates_route.py`（4 条：列举/反序列化/路径不被动态段吞/未知模板报错）。全量离线 A/B：11149→11155 passed、**失败集合逐条一致**（75）；workflow 套件 1106→1110 passed；ruff 干净。
+
+> **进度（切片 T：§24.10 运行成本报表）**：新增 `deerflow/workflow/costs.py`（**纯逻辑**）——`build_pricing_map(models)`（读 `models[*].pricing` 的 `currency`/`input_per_million`/`output_per_million`/`input_cache_hit_per_million`，与 console 计价**同一约定**；无价或**混合币种**一律返回 `{}` = 关闭计价，避免产出非法聚合）、`node_usage_from_state(state)`（只抽 `wf:<node>:__token_usage` 保留通道，容忍非 dict/坏字段）、`token_cost`（**cache-aware**：缓存命中按命中价、其余按未命中价，命中数钳到 `[0, input]`）、`build_run_cost_report(state, models, default_model=..., model_by_node=...)`。Gateway 增 `GET /api/workflows/{id}/runs/{rid}/cost`（`workflow_run_routes.py`，在 state 路由之后）。**诚实取舍**：用量通道只记 token 不记模型，故**按 `default_model` 计价并在每个节点回报所用模型**（与 console 对无 per-model 拆分行情的既有回退一致，`model_by_node` 可覆盖）；未定价模型 `cost: null`（不伪造 0），全未定价则 `total_cost: null`；无 checkpointer → 503；配置读取失败**不 500**（降级为无价报表）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动（`models[*].pricing` 走 extra 字段）。测试：新增 `tests/test_workflow_costs.py`（32 条：定价表/大小写键/零价跳过/坏值容忍/混合币种关闭/取价/缓存计价与钳位/用量抽取 + 报表（默认模型、per-node 覆盖、未定价 null、无价、部分定价、混合币种、空用量、JSON 可序列化）+ 路由（503/404/有价报表/空 checkpoint/配置失败降级））。全量离线 A/B：11155→11187 passed、**失败集合逐条一致**（75）；workflow 套件 1110→1142 passed；ruff check/format 干净。
 
 ---
 
@@ -455,5 +457,6 @@
 | `a099128` | N14q | §24.8 评测 CLI（`python -m deerflow.workflow.eval_cli`） |
 | `cdd6cc3` | N14r | §24.1 DeerMem `memory_store` 适配器 |
 | `7b84912` | N14s | §24.6b `GET /api/workflows/templates` 模板端点 |
+| `c8e3ffa` | N14t | §24.10 运行成本报表（`workflow/costs.py` + `GET /runs/{rid}/cost`） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。

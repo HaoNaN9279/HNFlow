@@ -1,31 +1,31 @@
 {
   "slice": "N14t",
-  "title": "运行成本报表（§24.10）",
+  "title": "杩愯鎴愭湰鎶ヨ〃锛埪?4.10锛?,
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "9b520f8",
-  "commit": "(pending)",
+  "commit": "c8e3ffa",
   "steps": [
-    { "id": "S1", "name": "costs.py 纯逻辑（定价表/用量抽取/计价/报表）", "status": "completed" },
+    { "id": "S1", "name": "costs.py 绾€昏緫锛堝畾浠疯〃/鐢ㄩ噺鎶藉彇/璁′环/鎶ヨ〃锛?, "status": "completed" },
     { "id": "S2", "name": "workflow_run_routes.py: GET /runs/{rid}/cost", "status": "completed" },
-    { "id": "S3", "name": "测试 + workflow 套件 + 全量 A/B + ruff", "status": "completed" },
-    { "id": "S4", "name": "文档同步 + boulder", "status": "completed" }
+    { "id": "S3", "name": "娴嬭瘯 + workflow 濂椾欢 + 鍏ㄩ噺 A/B + ruff", "status": "completed" },
+    { "id": "S4", "name": "鏂囨。鍚屾 + boulder", "status": "completed" }
   ],
   "decisions": {
-    "D1": "定价约定与 console 一致（models[*].pricing），不新增配置段",
-    "D2": "用量通道不记模型：按 default_model 计价并逐节点回报模型，model_by_node 可覆盖",
-    "D3": "未定价 cost: null（不伪造 0）；混合币种关闭计价；配置读取失败降级不 500",
-    "D4": "无 checkpointer 503；新增独立端点而非改 state 响应形状（additive）"
+    "D1": "瀹氫环绾﹀畾涓?console 涓€鑷达紙models[*].pricing锛夛紝涓嶆柊澧為厤缃",
+    "D2": "鐢ㄩ噺閫氶亾涓嶈妯″瀷锛氭寜 default_model 璁′环骞堕€愯妭鐐瑰洖鎶ユā鍨嬶紝model_by_node 鍙鐩?,
+    "D3": "鏈畾浠?cost: null锛堜笉浼€?0锛夛紱娣峰悎甯佺鍏抽棴璁′环锛涢厤缃鍙栧け璐ラ檷绾т笉 500",
+    "D4": "鏃?checkpointer 503锛涙柊澧炵嫭绔嬬鐐硅€岄潪鏀?state 鍝嶅簲褰㈢姸锛坅dditive锛?
   },
   "baseline": {
-    "backend_full_regression": "N14s 75 failed / 11155 passed -> N14t 75 failed / 11187 passed（104 skipped）；失败集合逐条一致基线",
+    "backend_full_regression": "N14s 75 failed / 11155 passed -> N14t 75 failed / 11187 passed锛?04 skipped锛夛紱澶辫触闆嗗悎閫愭潯涓€鑷村熀绾?,
     "workflow_suite": "1110 passed -> 1142 passed",
     "config_version": 40,
     "head_migration": "0019_human_task_kind_and_undo",
-    "frontend": "零前端改动",
-    "ruff": "check + format --check 干净"
+    "frontend": "闆跺墠绔敼鍔?,
+    "ruff": "check + format --check 骞插噣"
   },
   "extra_findings": [
-    "剩余可选增量：前端模板插入 UI、能力包导入/定义保存自动挂载 eval suite、worker 自动注入 memory_store、向量后端适配器、§24.12 工具级权限裁决（P3）。"
+    "鍓╀綑鍙€夊閲忥細鍓嶇妯℃澘鎻掑叆 UI銆佽兘鍔涘寘瀵煎叆/瀹氫箟淇濆瓨鑷姩鎸傝浇 eval suite銆亀orker 鑷姩娉ㄥ叆 memory_store銆佸悜閲忓悗绔€傞厤鍣ㄣ€伮?4.12 宸ュ叿绾ф潈闄愯鍐筹紙P3锛夈€?
   ]
 }
