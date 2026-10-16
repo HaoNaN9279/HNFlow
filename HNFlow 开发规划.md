@@ -189,7 +189,7 @@
 | N14h | §24.8 评测/回归 | golden traces + 确定性/语义断言 + runner（可挂能力包导入与定义保存） | ✅ 断言核心 + runner + CI CLI + 定义内嵌套件与 opt-in 保存门（N14u）已落地；能力包导入自动挂载待做 |
 | N14i | §24.10 成本/预算治理 | node/run/workflow 三级预算 + 超限策略（warn/degrade/abort）+ 本地优先路由 | ✅ 模型路由（N14i）+ 运行级预算（N14n）+ 运行成本报表（N14t）已落地 |
 | N14j | §24.1 记忆体系 | 四级记忆 + 节点 `params.memory` 注入/写回（复用现有 DeerMem） | ✅ 策略/格式化/store 协议 + AI 节点接线 + DeerMem 适配器已落地（仅 long_term 作用域） |
-| N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ✅ 纯检索核心 + AI 节点注入 + `data:knowledge` 节点（前端 palette）已落地；向量后端适配器待做 |
+| N14k | §24.2 知识检索 | `data:retrieve` 节点 + 摄入/索引/检索/引用（本地向量后端，可插拔） | ✅ 纯检索核心 + AI 节点注入 + `data:knowledge` 节点 + 向量后端适配器（N14w）已落地 |
 | N14l | §24.6a 余 + §24.6b | 有界评审回环 / 受控动态 handoff + supervisor/critic 拓扑模板 | ◐ 模板 builder + 端点 + 画布插入 UI 已落地；动态 handoff 待做 |
 | N14m | §24.12 注入防御（N15） | taint/来源追踪、记忆写入门、工具权限裁决点（低优先级） | ◐ AI 节点注入块未信任中和已落地；威胁模型/权限裁决深化待做 |
 | N14n | §24.10 运行级预算 | node/run/workflow 三级预算 + warn/degrade/abort | ✅ 运行级（`metadata.budget` warn/abort）+ 运行成本报表（N14t）已落地；节点级由 autonomy |
@@ -229,6 +229,8 @@
 > **进度（切片 U：§24.8 定义内嵌评测套件 + opt-in 保存门）**：新增 `deerflow/workflow/definition_evals.py`——把声明式 `metadata.evals`（`{fixture: ReplayFixture, cases, require_pass?, on_miss?: error|live, initial_state?}`）解析为 N14g 回放夹具 + N14h 断言，`evaluate_definition_evals` 复用 N14p runner **离线确定性**回放（无真实模型/工具调用），`eval_gate_errors` 产出逐条断言失败文案。`schema.WorkflowMetadata` 增可选 `evals` 字段（additive，旧定义零破坏）。**保存门 opt-in**：Gateway 的创建/更新在 `require_pass: true` 时运行套件，失败即 422 拒绝保存；仅「记录期望」的套件永不阻塞保存；规格非法一律 422（fail-loud，绝不静默关掉门）。Gateway 增 `POST /api/workflows/{definition_id}/evaluate` **按需回放**（无套件返回 `ran:false` 200，规格非法 422，未找到 404）。**诚实取舍**：本切片闭合「定义保存」一侧；**能力包（skill）导入时自动挂载套件列为后续增量**（需 SKILL.md frontmatter 契约）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_definition_evals.py`（35 条：解析/14 种坏形状/有无套件判定/通过/失败文案/未录制 fail-loud/`on_miss=live`/保存门 no-op 与 422/路由 ran-false、有报告、404、require_pass 拦保存、非必需套件可保存）。全量离线 A/B：11187→11222 passed、**失败集合逐条一致**（75）；workflow 套件 1142→1177 passed；ruff check/format 干净。
 
 > **进度（切片 V：§24.6b 画布插入模板）**：前端落地 N14s 端点的消费侧。`core/workflows/api.ts` 增 `fetchWorkflowTemplates()`（把后端序列化的 `definition` 解析回 `WorkflowDefinition`）；新增 `core/workflows/canvas/templates.ts`（**纯变换**）——`uniqueNodeId`（空画布保留可读 id，冲突才加 `-2/-3` 后缀）、`templateAnchor`（显式 position > 现有内容右侧 `maxX + 320` 且与最上节点对齐 > 原点）、`insertTemplateFlow`（**两遍**：先分配全部新 id 再重映射边，边 id 用 `makeEdgeId` 重算，`data.workflow.id` 同步、位置按锚点偏移；**确定性**、不改入参）；`workflow-toolbar.tsx` 增「模板」按钮 + 下拉列表（`enabled: templatesOpen` **按需拉取**，插入后 `markDirty`，失败 toast）；i18n en-US/zh-CN + `types.ts` 增 `workflows.templates.{label,hint,empty,insertFailed,loadFailed}`。**诚实取舍**：本切片只做**插入**（骨架落画布后由用户编辑保存），模板仍是后端权威（`patterns.py`），画布不硬编码拓扑；§24.6b 的**受控动态 handoff** 仍为后续增量。**无后端改动/无新依赖**；顺带修复 N14o 遗留的 `node-catalog.ts` 一行 prettier 格式。测试：新增 `tests/unit/core/workflows/canvas/templates.test.ts`（15 条：id 去重/锚点三态/空画布原样/冲突重映射与 payload 同步/边重映射与条件保留/偏移与显式位置/无存储位置的网格回退/不改入参/确定性）+ 更新工具栏 DOM 测试文案 mock。`pnpm test` 1165→1180 passed；`pnpm check`（eslint + tsc）与 `pnpm format` 全绿。
+
+> **进度（切片 W：§24.2 向量后端适配器）**：新增 `deerflow/workflow/embeddings.py`——`VectorKnowledgeStore` 实现与 `InMemoryKnowledgeStore` **相同**的 `KnowledgeStore` 协议（`upsert(collection, chunks)`/`query(collection, query, top_k, reranker)`），按**余弦相似度**排序；embedder **注入式**（`Embedder` 协议 + `embeddings_from_callable(fn)`（非 callable 构造期即 `EmbeddingError`）/ `embeddings_from_langchain(embeddings)`（适配 `embed_documents`）），**不引新依赖**。纯函数 `normalize_vector`（零向量原样）/`cosine_similarity`（维度不一致即报错）。**幂等**：`upsert` 按 chunk id 替换（与 `data:knowledge` 的幂等声明一致）、已带 `embedding` 的 chunk **不重复嵌入**且**不改调用方对象**。**排序与关键词路径同约定**：`(-score, citation)` 稳定 tie-break、非空 query 丢弃非正分、reranker 注入且**异常不破坏检索**、`top_k<=0`→空、未知 collection→空。**fail-loud**：embedder 返回**数量不符/非数值/参差/零宽向量**、预置空 embedding、或查询与索引**维度不一致**一律 `EmbeddingError`——静默空结果会让检索 bug 伪装成「无命中」，这是检索层最不能容忍的失败形状。与既有 `ingest_document`/`aquery` 无缝互换（同协议）。**诚实取舍**：embedder 由部署方注入（`deerflow.models` 侧无 embedding 客户端，强行内置会引新依赖/新配置段）；本切片交付**可插拔 store + 适配器**，**不内置任何 embedding 供应商**。**无迁移/无新表/无新配置段/无新依赖**；前端零改动。测试：新增 `tests/test_workflow_embeddings.py`（38 条：归一/余弦各态/适配器与协议 isinstance/幂等替换/预置向量跳过嵌入/6 类 embedder 坏答案/排序与 top_k/非正分丢弃/空 query 确定性/tie-break/引用前缀/reranker 重排与失败降级/维度不一致/关闭归一/与 `ingest_document` 往返/两 store 互换）。全量离线 A/B：11222→11260 passed、**失败集合逐条一致**（75）；workflow 套件 1177→1215 passed；ruff check/format 干净。
 
 ---
 
@@ -463,6 +465,7 @@
 | `7b84912` | N14s | §24.6b `GET /api/workflows/templates` 模板端点 |
 | `c8e3ffa` | N14t | §24.10 运行成本报表（`workflow/costs.py` + `GET /runs/{rid}/cost`） |
 | `0e25ab8` | N14u | §24.8 定义内嵌评测套件 + opt-in 保存门（`definition_evals.py` + `POST /workflows/{id}/evaluate`） |
-| （N14v） | N14v | §24.6b 画布「插入模板」（`fetchWorkflowTemplates` + `canvas/templates.ts` + 工具栏下拉） |
+| `2e2208f` | N14v | §24.6b 画布「插入模板」（`fetchWorkflowTemplates` + `canvas/templates.ts` + 工具栏下拉） |
+| `78d0715` | N14w | §24.2 向量后端适配器（`workflow/embeddings.py`） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。

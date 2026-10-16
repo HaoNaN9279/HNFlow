@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "ea44917",
-  "commit": "(pending)",
+  "commit": "78d0715",
   "steps": [
     { "id": "S1", "name": "embeddings.py：VectorKnowledgeStore + 纯向量函数 + 适配器", "status": "completed" },
     { "id": "S2", "name": "测试（含与 ingest_document/aquery 的互换）", "status": "completed" },
