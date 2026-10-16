@@ -194,15 +194,27 @@ export function WorkflowToolbar() {
           {runLabels.stop}
         </Button>
       ) : (
-        <Button
-          size="sm"
-          className="bg-emerald-600 text-white hover:bg-emerald-600/90"
-          onClick={() => void startRun()}
-          disabled={readonly || dirty}
-          title={dirty ? runLabels.runDisabled : undefined}
-        >
-          {runLabels.run}
-        </Button>
+        <>
+          <Button
+            size="sm"
+            className="bg-emerald-600 text-white hover:bg-emerald-600/90"
+            onClick={() => void startRun()}
+            disabled={readonly || dirty}
+            title={dirty ? runLabels.runDisabled : undefined}
+          >
+            {runLabels.run}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void startRun({ debugStep: true })}
+            disabled={readonly || dirty}
+            title={dirty ? runLabels.runDisabled : runLabels.stepHint}
+            data-testid="workflow-step-run"
+          >
+            {runLabels.step}
+          </Button>
+        </>
       )}
       <Button
         size="sm"

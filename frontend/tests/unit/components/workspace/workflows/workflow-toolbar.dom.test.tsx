@@ -58,6 +58,8 @@ rs.mock("@/core/i18n/hooks", () => ({
           run: "Run",
           runDisabled: "Save unsaved changes first",
           stop: "Stop",
+          step: "Step run",
+          stepHint: "Pause before every node",
         },
         errors: {
           saveSuccess: "Workflow saved",
@@ -309,5 +311,72 @@ describe("WorkflowToolbar", () => {
     expect(
       screen.getByRole<HTMLButtonElement>("button", { name: "Run" }).disabled,
     ).toBe(true);
+  });
+
+  it("starts a single-step run with the run-level debug flag", async () => {
+    mockedStream.mockImplementation(async function* () {
+      yield { type: "end" };
+    });
+    renderToolbar();
+
+    const stepButton = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Step run",
+    });
+    expect(stepButton.title).toBe("Pause before every node");
+    fireEvent.click(stepButton);
+
+    await waitFor(() => {
+      expect(mockedStream).toHaveBeenCalledWith("wf-1", { debug_step: true });
+    });
+  });
+
+  it("keeps the step control gated like Run", () => {
+    renderToolbar({ readonly: true });
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Step run" })
+        .disabled,
+    ).toBe(true);
+  });
+
+  it("gates the step control on a clean document", () => {
+    renderToolbar();
+
+    const clean = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Step run",
+    });
+    expect(clean.disabled).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+
+    const dirty = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Step run",
+    });
+    expect(dirty.disabled).toBe(true);
+    expect(dirty.title).toBe("Save unsaved changes first");
+  });
+
+  it("hides the step control while a run is active", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mockedStream.mockImplementation(async function* () {
+      yield { type: "metadata", runId: "run-1", threadId: "t1" };
+      await gate;
+      yield { type: "end" };
+    });
+
+    renderToolbar();
+    fireEvent.click(screen.getByRole("button", { name: "Step run" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("button", { name: "Step run" })).toBeNull();
+
+    release();
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    });
   });
 });

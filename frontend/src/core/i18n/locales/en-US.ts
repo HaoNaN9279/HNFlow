@@ -557,6 +557,23 @@ export const enUS: Translations = {
       continueCancel: "Cancel",
       continueStarted: (runId: string) =>
         `Continue session started (run ${runId})`,
+      step: "Step run",
+      stepHint:
+        "Pause before every node and advance one node per resume (a resume runs as a new run)",
+      debugPause: {
+        title: "Debug pause",
+        hint: "A node is waiting on a breakpoint or in step mode. Continue executes it; skip leaves its outputs unset. A resume runs as a new run.",
+        step: "Step",
+        breakpoint: "Breakpoint",
+        runHint: (runId: string) => `run ${runId}`,
+        continue: "Continue",
+        skip: "Skip",
+        continued: "Continued — the resumed run has started",
+        skipped: "Skipped that node and resumed the run",
+        actionFailed: "Action failed",
+        loadFailed: "Failed to load waiting debug tasks",
+        retry: "Retry",
+      },
       panel: {
         title: "Run",
         idleHint: "Run this workflow to see node status",

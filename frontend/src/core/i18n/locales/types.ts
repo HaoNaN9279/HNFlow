@@ -459,6 +459,22 @@ export interface Translations {
       continuePromptSubmit: string;
       continueCancel: string;
       continueStarted: (runId: string) => string;
+      step: string;
+      stepHint: string;
+      debugPause: {
+        title: string;
+        hint: string;
+        step: string;
+        breakpoint: string;
+        runHint: (runId: string) => string;
+        continue: string;
+        skip: string;
+        continued: string;
+        skipped: string;
+        actionFailed: string;
+        loadFailed: string;
+        retry: string;
+      };
       panel: {
         title: string;
         idleHint: string;

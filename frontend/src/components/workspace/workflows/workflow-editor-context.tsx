@@ -88,7 +88,12 @@ type WorkflowEditorContextValue = {
   /** Runtime run state for the current workflow (painted on the canvas). */
   runState: WorkflowRunState;
   isRunning: boolean;
-  startRun: () => Promise<void>;
+  /**
+   * Start a run of the saved definition. `debugStep` asks the engine to pause
+   * before **every** node (§25 single-step), so the operator advances one node
+   * per resume; the flag is run-level and never written into the definition.
+   */
+  startRun: (options?: { debugStep?: boolean }) => Promise<void>;
   cancelRun: () => Promise<void>;
   clearRun: () => void;
 };
@@ -111,7 +116,7 @@ export function useWorkflowEditor(): WorkflowEditorContextValue {
 export function useWorkflowRun(): {
   runState: WorkflowRunState;
   isRunning: boolean;
-  startRun: () => Promise<void>;
+  startRun: (options?: { debugStep?: boolean }) => Promise<void>;
   cancelRun: () => Promise<void>;
   clearRun: () => void;
 } {
@@ -269,43 +274,51 @@ export function WorkflowEditorProvider({
   // Set by a successful cancel; wins the terminal-status decision at stream end.
   const cancelledRef = useRef(false);
 
-  const startRun = useCallback(async () => {
-    if (runActiveRef.current) {
-      return;
-    }
-    runActiveRef.current = true;
-    cancelledRef.current = false;
-    runIdRef.current = null;
-    // The run id is unknown until the stream's metadata frame arrives; the
-    // reducer treats the empty placeholder as unset and lets metadata fill it.
-    dispatchRun({ type: "run-started", runId: "" });
-    let sawFailure = false;
-    try {
-      for await (const event of streamWorkflowRun(workflowId)) {
-        if (event.type === "metadata") {
-          runIdRef.current = event.runId;
-        } else if (event.type === "node-failed" || event.type === "error") {
-          sawFailure = true;
-        }
-        dispatchRun({ type: "stream-event", event });
+  const startRun = useCallback(
+    async (options?: { debugStep?: boolean }) => {
+      if (runActiveRef.current) {
+        return;
       }
-      dispatchRun({
-        type: "run-ended",
-        finalStatus: cancelledRef.current
-          ? "interrupted"
-          : sawFailure
-            ? "error"
-            : "success",
-      });
-    } catch (error) {
-      dispatchRun({
-        type: "run-error",
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      runActiveRef.current = false;
-    }
-  }, [workflowId]);
+      runActiveRef.current = true;
+      cancelledRef.current = false;
+      runIdRef.current = null;
+      // The run id is unknown until the stream's metadata frame arrives; the
+      // reducer treats the empty placeholder as unset and lets metadata fill it.
+      dispatchRun({ type: "run-started", runId: "" });
+      let sawFailure = false;
+      try {
+        // A plain run sends no body at all; only the step control adds the
+        // run-level debug flag.
+        const stream = options?.debugStep
+          ? streamWorkflowRun(workflowId, { debug_step: true })
+          : streamWorkflowRun(workflowId);
+        for await (const event of stream) {
+          if (event.type === "metadata") {
+            runIdRef.current = event.runId;
+          } else if (event.type === "node-failed" || event.type === "error") {
+            sawFailure = true;
+          }
+          dispatchRun({ type: "stream-event", event });
+        }
+        dispatchRun({
+          type: "run-ended",
+          finalStatus: cancelledRef.current
+            ? "interrupted"
+            : sawFailure
+              ? "error"
+              : "success",
+        });
+      } catch (error) {
+        dispatchRun({
+          type: "run-error",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        runActiveRef.current = false;
+      }
+    },
+    [workflowId],
+  );
 
   const cancelRun = useCallback(async () => {
     const runId = runIdRef.current;

@@ -1,0 +1,33 @@
+{
+  "slice": "N14ae",
+  "title": "§25 画布调试 UI（单步运行 + 调试暂停卡）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "2dff084",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "human-tasks.ts：解析/选择器/继续/跳过/列出", "status": "completed" },
+    { "id": "S2", "name": "startRun({debugStep}) + WorkflowRunPayload.debug_step", "status": "completed" },
+    { "id": "S3", "name": "工具栏单步运行按钮（与 Run 同 gating）", "status": "completed" },
+    { "id": "S4", "name": "运行面板调试暂停卡（继续/跳过/重试）", "status": "completed" },
+    { "id": "S5", "name": "i18n + 26 条测试 + check/format + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "debug_step 走 run 请求、不写进定义：调试一次执行无需保存定义（普通运行仍不带 body）",
+    "D2": "选择器把当前运行的暂停置前但不排他：resume 新起 run id，按运行过滤会让已单步的运行失联",
+    "D3": "acknowledge 载荷刻意非空：LangGraph 把假值 Command(resume) 当未 resume 会再次挂起",
+    "D4": "读取失败显式给重试而非静默当作无暂停（这是控制面不是观测面）",
+    "D5": "泛型 human:task/approval 端口任意，本卡不处理；通用暂停表单渲染列为后续增量"
+  },
+  "baseline": {
+    "slice_type": "前端专属（后端零改动，故不涉全量 A/B）",
+    "frontend_full": "1223 passed（新增 26 条：node 15 + DOM 7 + 工具栏 4）",
+    "check": "eslint + tsc exit 0",
+    "format": "prettier 全绿（新增/改动文件已 format:write）",
+    "note": "两个既有面板测试的 i18n 假字典补齐 debugPause，否则新卡片会读到 undefined"
+  },
+  "extra_findings": [
+    "画布终端状态仍沿用 SSE 推导（暂停的运行客户端显示 success，服务端记录 interrupted）：如需精确显示需消费 run.end/记录状态，列为后续。",
+    "剩余可选增量：通用 human:task/approval 表单渲染、回退重跑（按节点 checkpoint 定位）、能力包导入挂载 eval 套件、§24.6b 受控动态 handoff、Loop body 子图展开、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、成本感知规划器（方案明确待 benchmark）。"
+  ]
+}

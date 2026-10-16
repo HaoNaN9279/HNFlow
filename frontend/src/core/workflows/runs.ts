@@ -33,6 +33,11 @@ export type WorkflowRunPayload = {
   thread_id?: string;
   on_disconnect?: string;
   metadata?: Record<string, unknown>;
+  /**
+   * §25 single-step: pause before every node so an operator advances the run
+   * one node per resume. The flag rides the run request, not the definition.
+   */
+  debug_step?: boolean;
 };
 
 /** A normalized event emitted by the workflow run SSE stream. */

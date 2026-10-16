@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
 import { fetchWorkflowRunState } from "@/core/workflows/api";
+import {
+  continueDebugPause,
+  fetchPendingHumanTasks,
+  pendingDebugPauses,
+  skipHumanTask,
+  type DebugPause,
+} from "@/core/workflows/human-tasks";
 import {
   extractNodeDurations,
   formatDuration,
@@ -113,6 +120,80 @@ export function WorkflowRunPanel() {
     };
   }, [isTerminal, runId, workflowId]);
 
+  // §25 debug pauses (N14ae): a breakpoint / single-step suspension is a
+  // pending human task, so the panel resolves it by submitting or skipping the
+  // row. Fetched imperatively like the duration readout, but on failure it
+  // reports "could not read" instead of silently claiming no pause — this is a
+  // control, not observability.
+  const [pauses, setPauses] = useState<DebugPause[]>([]);
+  const [pausesLoadFailed, setPausesLoadFailed] = useState(false);
+  const [pauseBusyId, setPauseBusyId] = useState<string | null>(null);
+  const [pauseError, setPauseError] = useState<string | null>(null);
+
+  const loadPauses = useCallback(async () => {
+    if (typeof fetch !== "function") {
+      return;
+    }
+    try {
+      const tasks = await fetchPendingHumanTasks();
+      setPauses(pendingDebugPauses(tasks, { preferredRunId: runId }));
+      setPausesLoadFailed(false);
+    } catch {
+      setPausesLoadFailed(true);
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    if (!isTerminal || runId == null || typeof fetch !== "function") {
+      setPauses([]);
+      setPausesLoadFailed(false);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tasks = await fetchPendingHumanTasks();
+        if (!cancelled) {
+          setPauses(pendingDebugPauses(tasks, { preferredRunId: runId }));
+          setPausesLoadFailed(false);
+        }
+      } catch {
+        if (!cancelled) {
+          setPauses([]);
+          setPausesLoadFailed(true);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isTerminal, runId]);
+
+  const handlePauseAction = useCallback(
+    async (pause: DebugPause, action: "continue" | "skip") => {
+      setPauseBusyId(pause.id);
+      setPauseError(null);
+      try {
+        if (action === "continue") {
+          await continueDebugPause(pause.id);
+          toast.success(labels.debugPause.continued);
+        } else {
+          await skipHumanTask(pause.id);
+          toast.success(labels.debugPause.skipped);
+        }
+        // The resumed run is server-side and starts its own run id, so re-read
+        // the pending rows rather than assuming this pause is gone.
+        await loadPauses();
+      } catch (error) {
+        setPauseError(error instanceof Error ? error.message : String(error));
+        toast.error(labels.debugPause.actionFailed);
+      } finally {
+        setPauseBusyId(null);
+      }
+    },
+    [labels.debugPause, loadPauses],
+  );
+
   const handleContinue = async (nodeId: string) => {
     const prompt = continuePrompt.trim();
     if (!runId || prompt === "") {
@@ -162,6 +243,102 @@ export function WorkflowRunPanel() {
         </div>
       ) : (
         <div className="flex flex-col gap-4 p-4">
+          {(pauses.length > 0 || pausesLoadFailed) && (
+            <div
+              className="flex flex-col gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
+              data-testid="workflow-debug-pauses"
+            >
+              <span className="text-xs font-medium">
+                {labels.debugPause.title}
+              </span>
+              <p className="text-muted-foreground text-[11px]">
+                {labels.debugPause.hint}
+              </p>
+              {pausesLoadFailed && (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-destructive text-[11px]">
+                    {labels.debugPause.loadFailed}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-6 px-1.5 text-[11px]"
+                    onClick={() => void loadPauses()}
+                    data-testid="workflow-debug-retry"
+                  >
+                    {labels.debugPause.retry}
+                  </Button>
+                </div>
+              )}
+              {pauses.map((pause) => (
+                <div
+                  key={pause.id}
+                  className="border-muted flex flex-col gap-1 rounded border p-1.5"
+                  data-testid="workflow-debug-pause"
+                  data-pause-id={pause.id}
+                  data-pause-node={pause.nodeId}
+                  data-pause-kind={pause.kind}
+                  data-pause-run={pause.runId}
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="truncate font-mono">{pause.nodeId}</span>
+                    <span className="text-muted-foreground text-[11px]">
+                      {pause.kind === "step"
+                        ? labels.debugPause.step
+                        : labels.debugPause.breakpoint}
+                    </span>
+                  </div>
+                  <span
+                    className="text-muted-foreground truncate font-mono text-[10px]"
+                    title={pause.runId}
+                  >
+                    {labels.debugPause.runHint(pause.runId)}
+                  </span>
+                  {pause.description !== "" && (
+                    <span className="text-muted-foreground text-[11px] break-words">
+                      {pause.description}
+                    </span>
+                  )}
+                  <div className="flex gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-1.5 text-[11px]"
+                      disabled={pauseBusyId !== null}
+                      onClick={() => void handlePauseAction(pause, "continue")}
+                      data-testid="workflow-debug-continue"
+                      data-pause-id={pause.id}
+                    >
+                      {labels.debugPause.continue}
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-1.5 text-[11px]"
+                      disabled={pauseBusyId !== null}
+                      onClick={() => void handlePauseAction(pause, "skip")}
+                      data-testid="workflow-debug-skip"
+                      data-pause-id={pause.id}
+                    >
+                      {labels.debugPause.skip}
+                    </Button>
+                  </div>
+                </div>
+              ))}
+              {pauseError != null && (
+                <span
+                  className="text-destructive text-[11px] break-words"
+                  data-testid="workflow-debug-error"
+                >
+                  {pauseError}
+                </span>
+              )}
+            </div>
+          )}
+
           {runState.timeline.length > 0 && (
             <div className="flex flex-col gap-1">
               <div className="text-xs font-medium">{labels.panel.timeline}</div>

@@ -47,6 +47,20 @@ rs.mock("@/core/i18n/hooks", () => ({
           continueCancel: "Cancel",
           continueStarted: (runId: string) =>
             `Continue session started (run ${runId})`,
+          debugPause: {
+            title: "Debug pause",
+            hint: "A node is waiting on a breakpoint or in step mode.",
+            step: "Step",
+            breakpoint: "Breakpoint",
+            runHint: (runId: string) => `run ${runId}`,
+            continue: "Continue",
+            skip: "Skip",
+            continued: "Continued — the resumed run has started",
+            skipped: "Skipped that node and resumed the run",
+            actionFailed: "Action failed",
+            loadFailed: "Failed to load waiting debug tasks",
+            retry: "Retry",
+          },
           panel: {
             title: "Run",
             idleHint: "Run this workflow to see node status",
