@@ -1,0 +1,31 @@
+{
+  "slice": "N14w",
+  "title": "向量后端适配器（§24.2）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "ea44917",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "embeddings.py：VectorKnowledgeStore + 纯向量函数 + 适配器", "status": "completed" },
+    { "id": "S2", "name": "测试（含与 ingest_document/aquery 的互换）", "status": "completed" },
+    { "id": "S3", "name": "workflow 套件 + 全量 A/B + ruff", "status": "completed" },
+    { "id": "S4", "name": "文档同步 + boulder", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "embedder 注入式，不内置任何供应商、不引新依赖、不加配置段",
+    "D2": "fail-loud：embedder 坏答案（数量/非数值/参差/零宽）与维度不一致均 EmbeddingError",
+    "D3": "upsert 幂等（按 chunk id 替换）、已带 embedding 不重复嵌入、不改调用方对象",
+    "D4": "排序约定与关键词路径一致：(-score, citation)、非空 query 丢弃非正分、reranker 异常降级"
+  },
+  "baseline": {
+    "backend_full_regression": "N14u 75 failed / 11222 passed -> N14w 75 failed / 11260 passed（104 skipped）；失败集合逐条一致基线",
+    "workflow_suite": "1177 passed -> 1215 passed",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "剩余可选增量：能力包（skill）导入时自动挂载 eval 套件、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff、§25 规划项（loop body 子图展开、工具节点化、调试断点等）。"
+  ]
+}
