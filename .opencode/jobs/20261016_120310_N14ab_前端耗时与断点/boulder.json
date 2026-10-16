@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "4bdf0c3",
-  "commit": "(pending)",
+  "commit": "1bdfdbd",
   "steps": [
     { "id": "S1", "name": "core/workflows/run-durations.ts（纯逻辑抽取 + 格式化）", "status": "completed" },
     { "id": "S2", "name": "api.fetchWorkflowRunState", "status": "completed" },

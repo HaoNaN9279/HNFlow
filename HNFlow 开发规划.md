@@ -240,6 +240,8 @@
 
 > **进度（切片 AA：N1 §9 MCP 收编为 provider）**：`tool_gateway.py` 增 `PROVIDER_MCP` 与 `_mcp_tools()`——MCP 工具从「混在 builtin 池里」改为**独立 provider**：`_builtin_tools` 装配改 `include_mcp=False`，MCP 工具经 `get_cached_mcp_tools()` 单独成 provider（仍需 `get_enabled_mcp_servers()` 非空才装配），并**保留 `tag_mcp_tool` 标记**（`tool_search.py` 的 deferred-tool 过滤依赖该标记——AI 节点现在从 MCP provider 取工具，标记必须跟着走）；注册顺序 `sandbox → builtin → mcp → app`，故 MCP 工具不再可能覆盖同名 builtin（此前 `include_mcp=True` 的 dict 合并会让后到的 MCP 工具胜出，属静默遮蔽）。**fail-open**：无启用 server / 未装 `langchain-mcp-adapters` / 配置读取异常时该 provider 为空并告警，节点照常跑。**收益**：`tool:invoke` 的 `params.provider` 现在可写 `mcp` 做消歧；`resolve_with_provider` 的 provider 归因对 MCP 不再是「builtin」（诚实标注）。**无迁移/无新表/无新配置段/无新依赖**；前端零改动（provider 是 params 字符串）。测试：`tests/test_workflow_tool_gateway.py` 增 6 条（MCP 工具由 mcp provider 解析 / **标记保留**（`is_mcp_tool`）/ 无启用 server 时为空 / 配置异常 fail-open / builtin 装配确实 `include_mcp=False` / MCP 不遮蔽同名 builtin）。全量离线 A/B：11315→11323 passed；失败集 **74 条、无新增**（基线中 `test_mcp_task_service.py` 一条本次通过，属倾向相反的既有 flake）；workflow/mcp/tools 子集 2253 passed（失败项经 `Compare-Object` 全为基线既有、仅未被 `-k` 选中）；ruff check/format 干净。
 
+> **进度（切片 AB：§25 调试/观测的前端半边）**：把 N14x/N14y 的后端能力接到画布。**节点耗时读数**：新增纯逻辑 `core/workflows/run-durations.ts`（`extractNodeDurations` 从运行通道抽 `wf:<node>:__duration_ms`，跳过非数值而非伪造成 0；`slowest` tie-break 按 node id 稳定；`formatDuration` 亚秒一位小数/≥1s 转秒）+ `api.fetchWorkflowRunState(workflowId, runId)`；`workflow-run-panel.tsx` 在运行**终态后**读取该端点并在**已完成/失败**的时间线条目上显示耗时、顶部显示「最慢节点」。**实现取舍**：读数用**命令式 effect**（仅终态 + 有 runId 才发请求，且**不引入 query provider**）——因此既有的面板 DOM 测试无需改造；读取失败一律丢弃（观测绝不能变成运行失败）。耗时**不从节点事件取**：N14x 刻意把保留通道排除在事件之外，通道经 state 端点才是权威来源。**断点开关**：`workflow-properties-panel.tsx` 增勾选框，写同一个 compiler 读的 `params.breakpoint`；关闭时**删除该键**而不是留下 `breakpoint: false`。i18n 增 `workflows.run.panel.slowestNode` 与 `workflows.properties.breakpoint{Label,Hint}`（en-US/zh-CN/types）。**无后端改动/无新依赖**。测试：新增 `tests/unit/core/workflows/run-durations.test.ts`（10 条：只抽保留通道/空输入/跳非数值/数字字符串/ tie-break/空 node id/零值保留 + 格式化 3 态）；`workflow-run-panel.dom.test.tsx` 增 3 条（渲染耗时与最慢节点、无通道时不显示、读取失败时 run 仍报成功且无读数）；`workflow-properties-panel.dom.test.tsx` 增 3 条（勾选写 true、取消**删键**、true 时勾选框为选中）。`pnpm test` 1180→1196 passed；`pnpm check`（eslint + tsc）exit 0；`pnpm format` 全绿。
+
 ---
 
 ### P3 — 低优先级
@@ -479,5 +481,6 @@
 | `7bf2519` | N14y | §25 调试能力：节点断点（`breakpoint.py`，复用 HITL 栈） |
 | `72c7fd6` | N14z | §25 工具节点化：`tool:invoke` 直调网关工具（+ 前端 palette） |
 | `5e5bc9e` | N14aa | N1 §9 MCP 收编为独立 provider（`PROVIDER_MCP`） |
+| `1bdfdbd` | N14ab | §25 前端：节点耗时读数 + 断点开关 |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。
