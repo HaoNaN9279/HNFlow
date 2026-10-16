@@ -24,11 +24,14 @@ package import graph stays free of the agent tool graph.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from langchain.tools import BaseTool
+
+from deerflow.skills.permission_policy import adjudicate_tools
 
 logger = logging.getLogger(__name__)
 
@@ -416,6 +419,32 @@ def _load_enabled_skills(user_id: str | None) -> list[Any]:
         return []
 
 
+def _declared_permissions(selected_names: set[str], catalog: Mapping[str, Any]) -> tuple[set[str], dict[str, tuple[str, ...]]]:
+    """Union the selected groups' declared ``permissions`` / ``tool-permissions``.
+
+    Read through ``composition.resolve_declaration`` so an inherited
+    declaration counts (a group that ``extends`` a restricted base is restricted
+    too).  A group whose composition is broken contributes nothing here — the
+    caller has already failed closed on the tool list for that case.
+    """
+    from deerflow.skills.composition import CompositionError, resolve_declaration
+
+    declared: set[str] = set()
+    overrides: dict[str, tuple[str, ...]] = {}
+    for name in sorted(selected_names):
+        skill = catalog.get(name)
+        if skill is None:
+            continue
+        try:
+            resolved = resolve_declaration(skill, catalog)
+        except CompositionError:
+            continue
+        declared.update(permission for permission in (resolved.permissions or ()) if permission)
+        for tool_name, permissions in (resolved.tool_permissions or {}).items():
+            overrides[tool_name] = tuple(dict.fromkeys((*overrides.get(tool_name, ()), *tuple(permissions or ()))))
+    return declared, overrides
+
+
 def resolve_capability_tools(
     capability_groups: list[str],
     *,
@@ -459,6 +488,22 @@ def resolve_capability_tools(
     if not allowed:
         logger.info("AI node capability groups %s declare empty allowed-tools; node gets no tools", sorted(selected_names))
         return []
+
+    # N14 §24.12 least privilege: a capability group may declare a minimal set of
+    # permissions ({fs, net, exec, secrets}).  When it does, the node only
+    # receives tools that stay inside that declaration — an unclassifiable tool
+    # is denied rather than assumed harmless, and the denial names the knob that
+    # can declare it.  A group that declares nothing is not restricted, so a
+    # package that never asked for least privilege keeps its tools.
+    declared, overrides = _declared_permissions(selected_names, catalog)
+    if declared:
+        allowed_list, denials = adjudicate_tools(declared, allowed, overrides=overrides)
+        for denial in denials:
+            logger.warning("AI node capability group permission denial (groups=%s): %s", sorted(selected_names), denial.reason)
+        if not allowed_list:
+            logger.warning("AI node capability groups %s declare permissions %s and none of their tools survive adjudication", sorted(selected_names), sorted(declared))
+            return []
+        allowed = allowed_list
 
     gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
     return gateway.resolve_all(sorted(allowed))

@@ -16,6 +16,9 @@ Merge rules (deliberately small and predictable):
   nothing).
 * ``permissions`` / ``required-secrets`` / ``requirements`` — union (these are
   additive capability needs; a package cannot un-need what its base needs).
+  ``tool_permissions`` (N14 §24.12) is unioned **per tool name** for the same
+  reason: dropping either side would ship a narrower requirement than an author
+  declared, which is what an enforcement gate must not do.
 * ``tool-schema-version`` / ``context-budget`` — scalars: the package's own
   value wins, otherwise the last base that declared one.
 
@@ -28,7 +31,7 @@ possible failure mode for a capability boundary.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 #: Hard bound on the ``extends`` chain (a cycle is reported separately).
@@ -45,6 +48,9 @@ class ResolvedDeclaration:
 
     allowed_tools: tuple[str, ...] | None = None
     permissions: tuple[str, ...] = ()
+    #: Per-tool permission requirements (N14 §24.12), unioned per tool name.
+    #: Excluded from ``__hash__`` for the same reason as ``Skill.tool_permissions``.
+    tool_permissions: dict[str, tuple[str, ...]] = field(default_factory=dict, hash=False, compare=True)
     required_secrets: tuple[Any, ...] = ()
     requirements: tuple[Any, ...] = ()
     tool_schema_version: str | None = None
@@ -67,6 +73,19 @@ def _merges_allowed_tools(base: ResolvedDeclaration, own_tools: tuple[str, ...] 
     if base.allowed_tools is None:
         return tuple(dict.fromkeys(own_tools))
     return tuple(dict.fromkeys((*base.allowed_tools, *own_tools)))
+
+
+def _merge_tool_permissions(base: Mapping[str, tuple[str, ...]], own: Mapping[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+    """Per-tool union of ``tool-permissions`` across a composition chain.
+
+    A base and a derived package may both describe a tool; the union is the only
+    safe merge (dropping either side would ship a *narrower* requirement than an
+    author declared, which is exactly what an enforcement gate must not do).
+    """
+    merged: dict[str, tuple[str, ...]] = {name: tuple(values) for name, values in (base or {}).items()}
+    for name, values in (own or {}).items():
+        merged[name] = _dedupe((*merged.get(name, ()), *tuple(values or ())))
+    return merged
 
 
 def _dedupe(items: Iterable[Any], key: Any = None) -> tuple[Any, ...]:
@@ -124,6 +143,7 @@ def _resolve(name: str, by_name: Mapping[str, Any], *, stack: tuple[str, ...], d
         merged = ResolvedDeclaration(
             allowed_tools=merged_allowed,
             permissions=_dedupe((*merged.permissions, *base.permissions)),
+            tool_permissions=_merge_tool_permissions(merged.tool_permissions, getattr(base, "tool_permissions", {}) or {}),
             required_secrets=_dedupe((*merged.required_secrets, *base.required_secrets), key=lambda entry: getattr(entry, "name", entry)),
             requirements=_dedupe((*merged.requirements, *base.requirements), key=repr),
             # Later bases win, and the package's own value wins over all of them.
@@ -136,6 +156,7 @@ def _resolve(name: str, by_name: Mapping[str, Any], *, stack: tuple[str, ...], d
     return ResolvedDeclaration(
         allowed_tools=_merges_allowed_tools(merged, getattr(skill, "allowed_tools", None), overlay=overlay),
         permissions=_dedupe((*merged.permissions, *(getattr(skill, "permissions", ()) or ()))),
+        tool_permissions=_merge_tool_permissions(merged.tool_permissions, getattr(skill, "tool_permissions", {}) or {}),
         required_secrets=_dedupe((*merged.required_secrets, *(getattr(skill, "required_secrets", ()) or ())), key=lambda entry: getattr(entry, "name", entry)),
         requirements=_dedupe((*merged.requirements, *(getattr(skill, "requirements", ()) or ())), key=lambda entry: repr(entry)),
         tool_schema_version=getattr(skill, "tool_schema_version", None) or merged.tool_schema_version,

@@ -230,6 +230,40 @@ def parse_permissions(raw: object, skill_file: Path) -> tuple[str, ...]:
     return tuple(permissions)
 
 
+def parse_tool_permissions(raw: object, skill_file: Path) -> dict[str, tuple[str, ...]]:
+    """Parse the optional ``tool-permissions`` frontmatter field (N14 §24.12).
+
+    A mapping of tool name → list of permissions from the §5.5 vocabulary, for
+    tools the name-based table cannot classify (MCP servers, community tools):
+    inside an opted-in capability group an unclassifiable tool is *denied*, so
+    this is how a package keeps one.  Malformed entries are dropped with a
+    warning — like ``permissions``, a typo in an optional declaration must not
+    make the package unloadable — and an unknown permission name inside an entry
+    is dropped rather than kept as an unenforceable value.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        logger.warning("Ignoring non-mapping tool-permissions in %s: %r", skill_file, raw)
+        return {}
+    parsed: dict[str, tuple[str, ...]] = {}
+    for tool_name, value in raw.items():
+        name = str(tool_name).strip()
+        if not name or not isinstance(value, list):
+            logger.warning("Ignoring malformed tool-permissions entry %r in %s", tool_name, skill_file)
+            continue
+        permissions: list[str] = []
+        for item in value:
+            permission = str(item).strip().lower()
+            if permission not in CAPABILITY_PERMISSIONS:
+                logger.warning("Ignoring unknown permission %r for tool %r in %s; allowed: %s", item, tool_name, skill_file, sorted(CAPABILITY_PERMISSIONS))
+                continue
+            if permission not in permissions:
+                permissions.append(permission)
+        parsed[name] = tuple(permissions)
+    return parsed
+
+
 def parse_extends(raw: object, skill_file: Path) -> tuple[str, ...]:
     """Parse the optional ``extends`` frontmatter field (N14 §5.5).
 
@@ -402,6 +436,7 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
 
         # --- capability contract (N14 §5.5) ---
         permissions = parse_permissions(metadata.get("permissions"), skill_file)
+        tool_permissions = parse_tool_permissions(metadata.get("tool-permissions"), skill_file)
         tool_schema_version = parse_tool_schema_version(metadata.get("tool-schema-version"), skill_file)
         context_budget = parse_context_budget(metadata.get("context-budget"), skill_file)
         # --- composition (N14 §5.5) ---
@@ -433,6 +468,7 @@ def parse_skill_file(skill_file: Path, category: SkillCategory, relative_path: P
             dependencies=dependencies,
             requirements=requirements,
             permissions=permissions,
+            tool_permissions=tool_permissions,
             tool_schema_version=tool_schema_version,
             context_budget=context_budget,
             extends=extends,

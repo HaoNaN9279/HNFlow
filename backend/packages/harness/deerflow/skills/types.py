@@ -96,6 +96,15 @@ class Skill:
     # change; ``context_budget`` is the tool-description token budget. Unknown
     # values are dropped at parse time (see ``skills.parser``).
     permissions: tuple[str, ...] = ()
+    #: N14 §24.12: explicit per-tool permission requirements, for tools the
+    #: name-based table in ``skills.permission_policy`` cannot classify (MCP
+    #: servers, community tools). Frontmatter ``tool-permissions``:
+    #: ``{tool_name: [fs, net, ...]}``. Adjudication fail-closes inside an
+    #: opted-in group, so this is the knob that makes such a tool usable again.
+    #: Excluded from ``__hash__`` (a mapping is unhashable and ``Skill`` must stay
+    #: hashable for the frozen catalog) but kept in ``__eq__``, so a differing
+    #: declaration is still not "the same skill".
+    tool_permissions: dict[str, tuple[str, ...]] = field(default_factory=dict, hash=False, compare=True)
     tool_schema_version: str | None = None
     context_budget: int | None = None
     # N14 §5.5 composition: capability groups this package builds on

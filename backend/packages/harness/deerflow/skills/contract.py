@@ -13,8 +13,9 @@ from __future__ import annotations
 from deerflow.skills.types import Skill
 
 #: The closed set of declared permissions a capability package may request.
-#: Runtime adjudication by the tool gateway is a follow-up; today this is a
-#: declaration that import/validation can check.
+#: Runtime adjudication lives in ``deerflow.skills.permission_policy`` (N14
+#: §24.12): an AI node whose capability groups declare permissions only receives
+#: tools that stay inside the declaration.
 CAPABILITY_PERMISSIONS: frozenset[str] = frozenset({"fs", "net", "exec", "secrets"})
 
 
@@ -29,6 +30,10 @@ def validate_capability_contract(skill: Skill) -> list[str]:
     for permission in skill.permissions:
         if permission not in CAPABILITY_PERMISSIONS:
             problems.append(f"unknown permission {permission!r}; allowed: {sorted(CAPABILITY_PERMISSIONS)}")
+    for tool_name, permissions in (skill.tool_permissions or {}).items():
+        for permission in permissions:
+            if permission not in CAPABILITY_PERMISSIONS:
+                problems.append(f"unknown permission {permission!r} for tool {tool_name!r}; allowed: {sorted(CAPABILITY_PERMISSIONS)}")
     if skill.context_budget is not None and skill.context_budget <= 0:
         problems.append(f"context_budget must be positive, got {skill.context_budget}")
     if skill.tool_schema_version is not None and not skill.tool_schema_version.strip():
