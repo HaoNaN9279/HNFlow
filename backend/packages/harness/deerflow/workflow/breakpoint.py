@@ -45,6 +45,15 @@ BREAKPOINT_PARAM = "breakpoint"
 #: Marker stored on the task row's ``inputs_snapshot``.
 BREAKPOINT_SNAPSHOT_KIND = "breakpoint"
 
+#: Task marker + runtime-context key for **single-step** debugging (§25).
+#:
+#: Step mode is a *run-level* switch (not a node param): with it on, every node
+#: suspends before it executes, so an operator can advance the graph one node at
+#: a time.  The suspended task carries :data:`STEP_SNAPSHOT_KIND`, which is how a
+#: resume run knows to keep stepping (a plain breakpoint does not).
+STEP_SNAPSHOT_KIND = "step"
+DEBUG_STEP_CONTEXT_KEY = "debug_step"
+
 _DESCRIPTION_LIMIT = 500
 
 #: What a breakpoint task asks the human for: one explicit acknowledgement.
@@ -96,6 +105,18 @@ def breakpoint_requested(params: dict[str, Any]) -> bool:
     return params.get(BREAKPOINT_PARAM) is True
 
 
+def step_mode_requested(context: Any) -> bool:
+    """Whether this run is single-stepping (explicit ``True`` only).
+
+    Read off the run's runtime context — the flag arrives per run, so an
+    operator can step through one execution without editing (or saving) the
+    definition.
+    """
+    if not isinstance(context, dict):
+        return False
+    return context.get(DEBUG_STEP_CONTEXT_KEY) is True
+
+
 def _require_repo(runtime: WorkflowRuntime, node_id: str) -> Any:
     repo = (runtime.context or {}).get("human_task_repo")
     if repo is None:
@@ -103,11 +124,15 @@ def _require_repo(runtime: WorkflowRuntime, node_id: str) -> Any:
     return repo
 
 
-async def run_breakpoint(runtime: WorkflowRuntime, *, node_id: str, node_type: str) -> BreakpointDecision:
-    """Create (or reuse) the breakpoint HumanTask and suspend until it resolves.
+async def run_breakpoint(runtime: WorkflowRuntime, *, node_id: str, node_type: str, kind: str = BREAKPOINT_SNAPSHOT_KIND) -> BreakpointDecision:
+    """Create (or reuse) the pause HumanTask and suspend until it resolves.
 
-    Fails loudly without a repository: a breakpoint that cannot surface its task
-    would silently run the node it was supposed to pause.
+    ``kind`` distinguishes a static node breakpoint from a single-step pause;
+    both share the row (and therefore the resume machinery), and the kind is
+    what tells a resume run whether to keep stepping.
+
+    Fails loudly without a repository: a pause that cannot surface its task
+    would silently run the node it was supposed to stop.
     """
     repo = _require_repo(runtime, node_id)
     context = runtime.context or {}
@@ -122,16 +147,16 @@ async def run_breakpoint(runtime: WorkflowRuntime, *, node_id: str, node_type: s
             user_id=user_id,
             workflow_run_id=run_id,
             node_id=node_id,
-            kind=BREAKPOINT_SNAPSHOT_KIND,
-            description=f"[breakpoint] {node_type} node '{node_id}'"[:_DESCRIPTION_LIMIT],
-            inputs_snapshot={"kind": BREAKPOINT_SNAPSHOT_KIND, "node_id": node_id, "node_type": node_type},
+            kind=kind,
+            description=f"[{kind}] {node_type} node '{node_id}'"[:_DESCRIPTION_LIMIT],
+            inputs_snapshot={"kind": kind, "node_id": node_id, "node_type": node_type},
             output_spec=BREAKPOINT_OUTPUT_SPEC,
             validation_rules=BREAKPOINT_VALIDATION_RULES,
             checkpoint_ref=None,
         )
         task_id = str(row["id"])
 
-    resume = interrupt({"type": BREAKPOINT_SNAPSHOT_KIND, "task_id": task_id, "node_id": node_id, "node_type": node_type})
+    resume = interrupt({"type": kind, "task_id": task_id, "node_id": node_id, "node_type": node_type})
     return BreakpointDecision.from_resume(resume, task_id=task_id)
 
 
@@ -140,7 +165,10 @@ __all__ = [
     "BREAKPOINT_PARAM",
     "BREAKPOINT_SNAPSHOT_KIND",
     "BREAKPOINT_VALIDATION_RULES",
+    "DEBUG_STEP_CONTEXT_KEY",
+    "STEP_SNAPSHOT_KIND",
     "BreakpointDecision",
     "breakpoint_requested",
     "run_breakpoint",
+    "step_mode_requested",
 ]

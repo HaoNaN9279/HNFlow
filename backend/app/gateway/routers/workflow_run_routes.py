@@ -36,6 +36,10 @@ class WorkflowRunRequest(BaseModel):
     thread_id: str | None = None
     on_disconnect: str = "cancel"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    # §25 single-step debugging: suspend before **every** node so a caller can
+    # advance the graph one node at a time. A resume run keeps stepping while
+    # the task it resumes was a step task (see the human-task resume path).
+    debug_step: bool = False
 
 
 class WorkflowRunContinueRequest(BaseModel):
@@ -122,6 +126,7 @@ async def create_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         request=request,
         on_disconnect=body.on_disconnect,
         metadata=body.metadata,
+        debug_step=body.debug_step,
     )
     return _record_to_response(record)
 
@@ -150,6 +155,7 @@ async def stream_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         request=request,
         on_disconnect=body.on_disconnect,
         metadata=body.metadata,
+        debug_step=body.debug_step,
     )
 
     return StreamingResponse(
@@ -184,6 +190,7 @@ async def wait_workflow_run(definition_id: str, body: WorkflowRunRequest, reques
         request=request,
         on_disconnect=body.on_disconnect,
         metadata=body.metadata,
+        debug_step=body.debug_step,
     )
 
     completed = True

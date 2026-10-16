@@ -97,6 +97,7 @@ async def start_workflow_run(
     origin_run_id: str | None = None,
     continue_nodes: dict[str, str] | None = None,
     origin_thread_id: str | None = None,
+    debug_step: bool = False,
 ) -> dict[str, Any]:
     """Create a workflow ``RunRecord`` and launch the background worker task.
 
@@ -199,6 +200,7 @@ async def start_workflow_run(
             origin_run_id=origin_run_id,
             continue_nodes=continue_nodes,
             origin_thread_id=origin_thread_id,
+            debug_step=debug_step,
         )
 
     try:
@@ -271,6 +273,14 @@ async def resume_workflow_run(task: Any, *, runtime: Any) -> None:
 
         definition = deps["WorkflowDefinition"].model_validate(definition_dict)
 
+        # §25 single-step: a resume of a *step* task keeps stepping (mirrors the
+        # app-layer resume path). The task row is the only place that knows
+        # which kind of pause this was.
+        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND
+
+        snapshot = _task_field(task, "inputs_snapshot")
+        debug_step = isinstance(snapshot, Mapping) and snapshot.get("kind") == STEP_SNAPSHOT_KIND
+
         await start_workflow_run(
             definition_id=definition_id,
             definition=definition,
@@ -281,6 +291,7 @@ async def resume_workflow_run(task: Any, *, runtime: Any) -> None:
             metadata={},
             resume=Command(resume=_resume_value_for_task(task)),
             origin_run_id=workflow_run_id,
+            debug_step=debug_step,
         )
     except Exception:  # noqa: BLE001 - best-effort by design
         logger.warning("Resume run for human task %s failed (non-fatal)", task_label, exc_info=True)

@@ -1306,6 +1306,7 @@ async def start_workflow_run(
     metadata: dict[str, Any] | None = None,
     resume: Any | None = None,
     origin_run_id: str | None = None,
+    debug_step: bool = False,
 ) -> RunRecord:
     """Create a RunRecord and launch the background workflow task.
 
@@ -1386,6 +1387,7 @@ async def start_workflow_run(
                         human_task_repo=human_task_repo,
                         workflow_undo_repo=workflow_undo_repo,
                         origin_run_id=origin_run_id,
+                        debug_step=debug_step,
                     )
 
                 try:

@@ -39,6 +39,7 @@ async def run_workflow(
     origin_run_id: str | None = None,
     continue_nodes: dict[str, str] | None = None,
     origin_thread_id: str | None = None,
+    debug_step: bool = False,
 ) -> None:
     """Execute a compiled workflow graph in the background.
 
@@ -189,6 +190,13 @@ async def run_workflow(
     config.setdefault("context", {})
     if isinstance(config["context"], dict):
         config["context"]["checkpointer"] = checkpointer
+        if debug_step:
+            # §25 single-step: the node wrapper pauses before *every* node while
+            # this run-level flag is set (a resume run re-sets it when the
+            # suspending task was a step, see the human-task resume paths).
+            from deerflow.workflow.breakpoint import DEBUG_STEP_CONTEXT_KEY
+
+            config["context"][DEBUG_STEP_CONTEXT_KEY] = True
 
     # W2B cross-run AI-node continuation.  ``__ai_continue`` carries the
     # per-node continue prompts for this run; ``ai_origin_thread_id`` lets the

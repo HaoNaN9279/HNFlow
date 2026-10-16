@@ -569,16 +569,24 @@ def _make_node_fn(
 
         # §25 debugging: an explicit breakpoint suspends the node *before* it
         # executes, so an operator can inspect state and then resume (or skip).
-        # Runs ahead of the approval gate: a paused node has not previewed
+        # Single-step mode (a run-level switch) does the same for **every** node.
+        # Both run ahead of the approval gate: a paused node has not previewed
         # anything yet, and the approval gate's own suspension must not be
-        # shadowed by a breakpoint the operator already cleared.
-        from deerflow.workflow.breakpoint import breakpoint_requested, run_breakpoint
+        # shadowed by a pause the operator already cleared.  A node that stepped
+        # is not paused again by its own breakpoint — one pause per node visit.
+        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND, breakpoint_requested, run_breakpoint, step_mode_requested
 
-        if breakpoint_requested(executor_params):
-            decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value)
-            if decision.skipped:
+        paused = False
+        if step_mode_requested(runtime_context):
+            step_decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value, kind=STEP_SNAPSHOT_KIND)
+            paused = True
+            if step_decision.skipped:
                 # Same contract as a skipped ``human:task`` / rejected approval:
                 # continue with the node's output ports unset.
+                return {}
+        if not paused and breakpoint_requested(executor_params):
+            decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value)
+            if decision.skipped:
                 return {}
 
         # N10: human approval gate — preview the action, suspend, then verify the

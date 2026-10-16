@@ -98,6 +98,15 @@ async def _resume_workflow(
 
         definition = WorkflowDefinition.model_validate(definition_dict)
 
+        # §25 single-step: a resume of a *step* task keeps stepping, so the
+        # operator advances one node per resume instead of the run falling back
+        # to normal execution. The task row is the only place that knows which
+        # kind of pause this was.
+        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND
+
+        snapshot = _task_field(task, "inputs_snapshot")
+        debug_step = isinstance(snapshot, dict) and snapshot.get("kind") == STEP_SNAPSHOT_KIND
+
         await start_workflow_run(
             definition_id=definition_id,
             definition=definition,
@@ -108,6 +117,7 @@ async def _resume_workflow(
             metadata={},
             resume=Command(resume=resume_value),
             origin_run_id=workflow_run_id,
+            debug_step=debug_step,
         )
     except Exception:
         logger.warning("Resume run for human task %s failed (non-fatal)", task_id, exc_info=True)
