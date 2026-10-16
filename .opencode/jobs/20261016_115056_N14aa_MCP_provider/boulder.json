@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "7d10fdb",
-  "commit": "(pending)",
+  "commit": "5e5bc9e",
   "steps": [
     { "id": "S1", "name": "tool_gateway: PROVIDER_MCP + _mcp_tools + 注册顺序", "status": "completed" },
     { "id": "S2", "name": "_builtin_tools 改 include_mcp=False", "status": "completed" },
