@@ -567,6 +567,20 @@ def _make_node_fn(
 
             executor_params.setdefault("output_spec", derive_output_spec(node))
 
+        # §25 debugging: an explicit breakpoint suspends the node *before* it
+        # executes, so an operator can inspect state and then resume (or skip).
+        # Runs ahead of the approval gate: a paused node has not previewed
+        # anything yet, and the approval gate's own suspension must not be
+        # shadowed by a breakpoint the operator already cleared.
+        from deerflow.workflow.breakpoint import breakpoint_requested, run_breakpoint
+
+        if breakpoint_requested(executor_params):
+            decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value)
+            if decision.skipped:
+                # Same contract as a skipped ``human:task`` / rejected approval:
+                # continue with the node's output ports unset.
+                return {}
+
         # N10: human approval gate — preview the action, suspend, then verify the
         # approved preview is still fresh before letting the executor run.
         # Deferred imports: ``deerflow.workflow.approval`` imports the registry,
@@ -1263,6 +1277,25 @@ def _validate_approval_nodes(def_: WorkflowDefinition, ctx: CompileContext) -> N
             raise WorkflowCompileError(f"node '{node.id}': on_reject must be 'fail' or 'skip', got {on_reject!r}")
 
 
+def _validate_breakpoints(def_: WorkflowDefinition) -> None:
+    """Reject ``params.breakpoint`` where it could never take effect (§25).
+
+    A breakpoint pauses a node *before it runs*; ``flow:start`` / ``flow:end``
+    are graph sentinels with no node function, so a breakpoint there would be
+    silently ignored — exactly the failure mode this validator exists to stop.
+    ``breakpoint`` must also be a real boolean (``"true"`` is a config typo, not
+    a breakpoint).
+    """
+    for node in def_.nodes:
+        params = node.params or {}
+        if "breakpoint" not in params:
+            continue
+        if not isinstance(params.get("breakpoint"), bool):
+            raise WorkflowCompileError(f"node '{node.id}': breakpoint must be a boolean, got {params.get('breakpoint')!r}")
+        if params.get("breakpoint") is True and node.type in (NodeType.FLOW_START, NodeType.FLOW_END):
+            raise WorkflowCompileError(f"node '{node.id}': breakpoint is not supported on '{node.type.value}' (the node never executes)")
+
+
 #: Fan-in merge policies accepted by ``params.merge`` (N13).
 _MERGE_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "error"})
 
@@ -1650,6 +1683,7 @@ def _compile_impl(
     if errors:
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
     _validate_approval_nodes(def_, ctx)
+    _validate_breakpoints(def_)
     _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
     _validate_autonomy(def_)
