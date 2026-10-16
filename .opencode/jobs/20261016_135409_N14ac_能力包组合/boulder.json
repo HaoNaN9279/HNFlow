@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "36f186b",
-  "commit": "(pending)",
+  "commit": "318e04c",
   "steps": [
     { "id": "S1", "name": "skills/composition.py（解析/合并/闭包/校验）", "status": "completed" },
     { "id": "S2", "name": "Skill.extends/overlay + parser fail-loud 解析", "status": "completed" },
