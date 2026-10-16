@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "de1694a",
-  "commit": "(pending)",
+  "commit": "8c01d01",
   "steps": [
     { "id": "S1", "name": "parse_loop_body_spec + _validate_loop_bodies（参数化路由唯一真相）", "status": "completed" },
     { "id": "S2", "name": "生成 body 节点/回边 + ring 通道（seed/ring 端口解析）", "status": "completed" },

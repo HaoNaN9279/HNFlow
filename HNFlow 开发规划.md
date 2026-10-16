@@ -510,6 +510,6 @@
 | `301f0ed` | N14ah | §25 回退重跑（`checkpoint_id` 续跑 + `/rewind` 路由 + 画布按钮） |
 | `0ca11a8` | N14ai | §24.12 工具级权限裁决（能力包 `permissions` 运行时过滤 + `tool-permissions` 覆盖） |
 | `2ade1e2` | N14aj | 通用 `human:task` / approval 提交表单（画布可批准/提交，含预览） |
-| （N14ak） | N14ak | `flow:loop` 声明式 body（`params.subworkflow`，ring/`results`/`last`/`continue_on` 与内联一致） |
+| `8c01d01` | N14ak | `flow:loop` 声明式 body（`params.subworkflow`，ring/`results`/`last`/`continue_on` 与内联一致） |
 
 **盘点**：P0/P1/P2 主线（含 N12/N13/N14 切片 A–M）与 N3 已落地；N2 经核实由既有 `deerflow.models` 层满足。**剩余为各切片标注的后续增量与 §25 规划项**：N1 的 MCP/skill provider、DeerMem `memory_store` 适配器、`data:knowledge` 节点 + 前端 palette、评测 runner/CI 挂载、三级预算强制与成本报表、拓扑模板画布插入 UI、§24.12 完整威胁模型/工具级权限裁决、调试断点/成本缓存优化等。
