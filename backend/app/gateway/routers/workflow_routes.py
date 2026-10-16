@@ -18,6 +18,7 @@ from app.gateway.deps import get_optional_user_from_request, get_workflow_defini
 from app.gateway.permissions import require_permission
 from deerflow.skills.catalog import SkillCatalog
 from deerflow.skills.types import Skill
+from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
 from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
@@ -42,6 +43,34 @@ class WorkflowUpdateRequest(BaseModel):
     definition: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     version: str | None = None
+
+
+async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
+    """Run the definition's embedded eval suite when it opts in (N14 §24.8).
+
+    Only a definition whose ``metadata.evals.require_pass`` is true is gated —
+    a suite that merely *documents* expectations never blocks a save. A
+    malformed spec or a failing required suite rejects the request with 422
+    and the per-assertion failures, so a regression cannot be persisted
+    silently.
+    """
+    try:
+        parsed = parse_definition_evals(model.metadata)
+    except DefinitionEvalError as exc:
+        raise HTTPException(status_code=422, detail={"errors": [f"内嵌评测规格非法: {exc}"]}) from exc
+    if parsed is None or not parsed.require_pass:
+        return
+
+    try:
+        report = await evaluate_definition_evals(model)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — a suite that cannot run must not look like a pass
+        logger.warning("Embedded eval gate could not run: %s", exc, exc_info=True)
+        raise HTTPException(status_code=422, detail={"errors": [f"内嵌评测无法执行: {type(exc).__name__}: {exc}"]}) from exc
+
+    if report is not None and report.failed:
+        raise HTTPException(status_code=422, detail={"errors": eval_gate_errors(report)})
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -176,6 +205,9 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
+    # N14 §24.8: opt-in embedded eval gate (no-op unless require_pass is set).
+    await _run_embedded_eval_gate(model)
+
     repo = get_workflow_definition_repo(request)
     target_id = f"wf-{uuid.uuid4().hex}"
     cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), target_id, model)
@@ -207,6 +239,56 @@ async def get_workflow(definition_id: str, request: Request):
     return result
 
 
+@router.post("/workflows/{definition_id}/evaluate")
+@require_permission("threads", "read")
+async def evaluate_workflow(definition_id: str, request: Request):
+    """N14 §24.8: replay this definition's embedded eval suite on demand.
+
+    Reads the saved definition, replays its own golden fixture (deterministic,
+    no model/tool call) and returns the report. A definition without an
+    embedded suite answers ``ran: false`` with 200 — not having evals is a
+    normal state, not an error. A malformed spec is 422 (it would otherwise
+    silently disable the gate).
+    """
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    repo = get_workflow_definition_repo(request)
+    record = await repo.get(definition_id, user_id=str(user.id))
+    if record is None:
+        raise HTTPException(status_code=404, detail="Workflow definition not found")
+
+    raw_definition = record.get("definition") if isinstance(record, dict) else getattr(record, "definition", None)
+    try:
+        model = WorkflowDefinition.model_validate(raw_definition)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={"errors": _format_validation_errors(exc)}) from exc
+
+    try:
+        parsed = parse_definition_evals(model.metadata)
+    except DefinitionEvalError as exc:
+        raise HTTPException(status_code=422, detail={"errors": [f"内嵌评测规格非法: {exc}"]}) from exc
+
+    if not definition_has_evals(model):
+        return {"definition_id": definition_id, "ran": False, "require_pass": False, "passed": None, "report": None, "errors": []}
+
+    try:
+        report = await evaluate_definition_evals(model)
+    except Exception as exc:  # noqa: BLE001 — surface a runnable failure as a 422 with the cause
+        logger.warning("Embedded eval suite for %s could not run: %s", definition_id, exc, exc_info=True)
+        raise HTTPException(status_code=422, detail={"errors": [f"内嵌评测无法执行: {type(exc).__name__}: {exc}"]}) from exc
+
+    return {
+        "definition_id": definition_id,
+        "ran": True,
+        "require_pass": bool(parsed.require_pass) if parsed else False,
+        "passed": bool(report.passed and not report.failed) if report else None,
+        "report": report.to_dict() if report else None,
+        "errors": eval_gate_errors(report) if report else [],
+    }
+
+
 @router.put("/workflows/{definition_id}")
 @require_permission("threads", "write")
 async def update_workflow(definition_id: str, request: Request, body: WorkflowUpdateRequest):
@@ -232,6 +314,9 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         errors = validate_definition(model)
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
+
+        # N14 §24.8: opt-in embedded eval gate (no-op unless require_pass is set).
+        await _run_embedded_eval_gate(model)
 
         cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), definition_id, model)
         if cycle_errors:

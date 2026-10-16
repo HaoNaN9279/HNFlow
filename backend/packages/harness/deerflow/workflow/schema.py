@@ -196,6 +196,12 @@ class WorkflowMetadata(BaseModel):
     # 由 compiler 节点包装层聚合每个节点的保留通道 ``wf:<node>:__token_usage``
     # 后强制；None = 不设运行级上限（节点级上限由 §24.5 autonomy 承担）。
     budget: dict[str, Any] | None = None
+    # N14 §24.8 定义内嵌评测套件：``{fixture: ReplayFixture, cases: [...],
+    # require_pass?: bool, on_miss?: error|live, initial_state?: {...}}``。
+    # 定义自带 golden 夹具 + 断言，保存时可在 ``require_pass`` 下作为回归门，
+    # 也可经 ``POST /api/workflows/{id}/evaluate`` 按需回放（离线确定性）。
+    # None = 无内嵌套件（既有定义零行为变化）。
+    evals: dict[str, Any] | None = None
 
 
 class WorkflowDefinition(BaseModel):

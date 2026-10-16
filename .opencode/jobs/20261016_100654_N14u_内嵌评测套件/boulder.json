@@ -1,0 +1,32 @@
+{
+  "slice": "N14u",
+  "title": "定义内嵌评测套件 + opt-in 保存门（§24.8）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "f98a487",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "definition_evals.py：解析 + 回放评测 + 门文案", "status": "completed" },
+    { "id": "S2", "name": "schema.WorkflowMetadata.evals", "status": "completed" },
+    { "id": "S3", "name": "workflow_routes.py：保存门 + POST /{id}/evaluate", "status": "completed" },
+    { "id": "S4", "name": "测试 + workflow 套件 + 全量 A/B + ruff + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "保存门 opt-in（require_pass 默认 false）——只记录期望的套件永不阻塞保存",
+    "D2": "规格非法 fail-loud 422，绝不静默关掉门",
+    "D3": "回放离线确定性（复用 N14g/N14h/N14p），无真实模型/工具调用",
+    "D4": "单独 evaluate 端点；无套件 ran:false 200（非错误态）"
+  },
+  "baseline": {
+    "backend_full_regression": "N14t 75 failed / 11187 passed -> N14u 75 failed / 11222 passed（104 skipped）；失败集合逐条一致基线",
+    "workflow_suite": "1142 passed -> 1177 passed",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "能力包（skill）导入时自动挂载套件仍待做（需 SKILL.md frontmatter 契约）。",
+    "其余可选增量：前端模板插入 UI、worker 自动注入 memory_store、向量后端适配器、§24.12 工具级权限裁决（P3）。"
+  ]
+}
