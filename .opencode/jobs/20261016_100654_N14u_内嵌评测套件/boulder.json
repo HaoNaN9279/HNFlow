@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "f98a487",
-  "commit": "(pending)",
+  "commit": "0e25ab8",
   "steps": [
     { "id": "S1", "name": "definition_evals.py：解析 + 回放评测 + 门文案", "status": "completed" },
     { "id": "S2", "name": "schema.WorkflowMetadata.evals", "status": "completed" },
