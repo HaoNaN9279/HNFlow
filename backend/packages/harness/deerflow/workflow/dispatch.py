@@ -383,9 +383,11 @@ async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | Non
 
     Summary shape: ``{run_id, thread_id, status, error, created_at}``.  When
     the run has terminated and its ``run.end`` event is persisted in the
-    injected event store, an additive optional ``token_usage`` key carries the
-    aggregated AI-node sub-agent tokens (input/output/total + prompt-cache
-    ``cache_read_tokens``, plus a per-node ``nodes`` breakdown).
+    injected event store, additive optional keys carry its observability
+    aggregates: ``token_usage`` (aggregated AI-node sub-agent tokens —
+    input/output/total + prompt-cache ``cache_read_tokens``, plus a per-node
+    ``nodes`` breakdown) and ``node_timings`` (N14x per-node execution
+    milliseconds + ``total_ms`` + ``slowest_node``).
     """
     bundle = _require_runtime_bundle(runtime)
     run_manager = bundle.get("run_manager")
@@ -405,6 +407,9 @@ async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | Non
     token_usage = await _read_run_token_usage(record, bundle)
     if token_usage is not None:
         summary["token_usage"] = token_usage
+    node_timings = await _read_run_node_timings(record, bundle)
+    if node_timings is not None:
+        summary["node_timings"] = node_timings
     return summary
 
 
@@ -474,14 +479,13 @@ def _session_manager() -> Any | None:
         return None
 
 
-async def _read_run_token_usage(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
-    """Read the run's terminal ``run.end`` event and return its ``token_usage``.
+async def _read_run_end_content(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """Read the run's terminal ``run.end`` content, or ``None``.
 
-    The workflow worker writes an additive ``token_usage`` aggregate onto the
-    ``run.end`` content (see ``deerflow.workflow.worker``).  This lookup is
-    best-effort and optional: without a run context / event store, or before
-    the run has terminated, the key stays absent rather than failing the
-    summary read.
+    Shared by the additive observability readers (token usage, node timings) so
+    one summary read costs one event-store round trip.  Best-effort and
+    optional: without a run context / event store, or before the run has
+    terminated, the caller keeps its key absent rather than failing.
     """
     run_ctx = bundle.get("run_ctx")
     if run_ctx is None:
@@ -501,10 +505,36 @@ async def _read_run_token_usage(record: Any, bundle: dict[str, Any]) -> dict[str
     if not events:
         return None
     content = events[-1].get("content")
-    if not isinstance(content, dict):
+    return content if isinstance(content, dict) else None
+
+
+async def _read_run_token_usage(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """Read the run's terminal ``run.end`` event and return its ``token_usage``.
+
+    The workflow worker writes an additive ``token_usage`` aggregate onto the
+    ``run.end`` content (see ``deerflow.workflow.worker``).  This lookup is
+    best-effort and optional: without a run context / event store, or before
+    the run has terminated, the key stays absent rather than failing the
+    summary read.
+    """
+    content = await _read_run_end_content(record, bundle)
+    if content is None:
         return None
     token_usage = content.get("token_usage")
     return token_usage if isinstance(token_usage, dict) else None
+
+
+async def _read_run_node_timings(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """N14x: read the run's per-node execution timings off the ``run.end`` event.
+
+    Same best-effort contract as :func:`_read_run_token_usage`; a run whose
+    nodes predate the timing channel simply has no ``node_timings`` key.
+    """
+    content = await _read_run_end_content(record, bundle)
+    if content is None:
+        return None
+    node_timings = content.get("node_timings")
+    return node_timings if isinstance(node_timings, dict) else None
 
 
 async def list_run_events(run_id: str, *, runtime: Any) -> list[dict[str, Any]]:

@@ -415,6 +415,9 @@ async def run_workflow(
             token_usage = _aggregate_final_token_usage(final_output)
             if token_usage is not None:
                 run_end_content["token_usage"] = token_usage
+            node_timings = _aggregate_final_node_durations(final_output)
+            if node_timings is not None:
+                run_end_content["node_timings"] = node_timings
 
             try:
                 await event_store.put(
@@ -585,6 +588,32 @@ def _aggregate_final_token_usage(final_output: dict[str, Any]) -> dict[str, Any]
         for field in totals:
             totals[field] += int(value.get(field) or 0)
     return {**totals, "nodes": per_node}
+
+
+def _aggregate_final_node_durations(final_output: dict[str, Any]) -> dict[str, Any] | None:
+    """Collapse per-node reserved ``wf:<node>:__duration_ms`` state into one dict.
+
+    Every node's compiler wrapper records its work duration (N14x) onto
+    ``wf:<node_id>:__duration_ms``; this folds them into::
+
+        {"nodes": {<node_id>: float}, "total_ms": float, "slowest_node": str}
+
+    ``slowest_node`` breaks ties on the node id so a report is stable.  Returns
+    ``None`` when no duration channel is present, so the additive
+    ``node_timings`` key stays absent instead of emitting an empty structure.
+    """
+    per_node: dict[str, float] = {}
+    for key, value in final_output.items():
+        if not (isinstance(key, str) and key.startswith("wf:") and key.endswith(":__duration_ms")):
+            continue
+        try:
+            per_node[key[len("wf:") : -len(":__duration_ms")]] = float(value)
+        except (TypeError, ValueError):
+            continue
+    if not per_node:
+        return None
+    slowest = min(per_node.items(), key=lambda item: (-item[1], item[0]))[0]
+    return {"nodes": per_node, "total_ms": round(sum(per_node.values()), 3), "slowest_node": slowest}
 
 
 __all__ = ["run_workflow"]

@@ -50,6 +50,7 @@ import json
 import logging
 import re
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any, cast
@@ -345,6 +346,12 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             if isinstance(shared_name, str) and shared_name:
                 shared_key = f"{SHARED_CHANNEL_PREFIX}{shared_name}"
                 fields[shared_key] = Annotated[list, _shared_array_reducer] if shared_policies.get(shared_name, "overwrite") == "array" else Any
+        # N14x: every node declares a reserved execution-duration channel so the
+        # write in ``_make_node_fn`` persists into the final state → run.end
+        # ``node_timings`` → get_workflow_run.  Declared for every node type
+        # (not just AI), because a slow node is exactly what an operator wants
+        # to find.
+        fields[f"wf:{node.id}:__duration_ms"] = Any
         if node.type == NodeType.AI_LLM_AGENT:
             # Reserved observability channels: the sub-agent's aggregated token
             # usage (W1C) and, when a guardrail cap ended the run, its
@@ -388,6 +395,20 @@ def _emit_node_event(event_type: str, node_id: str, depth: int, **extra: Any) ->
         return
 
 
+def _event_output(result: Any) -> dict[str, Any]:
+    """The port-output view of a node's result for the ``completed`` event.
+
+    Reserved engine channels (``wf:<node>:__token_usage``, ``__duration_ms``,
+    ``__retry``, …) are internal bookkeeping — they already reach operators
+    through ``run.end`` aggregates (``token_usage`` / ``node_timings``) and
+    ``get_workflow_run``.  Keeping them out of the node-lifecycle event keeps
+    that payload about *what the node produced*.
+    """
+    if not isinstance(result, dict):
+        return {}
+    return {key: value for key, value in result.items() if not key.rsplit(":", 1)[-1].startswith("__")}
+
+
 def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any], node_type: NodeType | None = None) -> Callable[..., Any]:
     """Wrap a compiled-graph node fn to emit started / completed / failed events.
 
@@ -404,7 +425,7 @@ def _with_node_events(node_id: str, depth: int, fn: Callable[..., Any], node_typ
         except Exception as exc:
             _emit_node_event("failed", node_id, depth, error=str(exc), error_type=type(exc).__name__, error_class=classify_failure(exc, node_type=node_type))
             raise
-        _emit_node_event("completed", node_id, depth, output=result if isinstance(result, dict) else {})
+        _emit_node_event("completed", node_id, depth, output=_event_output(result))
         return result
 
     return _wrapped
@@ -599,7 +620,14 @@ def _make_node_fn(
             result = replay_session.replay(node_id=node.id, node_type=node.type.value, inputs=inputs)
 
         attempt = 0
+        duration_ms: float | None = None
         if result is None:
+            # N14x: node timing.  Measured around the *work* segment only — the
+            # approval gate above and any human wait are excluded, because a
+            # human's think time is not the node's execution cost.  Recorded
+            # per attempt run (backoff sleeps included), so a retried node
+            # reports what it actually cost the run.
+            _started = time.perf_counter()
             # N14 §24.7: bounded retry.  Only the executor call is retried (the
             # approval gate above ran once), and ``should_retry`` refuses to retry
             # a control-flow signal so an interrupt is never swallowed.
@@ -613,6 +641,7 @@ def _make_node_fn(
                         raise
                     if retry_policy.backoff_seconds > 0:
                         await asyncio.sleep(retry_policy.backoff_seconds)
+            duration_ms = round((time.perf_counter() - _started) * 1000, 3)
             if replay_session is not None and replay_mode == REPLAY_MODE_RECORD:
                 replay_session.record(node_id=node.id, node_type=node.type.value, inputs=inputs, outputs=result)
 
@@ -620,6 +649,13 @@ def _make_node_fn(
         for p in node.outputs:
             if p.name in result:
                 outputs[f"wf:{node.id}:{p.name}"] = result[p.name]
+
+        # N14x: every node reports how long its work took, on the reserved
+        # channel declared in ``_build_state_schema``.  A replayed node writes
+        # nothing — it did no work, and reporting ~0ms would be a lie that
+        # makes a replay look like an instant real run.
+        if duration_ms is not None:
+            outputs[f"wf:{node.id}:__duration_ms"] = duration_ms
 
         # AI nodes: surface the sub-agent's aggregated token usage on a
         # reserved state channel (declared in ``_build_state_schema``) instead

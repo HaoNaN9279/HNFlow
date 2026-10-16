@@ -1,0 +1,32 @@
+{
+  "slice": "N14x",
+  "title": "节点耗时观测 + 执行数据分析（§25）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "3011c98",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "compiler：执行段计时 + wf:<node>:__duration_ms 通道声明", "status": "completed" },
+    { "id": "S2", "name": "compiler：节点事件 output 只含声明端口（_event_output）", "status": "completed" },
+    { "id": "S3", "name": "worker/dispatch：run.end + get_workflow_run 的 node_timings", "status": "completed" },
+    { "id": "S4", "name": "测试 + 全量 A/B + ruff + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "只测执行段（executor + 重试/退避），不含审批门与人工等待",
+    "D2": "replay 命中不写耗时（未做实事，~0ms 会伪装成真实执行）",
+    "D3": "node_timings = {nodes, total_ms, slowest_node}，slowest tie-break 按 node id",
+    "D4": "节点事件 output 过滤 __ 保留通道（保留通道经 run.end 聚合对外）",
+    "D5": "get_workflow_run 与 token_usage 共用一次 run.end 读取（_read_run_end_content）"
+  },
+  "baseline": {
+    "backend_full_regression": "N14w 75 failed / 11260 passed -> N14x 76 failed / 11271 passed；唯一差异为既有时序 flake tests/test_extension_task_lifecycle.py（同代码连跑 4 次 2 failed/12 passed 与 12 passed 交替，单跑通过，与 workflow 图无关）",
+    "workflow_suite": "1215 passed -> 1271 passed（-k 'workflow or replay or compiler'）",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "剩余可选增量：瓶颈识别/Token 告警 UI（前端）、成本感知执行顺序规划器（方案明确「待 benchmark 后立项」）、能力包（skill）导入时挂载 eval 套件、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff、§25 调试断点/单步、工具节点化、Loop 子图展开。"
+  ]
+}
