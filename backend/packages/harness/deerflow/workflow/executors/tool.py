@@ -315,9 +315,10 @@ async def exec_tool_invoke(runtime: WorkflowRuntime, params: dict[str, Any], inp
     deterministic tool without spending a model turn on choosing it.
 
     ``params.tool`` (required) names the tool; ``params.provider`` optionally
-    restricts resolution to one provider (``sandbox``/``builtin``/``app``) when
-    the same id exists in several.  ``params.arguments`` is the tool's argument
-    mapping and supports ``{{port}}`` interpolation from the node's inputs.
+    restricts resolution to one provider (``sandbox``/``builtin``/``mcp``/
+    ``app``) when the same id exists in several.  ``params.arguments`` is the
+    tool's argument mapping and supports ``{{port}}`` interpolation from the
+    node's inputs.
 
     Requires ``params.crash_confirm is True``: the node is non-idempotent by
     construction (the resolved tool may write files, drive a local application,

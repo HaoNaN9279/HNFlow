@@ -1,0 +1,31 @@
+{
+  "slice": "N14aa",
+  "title": "N1 §9 MCP 收编为工具网关 provider",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "7d10fdb",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "tool_gateway: PROVIDER_MCP + _mcp_tools + 注册顺序", "status": "completed" },
+    { "id": "S2", "name": "_builtin_tools 改 include_mcp=False", "status": "completed" },
+    { "id": "S3", "name": "tool:invoke provider 文档补 mcp", "status": "completed" },
+    { "id": "S4", "name": "测试 6 条 + 全量 A/B + ruff + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "MCP 独立 provider（include_mcp=False 的 builtin 池）——诚实归因 + provider 消歧",
+    "D2": "保留 tag_mcp_tool 标记（deferred-tool 过滤依赖，AI 节点改从此 provider 取工具）",
+    "D3": "注册顺序 sandbox->builtin->mcp->app：MCP 不再静默遮蔽同名 builtin",
+    "D4": "fail-open（无启用 server/未装 extra/配置异常 → 空 provider + 告警）"
+  },
+  "baseline": {
+    "backend_full_regression": "N14z 76 failed / 11315 passed -> N14aa 74 failed / 11323 passed；无新增失败（基线 75 条中 test_mcp_task_service.py 一条本次通过，属倾向相反的既有 flake）",
+    "subset": "workflow/mcp/tools/capability/boundaries 子集 2253 passed；差异经 Compare-Object 全为基线既有、仅未被 -k 选中",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend": "零前端改动（provider 为 params 字符串）",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "剩余可选增量：断点/耗时 UI 与单步/回退重跑（前端）、能力包导入时挂载 eval 套件、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff、Loop body 子图展开、能力包组合机制（extends/overlay）、成本感知规划器（方案明确待 benchmark）。"
+  ]
+}

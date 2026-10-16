@@ -24,7 +24,9 @@ from deerflow.workflow.executors import exec_llm_agent
 
 
 def _tool(name: str) -> SimpleNamespace:
-    return SimpleNamespace(name=name, description=f"{name} tool")
+    # ``metadata`` is what ``tag_mcp_tool`` writes to (real ``BaseTool``s always
+    # carry the attribute), so the double must have it too.
+    return SimpleNamespace(name=name, description=f"{name} tool", metadata=None)
 
 
 def _skill(name: str, allowed_tools: tuple[str, ...] | None = None) -> Skill:
@@ -93,6 +95,102 @@ class TestResolveCapabilityTools:
         monkeypatch.setattr(tg, "_load_enabled_skills", lambda user_id: [])
         self._patch_gateway(monkeypatch, {"bash": _tool("bash")})
         assert tg.resolve_capability_tools(["ghost"], user_id="u1") == []
+
+
+# ── MCP provider (N1 §9) ─────────────────────────────────────────────────────
+
+
+class _FakeExtensionsConfig:
+    def __init__(self, servers: dict[str, Any]) -> None:
+        self._servers = servers
+
+    def get_enabled_mcp_servers(self) -> dict[str, Any]:
+        return self._servers
+
+
+def _patch_mcp(monkeypatch: pytest.MonkeyPatch, *, servers: dict[str, Any], tools: list[Any]) -> None:
+    """Patch the MCP config + cache the provider reads."""
+    import deerflow.config.extensions_config as ec
+    import deerflow.mcp.cache as mcp_cache
+
+    monkeypatch.setattr(ec.ExtensionsConfig, "from_file", classmethod(lambda cls, *a, **k: _FakeExtensionsConfig(servers)))
+    monkeypatch.setattr(mcp_cache, "get_cached_mcp_tools", lambda: list(tools))
+
+
+class TestMcpProvider:
+    def test_mcp_tools_resolve_from_the_mcp_provider(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {"bash": _tool("bash")})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        _patch_mcp(monkeypatch, servers={"srv": {"enabled": True}}, tools=[_tool("srv_ping")])
+
+        gateway = tg.build_default_tool_gateway()
+
+        assert gateway.provider_names() == ["sandbox", "builtin", "mcp", "app"]
+        assert gateway.resolve_with_provider("srv_ping") == (gateway.resolve("srv_ping"), tg.PROVIDER_MCP)
+
+    def test_mcp_tools_keep_their_deferred_filter_tag(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from deerflow.tools.mcp_metadata import is_mcp_tool
+
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        _patch_mcp(monkeypatch, servers={"srv": {"enabled": True}}, tools=[_tool("srv_ping")])
+
+        gateway = tg.build_default_tool_gateway()
+
+        # ``ai:llm_agent`` resolves tools through this gateway, so the tag the
+        # deferred-tool filter keys on must survive the provider split.
+        assert is_mcp_tool(gateway.resolve("srv_ping")) is True
+
+    def test_no_enabled_servers_yields_no_mcp_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        _patch_mcp(monkeypatch, servers={}, tools=[_tool("srv_ping")])
+
+        gateway = tg.build_default_tool_gateway()
+
+        assert gateway.resolve("srv_ping") is None
+        assert "mcp" in gateway.provider_names()  # registered, just empty
+
+    def test_config_failure_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import deerflow.config.extensions_config as ec
+
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        monkeypatch.setattr(ec.ExtensionsConfig, "from_file", classmethod(lambda cls, *a, **k: (_ for _ in ()).throw(RuntimeError("no config"))))
+
+        gateway = tg.build_default_tool_gateway()
+
+        assert "mcp" in gateway.provider_names()
+        assert gateway.resolve("srv_ping") is None
+
+    def test_builtin_provider_assembles_without_mcp(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        captured: dict[str, Any] = {}
+
+        def _fake_available(**kwargs: Any) -> list[Any]:
+            captured.update(kwargs)
+            return [_tool("bash")]
+
+        monkeypatch.setattr("deerflow.tools.tools.get_available_tools", _fake_available)
+
+        builtin = tg._builtin_tools(model_name=None, app_config=None)
+
+        assert captured["include_mcp"] is False  # MCP comes from its own provider
+        assert set(builtin) == {"bash"}
+
+    def test_mcp_name_does_not_shadow_a_builtin_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {"dup": _tool("builtin-dup")})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        _patch_mcp(monkeypatch, servers={"srv": {"enabled": True}}, tools=[_tool("dup")])
+
+        gateway = tg.build_default_tool_gateway()
+
+        assert gateway.resolve("dup").name == "builtin-dup"
+        assert gateway.resolve_with_provider("dup")[1] == tg.PROVIDER_BUILTIN
 
 
 # ── C1 wiring: exec_llm_agent passes resolved tools to the sub-agent ─────────

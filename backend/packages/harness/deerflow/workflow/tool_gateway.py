@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 PROVIDER_BUILTIN = "builtin"
 PROVIDER_SANDBOX = "sandbox"
 PROVIDER_APP = "app"
+#: MCP tools (N1 §9: MCP is *a provider*, not part of the builtin pool).
+PROVIDER_MCP = "mcp"
 
 
 @dataclass(frozen=True)
@@ -158,17 +160,56 @@ def _sandbox_tools() -> dict[str, BaseTool]:
 
 
 def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, BaseTool]:
-    """Config-defined + built-in + MCP tools assembled by the tool system."""
+    """Config-defined + built-in tools assembled by the tool system.
+
+    ``include_mcp=False`` on purpose: MCP tools come from their own provider
+    (:func:`_mcp_tools`) so a caller can name the provider that answered and an
+    MCP tool cannot shadow a builtin with the same name.
+    """
     from deerflow.tools.tools import get_available_tools
 
     available = get_available_tools(
         model_name=model_name,
-        include_mcp=True,
+        include_mcp=False,
         subagent_enabled=False,
         include_upload_tool=False,
         app_config=app_config,
     )
     return {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}
+
+
+def _mcp_tools() -> dict[str, BaseTool]:
+    """Tools from every enabled MCP server — the MCP provider (N1 §9).
+
+    Keeps the invariant the ``include_mcp=True`` assembly path established: each
+    tool is tagged with its MCP metadata (``tag_mcp_tool``) so deferred-tool
+    filtering keeps working for an AI node that resolves an MCP tool through its
+    capability groups.  Fail-open (no configured servers, or the MCP extra not
+    installed → no MCP provider tools) exactly like the inline path it replaces.
+    """
+    try:
+        from deerflow.config.extensions_config import ExtensionsConfig
+        from deerflow.mcp.cache import get_cached_mcp_tools
+        from deerflow.tools.mcp_metadata import tag_mcp_tool
+
+        if not ExtensionsConfig.from_file().get_enabled_mcp_servers():
+            return {}
+        tools = get_cached_mcp_tools() or []
+    except ImportError:
+        logger.warning("Tool gateway: MCP support unavailable (install 'langchain-mcp-adapters' to enable MCP tools)")
+        return {}
+    except Exception as e:  # noqa: BLE001 - fail-open provider
+        logger.warning("Tool gateway: MCP provider unavailable: %s", e)
+        return {}
+
+    resolved: dict[str, BaseTool] = {}
+    for tool in tools:
+        name = getattr(tool, "name", "")
+        if not name:
+            continue
+        tag_mcp_tool(tool)
+        resolved[name] = tool
+    return resolved
 
 
 def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | None = None) -> dict[str, BaseTool]:
@@ -325,13 +366,14 @@ def _presence_tool(app_names: list[str]) -> BaseTool:
 
 
 def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None, instance_repo: Any = None, user_id: str | None = None) -> ToolGateway:
-    """Build the gateway with the minimal builtin + sandbox (+ app) providers.
+    """Build the gateway with the sandbox / builtin / MCP / app providers.
 
     Fail-open per provider: a provider that cannot be constructed (missing
     config, import error) is skipped with a warning rather than failing the
-    node.  Sandbox is registered first so a name present in both sets prefers
-    the sandbox command/file tool; the app provider is registered last so a
-    sandbox/builtin tool name always wins a collision.
+    node.  Registration order is the resolution priority: sandbox first (a name
+    present in both sets prefers the sandbox command/file tool), then builtin,
+    then MCP, then app last so sandbox/builtin/MCP names always win a collision
+    with an application tool.
     """
     gateway = ToolGateway()
 
@@ -344,6 +386,11 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
         gateway.add_provider(StaticToolProvider(PROVIDER_BUILTIN, _builtin_tools(model_name=model_name, app_config=app_config)))
     except Exception as e:  # noqa: BLE001 - fail-open provider
         logger.warning("Tool gateway: builtin provider unavailable: %s", e)
+
+    try:
+        gateway.add_provider(StaticToolProvider(PROVIDER_MCP, _mcp_tools()))
+    except Exception as e:  # noqa: BLE001 - fail-open provider
+        logger.warning("Tool gateway: MCP provider unavailable: %s", e)
 
     try:
         gateway.add_provider(StaticToolProvider(PROVIDER_APP, _app_tools(app_config=app_config, instance_repo=instance_repo, user_id=user_id)))
@@ -418,5 +465,6 @@ __all__ = [
     "PROVIDER_BUILTIN",
     "PROVIDER_SANDBOX",
     "PROVIDER_APP",
+    "PROVIDER_MCP",
     "PRESENCE_TOOL_NAME",
 ]
