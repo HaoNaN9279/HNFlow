@@ -4,7 +4,7 @@
   "status": "completed",
   "branch": "deerflow-rebase",
   "start_head": "3011c98",
-  "commit": "(pending)",
+  "commit": "a2ba5fd",
   "steps": [
     { "id": "S1", "name": "compiler：执行段计时 + wf:<node>:__duration_ms 通道声明", "status": "completed" },
     { "id": "S2", "name": "compiler：节点事件 output 只含声明端口（_event_output）", "status": "completed" },
