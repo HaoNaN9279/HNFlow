@@ -298,47 +298,56 @@ def _check_params_json_compatible(nodes: list[Node]) -> list[str]:
 
 
 def _check_subworkflow_params(nodes: list[Node]) -> list[str]:
-    """Validate the ``params["subworkflow"]`` spec shape on ``nested:subworkflow`` nodes.
+    """Validate ``params["subworkflow"]`` specs on nodes that can carry one.
 
-    Shape-only validation — deliberately fail-open: it does NOT load or
-    ``model_validate`` the referenced sub-workflow content (that is
-    compile-time work owned by ``deerflow.workflow.compiler``).  Only the
-    ``nested:subworkflow`` node type is inspected; an unrelated node carrying a
-    ``subworkflow`` key is ignored.
+    Inspected node types: ``nested:subworkflow`` (its body), ``flow:try`` (its
+    protected body **and** its ``finally_subworkflow``), and ``flow:loop`` (its
+    declared body — N14ak).  Shape-only validation — deliberately fail-open: it
+    does NOT load or ``model_validate`` the referenced sub-workflow content (that
+    is compile-time work owned by ``deerflow.workflow.compiler``).  An unrelated
+    node carrying a ``subworkflow`` key is ignored.
     """
     errors: list[str] = []
 
     for node in nodes:
-        if node.type != NodeType.NESTED_SUBWORKFLOW:
+        if node.type not in (NodeType.NESTED_SUBWORKFLOW, NodeType.FLOW_TRY, NodeType.FLOW_LOOP):
             continue
-        spec = node.params.get("subworkflow")
-        if spec is None:
-            continue
-        if not isinstance(spec, dict):
-            errors.append(f"node '{node.id}': subworkflow spec must be a dict")
-            continue
+        candidates: list[tuple[str, Any]] = [(node.id, node.params.get("subworkflow"))]
+        if node.type == NodeType.FLOW_TRY and node.params.get("finally_subworkflow") is not None:
+            candidates.append((f"{node.id} (finally)", node.params.get("finally_subworkflow")))
+        for label, spec in candidates:
+            errors.extend(_check_one_subworkflow_spec(label, spec))
 
-        spec_type = spec.get("type")
-        if spec_type not in ("inline", "template"):
-            errors.append(f"node '{node.id}': subworkflow spec 'type' must be 'inline' or 'template'")
-            continue
+    return errors
 
-        has_definition = "definition" in spec
-        has_template_id = "template_id" in spec
-        if has_definition and has_template_id:
-            errors.append(f"node '{node.id}': subworkflow spec cannot combine inline 'definition' with 'template_id'")
-            continue
 
-        if spec_type == "inline":
-            if not isinstance(spec.get("definition"), dict):
-                errors.append(f"node '{node.id}': subworkflow inline spec requires a 'definition' dict")
-        else:  # template
-            template_id = spec.get("template_id")
-            if not isinstance(template_id, str) or not template_id:
-                errors.append(f"node '{node.id}': subworkflow template spec requires a non-empty 'template_id' string")
-            version = spec.get("version")
-            if version is not None and not isinstance(version, str):
-                errors.append(f"node '{node.id}': subworkflow template 'version' must be a string")
+def _check_one_subworkflow_spec(node_label: str, spec: Any) -> list[str]:
+    """Shape-check one subworkflow spec; returns zero or more error strings."""
+    errors: list[str] = []
+    if spec is None:
+        return errors
+    if not isinstance(spec, dict):
+        return [f"node '{node_label}': subworkflow spec must be a dict"]
+
+    spec_type = spec.get("type")
+    if spec_type not in ("inline", "template"):
+        return [f"node '{node_label}': subworkflow spec 'type' must be 'inline' or 'template'"]
+
+    has_definition = "definition" in spec
+    has_template_id = "template_id" in spec
+    if has_definition and has_template_id:
+        return [f"node '{node_label}': subworkflow spec cannot combine inline 'definition' with 'template_id'"]
+
+    if spec_type == "inline":
+        if not isinstance(spec.get("definition"), dict):
+            errors.append(f"node '{node_label}': subworkflow inline spec requires a 'definition' dict")
+    else:  # template
+        template_id = spec.get("template_id")
+        if not isinstance(template_id, str) or not template_id:
+            errors.append(f"node '{node_label}': subworkflow template spec requires a non-empty 'template_id' string")
+        version = spec.get("version")
+        if version is not None and not isinstance(version, str):
+            errors.append(f"node '{node_label}': subworkflow template 'version' must be a string")
 
     return errors
 

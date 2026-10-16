@@ -22,6 +22,13 @@ Key constraints:
   declares them, and supports an optional data-driven early exit through
   ``params.continue_on`` (names a source-port on an incoming edge; a falsy
   value there exits the loop, bounded by ``iterations``).
+  A ``params.subworkflow`` (inline/template) makes the body a *declared*
+  child graph instead of hand-drawn nodes: the compiler generates the body
+  edge and the back-edge, feeds each round's input (the *ring*: the seed on
+  round 1, the previous round's result afterwards) into the body's start
+  port and writes the body's result port to the reserved
+  ``wf:<loop_id>:__ring`` channel, so ``results``/``last``/``continue_on``
+  work exactly as they do for an inline body.
 - ``flow:parallel`` compiles to a pass-through node — multiple regular
   out edges produce LangGraph native fan-out parallelism.
 - ``flow:try`` compiles natively (no executor): it expands ``params.subworkflow``
@@ -100,6 +107,23 @@ from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
 logger = logging.getLogger(__name__)
+
+# Reserved state channel carrying the newest ring value of a ``flow:loop`` whose
+# body is declared by ``params.subworkflow`` (the body's result port).  Engine
+# bookkeeping, exactly like ``__count`` / ``__results`` / ``__retry``: it is not a
+# declared port and never appears in a node event's ``output``.
+LOOP_RING_CHANNEL = "__ring"
+
+# Separator between a ``flow:loop`` id and its generated body node's id.  ``.`` is
+# outside the definition-id grammar (``[A-Za-z0-9_-]``), so a generated name cannot
+# collide with an authored node id, and it is not one of the two characters
+# LangGraph reserves in node names (``:`` and ``|``).
+LOOP_BODY_NODE_SEP = "."
+
+# Node types whose ``params`` can carry a subworkflow spec that must be folded
+# into the compile cache key (a template's content decides the compiled structure).
+_SUBWORKFLOW_SPEC_NODE_TYPES = (NodeType.NESTED_SUBWORKFLOW, NodeType.FLOW_TRY, NodeType.FLOW_LOOP)
+
 
 # ── Public types ───────────────────────────────────────────────────────────
 
@@ -205,6 +229,72 @@ def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
     return result
 
 
+def parse_loop_body_spec(node: Node) -> dict[str, Any] | None:
+    """Parse a ``flow:loop`` node's ``params["subworkflow"]`` body spec.
+
+    Same spec vocabulary as ``nested:subworkflow`` / ``flow:try`` (see
+    :func:`parse_subworkflow_spec`), with one subtraction: a loop body runs
+    in-graph once per round, so ``mode: "delegate"`` is a compile error here (a
+    delegated body is a one-shot task, not a body).  Returns ``None`` when the
+    loop carries no ``subworkflow`` param — the node then keeps the inline,
+    hand-drawn body it has always had.
+    """
+    spec = parse_subworkflow_spec(node)
+    if spec is not None and spec.get("mode", "compile") != "compile":
+        raise WorkflowCompileError(f"node '{node.id}': flow:loop body spec 'mode' must be 'compile' (a loop body runs in-graph every round; it cannot be delegated)")
+    return spec
+
+
+def _subworkflow_specs(node: Node) -> list[dict[str, Any]]:
+    """Parse every subworkflow spec a node declares (its body, plus ``flow:try``'s finally block).
+
+    Cache-key helper.  Malformed specs are skipped rather than raised: the real
+    error is surfaced later, during expansion, and cache-key computation must
+    never throw.
+    """
+    if node.type not in _SUBWORKFLOW_SPEC_NODE_TYPES:
+        return []
+    candidates = [node]
+    finally_spec = node.params.get("finally_subworkflow")
+    if node.type == NodeType.FLOW_TRY and finally_spec is not None:
+        # ``parse_subworkflow_spec`` reads ``params["subworkflow"]``, so wrap the
+        # finally block in a throwaway node — the same shape the compiler
+        # synthesizes when it expands it.
+        candidates.append(Node(id=f"{node.id}__finally", type=NodeType.NESTED_SUBWORKFLOW, params={"subworkflow": finally_spec}))
+    specs: list[dict[str, Any]] = []
+    for candidate in candidates:
+        try:
+            spec = parse_subworkflow_spec(candidate)
+        except WorkflowCompileError:
+            continue
+        if spec is not None:
+            specs.append(spec)
+    return specs
+
+
+def _fold_template_digests(digest: Any, def_: WorkflowDefinition, resolver: Any, seen: set[tuple[str, str | None]]) -> None:
+    """Fold the content of every referenced subworkflow template into *digest* (D9-6).
+
+    Recursive: a template's *own* template references decide the parent graph's
+    compiled structure too, so a change deep in the chain must invalidate the
+    parent's cache entry.  ``seen`` guards against reference cycles (which are
+    detected properly, with a real error, during expansion).
+    """
+    for node in def_.nodes:
+        for spec in _subworkflow_specs(node):
+            if spec["type"] != "template":
+                continue
+            key = (spec["template_id"], spec.get("version"))
+            if key in seen:
+                continue
+            seen.add(key)
+            child = resolver(spec["template_id"], spec.get("version"))
+            if child is None:
+                continue
+            digest.update(b"\0template:" + serialize(child).encode())
+            _fold_template_digests(digest, child, resolver, seen)
+
+
 class WorkflowRouteError(RuntimeError):
     """Execution-time error — conditional edge with no matching condition and no default edge."""
 
@@ -307,18 +397,7 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
     if context is not None and context.checkpointer is not None:
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     if context is not None and context.definition_resolver is not None:
-        for node in def_.nodes:
-            if node.type != NodeType.NESTED_SUBWORKFLOW:
-                continue
-            try:
-                spec = parse_subworkflow_spec(node)
-            except WorkflowCompileError:
-                continue  # real error surfaces during expansion
-            if spec is None or spec["type"] != "template":
-                continue
-            child = context.definition_resolver(spec["template_id"], spec.get("version"))
-            if child is not None:
-                digest.update(b"\0template:" + serialize(child).encode())
+        _fold_template_digests(digest, def_, context.definition_resolver, set())
     return digest.hexdigest()
 
 
@@ -348,6 +427,10 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             loop_ports = {port.name for port in node.outputs}
             if "results" in loop_ports or "last" in loop_ports:
                 fields[f"wf:{node.id}:__results"] = Any
+            if node.params.get("subworkflow") is not None:
+                # A params-declared body feeds each round's result back through a
+                # reserved channel instead of a drawn back-edge.
+                fields[f"wf:{node.id}:{LOOP_RING_CHANNEL}"] = Any
         if node.type == NodeType.FLOW_HANDOFF:
             # §24.6a controlled dynamic handoff: reserved channel carrying how
             # often this node has routed within the run.  It is what the
@@ -1021,6 +1104,220 @@ def _make_try_node_fn(
     return _node_fn
 
 
+def _resolve_loop_body_ports(node: Node, child: WorkflowDefinition) -> tuple[str | None, str | None]:
+    """Resolve a ``flow:loop``'s ``params.seed_input`` / ``params.ring_port`` against its body.
+
+    ``seed_input`` names the body start-node port that receives this round's input
+    and ``ring_port`` names the body end-node port whose value becomes the next
+    round's input (and the newest ``last`` / ``results`` entry).  Both default to
+    ``"in"`` / ``"out"``, so an ordinary body needs no configuration.
+
+    The two defaults are **optional by design**: a body that declares neither port
+    is a legitimate "run this N times" body with no dataflow ring, and the loop
+    then aggregates nothing.  An *explicitly* named port that does not exist is a
+    typo the author intended something by, so it fails loudly instead of silently
+    degrading to a body with no ring — the same split the rest of the compiler uses
+    between a documented default and an expressed intent.
+    """
+    child_start = next((n for n in child.nodes if n.type == NodeType.FLOW_START), None)
+    child_end = next((n for n in child.nodes if n.type == NodeType.FLOW_END), None)
+    # Subgraph inputs are injected as ``wf:<start>:<port>``, which the state schema
+    # only declares for the start node's *output* ports — the same convention
+    # ``nested:subworkflow`` / ``flow:try`` mappings follow.
+    start_ports = {p.name for p in child_start.outputs} if child_start is not None else set()
+    end_ports = {p.name for p in child_end.outputs} if child_end is not None else set()
+
+    raw_seed = node.params.get("seed_input")
+    if raw_seed is None:
+        seed_input = "in" if "in" in start_ports else None
+    else:
+        if not isinstance(raw_seed, str) or raw_seed not in start_ports:
+            raise WorkflowCompileError(f"node '{node.id}': 'seed_input' port {raw_seed!r} not found in the loop body's start node outputs (available: {sorted(start_ports)})")
+        seed_input = raw_seed
+
+    raw_ring = node.params.get("ring_port")
+    if raw_ring is None:
+        ring_port = "out" if "out" in end_ports else None
+    else:
+        if not isinstance(raw_ring, str) or raw_ring not in end_ports:
+            raise WorkflowCompileError(f"node '{node.id}': 'ring_port' port {raw_ring!r} not found in the loop body's end node outputs (available: {sorted(end_ports)})")
+        ring_port = raw_ring
+
+    return seed_input, ring_port
+
+
+def _make_loop_body_node_fn(
+    node: Node,
+    body: CompiledStateGraph,
+    body_start_id: str,
+    body_end_id: str,
+    *,
+    seed_input: str | None,
+    ring_port: str | None,
+    map_outputs: dict[str, str],
+    incoming_edges: list[Edge],
+) -> Callable[..., Any]:
+    """Build the parent-graph node fn for a generated ``flow:loop`` body node.
+
+    One execution = one round.  The round's input (the *ring*: the seed the author
+    wired into the loop's ``in`` port on round 1, the previous round's result
+    afterwards) is injected into the body's start port ``seed_input`` — the same
+    ``wf:<start>:<port>`` convention ``nested:subworkflow`` / ``flow:try`` use —
+    the body runs in its own isolated child graph, and its end port ``ring_port``
+    is written to the loop's reserved ring channel.  ``mapping.outputs`` maps
+    further body end ports onto the loop's declared output ports, so a body can
+    report more than the next round's input.
+
+    LangGraph control-flow signals always propagate (see
+    :func:`_control_flow_should_propagate`): an interrupt is transport, not a body
+    failure, and turning it into a node error would break suspension outright.
+    A genuine failure propagates too — the loop body is not a ``flow:try``; a body
+    the author wants to tolerate belongs inside a ``flow:try``.
+    """
+    from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
+
+    ring_channel = f"wf:{node.id}:{LOOP_RING_CHANNEL}"
+    seed_key_map: dict[str, str] = {}
+    for edge in incoming_edges:
+        seed_key_map[edge.target_port] = f"wf:{edge.source}:{edge.source_port}"
+    mapping = node.params.get("mapping") or {}
+    map_inputs = (mapping or {}).get("inputs") or {}
+
+    async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
+        # The ring: the previous round's result when there is one, else the seed.
+        seed = state.get(seed_key_map.get("in", f"wf:{node.id}:in"))
+        ring = state[ring_channel] if ring_channel in state else seed
+
+        sub_input: dict[str, Any] = {}
+        if seed_input is not None:
+            sub_input[f"wf:{body_start_id}:{seed_input}"] = _copy_on_write(ring)
+        for child_port, parent_ref in map_inputs.items():
+            if isinstance(parent_ref, str) and parent_ref.startswith("wf:"):
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(state.get(parent_ref))
+            elif isinstance(parent_ref, str):
+                # A bare name is one of the loop's own input ports (or ``in``):
+                # resolve it through the loop's incoming-edge key map, the same way
+                # ``_make_try_node_fn`` resolves its inputs.
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(state.get(seed_key_map.get(parent_ref, f"wf:{node.id}:{parent_ref}")))
+            else:
+                sub_input[f"wf:{body_start_id}:{child_port}"] = _copy_on_write(parent_ref)
+
+        try:
+            config = get_config()
+        except Exception:
+            config = {}
+
+        try:
+            result = await body.ainvoke(sub_input, config)
+        except Exception as exc:  # noqa: BLE001 — re-raised below unless it is control flow
+            if _control_flow_should_propagate(exc, catch_recursion=False):
+                raise
+            raise WorkflowExecutionError(f"{node.id} > body > {exc}") from exc
+
+        outputs: dict[str, Any] = {}
+        if ring_port is not None:
+            outputs[ring_channel] = result.get(f"wf:{body_end_id}:{ring_port}")
+        for child_port, parent_port in map_outputs.items():
+            outputs[f"wf:{node.id}:{parent_port}"] = result.get(f"wf:{body_end_id}:{child_port}")
+        return outputs
+
+    return _node_fn
+
+
+def _register_loop_body_node(
+    node: Node,
+    ctx: CompileContext,
+    *,
+    depth: int,
+    visiting: set[str],
+    chain_path: list[str],
+    incoming_edges: list[Edge],
+    add_node: Callable[[str, Callable[..., Any]], None],
+) -> tuple[str, frozenset[str]]:
+    """Expand and register the generated body node of a ``flow:loop``.
+
+    Returns ``(body_node_id, report_ports)`` where ``report_ports`` are the loop
+    output ports that ``mapping.outputs`` makes the body write (Pass B resolves
+    ``params.continue_on`` against them).
+
+    The node id is ``<loop_id>.body`` — ``.`` is outside the definition-id grammar
+    (``[A-Za-z0-9_-]``), so a generated name cannot collide with an authored node
+    id, and it is not one of the two characters LangGraph reserves in node names
+    (``:`` and ``|``).  It is registered **without** lifecycle events on
+    purpose: it is an engine artifact, not a node the canvas knows, so a
+    ``wf:node:*`` event naming it would map to nothing.  The loop's own started /
+    completed / failed event already tells the story of the round; the body's node
+    events keep their child-graph depth (≥ 1) and are filtered out exactly like
+    any other expanded subgraph's.
+    """
+    body_spec = parse_loop_body_spec(node)
+    assert body_spec is not None, "caller must pass a loop with a params-declared body"
+
+    body_graph, body_def = _expand_subworkflow(node, ctx, depth=depth, visiting=visiting, chain_path=chain_path)
+    body_start_id = next((n.id for n in body_def.nodes if n.type == NodeType.FLOW_START), "")
+    body_end_id = next((n.id for n in body_def.nodes if n.type == NodeType.FLOW_END), "")
+    seed_input, ring_port = _resolve_loop_body_ports(node, body_def)
+
+    mapping = node.params.get("mapping") or {}
+    map_outputs = (mapping or {}).get("outputs") or {}
+    body_node_id = f"{node.id}{LOOP_BODY_NODE_SEP}body"
+    body_fn = _make_loop_body_node_fn(
+        node,
+        body_graph,
+        body_start_id,
+        body_end_id,
+        seed_input=seed_input,
+        ring_port=ring_port,
+        map_outputs=map_outputs,
+        incoming_edges=incoming_edges,
+    )
+    add_node(body_node_id, body_fn)
+    return body_node_id, frozenset(map_outputs.values())
+
+
+def _resolve_loop_continue_key(
+    node: Node,
+    incoming_edges: list[Edge],
+    *,
+    body_mapped_ports: set[str],
+    body_ring: str | None,
+) -> str | None:
+    """Resolve a ``flow:loop``'s ``params.continue_on`` to the state channel the route reads.
+
+    Three legal spellings, tried in this order:
+
+    1. the *source port* of one of the loop's incoming drawn edges — the classic
+       inline-body dataflow ring (typically the body's back-edge port), read from
+       that producer's channel;
+    2. one of the loop's own output ports that a params-declared body writes
+       (``mapping.outputs``, e.g. a body reporting ``needs_more``) — read from the
+       loop's own channel;
+    3. the params-declared body's result port (the ring) — read from the reserved
+       ring channel.
+
+    With a params-declared body the legal names are exactly known, so an
+    unresolvable ``continue_on`` is a **compile error**: a typo there would
+    silently disable the early exit, and a loop that never exits early looks
+    exactly like a loop that had no reason to.  Without a body spec the loop keeps
+    the documented inline behaviour (an unmatched name is a no-op), because there
+    the legal set is whatever edges the author happened to draw.
+    """
+    continue_on = node.params.get("continue_on")
+    if not isinstance(continue_on, str) or not continue_on:
+        return None
+    for edge in incoming_edges:
+        if edge.source_port == continue_on:
+            return f"wf:{edge.source}:{edge.source_port}"
+    if continue_on in body_mapped_ports:
+        return f"wf:{node.id}:{continue_on}"
+    if body_ring is not None and node.params.get("ring_port", "out") == continue_on:
+        return f"wf:{node.id}:{LOOP_RING_CHANNEL}"
+    if node.params.get("subworkflow") is not None:
+        allowed = sorted({edge.source_port for edge in incoming_edges} | body_mapped_ports | ({node.params.get("ring_port", "out")} if body_ring is not None else set()))
+        raise WorkflowCompileError(f"node '{node.id}': 'continue_on' names '{continue_on}', which is neither an incoming edge's source port nor one of the body's report ports (available: {allowed})")
+    return None
+
+
 def _make_delegate_node_fn(
     node: Node,
     child_graph: CompiledStateGraph,
@@ -1384,6 +1681,36 @@ def _validate_handoff(def_: WorkflowDefinition) -> None:
         for edge in def_.edges:
             if edge.source == node.id:
                 raise WorkflowCompileError(f"node '{node.id}': flow:handoff routes through 'params.candidates'; edge '{edge.source}'→'{edge.target}' must be removed")
+
+
+def _validate_loop_bodies(def_: WorkflowDefinition) -> None:
+    """Validate ``flow:loop`` nodes that declare a ``params.subworkflow`` body.
+
+    A params-declared body is the single source of the loop's *body* routing, the
+    same way a handoff's candidate list is the single source of its routing: the
+    compiler generates the body edge and the back-edge, so a drawn conditional
+    out-edge would be a second, conflicting answer to "which body runs?" — there
+    is no sensible way to merge the two.
+
+    The loop still needs somewhere to go when it finishes, so exactly one
+    unconditioned out-edge is required: that is the exit.  Zero exits compiles a
+    loop with no way out, and two make the exit ambiguous; both are errors rather
+    than an arbitrary winner.
+    """
+    for node in def_.nodes:
+        if node.type != NodeType.FLOW_LOOP or node.params.get("subworkflow") is None:
+            continue
+        out_edges = [edge for edge in def_.edges if edge.source == node.id]
+        conditional = [edge for edge in out_edges if edge.condition is not None]
+        defaults = [edge for edge in out_edges if edge.condition is None]
+        if conditional:
+            targets = sorted({edge.target for edge in conditional})
+            raise WorkflowCompileError(f"node '{node.id}': flow:loop with a 'subworkflow' body must not draw conditional out-edges — the body is declared by params (found {len(conditional)} conditional edge(s) to {targets})")
+        if not defaults:
+            raise WorkflowCompileError(f"node '{node.id}': flow:loop with a 'subworkflow' body requires exactly one unconditioned exit edge; found none")
+        if len(defaults) > 1:
+            targets = sorted({edge.target for edge in defaults})
+            raise WorkflowCompileError(f"node '{node.id}': flow:loop with a 'subworkflow' body has multiple exit edges {targets}; exactly one is allowed")
 
 
 #: Fan-in merge policies accepted by ``params.merge`` (N13).
@@ -1795,6 +2122,7 @@ def _compile_impl(
     _validate_approval_nodes(def_, ctx)
     _validate_breakpoints(def_)
     _validate_handoff(def_)
+    _validate_loop_bodies(def_)
     _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
     _validate_autonomy(def_)
@@ -1836,6 +2164,11 @@ def _compile_impl(
     for edge in def_.edges:
         incoming_edges[edge.target].append(edge)
 
+    # ``flow:loop`` id → (generated body node id, the loop output ports that body
+    # writes), for loops whose body is declared by ``params.subworkflow``.
+    # Filled in Pass A, consumed in Pass B.
+    loop_bodies: dict[str, tuple[str, frozenset[str]]] = {}
+
     # ── 4. Register nodes ─────────────────────────────────────────────
     for node in def_.nodes:
         if node.type == NodeType.FLOW_START:
@@ -1867,12 +2200,21 @@ def _compile_impl(
             # ``last`` only when the node actually declares them (C5).
             loop_out_ports: frozenset[str] = frozenset(port.name for port in node.outputs)
 
+            # A params-declared body (validated in ``_validate_loop_bodies``) makes
+            # the body a generated child-graph node; the loop then reads each
+            # round's input from the reserved ring channel instead of a drawn
+            # back-edge.
+            ring_key: str | None = None
+            if parse_loop_body_spec(node) is not None:
+                ring_key = f"wf:{node.id}:{LOOP_RING_CHANNEL}"
+
             async def _loop_node_fn(
                 state: dict[str, Any],
                 *,
                 _lid: str = loop_id,
                 _in_edges: tuple[tuple[str, str], ...] = loop_in_edges,
                 _out_ports: frozenset[str] = loop_out_ports,
+                _ring_key: str | None = ring_key,
             ) -> dict[str, Any]:
                 count_key = f"wf:{_lid}:__count"
                 current: int = state.get(count_key, 0)
@@ -1888,19 +2230,31 @@ def _compile_impl(
                 for port, key in _in_edges:
                     if port == "in":
                         in_state_key = key
-                in_value = state.get(in_state_key) if in_state_key is not None else None
+                # From round 2 on a params-declared body has fed the previous
+                # round's result back through the reserved ring channel, which is
+                # this round's input — the drawn back-edge's role, played by the
+                # engine instead of by an edge.  A body that produces no ring value
+                # (no declared result port) never sets the channel, so this stays
+                # false for every round and the loop is a pure "run N times" body.
+                ring_present = _ring_key is not None and current >= 1 and _ring_key in state
+                if ring_present and _ring_key is not None:
+                    in_value = state.get(_ring_key)
+                else:
+                    in_value = state.get(in_state_key) if in_state_key is not None else None
                 outputs[f"wf:{_lid}:out"] = in_value
-                # C5 aggregation: from round 2 on, the loop fn sees the previous
-                # round's body output on its ``in`` port (the dataflow ring), so
-                # collect those into ``results`` in iteration order and expose
-                # ``last``.  The seed value (round 1) is not a body output and is
-                # not collected.  Accumulation lives on a reserved channel so a
-                # node declaring only ``last`` still gets the full history.
+                # C5 aggregation: collect each round's *body output* into ``results``
+                # in iteration order and expose ``last``.  The seed value (round 1)
+                # is not a body output and is not collected; for a params-declared
+                # body the round's output exists exactly when the body wrote its
+                # ring value — so a ringless body aggregates nothing instead of
+                # reporting the seed once per round as if it had produced it.
+                # Accumulation lives on a reserved channel so a node declaring only
+                # ``last`` still gets the full history.
                 if "results" in _out_ports or "last" in _out_ports:
                     acc_key = f"wf:{_lid}:__results"
                     prior = state.get(acc_key)
                     results: list[Any] = list(prior) if isinstance(prior, list) else []
-                    if current >= 1:
+                    if ring_present or (_ring_key is None and current >= 1):
                         results.append(in_value)
                     outputs[acc_key] = results
                     if "results" in _out_ports:
@@ -1910,6 +2264,12 @@ def _compile_impl(
                 return outputs
 
             _register(node.id, _loop_node_fn)
+            if ring_key is not None:
+                # Expand + register the generated body node, and remember it for
+                # Pass B (which wires the loop's conditional edge to it).
+                body_node_id, body_report_ports = _register_loop_body_node(node, ctx, depth=depth, visiting=visiting, chain_path=chain_path, incoming_edges=incoming_edges.get(node.id, []), add_node=builder.add_node)
+                loop_bodies[node.id] = (body_node_id, body_report_ports)
+                builder.add_edge(body_node_id, node.id)  # generated back-edge
             continue
 
         if node.type == NodeType.FLOW_PARALLEL:
@@ -2080,6 +2440,31 @@ def _compile_impl(
         if cond_edges and default_target is None:
             raise WorkflowCompileError(f"conditional node '{cond_id}' requires a default edge (no condition)")
 
+        # A ``flow:loop`` with a params-declared body has *no* drawn conditional
+        # edge (validated in ``_validate_loop_bodies``): its body edge is the one
+        # the compiler generates, so it must be wired here — before the "no
+        # conditional edges → nothing to do" early-out that would otherwise leave
+        # the loop with no outgoing edge at all.
+        body = loop_bodies.get(cond_id)
+        if body is not None:
+            body_node_id = body[0]
+            _body_default: str = cast(str, default_target)
+            continue_key = _resolve_loop_continue_key(node, incoming_edges.get(node.id, []), body_mapped_ports=set(body[1]), body_ring=LOOP_RING_CHANNEL)
+
+            def _make_body_route(lid: str, max_it: int, body_target: str, dflt: str, cont_key: str | None) -> Callable[[dict[str, Any]], str]:
+                def _route(state: dict[str, Any]) -> str:
+                    count = state.get(f"wf:{lid}:__count", 0)
+                    if count <= max_it:
+                        if cont_key is not None and count >= 1 and cont_key in state and not state.get(cont_key):
+                            return dflt
+                        return body_target
+                    return dflt
+
+                return _route
+
+            builder.add_conditional_edges(cond_id, _make_body_route(cond_id, node.params.get("iterations", 1), body_node_id, _body_default, continue_key), {body_node_id: body_node_id, _body_default: _body_default})
+            continue
+
         if not cond_edges:
             continue  # no conditional edges — regular edges already handled in Pass A
 
@@ -2100,13 +2485,11 @@ def _compile_impl(
             # opinion" (keep looping) — so a signal the body has not produced
             # yet cannot cut the loop short on round 1.  ``iterations`` stays a
             # hard ceiling regardless.  A ``continue_on`` naming no edge is a
-            # safe no-op (count-only loop).
-            continue_on = node.params.get("continue_on")
-            continue_key: str | None = None
-            if isinstance(continue_on, str) and continue_on:
-                for edge in incoming_edges.get(node.id, []):
-                    if edge.source_port == continue_on:
-                        continue_key = f"wf:{edge.source}:{edge.source_port}"
+            # safe no-op (count-only loop) — unless the loop has a
+            # params-declared body, whose routing was already wired above (the
+            # legal names are known exactly there, so an unmatched one is a
+            # compile error caught in that branch).
+            continue_key = _resolve_loop_continue_key(node, incoming_edges.get(loop_id, []), body_mapped_ports=set(), body_ring=None)
 
             def _make_loop_route(
                 lid: str,
