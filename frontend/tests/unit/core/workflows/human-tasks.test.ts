@@ -3,8 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 import {
   continueDebugPause,
   fetchPendingHumanTasks,
+  formatRuleValue,
+  humanTaskFields,
+  initialHumanTaskDrafts,
   parseHumanTask,
   pendingDebugPauses,
+  pendingHumanTasks,
+  serializeHumanTaskDrafts,
   skipHumanTask,
   submitHumanTask,
 } from "@/core/workflows/human-tasks";
@@ -58,6 +63,9 @@ describe("parseHumanTask", () => {
       kind: "step",
       status: "pending",
       description: "[step] 节点 a 在单步调试中暂停",
+      outputSpec: [],
+      validationRules: { enum: {}, pattern: {} },
+      preview: null,
     });
   });
 
@@ -236,5 +244,417 @@ describe("debug pause actions", () => {
     await expect(skipHumanTask("ht-1")).rejects.toThrow(
       "Failed to skip human task: Internal Server Error",
     );
+  });
+});
+
+// ── generic task fields (N14aj) ──────────────────────────────────────────────
+
+/** A ``human:task`` row declaring the given submission ports. */
+function taskRow(
+  ports: {
+    name: string;
+    type: string;
+    required?: boolean;
+    description?: string;
+  }[],
+  rules: unknown = null,
+  snapshot: unknown = null,
+) {
+  return {
+    id: "ht-task",
+    workflow_run_id: "run-1",
+    node_id: "ask_user",
+    kind: "task",
+    status: "pending",
+    description: "请输入参数",
+    output_spec: {
+      ports: ports.map((port) => ({
+        required: false,
+        description: "",
+        ...port,
+        type: port.type ?? "data",
+      })),
+    },
+    validation_rules: rules,
+    inputs_snapshot: snapshot,
+  };
+}
+
+function parsed(raw: unknown) {
+  const task = parseHumanTask(raw);
+  if (task === null) {
+    throw new Error("row did not parse");
+  }
+  return task;
+}
+
+describe("humanTaskFields", () => {
+  it("derives one field per declared port, in order", () => {
+    const fields = humanTaskFields(
+      parsed(
+        taskRow([
+          {
+            name: "note",
+            type: "data",
+            required: true,
+            description: "写点说明",
+          },
+          { name: "confirmed", type: "bool" },
+        ]),
+      ),
+    );
+
+    expect(fields.map((field) => field.name)).toEqual(["note", "confirmed"]);
+    expect(fields[0]).toMatchObject({
+      kind: "text",
+      required: true,
+      description: "写点说明",
+      options: null,
+      pattern: null,
+    });
+    expect(fields[1]).toMatchObject({ kind: "bool" });
+  });
+
+  it("maps declared types onto widgets", () => {
+    const kinds = humanTaskFields(
+      parsed(
+        taskRow([
+          { name: "a", type: "bool" },
+          { name: "b", type: "number" },
+          { name: "c", type: "array" },
+          { name: "d", type: "record" },
+          { name: "e", type: "file" },
+        ]),
+      ),
+    ).map((field) => field.kind);
+
+    expect(kinds).toEqual(["bool", "number", "json", "json", "text"]);
+  });
+
+  it("drops malformed ports instead of inventing a field", () => {
+    const task = parseHumanTask({
+      ...taskRow([{ name: "ok", type: "data" }]),
+      output_spec: {
+        ports: [
+          { type: "data" },
+          { name: "", type: "data" },
+          "nope",
+          { name: "ok", type: "data" },
+        ],
+      },
+    })!;
+    expect(humanTaskFields(task).map((field) => field.name)).toEqual(["ok"]);
+  });
+
+  it("turns an enum rule into a labelled choice", () => {
+    const fields = humanTaskFields(
+      parsed(
+        taskRow([{ name: "mode", type: "enum" }], {
+          enum: { mode: { enum: ["fast", "slow"] } },
+        }),
+      ),
+    );
+
+    expect(fields[0]).toMatchObject({
+      kind: "enum",
+      options: [
+        { label: "fast", value: "fast" },
+        { label: "slow", value: "slow" },
+      ],
+    });
+  });
+
+  it("keeps the approval gate's boolean decision as a choice", () => {
+    const fields = humanTaskFields(
+      parsed({
+        ...taskRow([{ name: "decision", type: "bool", required: true }]),
+        kind: "approval",
+        validation_rules: { enum: { decision: { enum: [true, false] } } },
+      }),
+    );
+
+    // A bool port stays a bool: the rule constrains the *choice*, it does not
+    // turn the field into a select whose labels would be strings.
+    expect(fields[0]).toMatchObject({
+      kind: "bool",
+      options: [
+        { label: "true", value: true },
+        { label: "false", value: false },
+      ],
+    });
+  });
+
+  it("reports a declared pattern as a hint", () => {
+    const fields = humanTaskFields(
+      parsed(
+        taskRow([{ name: "code", type: "data" }], {
+          pattern: { code: { pattern: "^[a-z]+$" } },
+        }),
+      ),
+    );
+    expect(fields[0]).toMatchObject({ pattern: "^[a-z]+$" });
+  });
+
+  it("ignores malformed rules", () => {
+    const fields = humanTaskFields(
+      parsed(
+        taskRow([{ name: "x", type: "data" }], {
+          enum: { x: "nope" },
+          pattern: { x: 7 },
+        }),
+      ),
+    );
+    expect(fields[0]).toMatchObject({
+      kind: "text",
+      options: null,
+      pattern: null,
+    });
+  });
+});
+
+describe("serializeHumanTaskDrafts", () => {
+  const fields = humanTaskFields(
+    parsed(
+      taskRow(
+        [
+          { name: "note", type: "data", required: true },
+          { name: "confirmed", type: "bool", required: true },
+          { name: "count", type: "number" },
+          { name: "items", type: "array" },
+          { name: "mode", type: "enum" },
+        ],
+        { enum: { mode: { enum: ["fast", "slow"] } } },
+      ),
+    ),
+  );
+
+  it("starts booleans unset (an untouched approval must not submit a rejection)", () => {
+    const drafts = initialHumanTaskDrafts(fields);
+    expect(drafts.confirmed).toBeNull();
+    expect(drafts.note).toBe("");
+  });
+
+  it("round-trips every declared kind", () => {
+    const result = serializeHumanTaskDrafts(fields, {
+      note: "hello",
+      confirmed: true,
+      count: "3",
+      items: '[1, "two"]',
+      mode: "slow",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      values: {
+        note: "hello",
+        confirmed: true,
+        count: 3,
+        items: [1, "two"],
+        mode: "slow",
+      },
+    });
+  });
+
+  it("refuses a missing required field before making a request", () => {
+    const result = serializeHumanTaskDrafts(fields, {
+      note: "hello",
+      confirmed: null,
+      count: "",
+      items: "",
+      mode: "",
+    });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.error).toContain("confirmed");
+  });
+
+  it("omits an optional field left empty", () => {
+    const result = serializeHumanTaskDrafts(fields, {
+      note: "hello",
+      confirmed: false,
+      count: "",
+      items: "",
+      mode: "",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok === true && result.values).toEqual({
+      note: "hello",
+      confirmed: false,
+    });
+  });
+
+  it("rejects unparsable JSON / numbers / enum values", () => {
+    const base = {
+      note: "n",
+      confirmed: true,
+      count: "1",
+      items: "[1]",
+      mode: "fast",
+    };
+    for (const [patch, needle] of [
+      [{ items: "{oops" }, "JSON"],
+      [{ count: "abc" }, "数字"],
+      [{ mode: "medium" }, "枚举"],
+    ] as const) {
+      const result = serializeHumanTaskDrafts(fields, { ...base, ...patch });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.error).toContain(needle);
+    }
+  });
+
+  it("formatRuleValue distinguishes booleans from the strings that spell them", () => {
+    expect(formatRuleValue(true)).toBe("true");
+    expect(formatRuleValue("true")).toBe("true");
+    // Both labels read "true" but only the option's *value* is what gets
+    // submitted — so the boolean port's options must carry booleans.
+    const boolFields = humanTaskFields(
+      parsed({
+        ...taskRow([{ name: "decision", type: "bool", required: true }]),
+        kind: "approval",
+        validation_rules: { enum: { decision: { enum: [true, false] } } },
+      }),
+    );
+    expect(boolFields[0]?.options?.map((option) => option.value)).toEqual([
+      true,
+      false,
+    ]);
+    expect(serializeHumanTaskDrafts(boolFields, { decision: false })).toEqual({
+      ok: true,
+      values: { decision: false },
+    });
+  });
+
+  it("refuses a string draft for a boolean port", () => {
+    // The defensive guard behind the widget: a stale (or hand-built) draft must
+    // not submit the string "false" where the backend validates a boolean.
+    const fields = humanTaskFields(
+      parsed(taskRow([{ name: "confirmed", type: "bool", required: true }])),
+    );
+    const result = serializeHumanTaskDrafts(fields, { confirmed: "false" });
+    expect(result.ok).toBe(false);
+  });
+
+  it("narrows a boolean port to the booleans its enum rule allows", () => {
+    // A breakpoint's `acknowledge` allows only `true`: offering `false` would
+    // render a button the backend rejects.
+    const fields = humanTaskFields(
+      parsed({
+        ...taskRow([{ name: "acknowledge", type: "bool", required: true }]),
+        kind: "breakpoint",
+        validation_rules: { enum: { acknowledge: { enum: [true] } } },
+      }),
+    );
+    expect(fields[0]?.options).toEqual([{ label: "true", value: true }]);
+    expect(serializeHumanTaskDrafts(fields, { acknowledge: false }).ok).toBe(
+      false,
+    );
+  });
+});
+
+describe("pendingHumanTasks", () => {
+  it("keeps submission tasks and leaves debug pauses to their own list", () => {
+    const rows = [
+      parsed(taskRow([{ name: "x", type: "data" }])),
+      parsed({
+        ...taskRow([{ name: "x", type: "data" }]),
+        id: "ht-ap",
+        kind: "approval",
+      }),
+      parsed(stepTask()),
+      parsed({
+        ...taskRow([{ name: "x", type: "data" }]),
+        id: "ht-done",
+        status: "submitted",
+      }),
+    ];
+
+    const pending = pendingHumanTasks(rows);
+
+    expect(pending.map((task) => task.id)).toEqual(["ht-task", "ht-ap"]);
+    expect(pending.map((task) => task.kind)).toEqual(["task", "approval"]);
+  });
+
+  it("pins the open run's tasks first without hiding another run's", () => {
+    const other = parsed({
+      ...taskRow([{ name: "x", type: "data" }]),
+      id: "ht-other",
+      workflow_run_id: "run-9",
+    });
+    const mine = parsed(taskRow([{ name: "x", type: "data" }]));
+
+    expect(
+      pendingHumanTasks([other, mine], { preferredRunId: "run-1" }).map(
+        (task) => task.id,
+      ),
+    ).toEqual(["ht-task", "ht-other"]);
+  });
+});
+
+describe("approval previews", () => {
+  it("reduces a stored preview", () => {
+    const task = parsed({
+      ...taskRow([{ name: "decision", type: "bool", required: true }]),
+      kind: "approval",
+      inputs_snapshot: {
+        kind: "approval",
+        preview: {
+          action: "overwrite",
+          summary: "Overwrite hero.blend",
+          reversible: false,
+          recovery: "restore from backup",
+          targets: [
+            {
+              ref: {
+                uri: "asset://host/C:/x/hero.blend",
+                path: "C:/x/hero.blend",
+              },
+            },
+          ],
+          required_confirmations: ["type the file name"],
+        },
+      },
+    });
+
+    expect(task.preview).toEqual({
+      action: "overwrite",
+      summary: "Overwrite hero.blend",
+      reversible: false,
+      recovery: "restore from backup",
+      targets: ["asset://host/C:/x/hero.blend"],
+      requiredConfirmations: ["type the file name"],
+    });
+  });
+
+  it("is null for a non-approval snapshot or a missing preview", () => {
+    expect(parsed(taskRow([{ name: "x", type: "data" }])).preview).toBeNull();
+    expect(
+      parsed({
+        ...taskRow([{ name: "x", type: "data" }]),
+        kind: "approval",
+        inputs_snapshot: { kind: "approval" },
+      }).preview,
+    ).toBeNull();
+    expect(
+      parsed({
+        ...taskRow([{ name: "x", type: "data" }]),
+        kind: "approval",
+        inputs_snapshot: "nope",
+      }).preview,
+    ).toBeNull();
+  });
+
+  it("tolerates a preview with missing pieces", () => {
+    const task = parsed({
+      ...taskRow([{ name: "decision", type: "bool" }]),
+      kind: "approval",
+      inputs_snapshot: { kind: "approval", preview: {} },
+    });
+    expect(task.preview).toEqual({
+      action: "",
+      summary: "",
+      reversible: null,
+      recovery: null,
+      targets: [],
+      requiredConfirmations: [],
+    });
   });
 });

@@ -13,10 +13,13 @@ import { getBackendBaseURL } from "@/core/config";
  * renderer.
  */
 
-/** Debug pause kinds the canvas can resolve (`kind` on the backend task row). */
+/** Task kinds the debug controls resolve as a simple continue/skip (§25). */
 export const DEBUG_PAUSE_KINDS = ["breakpoint", "step"] as const;
 
 export type DebugPauseKind = (typeof DEBUG_PAUSE_KINDS)[number];
+
+/** The approval gate's task kind (N10) — a preview plus a yes/no decision. */
+export const APPROVAL_TASK_KIND = "approval";
 
 /**
  * The resume payload a debug pause accepts. The `acknowledge` port is declared
@@ -34,6 +37,51 @@ export type HumanTaskRecord = {
   kind: string;
   status: string;
   description: string;
+  /** What the human must submit — the row's own declaration (never guessed). */
+  outputSpec: HumanTaskPort[];
+  validationRules: HumanTaskRules;
+  /** Approval gate preview (N10), when the row carries one. */
+  preview: ApprovalPreview | null;
+};
+
+/** One declared submission port, as the backend's ``output_spec.ports`` states it. */
+export type HumanTaskPort = {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+};
+
+/** The submission constraints the backend enforces (`enum` / `pattern`). */
+export type HumanTaskRules = {
+  enum: Record<string, unknown[]>;
+  pattern: Record<string, string>;
+};
+
+/** What the human is approving (N10 ``ActionPreview``, defensively reduced). */
+export type ApprovalPreview = {
+  action: string;
+  summary: string;
+  reversible: boolean | null;
+  recovery: string | null;
+  targets: string[];
+  requiredConfirmations: string[];
+};
+
+/** How a declared port is edited. */
+export type HumanTaskFieldKind = "bool" | "number" | "json" | "enum" | "text";
+
+/** One editable field, derived from a port plus its declared rules. */
+export type HumanTaskField = {
+  name: string;
+  type: string;
+  required: boolean;
+  description: string;
+  kind: HumanTaskFieldKind;
+  /** Allowed values for an `enum` rule, each with its display label. */
+  options: { label: string; value: unknown }[] | null;
+  /** Declared `pattern` rule, shown as a hint (the backend enforces it). */
+  pattern: string | null;
 };
 
 /** A pending debug pause the run panel can offer to continue or skip. */
@@ -63,6 +111,95 @@ function isDebugPauseKind(value: unknown): value is DebugPauseKind {
   return (DEBUG_PAUSE_KINDS as readonly unknown[]).includes(value);
 }
 
+/** Reduce the row's ``output_spec`` (defensively — it comes off the wire). */
+function parseOutputSpec(raw: unknown): HumanTaskPort[] {
+  const ports = toRecord(raw)?.ports;
+  if (!Array.isArray(ports)) {
+    return [];
+  }
+  const parsed: HumanTaskPort[] = [];
+  for (const entry of ports) {
+    const port = toRecord(entry);
+    const name = stringField(port, "name");
+    if (name === undefined || name === "") {
+      continue;
+    }
+    parsed.push({
+      name,
+      type: stringField(port, "type") ?? "data",
+      required: port?.required === true,
+      description: stringField(port, "description") ?? "",
+    });
+  }
+  return parsed;
+}
+
+/** Reduce the row's ``validation_rules`` to the two rule kinds it can carry. */
+function parseValidationRules(raw: unknown): HumanTaskRules {
+  const rules = toRecord(raw);
+  const enumRaw = toRecord(rules?.enum);
+  const patternRaw = toRecord(rules?.pattern);
+  const enumRules: Record<string, unknown[]> = {};
+  if (enumRaw !== null) {
+    for (const [key, value] of Object.entries(enumRaw)) {
+      const entry = toRecord(value)?.enum;
+      if (Array.isArray(entry)) {
+        enumRules[key] = entry;
+      }
+    }
+  }
+  const patternRules: Record<string, string> = {};
+  if (patternRaw !== null) {
+    for (const [key, value] of Object.entries(patternRaw)) {
+      const pattern = stringField(toRecord(value), "pattern");
+      if (pattern !== undefined && pattern !== "") {
+        patternRules[key] = pattern;
+      }
+    }
+  }
+  return { enum: enumRules, pattern: patternRules };
+}
+
+/** Reduce an approval task's stored preview (N10), or ``null`` when absent. */
+function parseApprovalPreview(raw: unknown): ApprovalPreview | null {
+  const snapshot = toRecord(raw);
+  if (snapshot?.kind !== APPROVAL_TASK_KIND) {
+    return null;
+  }
+  const preview = toRecord(snapshot.preview);
+  if (preview === null) {
+    return null;
+  }
+  const targets = Array.isArray(preview.targets)
+    ? preview.targets
+        .map((entry) => {
+          const target = toRecord(entry);
+          const ref = toRecord(target?.ref);
+          return (
+            stringField(ref, "uri") ??
+            stringField(ref, "path") ??
+            stringField(target, "path") ??
+            null
+          );
+        })
+        .filter((path): path is string => path !== null)
+    : [];
+  const confirmations = Array.isArray(preview.required_confirmations)
+    ? preview.required_confirmations.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
+    : [];
+  return {
+    action: stringField(preview, "action") ?? "",
+    summary: stringField(preview, "summary") ?? "",
+    reversible:
+      typeof preview.reversible === "boolean" ? preview.reversible : null,
+    recovery: stringField(preview, "recovery") ?? null,
+    targets,
+    requiredConfirmations: confirmations,
+  };
+}
+
 /** Parse one raw task row, or `null` when it is not a well-formed human task. */
 export function parseHumanTask(raw: unknown): HumanTaskRecord | null {
   const record = toRecord(raw);
@@ -87,7 +224,195 @@ export function parseHumanTask(raw: unknown): HumanTaskRecord | null {
     kind,
     status,
     description: stringField(record, "description") ?? "",
+    outputSpec: parseOutputSpec(record?.output_spec),
+    validationRules: parseValidationRules(record?.validation_rules),
+    preview: parseApprovalPreview(record?.inputs_snapshot),
   };
+}
+
+/**
+ * The fields a pending task asks the human to fill, in the order the row
+ * declares them.  The row's own `output_spec` + `validation_rules` are the only
+ * source: the form must ask for exactly what the backend validator will check,
+ * no more (an invented field could never be submitted) and no less.
+ */
+export function humanTaskFields(task: HumanTaskRecord): HumanTaskField[] {
+  return task.outputSpec.map((port) => {
+    const enumValues = task.validationRules.enum[port.name] ?? null;
+    const pattern = task.validationRules.pattern[port.name] ?? null;
+    const kind = fieldKind(port.type, enumValues);
+    return {
+      name: port.name,
+      type: port.type,
+      required: port.required,
+      description: port.description,
+      kind,
+      options: fieldOptions(kind, enumValues),
+      pattern,
+    };
+  });
+}
+
+function fieldKind(
+  type: string,
+  enumValues: unknown[] | null,
+): HumanTaskFieldKind {
+  // A declared port type wins over a rule: an approval's ``decision`` is a
+  // boolean port, so its ``enum: [true, false]`` *constrains the choice* — it
+  // does not turn the field into a free-select (whose label "true" would be a
+  // string, not the boolean the backend validates).
+  if (type === "bool") {
+    return "bool";
+  }
+  if (enumValues !== null && enumValues.length > 0) {
+    return "enum";
+  }
+  switch (type) {
+    case "number":
+      return "number";
+    case "array":
+    case "record":
+      return "json";
+    default:
+      return "text";
+  }
+}
+
+/**
+ * The choices a field offers.
+ *
+ * A boolean port offers exactly the booleans its `enum` rule allows (a
+ * breakpoint's `acknowledge` allows only `true`), or both when it declares no
+ * rule — never a hand-written label that could disagree with the rule.
+ */
+function fieldOptions(
+  kind: HumanTaskFieldKind,
+  enumValues: unknown[] | null,
+): { label: string; value: unknown }[] | null {
+  if (kind === "bool") {
+    const declared =
+      enumValues !== null && enumValues.length > 0
+        ? enumValues.filter(
+            (value): value is boolean => typeof value === "boolean",
+          )
+        : [];
+    const values = declared.length > 0 ? declared : [true, false];
+    return values.map((value) => ({ label: String(value), value }));
+  }
+  if (enumValues === null) {
+    return null;
+  }
+  return enumValues.map((value) => ({ label: formatRuleValue(value), value }));
+}
+
+/** Display label for a rule value (JSON so `true` / `"true"` stay distinct). */
+export function formatRuleValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** A draft value as the form stores it before serialization. */
+export type HumanTaskDraft = string | boolean | null;
+
+/**
+ * Starting drafts for every field.
+ *
+ * A boolean stays **unset** rather than defaulting to `false`: an approval's
+ * `false` is a rejection, and an unchecked checkbox would submit one without
+ * the human ever choosing.  Everything else starts as empty text.
+ */
+export function initialHumanTaskDrafts(
+  fields: readonly HumanTaskField[],
+): Record<string, HumanTaskDraft> {
+  const drafts: Record<string, HumanTaskDraft> = {};
+  for (const field of fields) {
+    drafts[field.name] = field.kind === "bool" ? null : "";
+  }
+  return drafts;
+}
+
+/** Serialize one draft into the value the backend expects, or an error. */
+export function serializeHumanTaskValue(
+  field: HumanTaskField,
+  draft: HumanTaskDraft,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  if (field.kind === "bool") {
+    if (typeof draft !== "boolean") {
+      return field.required
+        ? { ok: false, error: `${field.name}: 请明确选择 true / false` }
+        : { ok: true, value: undefined };
+    }
+    // Defensive: the widget only offers declared choices, but a stale draft must
+    // not slip past the rule the backend will enforce.
+    const options = field.options ?? [];
+    if (
+      options.length > 0 &&
+      !options.some((option) => option.value === draft)
+    ) {
+      return { ok: false, error: `${field.name}: 不在允许的枚举值中` };
+    }
+    return { ok: true, value: draft };
+  }
+
+  const text = typeof draft === "string" ? draft.trim() : "";
+  if (text === "") {
+    // The backend treats a missing value as absent; for a required field that is
+    // a submission error, for an optional one it means "leave the port unset".
+    return field.required
+      ? { ok: false, error: `${field.name}: 必填` }
+      : { ok: true, value: undefined };
+  }
+
+  if (field.kind === "enum") {
+    const match = (field.options ?? []).find(
+      (option) => formatRuleValue(option.value) === text,
+    );
+    if (match === undefined) {
+      return { ok: false, error: `${field.name}: 不在允许的枚举值中` };
+    }
+    return { ok: true, value: match.value };
+  }
+  if (field.kind === "number") {
+    const parsed = Number(text);
+    if (!Number.isFinite(parsed)) {
+      return { ok: false, error: `${field.name}: 需要一个数字` };
+    }
+    return { ok: true, value: parsed };
+  }
+  if (field.kind === "json") {
+    try {
+      return { ok: true, value: JSON.parse(text) as unknown };
+    } catch {
+      return { ok: false, error: `${field.name}: 不是合法 JSON` };
+    }
+  }
+  return { ok: true, value: draft };
+}
+
+/** Serialize every draft; the first error wins (an all-or-nothing submission). */
+export function serializeHumanTaskDrafts(
+  fields: readonly HumanTaskField[],
+  drafts: Record<string, HumanTaskDraft>,
+):
+  | { ok: true; values: Record<string, unknown> }
+  | { ok: false; error: string } {
+  const values: Record<string, unknown> = {};
+  for (const field of fields) {
+    const result = serializeHumanTaskValue(field, drafts[field.name] ?? null);
+    if (!result.ok) {
+      return result;
+    }
+    if (result.value !== undefined) {
+      values[field.name] = result.value;
+    }
+  }
+  return { ok: true, values };
 }
 
 /**
@@ -120,6 +445,29 @@ export function pendingDebugPauses(
       description: task.description,
     };
     (task.workflowRunId === preferredRunId ? preferred : others).push(pause);
+  }
+  return [...preferred, ...others];
+}
+
+/**
+ * Every pending task that needs a *submission* — a ``human:task`` node or an
+ * approval gate — newest first, with the open run's own pinned ahead.
+ *
+ * Same reasoning as :func:`pendingDebugPauses`: a resume admits a new run, so a
+ * run-scoped list would hide the task a rewind or approval just created.  A
+ * paused approval must stay reachable from the canvas no matter which run
+ * started it, because nothing else in the canvas can resolve it.
+ */
+export function pendingHumanTasks(
+  tasks: readonly HumanTaskRecord[],
+  options: { preferredRunId?: string | null } = {},
+): HumanTaskRecord[] {
+  const preferredRunId = options.preferredRunId ?? null;
+  const preferred: HumanTaskRecord[] = [];
+  const others: HumanTaskRecord[] = [];
+  for (const task of tasks) {
+    if (task.status !== "pending" || isDebugPauseKind(task.kind)) continue;
+    (task.workflowRunId === preferredRunId ? preferred : others).push(task);
   }
   return [...preferred, ...others];
 }

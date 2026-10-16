@@ -11,8 +11,10 @@ import {
   continueDebugPause,
   fetchPendingHumanTasks,
   pendingDebugPauses,
+  pendingHumanTasks,
   skipHumanTask,
   type DebugPause,
+  type HumanTaskRecord,
 } from "@/core/workflows/human-tasks";
 import {
   extractNodeDurations,
@@ -24,6 +26,7 @@ import { continueWorkflowNode, rewindWorkflowRun } from "@/core/workflows/runs";
 import { cn } from "@/lib/utils";
 
 import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
+import { WorkflowHumanTaskForm } from "./workflow-human-task-form";
 
 /** Badge tint per overall run status, mirroring the workflow-list row badges. */
 const RUN_STATUS_BADGE_CLASSES: Record<RunStatus, string> = {
@@ -126,40 +129,55 @@ export function WorkflowRunPanel() {
   // reports "could not read" instead of silently claiming no pause — this is a
   // control, not observability.
   const [pauses, setPauses] = useState<DebugPause[]>([]);
+  const [tasks, setTasks] = useState<HumanTaskRecord[]>([]);
   const [pausesLoadFailed, setPausesLoadFailed] = useState(false);
   const [pauseBusyId, setPauseBusyId] = useState<string | null>(null);
   const [pauseError, setPauseError] = useState<string | null>(null);
+
+  const applyTasks = useCallback(
+    (rows: HumanTaskRecord[]) => {
+      setPauses(pendingDebugPauses(rows, { preferredRunId: runId }));
+      // Everything else pending is a submission form (a ``human:task`` node or an
+      // approval gate).  A rewind / resume admits a new run id, so these are
+      // deliberately not scoped to the panel's own run — a paused approval must
+      // stay reachable no matter which run started it.
+      setTasks(pendingHumanTasks(rows, { preferredRunId: runId }));
+    },
+    [runId],
+  );
 
   const loadPauses = useCallback(async () => {
     if (typeof fetch !== "function") {
       return;
     }
     try {
-      const tasks = await fetchPendingHumanTasks();
-      setPauses(pendingDebugPauses(tasks, { preferredRunId: runId }));
+      const rows = await fetchPendingHumanTasks();
+      applyTasks(rows);
       setPausesLoadFailed(false);
     } catch {
       setPausesLoadFailed(true);
     }
-  }, [runId]);
+  }, [applyTasks]);
 
   useEffect(() => {
     if (!isTerminal || runId == null || typeof fetch !== "function") {
       setPauses([]);
+      setTasks([]);
       setPausesLoadFailed(false);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const tasks = await fetchPendingHumanTasks();
+        const rows = await fetchPendingHumanTasks();
         if (!cancelled) {
-          setPauses(pendingDebugPauses(tasks, { preferredRunId: runId }));
+          applyTasks(rows);
           setPausesLoadFailed(false);
         }
       } catch {
         if (!cancelled) {
           setPauses([]);
+          setTasks([]);
           setPausesLoadFailed(true);
         }
       }
@@ -167,7 +185,7 @@ export function WorkflowRunPanel() {
     return () => {
       cancelled = true;
     };
-  }, [isTerminal, runId]);
+  }, [applyTasks, isTerminal, runId]);
 
   const handlePauseAction = useCallback(
     async (pause: DebugPause, action: "continue" | "skip") => {
@@ -270,7 +288,7 @@ export function WorkflowRunPanel() {
         </div>
       ) : (
         <div className="flex flex-col gap-4 p-4">
-          {(pauses.length > 0 || pausesLoadFailed) && (
+          {(pauses.length > 0 || tasks.length > 0 || pausesLoadFailed) && (
             <div
               className="flex flex-col gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
               data-testid="workflow-debug-pauses"
@@ -363,6 +381,13 @@ export function WorkflowRunPanel() {
                   {pauseError}
                 </span>
               )}
+              {tasks.map((task) => (
+                <WorkflowHumanTaskForm
+                  key={task.id}
+                  task={task}
+                  onResolved={() => void loadPauses()}
+                />
+              ))}
             </div>
           )}
 

@@ -465,6 +465,26 @@ export interface Translations {
       rewindHint: string;
       rewindStarted: (runId: string) => string;
       rewindFailed: string;
+      humanTask: {
+        title: string;
+        task: string;
+        approval: string;
+        runHint: (runId: string) => string;
+        previewTitle: string;
+        reversible: string;
+        irreversible: string;
+        recovery: string;
+        confirmations: string;
+        noFields: string;
+        submit: string;
+        skip: string;
+        skipHint: string;
+        required: string;
+        optional: string;
+        true: string;
+        false: string;
+        patternHint: string;
+      };
       debugPause: {
         title: string;
         hint: string;

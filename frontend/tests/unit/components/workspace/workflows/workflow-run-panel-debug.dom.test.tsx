@@ -72,6 +72,26 @@ rs.mock("@/core/i18n/hooks", () => ({
             loadFailed: "Failed to load waiting debug tasks",
             retry: "Retry",
           },
+          humanTask: {
+            title: "Waiting human task",
+            task: "Human task",
+            approval: "Approval",
+            runHint: (runId: string) => `run ${runId}`,
+            previewTitle: "What will happen",
+            reversible: "Reversible",
+            irreversible: "Irreversible",
+            recovery: "Recovery",
+            confirmations: "Confirmations",
+            noFields: "This task declares no fields to fill in",
+            submit: "Submit",
+            skip: "Skip",
+            skipHint: "Skipping continues as declined",
+            required: "required",
+            optional: "optional",
+            true: "true",
+            false: "false",
+            patternHint: "Format:",
+          },
           panel: {
             title: "Run",
             idleHint: "Run this workflow to see node status",
@@ -159,6 +179,33 @@ function taskRow(overrides: Record<string, unknown> = {}) {
     kind: "step",
     status: "pending",
     description: "[step] node a paused",
+    ...overrides,
+  };
+}
+
+/** An approval row: the gate's ``decision`` port plus a stored preview. */
+function approvalRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "ht-ap",
+    workflow_run_id: "run-1",
+    node_id: "write_file",
+    kind: "approval",
+    status: "pending",
+    description: "[approval] Overwrite hero.blend",
+    output_spec: {
+      ports: [
+        { name: "decision", type: "bool", required: true, description: "" },
+      ],
+    },
+    validation_rules: { enum: { decision: { enum: [true, false] } } },
+    inputs_snapshot: {
+      kind: "approval",
+      preview: {
+        action: "overwrite",
+        summary: "Overwrite hero.blend",
+        reversible: false,
+      },
+    },
     ...overrides,
   };
 }
@@ -328,7 +375,7 @@ describe("WorkflowRunPanel debug pauses", () => {
     expect(skip!.init.method).toBe("POST");
   });
 
-  it("does not offer to resolve a non-debug human task", async () => {
+  it("keeps a non-debug task out of the debug pause card", async () => {
     routeFetch({
       tasks: [
         taskRow({ kind: "task" }),
@@ -342,9 +389,14 @@ describe("WorkflowRunPanel debug pauses", () => {
         humanTaskCalls().some((call) => call.url.includes("?status=pending")),
       ).toBe(true),
     );
+    // A `task` row is a submission (its own form), never a continue/skip pause;
+    // the already-submitted row is not offered at all.
     expect(
-      container.querySelector('[data-testid="workflow-debug-pauses"]'),
+      container.querySelector('[data-testid="workflow-debug-pause"]'),
     ).toBeNull();
+    expect(
+      container.querySelectorAll('[data-testid="workflow-human-task"]'),
+    ).toHaveLength(1);
   });
 
   it("keeps a paused run reachable even when it is not the panel's own run", async () => {
@@ -438,5 +490,42 @@ describe("WorkflowRunPanel debug pauses", () => {
     expect(
       humanTaskCalls().some((call) => call.url.includes("?status=pending")),
     ).toBe(false);
+  });
+});
+
+describe("WorkflowRunPanel human tasks", () => {
+  it("offers a form for a pending approval (the canvas is the only place that can resolve it)", async () => {
+    routeFetch({ tasks: [approvalRow()] });
+    const container = await runCompletedOnce();
+
+    const form = await waitFor(() => {
+      const found = container.querySelector(
+        '[data-testid="workflow-human-task"]',
+      );
+      expect(found).toBeTruthy();
+      return found!;
+    });
+    expect(form.getAttribute("data-task-kind")).toBe("approval");
+    expect(form.getAttribute("data-task-node")).toBe("write_file");
+    // The preview — the reason an approval exists at all — is rendered.
+    expect(form.textContent).toContain("Overwrite hero.blend");
+    expect(form.textContent).toContain("Irreversible");
+    expect(
+      form.querySelectorAll('[data-testid="workflow-human-task-bool"]'),
+    ).toHaveLength(2);
+  });
+
+  it("does not route a debug pause into the submission form", async () => {
+    routeFetch({ tasks: [taskRow()] });
+    const container = await runCompletedOnce();
+
+    await waitFor(() =>
+      expect(
+        container.querySelector('[data-testid="workflow-debug-pause"]'),
+      ).toBeTruthy(),
+    );
+    expect(
+      container.querySelector('[data-testid="workflow-human-task"]'),
+    ).toBeNull();
   });
 });
