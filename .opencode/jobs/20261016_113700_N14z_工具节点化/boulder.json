@@ -1,0 +1,35 @@
+{
+  "slice": "N14z",
+  "title": "§25 工具节点化（tool:invoke）",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "6d6fec3",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "schema: NodeType.TOOL_INVOKE", "status": "completed" },
+    { "id": "S2", "name": "tool_gateway: provider 作用域解析（additive）", "status": "completed" },
+    { "id": "S3", "name": "executors/tool.py: exec_tool_invoke + 直调路径 + 插值", "status": "completed" },
+    { "id": "S4", "name": "registry/danger 归类 + 前端 palette + 计数", "status": "completed" },
+    { "id": "S5", "name": "测试 + 全量 A/B + ruff/前端 check + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "直调路径（tool.coroutine/func + 自 schema 校验 + 仅签名声明 runtime 才传 ToolRuntime）——绕开 InjectedToolArg 在 from __future__ import annotations 下退化导致注入参数被填 None 的坑（已实测）",
+    "D2": "未知 provider 不回落；网关缺失 fail-loud（避免解析出与准入不同的工具集）",
+    "D3": "非幂等 + crash-confirm 门 + 默认待人工审核 → 编译期拒绝 params.retry",
+    "D4": "透明 BaseTool 子类回落框架 ainvoke（docstring 明写唯一不保证注入的情形）",
+    "D5": "arguments 支持 {{port}} 插值与嵌套递归；整值占位保留原类型；缺端口→空串",
+    "D6": "同步工具经 asyncio.to_thread 离事件循环"
+  },
+  "baseline": {
+    "backend_full_regression": "N14y 75 failed / 11291 passed -> N14z 76 failed / 11315 passed；唯一差异为既有时序 flake tests/test_extension_task_lifecycle.py::test_notification_timeout_is_one_shared_budget（同代码交替通过/失败、单跑通过，N14a 起已记录）",
+    "workflow_suite": "1349 -> 1326 passed（过滤含 danger/retry/reliability/tool_gateway/runtime_integration）",
+    "config_version": 40,
+    "head_migration": "0019_human_task_kind_and_undo",
+    "frontend_tests": "1180 passed（计数同步 27→28、tool 4→5）",
+    "frontend_check": "pnpm check exit 0；pnpm format 全绿",
+    "ruff": "check + format --check 干净"
+  },
+  "extra_findings": [
+    "剩余可选增量：MCP 收编为 provider（工具网关）、断点/耗时 UI 与单步/回退重跑、能力包导入时挂载 eval 套件、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff、Loop body 子图展开、成本感知规划器（方案明确待 benchmark）。"
+  ]
+}

@@ -101,6 +101,9 @@ class NodeType(StrEnum):
     TOOL_HTTP = "tool:http"
     TOOL_NOTIFY = "tool:notify"
     TOOL_LOG = "tool:log"
+    # §25 工具节点化：直接用图调用网关里的一个工具（不经 AI 节点工具集）。
+    # ``params.tool`` 必填；``params.provider`` 可选（builtin/sandbox/app 消歧）。
+    TOOL_INVOKE = "tool:invoke"
 
     # AI
     AI_LLM_AGENT = "ai:llm_agent"

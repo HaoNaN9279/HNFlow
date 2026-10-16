@@ -27,7 +27,7 @@ from .flow import exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
 from .knowledge import exec_knowledge  # noqa: E402
 from .local_app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
-from .tool import exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify  # noqa: E402
+from .tool import exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke  # noqa: E402
 
 # ── Default registry assembly ────────────────────────────────────────────────
 
@@ -83,6 +83,19 @@ def build_default_registry() -> ExecutorRegistry:
     )
     reg.register(ExecutorRegistration(node_type=NodeType.TOOL_LOG, executor=exec_log, idempotent=True, description="Logging executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.TOOL_NOTIFY, executor=exec_notify, idempotent=True, description="User-facing notification executor"))
+    # §25 工具节点化: call one gateway tool directly (no model turn).  Non-idempotent
+    # by construction — the resolved tool may write files, drive a local
+    # application, or perform network IO — so it is crash-confirm gated like
+    # bash/http and refused as a retry target.
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.TOOL_INVOKE,
+            executor=exec_tool_invoke,
+            idempotent=False,
+            requires_confirmation=True,
+            description="Direct gateway tool invocation executor (crash-confirm gated)",
+        )
+    )
 
     # ── AI ────────────────────────────────────────────────────────────────
     # AI nodes are non-idempotent (a re-run consumes tokens and may re-act with
@@ -146,6 +159,7 @@ __all__ = [
     "exec_http",
     "exec_log",
     "exec_notify",
+    "exec_tool_invoke",
     "exec_nested_subworkflow",
     # AI
     "exec_llm_agent",

@@ -141,6 +141,10 @@ _NON_IDEMPOTENT_TYPES: frozenset[NodeType] = frozenset(
     {
         NodeType.TOOL_BASH,
         NodeType.TOOL_HTTP,
+        # §25 工具节点化: the resolved tool may be bash/app/HTTP, so a direct
+        # invocation is non-idempotent by construction (and therefore
+        # crash-confirm gated and refused as a retry target).
+        NodeType.TOOL_INVOKE,
         NodeType.APP_LAUNCH,
         NodeType.APP_SCRIPT,
     }

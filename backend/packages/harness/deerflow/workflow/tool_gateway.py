@@ -87,12 +87,34 @@ class ToolGateway:
     def providers(self) -> list[ToolProvider]:
         return list(self._providers)
 
-    def resolve(self, tool_id: str) -> BaseTool | None:
-        """Resolve one tool id to a ``BaseTool``; first provider wins."""
-        for provider in self._providers:
-            tool = provider.resolve(tool_id)
+    def resolve(self, tool_id: str, *, provider: str | None = None) -> BaseTool | None:
+        """Resolve one tool id to a ``BaseTool``; first provider wins.
+
+        ``provider`` restricts the search to that provider name (the §25
+        ``tool:invoke`` node's disambiguator when the same id exists in more
+        than one provider).  An unknown provider name resolves nothing rather
+        than silently falling back — a typo must not pick a different tool.
+        """
+        for candidate in self._providers:
+            if provider is not None and candidate.name != provider:
+                continue
+            tool = candidate.resolve(tool_id)
             if tool is not None:
                 return tool
+        return None
+
+    def provider_names(self) -> list[str]:
+        """Registered provider names, in priority order."""
+        return [provider.name for provider in self._providers]
+
+    def resolve_with_provider(self, tool_id: str, *, provider: str | None = None) -> tuple[BaseTool, str] | None:
+        """Resolve one tool id together with the provider that answered it."""
+        for candidate in self._providers:
+            if provider is not None and candidate.name != provider:
+                continue
+            tool = candidate.resolve(tool_id)
+            if tool is not None:
+                return tool, candidate.name
         return None
 
     def resolve_all(self, tool_ids: list[str]) -> list[BaseTool]:

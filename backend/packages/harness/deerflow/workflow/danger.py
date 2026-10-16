@@ -22,6 +22,9 @@ _DANGEROUS_TYPES: frozenset[NodeType] = frozenset(
     {
         NodeType.TOOL_BASH,
         NodeType.TOOL_HTTP,
+        # §25 工具节点化: the resolved tool may be bash/app/HTTP, so the node is
+        # dangerous by construction, exactly like the static dangerous types.
+        NodeType.TOOL_INVOKE,
         NodeType.APP_LAUNCH,
         NodeType.APP_SCRIPT,
     }

@@ -225,6 +225,16 @@ export const NODE_CATALOG = [
     description: "Log a message and pass the input through.",
   },
   {
+    type: "tool:invoke",
+    label: "Tool Call",
+    category: "tool",
+    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultOutputs: [{ name: "out", type: "data", required: true }],
+    defaultParams: { tool: "", crash_confirm: false },
+    description:
+      "Call one gateway tool directly (sandbox / builtin / local app) without an AI node.",
+  },
+  {
     type: "ai:llm_agent",
     label: "LLM Agent",
     category: "ai",

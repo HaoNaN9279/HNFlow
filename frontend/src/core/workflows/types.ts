@@ -44,6 +44,7 @@ export const NODE_TYPES = [
   "tool:http",
   "tool:notify",
   "tool:log",
+  "tool:invoke",
   // AI
   "ai:llm_agent",
   // Local professional software
