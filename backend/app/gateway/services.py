@@ -1307,6 +1307,7 @@ async def start_workflow_run(
     resume: Any | None = None,
     origin_run_id: str | None = None,
     debug_step: bool = False,
+    checkpoint_id: str | None = None,
 ) -> RunRecord:
     """Create a RunRecord and launch the background workflow task.
 
@@ -1338,6 +1339,10 @@ async def start_workflow_run(
         overriding ``config["context"]["run_id"]`` with the original run id the
         resume re-execution reuses the existing pending task instead of minting
         a duplicate.
+    checkpoint_id : str | None
+        Optional checkpoint to resume from instead of starting at ``params``
+        (§25 rewind & re-run).  The checkpoint must belong to *thread_id*;
+        ``workflow/rewind.py::locate_rewind_point`` resolves which one.
     """
     try:
         validate_thread_id(thread_id)
@@ -1388,6 +1393,7 @@ async def start_workflow_run(
                         workflow_undo_repo=workflow_undo_repo,
                         origin_run_id=origin_run_id,
                         debug_step=debug_step,
+                        checkpoint_id=checkpoint_id,
                     )
 
                 try:

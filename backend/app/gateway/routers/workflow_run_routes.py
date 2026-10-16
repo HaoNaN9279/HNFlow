@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field
 from app.gateway.deps import get_current_user, get_optional_user_from_request, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
 from app.gateway.permissions import require_permission
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
-from app.gateway.services import sse_consumer, start_workflow_run, wait_for_run_completion
+from app.gateway.services import _build_workflow_template_resolver, sse_consumer, start_workflow_run, wait_for_run_completion
 from deerflow.config import get_app_config
+from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.workflow.costs import build_run_cost_report
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,17 @@ class WorkflowRunContinueRequest(BaseModel):
     node_id: str = Field(min_length=1)
     prompt: str = Field(min_length=1)
     params: dict[str, Any] | None = None
+
+
+class WorkflowRunRewindRequest(BaseModel):
+    """§25 rewind & re-run: re-execute *node_id* and everything after it."""
+
+    node_id: str = Field(min_length=1)
+
+
+#: Run statuses a rewind may start from — a live run is still writing its own
+#: checkpoints, so rewinding it would race the writes it exists to replay.
+_REWINDABLE_RUN_STATUSES = frozenset({RunStatus.success, RunStatus.error, RunStatus.timeout, RunStatus.interrupted})
 
 
 class WorkflowNodePreviewRequest(BaseModel):
@@ -293,6 +305,74 @@ async def continue_workflow_run(definition_id: str, run_id: str, body: WorkflowR
     if record is None:
         raise HTTPException(status_code=500, detail=f"Continue run {summary['run_id']} was not created")
     return _record_to_response(record)
+
+
+@router.post("/{definition_id}/runs/{run_id}/rewind", response_model=RunResponse)
+@require_permission("runs", "create")
+async def rewind_workflow_run(definition_id: str, run_id: str, body: WorkflowRunRewindRequest, request: Request) -> RunResponse:
+    """Re-execute a finished run from *node_id* onward (§25 rewind & re-run).
+
+    The checkpoint where that node was scheduled is the rewind point: resuming
+    there re-runs the node and everything downstream while the already-produced
+    upstream outputs stay in state, so an upstream side effect (a ``tool:bash``,
+    an ``app:launch``) is not repeated.  The new run lands on the **same**
+    ``thread_id`` — that is what makes it a continuation of this run's state
+    rather than a fresh execution.
+
+    Error mapping:
+    - 404 the run is unknown / not owned
+    - 409 the run is not finished (a live run is still writing its checkpoints)
+    - 422 the node cannot be rewound to (unknown, sentinel, never scheduled)
+    - 503 no checkpointer is configured (nothing to rewind to)
+    """
+    from deerflow.workflow.rewind import RewindError, locate_rewind_point
+
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    run_mgr = get_run_manager(request)
+    record = await _require_run_owner(request, run_mgr, run_id)
+
+    status = getattr(record, "status", None)
+    if status not in _REWINDABLE_RUN_STATUSES:
+        raise HTTPException(status_code=409, detail=f"Run {run_id} is not finished (status: {getattr(status, 'value', status)}); a rewind needs a settled run")
+
+    ctx = get_run_context(request)
+    if ctx.checkpointer is None:
+        raise HTTPException(status_code=503, detail="Checkpointer not configured — rewind is unavailable")
+
+    _, definition = await _resolve_definition(request, definition_id, user)
+    kwargs = getattr(record, "kwargs", None) or {}
+    params = kwargs.get("params") if isinstance(kwargs, dict) else None
+
+    try:
+        point = await locate_rewind_point(
+            definition,
+            ctx.checkpointer,
+            record.thread_id,
+            body.node_id,
+            definition_resolver=await _build_workflow_template_resolver(definition, request, user_id=str(user.id)),
+            max_delegation_depth=get_app_config().subagents.max_delegation_depth,
+        )
+    except RewindError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    new_record = await start_workflow_run(
+        definition_id=definition_id,
+        definition=definition,
+        params=dict(params) if isinstance(params, dict) else {},
+        thread_id=record.thread_id,
+        request=request,
+        on_disconnect="cancel",
+        metadata={
+            "rewind_from_run_id": run_id,
+            "rewind_node_id": body.node_id,
+            "rewind_checkpoint_id": point.checkpoint_id,
+        },
+        checkpoint_id=point.checkpoint_id,
+    )
+    return _record_to_response(new_record)
 
 
 @router.get("/{definition_id}/runs/{run_id}/join")

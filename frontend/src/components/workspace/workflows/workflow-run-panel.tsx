@@ -20,7 +20,7 @@ import {
   type NodeDurationReport,
 } from "@/core/workflows/run-durations";
 import type { RunStatus } from "@/core/workflows/run-state";
-import { continueWorkflowNode } from "@/core/workflows/runs";
+import { continueWorkflowNode, rewindWorkflowRun } from "@/core/workflows/runs";
 import { cn } from "@/lib/utils";
 
 import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
@@ -192,6 +192,33 @@ export function WorkflowRunPanel() {
       }
     },
     [labels.debugPause, loadPauses],
+  );
+
+  // §25 rewind & re-run (N14ah): re-execute from one node onward. Offered only
+  // for a settled run — the engine refuses a live one (it is still writing the
+  // checkpoints a rewind replays).
+  const [rewindBusyNode, setRewindBusyNode] = useState<string | null>(null);
+  const { rewindFailed: rewindFailedLabel, rewindStarted: rewindStartedLabel } =
+    labels;
+
+  const handleRewind = useCallback(
+    async (nodeId: string) => {
+      if (runId == null) {
+        return;
+      }
+      setRewindBusyNode(nodeId);
+      try {
+        const record = await rewindWorkflowRun(workflowId, runId, nodeId);
+        toast.success(rewindStartedLabel(record.run_id));
+      } catch (error) {
+        toast.error(
+          `${rewindFailedLabel}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        setRewindBusyNode(null);
+      }
+    },
+    [rewindFailedLabel, rewindStartedLabel, runId, workflowId],
   );
 
   const handleContinue = async (nodeId: string) => {
@@ -467,6 +494,21 @@ export function WorkflowRunPanel() {
                             {labels.continueSession}
                           </Button>
                         ))}
+                      {isTerminal && runId != null && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 self-start px-1.5 text-[11px]"
+                          disabled={rewindBusyNode !== null}
+                          title={labels.rewindHint}
+                          onClick={() => void handleRewind(entry.nodeId)}
+                          data-testid="workflow-run-rewind"
+                          data-rewind-node={entry.nodeId}
+                        >
+                          {labels.rewind}
+                        </Button>
+                      )}
                       {entry.status === "completed" &&
                         (hasOutput ? (
                           <details className="text-muted-foreground text-xs">

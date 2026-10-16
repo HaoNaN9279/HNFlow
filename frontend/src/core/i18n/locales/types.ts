@@ -461,6 +461,10 @@ export interface Translations {
       continueStarted: (runId: string) => string;
       step: string;
       stepHint: string;
+      rewind: string;
+      rewindHint: string;
+      rewindStarted: (runId: string) => string;
+      rewindFailed: string;
       debugPause: {
         title: string;
         hint: string;

@@ -15,6 +15,7 @@ import {
   createWorkflowRun,
   getWorkflowRun,
   parseWorkflowSseLine,
+  rewindWorkflowRun,
   streamWorkflowRun,
   type WorkflowRunRecord,
   type WorkflowRunStreamEvent,
@@ -156,6 +157,39 @@ describe("cancelWorkflowRun", () => {
 
     await expect(cancelWorkflowRun("wf-1", "run-1")).rejects.toThrow(
       "Run run-1 cannot be cancelled",
+    );
+  });
+});
+
+describe("rewindWorkflowRun", () => {
+  test("posts to /runs/{runId}/rewind with the node id", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    const result = await rewindWorkflowRun("wf-1", "run-1", "b");
+
+    const { url, init } = lastCall();
+    expect(url).toContain("/api/workflows/wf-1/runs/run-1/rewind");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ node_id: "b" });
+    expect(result).toEqual(SAMPLE_RUN);
+  });
+
+  test("URL-encodes the run id", async () => {
+    mockedFetch.mockResolvedValueOnce(jsonResponse(200, SAMPLE_RUN));
+
+    await rewindWorkflowRun("wf-1", "run 1/x", "b");
+
+    const { url } = lastCall();
+    expect(url).toContain("/runs/run%201%2Fx/rewind");
+  });
+
+  test("surfaces the backend detail when the rewind is refused", async () => {
+    mockedFetch.mockResolvedValueOnce(
+      jsonResponse(409, { detail: "Run run-1 is not finished" }),
+    );
+
+    await expect(rewindWorkflowRun("wf-1", "run-1", "b")).rejects.toThrow(
+      "Run run-1 is not finished",
     );
   });
 });

@@ -560,6 +560,11 @@ export const enUS: Translations = {
       step: "Step run",
       stepHint:
         "Pause before every node and advance one node per resume (a resume runs as a new run)",
+      rewind: "Rewind & re-run",
+      rewindHint:
+        "Re-execute from this node onward; earlier nodes are not repeated, so an upstream side effect is not applied twice (needs a finished run)",
+      rewindStarted: (runId: string) => `Re-ran from this node (run ${runId})`,
+      rewindFailed: "Rewind failed",
       debugPause: {
         title: "Debug pause",
         hint: "A node is waiting on a breakpoint or in step mode. Continue executes it; skip leaves its outputs unset. A resume runs as a new run.",

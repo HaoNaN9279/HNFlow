@@ -537,6 +537,11 @@ export const zhCN: Translations = {
       continueStarted: (runId: string) => `继续会话已启动（run ${runId}）`,
       step: "单步运行",
       stepHint: "每个节点执行前暂停，逐节点推进（恢复会以新运行执行）",
+      rewind: "回退重跑",
+      rewindHint:
+        "从该节点起重新执行（之前的节点不重跑，避免重复副作用）；需要已结束的运行",
+      rewindStarted: (runId: string) => `已从该节点重跑（run ${runId}）`,
+      rewindFailed: "回退重跑失败",
       debugPause: {
         title: "调试暂停",
         hint: "节点在断点或单步模式下等待处理。继续即执行该节点，跳过则该节点的输出不写入；恢复会以一次新运行执行。",

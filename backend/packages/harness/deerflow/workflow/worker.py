@@ -40,6 +40,7 @@ async def run_workflow(
     continue_nodes: dict[str, str] | None = None,
     origin_thread_id: str | None = None,
     debug_step: bool = False,
+    checkpoint_id: str | None = None,
 ) -> None:
     """Execute a compiled workflow graph in the background.
 
@@ -105,6 +106,12 @@ async def run_workflow(
         Injected as ``config["context"]["ai_origin_thread_id"]`` only when not
         ``None``; absent, the executor falls back to the current
         ``thread_id`` (W1A behavior).
+    checkpoint_id:
+        Optional checkpoint to resume the run from (§25 rewind & re-run).  When
+        set, the caller-supplied ``params`` are ignored and the graph continues
+        from that checkpoint's scheduled tasks, so the nodes before it are not
+        re-executed (their outputs are already in state — the whole point of a
+        rewind).  Resolved by ``workflow/rewind.py::locate_rewind_point``.
     """
 
     run_id = record.run_id
@@ -144,6 +151,11 @@ async def run_workflow(
         # Resume run: the caller supplies a langgraph ``Command(resume=...)`` that
         # re-enters the graph from the interrupted ``human:task`` checkpoint.
         graph_input: Any = resume
+    elif checkpoint_id is not None:
+        # §25 rewind: continue from a chosen checkpoint's scheduled tasks, so the
+        # nodes before it are not re-executed (``params`` would seed a *fresh*
+        # start and discard the checkpointed progress).
+        graph_input = None
     else:
         graph_input = _build_graph_input(definition, params)
 
@@ -163,6 +175,10 @@ async def run_workflow(
             "thread_id": thread_id,
         }
     }
+    if checkpoint_id is not None:
+        # LangGraph resumes from a checkpoint through ``configurable``; the
+        # checkpoint must belong to this thread (LangGraph validates that).
+        config["configurable"]["checkpoint_id"] = checkpoint_id
     if ctx.app_config is not None:
         config.setdefault("context", {})
         if isinstance(config["context"], dict):

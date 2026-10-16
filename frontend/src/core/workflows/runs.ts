@@ -267,6 +267,33 @@ export async function continueWorkflowNode(
 }
 
 /**
+ * Rewind a finished run and re-execute it from *nodeId* onward (§25). The
+ * engine resumes the checkpoint where that node was scheduled, so the nodes
+ * before it are not repeated — an upstream side effect must not run twice.
+ */
+export async function rewindWorkflowRun(
+  workflowId: string,
+  runId: string,
+  nodeId: string,
+): Promise<WorkflowRunRecord> {
+  const response = await fetch(
+    workflowRunsUrl(workflowId, `/${encodeURIComponent(runId)}/rewind`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node_id: nodeId }),
+    },
+  );
+  if (!response.ok) {
+    await throwWorkflowRunApiError(
+      response,
+      `Failed to rewind workflow run: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<WorkflowRunRecord>;
+}
+
+/**
  * Create a workflow run and stream its events over SSE. Frames are split on
  * blank lines with a buffer, so events spanning chunk boundaries are joined
  * before parsing; an explicit ``end`` event passes through, and one is emitted
