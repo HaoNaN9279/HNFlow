@@ -15,6 +15,9 @@ rs.mock("@/core/i18n/hooks", () => ({
           inputs: "Inputs",
           outputs: "Outputs",
           deleteNode: "Delete node",
+          breakpointLabel: "Pause before this node (breakpoint)",
+          breakpointHint:
+            "Suspends the run as a human task before the node executes",
           paramKey: "Param key",
           paramValue: "Param value",
           addParam: "Add param",
@@ -153,5 +156,66 @@ describe("WorkflowPropertiesPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete node" }));
 
     expect(onDeleteNode).toHaveBeenCalledWith("n_1");
+  });
+
+  it("sets params.breakpoint when the breakpoint toggle is checked (§25)", () => {
+    const onUpdateNodeParams = rs.fn();
+    render(
+      <WorkflowPropertiesPanel
+        node={makeNode()}
+        onUpdateNodeParams={onUpdateNodeParams}
+        onDeleteNode={rs.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByLabelText("Pause before this node (breakpoint)"),
+    );
+
+    expect(onUpdateNodeParams).toHaveBeenCalledWith("n_1", {
+      threshold: 10,
+      label: "check",
+      breakpoint: true,
+    });
+  });
+
+  it("removes the breakpoint key when the toggle is unchecked (§25)", () => {
+    const onUpdateNodeParams = rs.fn();
+    const node = makeNode();
+    node.data.workflow.params = { threshold: 10, breakpoint: true };
+    render(
+      <WorkflowPropertiesPanel
+        node={node}
+        onUpdateNodeParams={onUpdateNodeParams}
+        onDeleteNode={rs.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByLabelText("Pause before this node (breakpoint)"),
+    );
+
+    // Cleared rather than written as `false`, so the saved definition carries
+    // no vestigial key.
+    expect(onUpdateNodeParams).toHaveBeenCalledWith("n_1", {
+      threshold: 10,
+    });
+  });
+
+  it("renders the breakpoint toggle as checked for a breakpoint node (§25)", () => {
+    const node = makeNode();
+    node.data.workflow.params = { breakpoint: true };
+    render(
+      <WorkflowPropertiesPanel
+        node={node}
+        onUpdateNodeParams={rs.fn()}
+        onDeleteNode={rs.fn()}
+      />,
+    );
+
+    const toggle = screen.getByLabelText<HTMLInputElement>(
+      "Pause before this node (breakpoint)",
+    );
+    expect(toggle.checked).toBe(true);
   });
 });

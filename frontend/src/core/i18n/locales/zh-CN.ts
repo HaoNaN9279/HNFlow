@@ -451,6 +451,9 @@ export const zhCN: Translations = {
       inputs: "输入",
       outputs: "输出",
       deleteNode: "删除节点",
+      breakpointLabel: "在此节点前暂停（断点）",
+      breakpointHint:
+        "节点执行前以人工任务挂起；恢复即继续，跳过则该节点输出不写入。",
       paramKey: "参数名",
       paramValue: "参数值",
       addParam: "添加参数",
@@ -536,6 +539,7 @@ export const zhCN: Translations = {
         title: "运行",
         idleHint: "运行此工作流以查看节点状态",
         timeline: "节点时间线",
+        slowestNode: "最慢节点",
         output: "输出",
         noOutput: "无输出",
         errorDetail: "错误",

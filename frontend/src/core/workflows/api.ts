@@ -89,6 +89,32 @@ export async function fetchWorkflowTemplates(): Promise<WorkflowTemplate[]> {
   }));
 }
 
+/**
+ * Read a workflow run's checkpoint channel values (N14x timing readout).
+ *
+ * The endpoint returns the `wf:*` channels, which include each node's reserved
+ * `wf:<node>:__duration_ms` — the source :func:`extractNodeDurations` reads.
+ * An empty object means the run has no checkpoint yet; a non-2xx response
+ * throws with the backend `detail` like the other workflow calls.
+ */
+export async function fetchWorkflowRunState(
+  workflowId: string,
+  runId: string,
+): Promise<Record<string, unknown>> {
+  const response = await fetch(
+    workflowsUrl(
+      `/${encodeURIComponent(workflowId)}/runs/${encodeURIComponent(runId)}/state`,
+    ),
+  );
+  if (!response.ok) {
+    await throwWorkflowApiError(
+      response,
+      `Failed to load workflow run state: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<Record<string, unknown>>;
+}
+
 export type CreateWorkflowPayload = {
   name: string;
   definition: WorkflowDefinition;

@@ -377,6 +377,8 @@ export interface Translations {
       inputs: string;
       outputs: string;
       deleteNode: string;
+      breakpointLabel: string;
+      breakpointHint: string;
       paramKey: string;
       paramValue: string;
       addParam: string;
@@ -461,6 +463,7 @@ export interface Translations {
         title: string;
         idleHint: string;
         timeline: string;
+        slowestNode: string;
         output: string;
         noOutput: string;
         errorDetail: string;

@@ -1,0 +1,32 @@
+{
+  "slice": "N14ab",
+  "title": "§25 前端：节点耗时读数 + 断点开关",
+  "status": "completed",
+  "branch": "deerflow-rebase",
+  "start_head": "4bdf0c3",
+  "commit": "(pending)",
+  "steps": [
+    { "id": "S1", "name": "core/workflows/run-durations.ts（纯逻辑抽取 + 格式化）", "status": "completed" },
+    { "id": "S2", "name": "api.fetchWorkflowRunState", "status": "completed" },
+    { "id": "S3", "name": "run-panel：终态读数 + 逐条耗时 + 最慢节点", "status": "completed" },
+    { "id": "S4", "name": "properties-panel：断点勾选框 + i18n", "status": "completed" },
+    { "id": "S5", "name": "测试 + pnpm test/check/format + 文档", "status": "completed" }
+  ],
+  "decisions": {
+    "D1": "耗时读数命令式 effect（仅终态 + 有 runId，不引入 query provider）——既有面板 DOM 测试无需改造",
+    "D2": "读取失败一律丢弃（观测不得变成运行失败）；无通道不显示",
+    "D3": "耗时取自 state 端点的保留通道，不从节点事件取（N14x 刻意排除保留通道）",
+    "D4": "耗时只挂在 completed/failed 条目（started 行不报耗时）",
+    "D5": "断点关闭删键（不留 breakpoint: false）"
+  },
+  "baseline": {
+    "frontend_tests": "1180 passed -> 1196 passed（+16：10 纯逻辑 + 3 run-panel DOM + 3 properties DOM）",
+    "frontend_check": "pnpm check（eslint + tsc）exit 0（含一次 getByLabelText<HTMLInputElement> 泛型改写以同时满足 eslint 与 tsc）",
+    "frontend_format": "pnpm format 全绿",
+    "backend": "零后端改动（无 A/B 需要）",
+    "frontend_agents_doc": "frontend/AGENTS.md 已同步"
+  },
+  "extra_findings": [
+    "剩余可选增量：单步/回退重跑（§25 调试剩余）、能力包导入时挂载 eval 套件、worker 自动注入 memory_store、§24.12 工具级权限裁决（P3）、§24.6b 受控动态 handoff、Loop body 子图展开、能力包组合机制（extends/overlay）、成本感知规划器（方案明确待 benchmark）。"
+  ]
+}

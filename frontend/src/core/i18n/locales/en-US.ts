@@ -468,6 +468,9 @@ export const enUS: Translations = {
       inputs: "Inputs",
       outputs: "Outputs",
       deleteNode: "Delete node",
+      breakpointLabel: "Pause before this node (breakpoint)",
+      breakpointHint:
+        "Suspends the run as a human task before the node executes; resume to continue or skip to leave its outputs unset.",
       paramKey: "Parameter name",
       paramValue: "Parameter value",
       addParam: "Add parameter",
@@ -558,6 +561,7 @@ export const enUS: Translations = {
         title: "Run",
         idleHint: "Run this workflow to see node status",
         timeline: "Node timeline",
+        slowestNode: "Slowest node",
         output: "Output",
         noOutput: "No output",
         errorDetail: "Error",

@@ -196,6 +196,36 @@ export function WorkflowPropertiesPanel({
           />
         )}
 
+        {/*
+          §25 debugging: an explicit breakpoint toggle. It writes the same
+          ``params.breakpoint`` the compiler's gate reads, so the canvas and a
+          hand-written definition agree — the generic params editor below can
+          still set it, this just makes the intent discoverable (and clears the
+          key when switched off instead of leaving `breakpoint: false` behind).
+        */}
+        <label
+          className="flex items-center gap-2 text-xs"
+          title={labels.breakpointHint}
+        >
+          <input
+            type="checkbox"
+            checked={workflow.params.breakpoint === true}
+            disabled={readonly}
+            onChange={(event) => {
+              const next = { ...workflow.params };
+              if (event.target.checked) {
+                next.breakpoint = true;
+              } else {
+                delete next.breakpoint;
+              }
+              onUpdateNodeParams(node.id, next);
+            }}
+            aria-label={labels.breakpointLabel}
+            data-testid="workflow-breakpoint-toggle"
+          />
+          <span>{labels.breakpointLabel}</span>
+        </label>
+
         <div className="flex flex-col gap-2">
           <div className="text-xs font-medium">{labels.paramsTitle}</div>
           {draft.map((row, index) => (

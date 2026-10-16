@@ -1,11 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
+import { fetchWorkflowRunState } from "@/core/workflows/api";
+import {
+  extractNodeDurations,
+  formatDuration,
+  type NodeDurationReport,
+} from "@/core/workflows/run-durations";
 import type { RunStatus } from "@/core/workflows/run-state";
 import { continueWorkflowNode } from "@/core/workflows/runs";
 import { cn } from "@/lib/utils";
@@ -76,6 +82,37 @@ export function WorkflowRunPanel() {
   const [continueSubmitting, setContinueSubmitting] = useState(false);
   const [continueError, setContinueError] = useState<string | null>(null);
 
+  // N14x: per-node durations come from the run's checkpoint channels (the
+  // node-lifecycle events deliberately carry declared ports only). Fetched
+  // imperatively — and only once a run has settled — so a panel that never ran
+  // anything makes no request and the component needs no query provider.
+  const [durationReport, setDurationReport] =
+    useState<NodeDurationReport | null>(null);
+
+  useEffect(() => {
+    if (!isTerminal || runId == null || typeof fetch !== "function") {
+      setDurationReport(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const channels = await fetchWorkflowRunState(workflowId, runId);
+        if (!cancelled) {
+          setDurationReport(extractNodeDurations(channels));
+        }
+      } catch {
+        // The timing readout is observability, never a run failure.
+        if (!cancelled) {
+          setDurationReport(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isTerminal, runId, workflowId]);
+
   const handleContinue = async (nodeId: string) => {
     const prompt = continuePrompt.trim();
     if (!runId || prompt === "") {
@@ -128,12 +165,27 @@ export function WorkflowRunPanel() {
           {runState.timeline.length > 0 && (
             <div className="flex flex-col gap-1">
               <div className="text-xs font-medium">{labels.panel.timeline}</div>
+              {durationReport?.slowest != null && (
+                <div
+                  className="text-muted-foreground text-[11px]"
+                  data-testid="workflow-run-slowest"
+                  data-node={durationReport.slowest.nodeId}
+                >
+                  {labels.panel.slowestNode}: {durationReport.slowest.nodeId} ·{" "}
+                  {formatDuration(durationReport.slowest.ms)}
+                </div>
+              )}
               <ul className="flex flex-col gap-1.5">
                 {runState.timeline.map((entry, index) => {
                   const statusLabel = timelineStatusLabel(entry.status);
                   const hasOutput =
                     entry.output != null &&
                     Object.keys(entry.output).length > 0;
+                  const duration = durationReport?.durations[entry.nodeId];
+                  // Only the entry that actually finished reports the timing.
+                  const showDuration =
+                    duration != null &&
+                    (entry.status === "completed" || entry.status === "failed");
                   return (
                     <li
                       key={`${entry.nodeId}-${entry.step}-${entry.status}-${index}`}
@@ -145,13 +197,24 @@ export function WorkflowRunPanel() {
                         <span className="truncate font-mono">
                           {entry.nodeId}
                         </span>
-                        <span
-                          className={cn(
-                            "rounded-full px-1.5 py-0.5 text-[11px]",
-                            timelineStatusClass(entry.status),
+                        <span className="flex items-center gap-1">
+                          {showDuration && (
+                            <span
+                              className="text-muted-foreground font-mono text-[11px]"
+                              data-testid="workflow-run-node-duration"
+                              data-node={entry.nodeId}
+                            >
+                              {formatDuration(duration)}
+                            </span>
                           )}
-                        >
-                          {labels.nodeStatus[statusLabel]}
+                          <span
+                            className={cn(
+                              "rounded-full px-1.5 py-0.5 text-[11px]",
+                              timelineStatusClass(entry.status),
+                            )}
+                          >
+                            {labels.nodeStatus[statusLabel]}
+                          </span>
                         </span>
                       </div>
                       {isTerminal &&

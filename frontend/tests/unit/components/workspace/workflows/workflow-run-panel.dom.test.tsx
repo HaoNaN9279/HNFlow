@@ -13,6 +13,7 @@ import {
   useWorkflowEditor,
 } from "@/components/workspace/workflows/workflow-editor-context";
 import { WorkflowRunPanel } from "@/components/workspace/workflows/workflow-run-panel";
+import { fetchWorkflowRunState } from "@/core/workflows/api";
 import {
   streamWorkflowRun,
   type WorkflowRunStreamEvent,
@@ -50,6 +51,7 @@ rs.mock("@/core/i18n/hooks", () => ({
             title: "Run",
             idleHint: "Run this workflow to see node status",
             timeline: "Node timeline",
+            slowestNode: "Slowest node",
             output: "Output",
             noOutput: "No output",
             errorDetail: "Error",
@@ -66,7 +68,12 @@ rs.mock("@/core/workflows/runs", () => ({
   cancelWorkflowRun: rs.fn(),
 }));
 
+rs.mock("@/core/workflows/api", () => ({
+  fetchWorkflowRunState: rs.fn(),
+}));
+
 const mockedStream = rs.mocked(streamWorkflowRun);
+const mockedRunState = rs.mocked(fetchWorkflowRunState);
 
 let bridgeStart: (() => Promise<void>) | undefined;
 
@@ -109,6 +116,8 @@ async function* events(
 
 beforeEach(() => {
   mockedStream.mockReset();
+  mockedRunState.mockReset();
+  mockedRunState.mockResolvedValue({});
   bridgeStart = undefined;
 });
 
@@ -276,5 +285,108 @@ describe("WorkflowRunPanel timeline", () => {
     // No timeline entries for an empty node sequence.
     expect(container.querySelector("[data-timeline-node]")).toBe(null);
     expect(container.textContent).not.toContain("Node timeline");
+  });
+});
+
+describe("WorkflowRunPanel node durations (N14x)", () => {
+  it("shows per-node timings and the slowest node after a settled run", async () => {
+    mockedStream.mockImplementation(() =>
+      events([
+        { type: "metadata", runId: "run-1", threadId: "t1" },
+        { type: "node-started", nodeId: "n-a", step: 1 },
+        { type: "node-completed", nodeId: "n-a", step: 1, output: {} },
+        { type: "node-started", nodeId: "n-b", step: 2 },
+        { type: "node-completed", nodeId: "n-b", step: 2, output: {} },
+        { type: "end" },
+      ]),
+    );
+    mockedRunState.mockResolvedValue({
+      "wf:n-a:__duration_ms": 12.5,
+      "wf:n-b:__duration_ms": 1500,
+      "wf:n-a:out": "text",
+    });
+
+    const { container } = renderPanel();
+    await waitFor(() => expect(bridgeStart).toBeTruthy());
+
+    await act(async () => {
+      await bridgeStart!();
+    });
+
+    // The channels are read from the run-state endpoint for this run.
+    await waitFor(() =>
+      expect(mockedRunState).toHaveBeenCalledWith("wf-1", "run-1"),
+    );
+
+    const badges = container.querySelectorAll(
+      '[data-testid="workflow-run-node-duration"]',
+    );
+    await waitFor(() => expect(badges).toHaveLength(2));
+    expect(badges[0]!.getAttribute("data-node")).toBe("n-a");
+    expect(badges[0]!.textContent).toBe("12.5 ms");
+    expect(badges[1]!.textContent).toBe("1.5 s");
+
+    const slowest = container.querySelector(
+      '[data-testid="workflow-run-slowest"]',
+    )!;
+    expect(slowest.getAttribute("data-node")).toBe("n-b");
+    expect(slowest.textContent).toContain("Slowest node");
+    expect(slowest.textContent).toContain("1.5 s");
+  });
+
+  it("omits the readout when the run state carries no timings", async () => {
+    mockedStream.mockImplementation(() =>
+      events([
+        { type: "metadata", runId: "run-1", threadId: "t1" },
+        { type: "node-started", nodeId: "n-a", step: 1 },
+        { type: "node-completed", nodeId: "n-a", step: 1, output: {} },
+        { type: "end" },
+      ]),
+    );
+    mockedRunState.mockResolvedValue({});
+
+    const { container } = renderPanel();
+    await waitFor(() => expect(bridgeStart).toBeTruthy());
+
+    await act(async () => {
+      await bridgeStart!();
+    });
+    await waitFor(() => expect(mockedRunState).toHaveBeenCalled());
+
+    expect(
+      container.querySelector('[data-testid="workflow-run-node-duration"]'),
+    ).toBe(null);
+    expect(
+      container.querySelector('[data-testid="workflow-run-slowest"]'),
+    ).toBe(null);
+  });
+
+  it("treats a failed state read as no data (never a run failure)", async () => {
+    mockedStream.mockImplementation(() =>
+      events([
+        { type: "metadata", runId: "run-1", threadId: "t1" },
+        { type: "node-started", nodeId: "n-a", step: 1 },
+        { type: "node-completed", nodeId: "n-a", step: 1, output: {} },
+        { type: "end" },
+      ]),
+    );
+    mockedRunState.mockRejectedValue(new Error("state unavailable"));
+
+    const { container } = renderPanel();
+    await waitFor(() => expect(bridgeStart).toBeTruthy());
+
+    await act(async () => {
+      await bridgeStart!();
+    });
+    await waitFor(() => expect(mockedRunState).toHaveBeenCalled());
+
+    // The run itself still reports success.
+    const badge = container.querySelector(
+      '[data-testid="workflow-run-badge"]',
+    )!;
+    expect(badge.getAttribute("data-status")).toBe("success");
+    expect(
+      container.querySelector('[data-testid="workflow-run-node-duration"]'),
+    ).toBe(null);
   });
 });
