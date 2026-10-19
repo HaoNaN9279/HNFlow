@@ -247,6 +247,35 @@ _kill_repo_nginx() {
     fi
 }
 
+# Git Bash on Windows often has no lsof/pgrep, so the POSIX reapers above miss
+# uvicorn/next-server children.  Reclaim the service ports through the Windows
+# socket table, but only when the owning process's command line/path belongs to
+# this repo (never an unrelated project on 3000).
+_kill_repo_port_windows() {
+    local port=$1
+    command -v powershell.exe >/dev/null 2>&1 || return 0
+    local root_win
+    root_win="$(cygpath -w "$REPO_ROOT" 2>/dev/null || printf '%s' "$REPO_ROOT")"
+    REPO_ROOT_WIN="$root_win" TARGET_PORT="$port" powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+        $root = $env:REPO_ROOT_WIN.TrimEnd("\");
+        $procIds = Get-NetTCPConnection -LocalPort ([int]$env:TARGET_PORT) -State Listen -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty OwningProcess -Unique;
+        foreach ($procId in $procIds) {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue;
+            if ($null -eq $proc) { continue }
+            $cmd = [string]$proc.CommandLine;
+            $path = [string]$proc.ExecutablePath;
+            $name = [string]$proc.Name;
+            $project_port_owner = (($env:TARGET_PORT -eq "8001") -and ($name -like "python*")) -or
+                (($env:TARGET_PORT -eq "2026") -and (($name -like "*nginx*") -or ($name -like "python*"))) -or
+                (($env:TARGET_PORT -eq "3000") -and ($cmd -like "*next*"));
+            if ($cmd -like "*$root*" -or $path -like "$root*" -or $project_port_owner) {
+                Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+            }
+        }
+    ' >/dev/null 2>&1 || true
+}
+
 stop_all() {
     echo "Stopping all services..."
     _report_reclaimed_ports
@@ -264,6 +293,9 @@ stop_all() {
     _kill_repo_port 8001
     _kill_repo_port 3000
     _kill_repo_port 2026
+    _kill_repo_port_windows 8001
+    _kill_repo_port_windows 3000
+    _kill_repo_port_windows 2026
     ./scripts/cleanup-containers.sh deer-flow-sandbox 2>/dev/null || true
     echo "✓ All services stopped"
 }
@@ -306,7 +338,17 @@ export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 if $DEV_MODE; then
     FRONTEND_CMD='"$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'
 else
-    FRONTEND_CMD="env BETTER_AUTH_SECRET=$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))') \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run preview"
+    # `next build` is expensive (tens of seconds on this app).  Reuse an
+    # existing production build; build only when there is none.  This is what
+    # makes the default `start.bat prod` path fast on every subsequent launch.
+    FRONTEND_SECRET="$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))')"
+    FRONTEND_START="env BETTER_AUTH_SECRET=$FRONTEND_SECRET \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start"
+    if [ -f "$REPO_ROOT/frontend/.next/BUILD_ID" ]; then
+        FRONTEND_CMD="$FRONTEND_START"
+    else
+        echo "No production frontend build found; building once..."
+        FRONTEND_CMD="env BETTER_AUTH_SECRET=$FRONTEND_SECRET \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run build && $FRONTEND_START"
+    fi
 fi
 
 # Runtime path defaults. Local `make dev` launches Gateway from `backend/`,
@@ -472,10 +514,28 @@ run_service "Frontend" \
     "cd frontend && $FRONTEND_CMD > ../logs/frontend.log 2>&1" \
     3000 120
 
+# A listening port is not readiness: Next dev opens 3000 before compiling the
+# first route.  Warm /workspace/chats/new so nginx is only started once the
+# browser's first request can actually be served.
+"$DEERFLOW_PNPM_PYTHON" "$REPO_ROOT/scripts/wait-for-http.py" \
+    "http://127.0.0.1:3000/workspace/chats/new" 300 "Frontend" || {
+    echo "Frontend did not become ready; see logs/frontend.log"
+    cleanup 1
+}
+
 # 3. Nginx
 run_service "Nginx" \
     "nginx -g 'daemon off;' -c '$REPO_ROOT/docker/nginx/nginx.local.conf' -p '$REPO_ROOT' > logs/nginx.log 2>&1" \
     2026 10
+
+# Verify the public entry point, not just the nginx listen socket.  A 502 from
+# nginx while upstream is still warming is exactly the "page keeps loading"
+# failure this launcher must not report as ready.
+"$DEERFLOW_PNPM_PYTHON" "$REPO_ROOT/scripts/wait-for-http.py" \
+    "http://127.0.0.1:2026/workspace/chats/new" 30 "Nginx" || {
+    echo "Nginx is up but the first page is not being served; see logs/nginx-error.log and logs/frontend.log"
+    cleanup 1
+}
 
 # ── Ready ────────────────────────────────────────────────────────────────────
 
@@ -492,6 +552,12 @@ echo "           /api/*              →  Gateway REST API (8001)"
 echo ""
 echo "  📋 Logs: logs/{gateway,frontend,nginx}.log"
 echo ""
+
+# start.bat asks us to open the browser.  Doing it here (after nginx is up and
+# the first route is warm) avoids racing a previous instance / Next compilation.
+if [ "${HNFLOW_OPEN_BROWSER:-0}" = "1" ]; then
+    powershell.exe -NoProfile -Command "Start-Process 'http://localhost:2026'" >/dev/null 2>&1 || true
+fi
 
 if $DAEMON_MODE; then
     echo "  🛑 Stop: make stop"

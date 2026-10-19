@@ -7,23 +7,28 @@ REM ============================================================
 REM  HNFlow one-click launcher (Windows)
 REM
 REM  Usage:
-REM    start.bat            dev mode (default, hot reload)
-REM    start.bat prod       prod mode (prebuilt frontend, no hot reload)
+REM    start.bat            fast mode (production frontend, reuse build)
+REM    start.bat dev        dev mode (hot reload)
+REM    start.bat prod       prod mode (prebuilt frontend)
 REM    start.bat stop       stop all services
-REM    start.bat restart    restart (dev mode)
-REM    start.bat fast       dev mode, skip dependency install
+REM    start.bat restart    restart (production mode)
+REM    start.bat fast       skip dependency install
+REM    start.bat install     force dependency install
 REM    start.bat help       show help
 REM
-REM  Opens http://localhost:2026 when ready.
-REM  Equivalent to `make dev` / `make start`, but does not require make.
+REM  Opens http://localhost:2026 only after the first frontend route is ready.
+REM  First run builds the frontend once; later runs reuse it.
 REM ============================================================
 
 set "ROOT=%~dp0"
 cd /d "%ROOT%"
 
 set "ACTION=start"
-set "MODE=--dev"
+REM Default is the fast path: reuse a production frontend build.  `dev` is
+REM still available explicitly for hot reload.
+set "MODE=--prod"
 set "SKIP_INSTALL="
+set "FORCE_INSTALL="
 
 REM ---- parse arguments ----
 :parse
@@ -37,6 +42,7 @@ if /I "%ARG%"=="stop"    (set "ACTION=stop" & set "KNOWN=1")
 if /I "%ARG%"=="restart" (set "ACTION=restart" & set "KNOWN=1")
 if /I "%ARG%"=="fast"    (set "SKIP_INSTALL=--skip-install" & set "KNOWN=1")
 if /I "%ARG%"=="--skip-install" (set "SKIP_INSTALL=--skip-install" & set "KNOWN=1")
+if /I "%ARG%"=="install" (set "FORCE_INSTALL=1" & set "KNOWN=1")
 if /I "%ARG%"=="help"    goto usage
 if /I "%ARG%"=="-h"      goto usage
 if /I "%ARG%"=="--help"  goto usage
@@ -77,8 +83,14 @@ if errorlevel 1 (
     goto fail
 )
 
-REM ---- open browser once port 2026 is ready ----
-call :open_browser_when_ready
+REM Dependencies already installed: skip the sync by default.  Use
+REM `start.bat install` after changing package manifests.
+if not defined SKIP_INSTALL if not defined FORCE_INSTALL if exist "%ROOT%frontend\node_modules" if exist "%ROOT%backend\.venv" set "SKIP_INSTALL=--skip-install"
+
+REM serve.sh opens the browser only after nginx + the first frontend route are
+REM actually ready.  Opening it here (on TCP 2026) raced the old instance and
+REM the frontend compile, which is what produced the endless loading page.
+set "HNFLOW_OPEN_BROWSER=1"
 
 REM ---- run serve.sh (Ctrl+C stops all services) ----
 :run
@@ -86,33 +98,32 @@ set "SERVE_FLAGS=%MODE% %SKIP_INSTALL%"
 if /I "%ACTION%"=="stop" set "SERVE_FLAGS=--stop"
 if /I "%ACTION%"=="restart" set "SERVE_FLAGS=--restart %MODE% %SKIP_INSTALL%"
 
-echo.
-echo [HNFlow] Starting (first run installs dependencies; may take a while)...
+if /I not "%ACTION%"=="stop" (
+    echo.
+    echo [HNFlow] Starting (production frontend build is reused; first run may build once)...
+)
 call "%ROOT%scripts\run-with-git-bash.cmd" ./scripts/serve.sh %SERVE_FLAGS%
 
 echo.
 echo [HNFlow] Services exited.
-pause
-exit /b 0
-
-REM ---- background: wait for port 2026, then open browser ----
-:open_browser_when_ready
-start "" /min powershell -NoProfile -ExecutionPolicy Bypass -Command "for($i=0;$i -lt 180;$i++){try{$c=New-Object Net.Sockets.TcpClient;$c.Connect('127.0.0.1',2026);$c.Close();Start-Process 'http://localhost:2026';break}catch{Start-Sleep -Seconds 1}}"
+if /I not "%ACTION%"=="stop" pause
 exit /b 0
 
 REM ---- help ----
 :usage
 echo HNFlow one-click launcher
 echo.
-echo   start.bat            dev mode (default, hot reload)
-echo   start.bat prod       prod mode (prebuilt frontend)
+echo   start.bat            fast mode (production frontend, reuse build)
+echo   start.bat dev        dev mode (hot reload)
+echo   start.bat prod       production mode
 echo   start.bat stop       stop all services
-echo   start.bat restart    restart (dev mode)
-echo   start.bat fast       dev mode, skip dependency install
+echo   start.bat restart    restart (production mode)
+echo   start.bat fast       skip dependency install
+echo   start.bat install    force dependency install
 echo   start.bat help       show this help
 echo.
 echo   URL: http://localhost:2026
-echo   Equivalent: make dev / make start / make stop
+echo   First run builds the frontend once; later runs reuse it.
 exit /b 0
 
 REM ---- failure ----

@@ -22,9 +22,6 @@ const meta: MetaRecord = {
   workspace: {
     type: "page",
   },
-  blog: {
-    type: "page",
-  },
   posts: {
     type: "page",
   },
