@@ -27,6 +27,23 @@ const config = {
   },
   devIndicators: false,
   allowedDevOrigins: getAllowedDevOrigins(),
+  async redirects() {
+    // The application entry point is the workspace. Only the static marketing
+    // website build serves the landing page at `/`, so redirect the root to
+    // the workspace everywhere else. Done at the routing layer (not inside the
+    // page) so the landing route stays static and the app opens directly in the
+    // workspace without rendering — and then navigating away from — the landing.
+    if (process.env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true") {
+      return [];
+    }
+    return [
+      {
+        source: "/",
+        destination: "/workspace/chats/new",
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     const rewrites = [];
     const gatewayURL = getInternalServiceURL(

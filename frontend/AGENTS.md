@@ -48,7 +48,7 @@ The frontend is a stateful chat application. Users create **threads** (conversat
 
 ### Source Layout (`src/`)
 
-- **`app/`** — Next.js App Router. Routes include `/` (landing), `/workspace/chats/[thread_id]` (chat), `/workspace/agents/[agent_name]` and `/workspace/agents/new` (custom agents), `/[lang]/docs/…`, and `/api/…` route handlers (e.g. `/api/memory`).
+- **`app/`** — Next.js App Router. Routes include `/` (redirects to the workspace in the normal build; the marketing landing page is only served by the static website build), `/workspace/chats/[thread_id]` (chat), `/workspace/agents/[agent_name]` and `/workspace/agents/new` (custom agents), `/workspace/workflows` (workflow list/editor), `/workspace/capability-groups` (capability-group management), `/[lang]/docs/…`, and `/api/…` route handlers (e.g. `/api/memory`).
 - **`components/`** — React components:
   - `ui/` — Shadcn UI primitives (auto-generated, ESLint-ignored)
   - `ai-elements/` — Vercel AI SDK elements (auto-generated, ESLint-ignored)
@@ -120,6 +120,11 @@ Edit-and-rerun is deliberately latest-turn-only. `core/messages/utils.ts::getLat
   `core/i18n/translations.ts`; the interactive auth/workspace client provider owns both
   formatter-bearing dictionaries because functions cannot cross the RSC boundary.
   Keep public `/` static and keep rich-content CSS on the routes that render it.
+  The normal build's root entry is a routing-layer redirect (`next.config.js`
+  `redirects()`) to `/workspace/chats/new` so opening the app lands in the
+  workspace without rendering the heavy landing page first; only the static
+  website build (`NEXT_PUBLIC_STATIC_WEBSITE_ONLY=true`) serves the landing at
+  `/`.
 - **Thread hooks** (`useThreadStream`, `useSubmitThread`, `useThreads`) are the primary API interface
 - **Thread routes** — construct Web UI chat paths through `core/threads/utils.ts::pathOfThread()`, which percent-encodes both custom agent names and thread IDs before inserting them into route segments
 - **LangGraph client** is a singleton obtained via `getAPIClient()` in `core/api/`

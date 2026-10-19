@@ -2,7 +2,34 @@ import { expect, test } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
 
+// The marketing landing page is only served by the static website build. The
+// normal (single-user workspace) build redirects the root entry to the
+// workspace, so those landing assertions only apply in static mode.
+const staticOnly = process.env.NEXT_PUBLIC_STATIC_WEBSITE_ONLY === "true";
+
+test.describe("Root entry", () => {
+  test("redirects to the workspace in the normal build", async ({ page }) => {
+    test.skip(
+      staticOnly,
+      "the static website build serves the landing page at /",
+    );
+    mockLangGraphAPI(page);
+
+    await page.goto("/");
+
+    await page.waitForURL("**/workspace/chats/new");
+    await expect(page).toHaveURL(/\/workspace\/chats\/new/);
+  });
+});
+
 test.describe("Landing page", () => {
+  test.beforeEach(() => {
+    test.skip(
+      !staticOnly,
+      "the landing page requires the static website build",
+    );
+  });
+
   test("renders the header and hero section", async ({ page }) => {
     await page.goto("/");
 
