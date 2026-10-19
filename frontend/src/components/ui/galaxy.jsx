@@ -170,6 +170,17 @@ void main() {
 }
 `;
 
+// The fragment shader evaluates four star layers x a 3x3 neighbourhood per
+// pixel, so its frame cost scales with the shaded pixel count. On a large or
+// high-DPI viewport that is expensive enough to saturate the main thread and
+// make clicks/navigation take seconds, so the background renders into a
+// bounded backing store and at a capped frame rate. The canvas is still
+// stretched over the container by CSS, so it remains a soft full-bleed field.
+const MAX_RENDER_PIXELS = 640 * 360;
+const MAX_DEVICE_PIXEL_RATIO = 1;
+const MIN_DEVICE_PIXEL_RATIO = 0.35;
+const TARGET_FRAME_INTERVAL_MS = 1000 / 30;
+
 export default function Galaxy({
   focal = [0.5, 0.5],
   rotation = [1.0, 0.0],
@@ -233,8 +244,21 @@ export default function Galaxy({
     let program;
 
     function resize() {
-      const scale = 1;
-      renderer.setSize(ctn.offsetWidth * scale, ctn.offsetHeight * scale);
+      const width = Math.max(1, ctn.offsetWidth);
+      const height = Math.max(1, ctn.offsetHeight);
+      // Keep the shaded pixel budget bounded: cap the pixel ratio and shrink
+      // the backing store area for large viewports before `setSize` derives
+      // `canvas.width/height` from it.
+      const nativeDpr = Math.min(
+        window.devicePixelRatio || 1,
+        MAX_DEVICE_PIXEL_RATIO,
+      );
+      const areaScale = Math.min(
+        1,
+        Math.sqrt(MAX_RENDER_PIXELS / (width * height)),
+      );
+      renderer.dpr = Math.max(MIN_DEVICE_PIXEL_RATIO, nativeDpr * areaScale);
+      renderer.setSize(width, height);
       if (program) {
         program.uniforms.uResolution.value = new Color(
           gl.canvas.width,
@@ -285,9 +309,15 @@ export default function Galaxy({
 
     const mesh = new Mesh(gl, { geometry, program });
     let animateId;
+    let lastFrameTime = 0;
 
     function update(t) {
       animateId = requestAnimationFrame(update);
+      // Throttle to the target cadence: the shader is fill-rate bound, and
+      // rendering every display refresh steals main-thread time from
+      // interaction for no visible benefit on a background.
+      if (t - lastFrameTime < TARGET_FRAME_INTERVAL_MS) return;
+      lastFrameTime = t;
       if (!disableAnimation) {
         program.uniforms.uTime.value = t * 0.001;
         program.uniforms.uStarSpeed.value = (t * 0.001 * starSpeed) / 10.0;
