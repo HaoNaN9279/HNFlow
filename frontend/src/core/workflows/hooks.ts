@@ -57,6 +57,12 @@ export function useCreateWorkflow() {
       toast.success(t.workflows.errors.saveSuccess);
     },
     onError: (error: Error) => {
+      if (error instanceof WorkflowValidationErrors) {
+        toast.error(
+          `${t.workflows.errors.validationPrefix}${error.errors.map((e) => e.message).join("\n")}`,
+        );
+        return;
+      }
       toast.error(`${t.workflows.errors.saveFailed}: ${error.message}`);
     },
   });

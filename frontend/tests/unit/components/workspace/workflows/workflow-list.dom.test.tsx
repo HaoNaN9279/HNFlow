@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, rs } from "@rstest/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 
 import { WorkflowList } from "@/components/workspace/workflows/workflow-list";
 import type { WorkflowRecord } from "@/core/workflows/types";
@@ -185,5 +191,47 @@ describe("WorkflowList", () => {
     expect(await screen.findByText("My workflow")).toBeTruthy();
     expect(screen.getByText("wf-1")).toBeTruthy();
     expect(screen.getByText(/Version: 0\.1\.0/)).toBeTruthy();
+  });
+
+  it("creates a structurally valid starter definition", async () => {
+    // An empty graph is rejected by the backend (422: missing flow:start /
+    // flow:end), so the create payload must already carry a start → end pair.
+    apiMock.listWorkflows.mockResolvedValue([]);
+    apiMock.createWorkflow.mockResolvedValue({
+      ...makeRecord(),
+      id: "wf-new",
+      name: "My new flow",
+    });
+
+    renderList();
+
+    const createButtons = await screen.findAllByRole("button", {
+      name: /new workflow/i,
+    });
+    fireEvent.click(createButtons[0]!);
+    const nameInput = await screen.findByLabelText("Name");
+    fireEvent.change(nameInput, { target: { value: "My new flow" } });
+    fireEvent.keyDown(nameInput, { key: "Enter" });
+
+    await waitFor(() =>
+      expect(apiMock.createWorkflow).toHaveBeenCalledTimes(1),
+    );
+    const payload = apiMock.createWorkflow.mock.calls[0]![0] as {
+      definition: {
+        nodes: { id: string; type: string }[];
+        edges: {
+          source: string;
+          source_port: string;
+          target: string;
+          target_port: string;
+        }[];
+      };
+    };
+    const nodeTypes = payload.definition.nodes.map((node) => node.type);
+    expect(nodeTypes).toContain("flow:start");
+    expect(nodeTypes).toContain("flow:end");
+    expect(payload.definition.edges).toEqual([
+      { source: "start", source_port: "out", target: "end", target_port: "in" },
+    ]);
   });
 });

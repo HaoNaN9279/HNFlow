@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/core/i18n/hooks";
+import { getDefaultNode } from "@/core/workflows/canvas/node-catalog";
 import {
   useCreateWorkflow,
   useDeleteWorkflow,
@@ -26,17 +27,27 @@ import type { WorkflowRunStatus } from "@/core/workflows/runs";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
 /**
- * The backend creates a blank definition server-side (id/name are re-stamped
- * at persistence time), but the create payload requires a structurally valid
- * `definition` — send an empty one.
+ * A structurally valid starter definition for a brand-new workflow.
+ *
+ * The backend validates every saved definition (`validate_definition`) and
+ * requires exactly one `flow:start` and one `flow:end`, so an empty graph is
+ * rejected with 422. Seed the canvas with a start → end pair (using the same
+ * port defaults the palette produces) so creation succeeds and the new
+ * workflow opens on a legal, runnable skeleton. The id/name are re-stamped at
+ * persistence time.
  */
 function blankDefinition(name: string): WorkflowRecord["definition"] {
   return {
     id: "draft",
     name,
     version: "0.1.0",
-    nodes: [],
-    edges: [],
+    nodes: [
+      { ...getDefaultNode("flow:start"), id: "start" },
+      { ...getDefaultNode("flow:end"), id: "end" },
+    ],
+    edges: [
+      { source: "start", source_port: "out", target: "end", target_port: "in" },
+    ],
     metadata: {},
   };
 }
