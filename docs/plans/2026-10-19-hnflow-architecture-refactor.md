@@ -137,8 +137,8 @@
 | 1 | 测试耗时治理 | done | 7db7ec4 |
 | 2 | 运行时装配收敛 | done | 891ad02 |
 | 3 | 状态与可观测 | in_progress | 891ad02 |
-| 4 | 定义修订与 metadata | in_progress | 891ad02 |
-| 5 | AgentPort | done | (待提交) |
+| 4 | 定义修订与 metadata | in_progress | 42969fd |
+| 5 | AgentPort | done | 57c8d67 |
 | 6 | 双入口/前端契约/拆分 | todo | - |
 
 ## 8. 提交记录
@@ -147,6 +147,8 @@
 |---|---|
 | 7db7ec4 | docs: 重写开发方案并建立改造跟踪 + test 目标优化 |
 | 891ad02 | refactor(workflow): 运行时装配收敛、提示词去重、IO offload、state/cost、run 快照 |
+| 57c8d67 | refactor(workflow): AgentPort + 默认 DeerFlow 适配器 |
+| 42969fd | feat(workflow): 定义修订持久化 + 保存时 dry-run compile 校验 |
 
 ## 9. 验收清单（全部完成时）
 
