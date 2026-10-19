@@ -82,9 +82,10 @@
 ### 3.2 `run.end` 终态一致性
 
 - [x] 终态状态修正：取消/挂起不再把 `run.end.metadata.status` 写成 `success`；错误路径补写 `run.end`。
-- [ ] 抽出唯一 `finalize_workflow_run`（当前仍是 worker 内联逻辑）。
-- [ ] `run.end` 内容限长/脱敏，不直接写完整 state。
-- [ ] 测试：四种终态事件结构一致，token/timing 不丢失。
+- [x] 统一 `_build_run_end_content` / `_persist_run_end` 构造与写入（终态 status 进 content/metadata）。
+- [x] `run.end` 大值截断为 `{__truncated, type, chars}`，不直接写完整 state。
+- [ ] `run.end` 敏感字段脱敏（当前只做限长）。
+- [ ] 测试：四种终态事件结构一致（当前覆盖 success/error；interrupted/cancelled 待补）。
 
 ## 4. 阶段三：定义修订与元数据契约（P1）
 

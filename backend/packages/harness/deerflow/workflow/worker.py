@@ -7,6 +7,7 @@ infrastructure.  It is the workflow counterpart of ``runtime/runs/worker.py:run_
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -409,30 +410,8 @@ async def run_workflow(
             if not final_output:
                 final_output = accumulated_output
 
-            # Additive observability key (run.end content is opaque per
-            # contracts/run_event_stream_contract.json — existing keys are
-            # preserved untouched).  Every AI node's reserved
-            # ``wf:<node>:__token_usage`` channel is aggregated into one
-            # ``token_usage`` dict consumed by ``get_workflow_run``.
-            run_end_content: dict[str, Any] = dict(final_output)
-            token_usage = _aggregate_final_token_usage(final_output)
-            if token_usage is not None:
-                run_end_content["token_usage"] = token_usage
-            node_timings = _aggregate_final_node_durations(final_output)
-            if node_timings is not None:
-                run_end_content["node_timings"] = node_timings
-
-            try:
-                await event_store.put(
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    event_type="run.end",
-                    category="outputs",
-                    content=run_end_content,
-                    metadata={"status": terminal_status},
-                )
-            except Exception:
-                logger.warning("Failed to persist run.end for run %s (non-fatal)", run_id, exc_info=True)
+            run_end_content = _build_run_end_content(final_output, status=terminal_status)
+            await _persist_run_end(event_store, thread_id=thread_id, run_id=run_id, content=run_end_content, status=terminal_status)
 
     except asyncio.CancelledError:
         logger.info("Run %s was cancelled", run_id)
@@ -518,17 +497,8 @@ async def run_workflow(
             # Every terminal path must expose one run.end.  Without this an
             # error run had no token/timing aggregate at all, while a cancelled
             # run wrote status=success because only ``has_pending`` was checked.
-            try:
-                await event_store.put(
-                    thread_id=thread_id,
-                    run_id=run_id,
-                    event_type="run.end",
-                    category="outputs",
-                    content={"status": "error", "error": error_msg},
-                    metadata={"status": "error"},
-                )
-            except Exception:
-                logger.warning("Failed to persist run.end for failed run %s (non-fatal)", run_id, exc_info=True)
+            run_end_content = _build_run_end_content(accumulated_output, status="error", error=error_msg)
+            await _persist_run_end(event_store, thread_id=thread_id, run_id=run_id, content=run_end_content, status="error")
 
     finally:
         await bridge.publish_end(run_id)
@@ -536,6 +506,62 @@ async def run_workflow(
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────
+
+
+#: A single state value larger than this is replaced by a typed marker in
+#: ``run.end``.  The checkpoint remains the source of truth for the full value;
+#: run events are an observability/reporting feed, not a second state store.
+_RUN_END_VALUE_CHAR_LIMIT = 32_000
+
+
+def _bounded_run_end_value(value: Any) -> Any:
+    try:
+        size = len(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        size = len(str(value))
+    if size <= _RUN_END_VALUE_CHAR_LIMIT:
+        return value
+    return {"__truncated": True, "type": type(value).__name__, "chars": size}
+
+
+def _build_run_end_content(final_output: dict[str, Any], *, status: str, error: str | None = None) -> dict[str, Any]:
+    """Build the terminal ``run.end`` payload with a bounded state snapshot."""
+    content: dict[str, Any] = {}
+    for key, value in final_output.items():
+        if isinstance(key, str) and key.startswith("wf:"):
+            content[key] = _bounded_run_end_value(value)
+
+    token_usage = _aggregate_final_token_usage(final_output)
+    if token_usage is not None:
+        content["token_usage"] = token_usage
+    node_timings = _aggregate_final_node_durations(final_output)
+    if node_timings is not None:
+        content["node_timings"] = node_timings
+    content["status"] = status
+    if error:
+        content["error"] = error
+    return content
+
+
+async def _persist_run_end(
+    event_store: Any,
+    *,
+    thread_id: str,
+    run_id: str,
+    content: dict[str, Any],
+    status: str,
+) -> None:
+    try:
+        await event_store.put(
+            thread_id=thread_id,
+            run_id=run_id,
+            event_type="run.end",
+            category="outputs",
+            content=content,
+            metadata={"status": status},
+        )
+    except Exception:
+        logger.warning("Failed to persist run.end for run %s (non-fatal)", run_id, exc_info=True)
 
 
 def _build_graph_input(definition: WorkflowDefinition, params: dict[str, Any]) -> dict[str, Any]:

@@ -229,6 +229,10 @@ class TestNodeFailure:
         assert "wf:node:started" in put_types
         assert "wf:node:failed" in put_types
         assert "run.error" in put_types
+        assert "run.end" in put_types
+        run_end = next(c for c in event_store.put.call_args_list if c.kwargs["event_type"] == "run.end")
+        assert run_end.kwargs["content"]["status"] == "error"
+        assert run_end.kwargs["metadata"]["status"] == "error"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
