@@ -287,7 +287,37 @@ export const enUS: Translations = {
     demoChats: "Demo chats",
     agents: "Agents",
     scheduledTasks: "Scheduled tasks",
+    capabilityGroups: "Capability groups",
     agentsDisabledTooltip: "Feature not enabled",
+  },
+
+  capabilityGroups: {
+    title: "Capability groups",
+    description:
+      "A capability group is a versioned package that can contain rules, agents, skills, tools and more. A skill is only one resource inside a group.",
+    loading: "Loading capability groups...",
+    loadFailed: "Failed to load capability groups",
+    retry: "Retry",
+    empty: "No capability groups installed",
+    emptyHint: "Add group.json under capability-groups/<name>/<version>/.",
+    loadingContents: "Loading contents...",
+    loadContentsFailed: "Failed to load capability group contents",
+    noFiles: "This capability group has no files to show",
+    reveal: "Reveal in file manager",
+    revealFailed: "Failed to reveal file",
+    revealed: "Revealed in file manager",
+    source: { public: "Built-in", user: "User" },
+    categories: {
+      rules: "Rules",
+      agents: "Agents",
+      skills: "Skills",
+      tools: "Tools",
+      references: "References",
+      templates: "Templates",
+      assets: "Assets",
+      evals: "Evals",
+      other: "Other",
+    },
   },
 
   // Scheduled tasks

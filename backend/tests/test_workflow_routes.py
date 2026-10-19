@@ -14,7 +14,6 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
 from app.gateway.routers import workflow_routes
-from app.gateway.routers.workflow_routes import _resolve_workflow_metadata
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
@@ -435,103 +434,6 @@ def _make_definition(*group_sets: list[str]) -> WorkflowDefinition:
 
 
 # ── Tests: _resolve_workflow_metadata ──────────────────────────────────────────
-
-
-class TestResolveWorkflowMetadata:
-    """Unit tests for _resolve_workflow_metadata helper."""
-
-    def test_with_capability_groups_populates_resolved_groups(self):
-        """Metadata gets resolved_groups populated when nodes have capability_groups."""
-        mock_storage = MagicMock()
-        mock_storage.load_skills.return_value = [
-            _make_skill("data-analysis", skill_id="550e8400-e29b", version="0.2.0"),
-        ]
-
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-            definition = _make_definition(["data-analysis"])
-            result = _resolve_workflow_metadata(definition, {"key": "val"})
-
-        assert result["key"] == "val"
-        assert result["resolved_groups"] == ["550e8400-e29b@v0.2.0"]
-
-    def test_no_capability_groups_preserves_keys_and_attaches_lockfile(self):
-        """No capability groups → user keys preserved, no resolved_groups, lockfile attached (C3)."""
-        definition = _make_definition([])
-        metadata = {"key": "val"}
-        result = _resolve_workflow_metadata(definition, metadata)
-        assert result is not metadata  # a fresh dict now carries the lockfile
-        assert result["key"] == "val"
-        assert "resolved_groups" not in result
-        assert isinstance(result["lockfile"], dict)
-        assert result["lockfile"]["workflow"] == {"id": "test-wf", "version": "0.1.0"}
-
-    def test_unknown_skill_name_yields_none_resolved_groups(self):
-        """Unknown capability group name → resolved_groups set to None."""
-        mock_storage = MagicMock()
-        mock_storage.load_skills.return_value = [
-            _make_skill("known", skill_id="guid-known"),
-        ]
-
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-            definition = _make_definition(["unknown"])
-            result = _resolve_workflow_metadata(definition, {})
-
-        assert result["resolved_groups"] is None
-
-    def test_storage_error_fail_open(self):
-        """Storage failure → keys preserved, no resolved_groups; lockfile still attached (fail-open)."""
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", side_effect=RuntimeError("boom")):
-            definition = _make_definition(["data-analysis"])
-            metadata = {"existing": "data"}
-            result = _resolve_workflow_metadata(definition, metadata)
-
-        # Fail-open: the original keys survive and resolution is skipped.
-        assert result["existing"] == "data"
-        assert "resolved_groups" not in result
-        assert isinstance(result["lockfile"], dict)
-
-    def test_preserves_existing_metadata_keys(self):
-        """Existing metadata keys survive resolution."""
-        mock_storage = MagicMock()
-        mock_storage.load_skills.return_value = [
-            _make_skill("data-analysis", skill_id="550e8400-e29b"),
-        ]
-
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-            definition = _make_definition(["data-analysis"])
-            result = _resolve_workflow_metadata(definition, {"custom_field": 42, "another": "keep"})
-
-        assert result["custom_field"] == 42
-        assert result["another"] == "keep"
-        assert result["resolved_groups"] == ["550e8400-e29b@v0.1.0"]
-
-    def test_empty_resolved_becomes_none(self):
-        """When all capability_groups are unknown → resolved_groups becomes None (not empty list)."""
-        mock_storage = MagicMock()
-        mock_storage.load_skills.return_value = []  # no skills in catalog
-
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-            definition = _make_definition(["missing"])
-            result = _resolve_workflow_metadata(definition, {})
-
-        assert result["resolved_groups"] is None
-
-    def test_mixed_known_and_unknown(self):
-        """Mixed groups: known resolves, unknown and no-id skipped."""
-        mock_storage = MagicMock()
-        mock_storage.load_skills.return_value = [
-            _make_skill("known", skill_id="guid-known", version="0.1.0"),
-            _make_skill("no-id", skill_id=None),
-        ]
-
-        with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-            definition = _make_definition(["known", "unknown", "no-id"])
-            result = _resolve_workflow_metadata(definition, {})
-
-        assert result["resolved_groups"] == ["guid-known@v0.1.0"]
-
-
-# ── Tests: create_workflow integration ─────────────────────────────────────────
 
 
 class TestCreateWorkflowResolvedGroups:

@@ -15,7 +15,6 @@ from typing import Any
 from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.agent_port import get_agent_adapter
-from deerflow.workflow.capability_groups import CAPABILITY_GROUPS_PORT, normalize_capability_groups
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.knowledge import (
@@ -203,12 +202,8 @@ async def exec_llm_agent(
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty 'instruction' param")
 
     agent_name = params.get("agent_name")
-    # Compiler-resolved capability list is authoritative.  The runtime input is
-    # accepted as a fallback for direct executor calls and forward compatibility.
-    if CAPABILITY_GROUPS_PORT in inputs and inputs.get(CAPABILITY_GROUPS_PORT) is not None:
-        capability_groups = normalize_capability_groups(inputs[CAPABILITY_GROUPS_PORT])
-    else:
-        capability_groups = normalize_capability_groups(params.get("capability_groups") or [])
+    raw_groups = params.get("capability_groups") or []
+    capability_groups = list(dict.fromkeys(str(item) for item in raw_groups if isinstance(item, str) and item))
 
     context = runtime.context
     user_id = context.get("user_id")

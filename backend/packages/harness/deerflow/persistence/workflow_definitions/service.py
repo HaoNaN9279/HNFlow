@@ -28,10 +28,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from deerflow.capability_groups import discover_capability_groups
 from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
-from deerflow.skills.catalog import SkillCatalog
 from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups, declared_capability_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
@@ -46,8 +46,8 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
     """Populate ``metadata["resolved_groups"]`` from the definition's capability groups.
 
     Only when any node declares ``capability_groups``; otherwise ``resolved_groups``
-    is left untouched.  Fail-open: a skills-storage failure leaves metadata
-    unchanged rather than rejecting the save.
+    is left untouched.  Fail-open: a capability-group discovery failure leaves
+    metadata unchanged rather than rejecting the save.
 
     Mirrors ``app.gateway.routers.workflow_routes._resolve_workflow_metadata`` —
     logic duplicated here so the harness layer never imports ``app.*``.
@@ -58,12 +58,10 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
         return result
 
     try:
-        from deerflow.skills.storage import get_or_new_skill_storage
-
-        storage = get_or_new_skill_storage()
-        skills = storage.load_skills(enabled_only=False)
-        catalog = SkillCatalog(skills=tuple(skills))
-        resolved = collect_resolved_groups(definition, catalog)
+        groups = discover_capability_groups()
+        by_reference = {group.name: group for group in groups}
+        by_reference.update({group.guid: group for group in groups})
+        resolved = collect_resolved_groups(definition, by_reference)
         result["resolved_groups"] = resolved if resolved else None
     except Exception as e:  # noqa: BLE001 - fail-open by design
         logger.warning("Failed to resolve workflow capability groups: %s", e)

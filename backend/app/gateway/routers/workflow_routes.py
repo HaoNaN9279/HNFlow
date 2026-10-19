@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo
 from app.gateway.permissions import require_permission
-from deerflow.skills.types import Skill
 from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
@@ -121,8 +120,9 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
     any node declares them; otherwise it is left as provided.  Either way a
     fresh ``metadata["lockfile"]`` capability snapshot (搂5.6) is attached so the
     saved definition records its reproducibility inputs.  Fail-open: a
-    skills-storage or config-read failure never rejects the save 鈥?it degrades
-    to the best snapshot available (mirrors the harness-layer save service).
+    capability-group discovery or config-read failure never rejects the save —
+    it degrades to the best snapshot available (mirrors the harness-layer save
+    service).
     """
     from deerflow.persistence.workflow_definitions.service import _resolve_workflow_metadata as resolve_metadata
 
@@ -146,8 +146,9 @@ async def _check_workflow_dependency_cycles(
     replaces the stored one (update) or joins as a new node (create).  A single
     unparseable stored row is skipped rather than aborting the whole check.
 
-    Skills are loaded fail-open: a storage failure degrades to workflow-only
-    cycle detection (partial detection) instead of rejecting the save with a 500.
+    Capability-group edges are intentionally not part of cycle detection here:
+    the group registry is being rewritten, so this check only covers workflow →
+    subworkflow references.
     """
     rows = await repo.list_by_user(user_id)
     definitions: dict[str, WorkflowDefinition] = {}
@@ -164,16 +165,7 @@ async def _check_workflow_dependency_cycles(
             continue
     definitions[target_id] = target_def
 
-    skills: list[Skill] = []
-    try:
-        from deerflow.skills.storage import get_or_new_skill_storage
-
-        storage = get_or_new_skill_storage()
-        skills = storage.load_skills(enabled_only=False)
-    except Exception as e:
-        logger.warning("Failed to load skills for workflow dependency cycle detection: %s", e)
-
-    return find_dependency_cycles(definitions, skills)
+    return find_dependency_cycles(definitions, ())
 
 
 def _format_validation_errors(exc: ValidationError) -> list[str]:

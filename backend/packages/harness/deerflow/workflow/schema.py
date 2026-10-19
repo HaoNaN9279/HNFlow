@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from deerflow.config.agents_config import AGENT_NAME_PATTERN
 
 if TYPE_CHECKING:
-    from deerflow.skills.catalog import SkillCatalog
+    from deerflow.capability_groups import CapabilityGroup
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +109,8 @@ class NodeType(StrEnum):
 
     # AI
     AI_LLM_AGENT = "ai:llm_agent"
-    # Authoring-only capability-group wiring (resolved by the compiler, not
-    # executed as runtime nodes).
+    # Authoring-only capability-group selector (compile-time wiring).
     AI_CAPABILITY_GROUP = "ai:capability_group"
-    AI_CAPABILITY_MERGE = "ai:capability_merge"
     # Reads the reserved final-prompt channel an AI node publishes.
     AI_PROMPT_PREVIEW = "ai:prompt_preview"
 
@@ -240,89 +239,58 @@ class WorkflowDefinition(BaseModel):
 
 
 def declared_capability_groups(node: Node) -> list[str]:
-    """Return the group names a node declares for dependency resolution.
-
-    Selector nodes carry their single group in ``params.group``; every other
-    node keeps the historical top-level ``capability_groups`` list.  This is the
-    single helper shared by resolved-group snapshots, validation and the
-    dependency graph, so the new authoring nodes cannot be forgotten in one
-    place while working in another.
-    """
-    if node.type == NodeType.AI_CAPABILITY_GROUP:
-        group = node.params.get("group")
-        return [group] if isinstance(group, str) and group else []
+    """Return the capability-group identifiers a node declares."""
     return list(node.capability_groups)
+
+
+def _group_for_reference(reference: str, groups: Mapping[str, CapabilityGroup]) -> CapabilityGroup | None:
+    return groups.get(reference)
 
 
 def collect_resolved_groups(
     definition: WorkflowDefinition,
-    catalog: SkillCatalog,
+    groups: Mapping[str, CapabilityGroup],
 ) -> list[str]:
-    """Collect the capability groups a workflow depends on, resolved to ``guid@version``.
+    """Resolve referenced capability groups to ``guid@version`` snapshots.
 
-    Walks every node's ``capability_groups`` (skill names at authoring time),
-    maps each name to its skill via the catalog, and emits ``<guid>@v<version>``
-    strings.  N14 §5.5: a referenced group's ``extends`` closure is included too,
-    so the recorded snapshot covers the packages the node actually depends on by
-    inheritance.  Names that do not resolve to an installed skill are skipped
-    (backward compatible — a node may reference a not-yet-installed skill).
-    Results are deduplicated and order-stable.
+    *groups* maps both group names and GUIDs to their current
+    :class:`CapabilityGroup`.  Unknown references are logged and skipped so a
+    save remains fail-open while the group is being authored.
     """
-    raw_entries: list[str] = []
-    name_to_skill: dict[str, Any] = {s.name: s for s in catalog.skills}
-
-    def _record(name: str, node_id: str, *, via: str | None = None) -> None:
-        skill = name_to_skill.get(name)
-        if skill is None:
-            logger.warning(
-                "Workflow node %r references unknown capability group %r%s — skipping",
-                node_id,
-                name,
-                f" (via extends {via!r})" if via else "",
-            )
-            return
-        if not skill.skill_id:
-            logger.warning(
-                "Skill %r has no skill_id (public/legacy), skipping resolved group",
-                skill.name,
-            )
-            return
-        raw_entries.append(f"{skill.skill_id}@v{skill.version}")
-
+    resolved: list[str] = []
     for node in definition.nodes:
-        for name in declared_capability_groups(node):
-            _record(name, node.id)
-            # §5.5: the inherited packages are dependencies too.  A broken
-            # ``extends`` (cycle/unknown base) is reported by
-            # ``skills.composition.validate_composition``; here the closure is
-            # best-effort so metadata resolution never fails a save.
-            skill = name_to_skill.get(name)
-            for base in getattr(skill, "extends", ()) or () if skill is not None else ():
-                _record(str(base), node.id, via=name)
-
-    return list(dict.fromkeys(raw_entries))
+        for reference in declared_capability_groups(node):
+            group = _group_for_reference(reference, groups)
+            if group is None:
+                logger.warning(
+                    "Workflow node %r references unknown capability group %r — skipping",
+                    node.id,
+                    reference,
+                )
+                continue
+            resolved.append(f"{group.guid}@v{group.version}")
+            for base in group.extends:
+                parent = _group_for_reference(base, groups)
+                if parent is None:
+                    logger.warning(
+                        "Workflow node %r capability group %r extends unknown group %r",
+                        node.id,
+                        group.name,
+                        base,
+                    )
+                    continue
+                resolved.append(f"{parent.guid}@v{parent.version}")
+    return list(dict.fromkeys(resolved))
 
 
 def validate_capability_groups(
     definition: WorkflowDefinition,
-    catalog: SkillCatalog,
+    groups: Mapping[str, CapabilityGroup],
 ) -> list[str]:
-    """Validate that every referenced capability group exists in the catalog.
-
-    Returns one error message per ``(node_id, group_name)`` whose skill is not
-    installed.  Pure function — no IO.
-
-    This is the *static existence* half of §5.4's capability-group validation;
-    version-range checking lives in the dependency graph / lockfile layer.  It
-    is intentionally exposed as a non-raising reporter: callers that need
-    fail-open save behavior (a node may legitimately reference a skill that is
-    installed later) collect and log the result, while callers that need a hard
-    gate inspect a non-empty return value.
-    """
+    """Return one error for every referenced capability group that is missing."""
     errors: list[str] = []
-    known_names = {s.name for s in catalog.skills}
     for node in definition.nodes:
-        for name in declared_capability_groups(node):
-            if name not in known_names:
-                errors.append(f"node '{node.id}': capability group '{name}' is not installed")
+        for reference in declared_capability_groups(node):
+            if reference not in groups:
+                errors.append(f"node '{node.id}': capability group '{reference}' is not installed")
     return errors

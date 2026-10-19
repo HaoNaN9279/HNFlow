@@ -6,11 +6,9 @@ import {
 } from "@/core/workflows/canvas/mapping";
 import { getDefaultNode } from "@/core/workflows/canvas/node-catalog";
 import {
-  addMergeInput,
   applyNodeFormValues,
   parseNodeFormValues,
   parseSubworkflowSpec,
-  removeMergeInput,
   serializeSubworkflowSpec,
   validateNodeForm,
   type NodeFormValues,
@@ -588,23 +586,27 @@ describe("app:* node fields", () => {
   });
 });
 
-describe("capability group fields", () => {
-  test("parse/apply round-trips group and prompt-preview agent_node", () => {
+describe("capability group selector fields", () => {
+  test("parse/apply round-trips selected group references", () => {
     const selector: WorkflowNode = {
-      id: "n-group",
+      id: "n-groups",
       type: "ai:capability_group",
       inputs: [],
       outputs: [{ name: "groups", type: "array" }],
-      params: { group: "web-research" },
+      params: { groups: ["a".repeat(32)] },
     };
-    expect(parseNodeFormValues(selector).group).toBe("web-research");
+    expect(parseNodeFormValues(selector).groups).toEqual(["a".repeat(32)]);
     expect(
       applyNodeFormValues(selector, {
         ...parseNodeFormValues(selector),
-        group: "code-review",
-      }).params.group,
-    ).toBe("code-review");
+        groups: ["b".repeat(32)],
+      }).params.groups,
+    ).toEqual(["b".repeat(32)]);
+  });
+});
 
+describe("prompt preview fields", () => {
+  test("parse/apply round-trips the preview agent_node", () => {
     const preview: WorkflowNode = {
       id: "n-preview",
       type: "ai:prompt_preview",
@@ -619,26 +621,5 @@ describe("capability group fields", () => {
         agent_node: "n-other",
       }).params.agent_node,
     ).toBe("n-other");
-  });
-
-  test("merge input slots are appended and removed without mutating the node", () => {
-    const merge = getDefaultNode("ai:capability_merge");
-    const original = merge.inputs.map((port) => port.name);
-    const added = addMergeInput(merge);
-    expect(added.inputs.map((port) => port.name)).toHaveLength(
-      original.length + 1,
-    );
-    expect(added.inputs.at(-1)?.type).toBe("array");
-    expect(merge.inputs.map((port) => port.name)).toEqual(original);
-
-    const firstInput = added.inputs[0];
-    expect(firstInput).toBeDefined();
-    if (!firstInput) {
-      return;
-    }
-    const removed = removeMergeInput(added, firstInput.name);
-    expect(removed.inputs.map((port) => port.name)).not.toContain(
-      firstInput.name,
-    );
   });
 });

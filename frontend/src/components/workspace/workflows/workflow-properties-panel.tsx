@@ -28,14 +28,13 @@ import {
 const TYPED_NODE_TYPES = new Set([
   "ai:llm_agent",
   "ai:capability_group",
-  "ai:capability_merge",
   "ai:prompt_preview",
   "nested:subworkflow",
 ]);
 const TYPED_PARAM_KEYS = [
   "instruction",
   "subworkflow",
-  "group",
+  "groups",
   "agent_node",
 ] as const;
 

@@ -1,9 +1,8 @@
-"""Validate every bundled SKILL.md under skills/public/.
+"""Validate bundled SKILL.md packages under skills/public/.
 
-Catches regressions like #2443 — a SKILL.md whose YAML front-matter fails to
-parse (e.g. an unquoted description containing a colon, which YAML interprets
-as a nested mapping). Each bundled skill is checked individually so the
-failure message identifies the exact file.
+The previous skill packages were removed as part of the capability-group
+rewrite; this module keeps the frontmatter validator coverage for packages
+added back later.
 """
 
 from pathlib import Path
@@ -11,11 +10,9 @@ from pathlib import Path
 import pytest
 
 from deerflow.skills.package_paths import is_eval_fixture_skill_md
-from deerflow.skills.storage import get_or_new_skill_storage
 from deerflow.skills.validation import _validate_skill_frontmatter
 
 SKILLS_PUBLIC_DIR = Path(__file__).resolve().parents[2] / "skills" / "public"
-
 
 BUNDLED_SKILL_DIRS = sorted(p.parent for p in SKILLS_PUBLIC_DIR.rglob("SKILL.md") if not is_eval_fixture_skill_md(p.relative_to(SKILLS_PUBLIC_DIR)))
 
@@ -31,13 +28,5 @@ def test_bundled_skill_frontmatter_is_valid(skill_dir: Path) -> None:
     assert name, f"{skill_dir.relative_to(SKILLS_PUBLIC_DIR)}: no name extracted"
 
 
-def test_skills_public_dir_has_skills() -> None:
-    assert BUNDLED_SKILL_DIRS, f"no SKILL.md found under {SKILLS_PUBLIC_DIR}"
-
-
-def test_runtime_registry_excludes_skill_reviewer_eval_fixtures() -> None:
-    skills = get_or_new_skill_storage(skills_path=SKILLS_PUBLIC_DIR.parent).load_skills(enabled_only=False)
-    names = {skill.name for skill in skills}
-
-    assert "skill-reviewer" in names
-    assert all("evals/fixtures" not in skill.skill_file.as_posix() for skill in skills)
+def test_public_skills_directory_has_no_bundled_packages() -> None:
+    assert not BUNDLED_SKILL_DIRS, f"unexpected bundled skills under {SKILLS_PUBLIC_DIR}"

@@ -71,35 +71,6 @@ class TestToolGateway:
 # ── resolve_capability_tools ─────────────────────────────────────────────────
 
 
-class TestResolveCapabilityTools:
-    def _patch_gateway(self, monkeypatch: pytest.MonkeyPatch, tools: dict[str, Any]) -> None:
-        gateway = tg.ToolGateway([tg.StaticToolProvider("sandbox", tools)])
-        monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: gateway)
-
-    def test_empty_groups_returns_no_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self._patch_gateway(monkeypatch, {"bash": _tool("bash")})
-        assert tg.resolve_capability_tools([]) == []
-
-    def test_union_of_allowed_tools_is_resolved_sorted(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tg, "_load_enabled_skills", lambda user_id: [_skill("grp", ("read_file", "bash"))])
-        self._patch_gateway(monkeypatch, {"bash": _tool("bash"), "read_file": _tool("read_file")})
-        resolved = tg.resolve_capability_tools(["grp"], user_id="u1")
-        assert [t.name for t in resolved] == ["bash", "read_file"]  # sorted for cache stability
-
-    def test_group_without_allowed_tools_yields_no_tools(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tg, "_load_enabled_skills", lambda user_id: [_skill("grp", None)])
-        self._patch_gateway(monkeypatch, {"bash": _tool("bash")})
-        assert tg.resolve_capability_tools(["grp"], user_id="u1") == []
-
-    def test_unknown_group_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(tg, "_load_enabled_skills", lambda user_id: [])
-        self._patch_gateway(monkeypatch, {"bash": _tool("bash")})
-        assert tg.resolve_capability_tools(["ghost"], user_id="u1") == []
-
-
-# ── MCP provider (N1 §9) ─────────────────────────────────────────────────────
-
-
 class _FakeExtensionsConfig:
     def __init__(self, servers: dict[str, Any]) -> None:
         self._servers = servers

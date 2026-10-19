@@ -7,20 +7,14 @@ rs.mock("@/core/agents/api", () => ({
   listAgents: rs.fn(),
 }));
 
-rs.mock("@/core/skills/api", () => ({
-  loadSkills: rs.fn(),
-}));
-
 rs.mock("@/core/workflows/api", () => ({
   listWorkflows: rs.fn(),
 }));
 
 import { listAgents } from "@/core/agents/api";
-import { loadSkills } from "@/core/skills/api";
 import { listWorkflows } from "@/core/workflows/api";
 import {
   useAgentOptions,
-  useSkillOptions,
   useWorkflowTemplateOptions,
 } from "@/core/workflows/canvas/use-node-form-options";
 import {
@@ -29,7 +23,6 @@ import {
 } from "@/core/workflows/types";
 
 const mockedListAgents = rs.mocked(listAgents);
-const mockedLoadSkills = rs.mocked(loadSkills);
 const mockedListWorkflows = rs.mocked(listWorkflows);
 
 function createWrapper() {
@@ -53,17 +46,6 @@ function agentRecord(name: string) {
     model: null,
     tool_groups: [],
     skills: [],
-  };
-}
-
-function skillRecord(name: string) {
-  return {
-    name,
-    description: `Skill ${name}`,
-    category: "general",
-    license: "MIT",
-    enabled: true,
-    editable: true,
   };
 }
 
@@ -125,44 +107,6 @@ describe("useAgentOptions", () => {
     mockedListAgents.mockRejectedValue(new Error("agents down"));
 
     const { result } = renderHook(() => useAgentOptions(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.data).toEqual([]);
-    });
-    expect(result.current.error).toBeNull();
-  });
-});
-
-describe("useSkillOptions", () => {
-  beforeEach(() => {
-    mockedLoadSkills.mockReset();
-  });
-
-  afterEach(() => {
-    cleanup();
-  });
-
-  it("unwraps the skills payload into skill names", async () => {
-    mockedLoadSkills.mockResolvedValue([
-      skillRecord("web-research"),
-      skillRecord("code-review"),
-    ]);
-
-    const { result } = renderHook(() => useSkillOptions(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => {
-      expect(result.current.data).toEqual(["web-research", "code-review"]);
-    });
-  });
-
-  it("degrades to an empty array when loading fails", async () => {
-    mockedLoadSkills.mockRejectedValue(new Error("skills down"));
-
-    const { result } = renderHook(() => useSkillOptions(), {
       wrapper: createWrapper(),
     });
 

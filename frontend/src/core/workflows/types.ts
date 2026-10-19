@@ -49,7 +49,6 @@ export const NODE_TYPES = [
   // AI
   "ai:llm_agent",
   "ai:capability_group",
-  "ai:capability_merge",
   "ai:prompt_preview",
   // Local professional software
   "app:launch",

@@ -1,0 +1,8 @@
+{
+  "guid": "22222222222222222222222222222222",
+  "name": "data-pipeline",
+  "version": "0.1.0",
+  "description": "数据检查、分析与报表能力组",
+  "permissions": ["fs", "exec"],
+  "extends": []
+}

@@ -323,29 +323,3 @@ def test_skills_storage_failure_still_detects_workflow_cycle():
     assert response.status_code == 422, f"Got {response.status_code}: {response.text}"
     errors = response.json()["detail"]["errors"]
     assert any(e.startswith("依赖环:") for e in errors)
-
-
-# ── Capability-group cycle ────────────────────────────────────────────────────
-
-
-def test_capability_group_cycle_returns_422():
-    """A workflow referencing a capability group whose dependencies cycle → 422."""
-    g1 = _make_skill("g1-name", skill_id="guid-g1", dependencies=(DependencySpec(guid="guid-g2", version="0.1.0"),))
-    g2 = _make_skill("g2-name", skill_id="guid-g2", dependencies=(DependencySpec(guid="guid-g1", version="0.1.0"),))
-
-    mock_storage = MagicMock()
-    mock_storage.load_skills.return_value = [g1, g2]
-
-    repo = _mock_repo(list_rows=[])
-    app = _make_authed_workflow_app(repo)
-    client = TestClient(app)
-
-    definition = _capability_group_def("wf-cap", ["g1-name"])
-    with patch("deerflow.skills.storage.get_or_new_skill_storage", return_value=mock_storage):
-        response = client.post("/api/workflows", json={"name": "Cap", "definition": definition})
-
-    assert response.status_code == 422, f"Got {response.status_code}: {response.text}"
-    errors = response.json()["detail"]["errors"]
-    assert any(e.startswith("依赖环:") for e in errors)
-    assert any("skill:guid-g1" in e and "skill:guid-g2" in e for e in errors), f"Expected capability-group cycle; got {errors}"
-    repo.create.assert_not_called()

@@ -213,7 +213,36 @@ export interface Translations {
     demoChats: string;
     agents: string;
     scheduledTasks: string;
+    capabilityGroups: string;
     agentsDisabledTooltip: string;
+  };
+
+  capabilityGroups: {
+    title: string;
+    description: string;
+    loading: string;
+    loadFailed: string;
+    retry: string;
+    empty: string;
+    emptyHint: string;
+    loadingContents: string;
+    loadContentsFailed: string;
+    noFiles: string;
+    reveal: string;
+    revealFailed: string;
+    revealed: string;
+    source: { public: string; user: string };
+    categories: {
+      rules: string;
+      agents: string;
+      skills: string;
+      tools: string;
+      references: string;
+      templates: string;
+      assets: string;
+      evals: string;
+      other: string;
+    };
   };
 
   // Scheduled tasks

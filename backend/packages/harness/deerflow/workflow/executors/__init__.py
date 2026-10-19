@@ -118,8 +118,8 @@ def build_default_registry() -> ExecutorRegistry:
             description="LLM agent executor (three-layer prompt + capability tools)",
         )
     )
-    # Capability selector/merge nodes are compile-time wiring only; the prompt
-    # preview node is a real idempotent read of the AI node's reserved prompt.
+    # The prompt preview node is a real idempotent read of the AI node's
+    # reserved prompt.
     reg.register(
         ExecutorRegistration(
             node_type=NodeType.AI_PROMPT_PREVIEW,

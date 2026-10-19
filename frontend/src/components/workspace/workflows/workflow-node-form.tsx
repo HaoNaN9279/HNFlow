@@ -13,21 +13,19 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { checkAgentName } from "@/core/agents/api";
+import { useCapabilityGroups } from "@/core/capability-groups/hooks";
 import { useI18n } from "@/core/i18n/hooks";
 import { previewWorkflowPrompt } from "@/core/workflows/api";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import {
-  addMergeInput,
   applyNodeFormValues,
   parseNodeFormValues,
-  removeMergeInput,
   validateNodeForm,
   type NodeFormValues,
 } from "@/core/workflows/canvas/node-form";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import {
   useAgentOptions,
-  useSkillOptions,
   useWorkflowTemplateOptions,
 } from "@/core/workflows/canvas/use-node-form-options";
 
@@ -37,7 +35,6 @@ import { useWorkflowEditor } from "./workflow-editor-context";
 const AGENT_NONE_VALUE = "__none__";
 const AGENT_CUSTOM_VALUE = "__custom__";
 const CUSTOM_AGENT_LABEL = "Custom agent...";
-const CAPABILITY_NONE_VALUE = "__none__";
 const PROMPT_PREVIEW_NONE_VALUE = "__none__";
 
 /** Sentinel select value meaning "this subworkflow port is not mapped". */
@@ -51,9 +48,8 @@ type WorkflowNodeFormProps = {
 
 /**
  * Typed edit form for workflow nodes. Renders dedicated forms for the AI
- * agent, capability selector/merge, prompt preview, subworkflow and app node
- * families; every other node type returns null so the properties panel keeps
- * its generic key/value editor.
+ * agent, prompt preview, subworkflow and app node families; every other node
+ * type returns null so the properties panel keeps its generic key/value editor.
  *
  * Commits are local-draft + commit-on-blur/select, matching the properties
  * panel: edits update local state immediately and `onChange` fires with a new
@@ -74,16 +70,7 @@ export function WorkflowNodeForm({
   }
   if (workflow.type === "ai:capability_group") {
     return (
-      <CapabilityGroupForm
-        node={node}
-        readonly={readonly}
-        onChange={onChange}
-      />
-    );
-  }
-  if (workflow.type === "ai:capability_merge") {
-    return (
-      <CapabilityMergeForm
+      <CapabilityGroupSelectorForm
         node={node}
         readonly={readonly}
         onChange={onChange}
@@ -285,7 +272,7 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   );
 }
 
-function CapabilityGroupForm({
+function CapabilityGroupSelectorForm({
   node,
   readonly,
   onChange,
@@ -296,17 +283,19 @@ function CapabilityGroupForm({
   const [values, setValues] = useState<NodeFormValues>(() =>
     parseNodeFormValues(workflow),
   );
+  const groupsQuery = useCapabilityGroups();
+
   useEffect(() => {
     setValues(parseNodeFormValues(node.data.workflow));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [node.id]);
 
-  const skillQuery = useSkillOptions();
-  const skills = skillQuery.data ?? [];
-  const selected = values.group ?? "";
-  const selectValue = selected || CAPABILITY_NONE_VALUE;
-
-  const commit = (next: NodeFormValues) => {
+  const selected = new Set(values.groups ?? []);
+  const toggle = (guid: string) => {
+    const nextGroups = selected.has(guid)
+      ? (values.groups ?? []).filter((item) => item !== guid)
+      : [...(values.groups ?? []), guid];
+    const next = { ...values, groups: nextGroups };
     setValues(next);
     onChange(applyNodeFormValues(node.data.workflow, next));
   };
@@ -314,92 +303,49 @@ function CapabilityGroupForm({
   return (
     <div className="flex flex-col gap-3 border-b pb-4">
       <div className="text-xs font-medium">{labels.capabilityGroup.title}</div>
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium">
-          {labels.capabilityGroup.groupLabel}
-        </label>
-        <Select
-          value={selectValue}
-          disabled={readonly}
-          onValueChange={(value) =>
-            commit({
-              ...values,
-              group: value === CAPABILITY_NONE_VALUE ? "" : value,
-            })
-          }
-        >
-          <SelectTrigger
-            aria-label={labels.capabilityGroup.groupLabel}
-            className="h-7 text-xs"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={CAPABILITY_NONE_VALUE}>
-              {labels.capabilityGroup.groupPlaceholder}
-            </SelectItem>
-            {selected && !skills.includes(selected) && (
-              <SelectItem value={selected}>{selected}</SelectItem>
-            )}
-            {skills.map((skill) => (
-              <SelectItem key={skill} value={skill}>
-                {skill}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {skills.length === 0 && (
-          <p className="text-muted-foreground text-[11px]">
-            {labels.capabilityGroup.noGroups}
-          </p>
-        )}
+      <div className="text-muted-foreground text-[11px]">
+        {labels.capabilityGroup.groupLabel}
       </div>
-    </div>
-  );
-}
-
-function CapabilityMergeForm({
-  node,
-  readonly,
-  onChange,
-}: WorkflowNodeFormProps) {
-  const { t } = useI18n();
-  const labels = t.workflows.properties;
-  const workflow = node.data.workflow;
-
-  return (
-    <div className="flex flex-col gap-2 border-b pb-4">
-      <div className="text-xs font-medium">
-        {labels.capabilityGroup.mergeTitle}
-      </div>
-      {workflow.inputs.map((port, index) => (
-        <div key={port.name} className="flex items-center gap-2 text-xs">
-          <span className="text-muted-foreground w-6">{index + 1}</span>
-          <span className="flex-1 font-mono">{port.name}</span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={readonly || workflow.inputs.length <= 1}
-            aria-label={`${labels.capabilityGroup.removeInput} ${port.name}`}
-            onClick={() => onChange(removeMergeInput(workflow, port.name))}
-          >
-            ×
-          </Button>
+      {groupsQuery.isPending ? (
+        <div className="text-muted-foreground text-xs">Loading...</div>
+      ) : groupsQuery.isError ? (
+        <div className="text-destructive text-xs">
+          {groupsQuery.error.message}
         </div>
-      ))}
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        disabled={readonly}
-        onClick={() => onChange(addMergeInput(workflow))}
-      >
-        {labels.capabilityGroup.addInput}
-      </Button>
-      <p className="text-muted-foreground text-[11px]">
-        {labels.capabilityGroup.inputLabel}: {workflow.inputs.length}
-      </p>
+      ) : groupsQuery.data.length === 0 ? (
+        <div className="text-muted-foreground text-xs">
+          {labels.capabilityGroup.noGroups}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {groupsQuery.data.map((group) => (
+            <label
+              key={group.guid}
+              className="flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 text-xs"
+            >
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={selected.has(group.guid)}
+                disabled={readonly}
+                onChange={() => toggle(group.guid)}
+                aria-label={`${group.name} ${group.version}`}
+              />
+              <span className="min-w-0">
+                <span className="font-medium">{group.name}</span>
+                <span className="text-muted-foreground ml-1 font-mono">
+                  v{group.version}
+                </span>
+                {group.description && (
+                  <span className="text-muted-foreground block truncate">
+                    {group.description}
+                  </span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

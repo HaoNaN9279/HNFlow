@@ -1,0 +1,8 @@
+{
+  "guid": "33333333333333333333333333333333",
+  "name": "local-app-pipeline",
+  "version": "0.1.0",
+  "description": "本地应用启动、脚本执行与结果收集能力组",
+  "permissions": ["fs", "exec"],
+  "extends": []
+}

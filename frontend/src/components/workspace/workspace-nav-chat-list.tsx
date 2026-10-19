@@ -1,6 +1,12 @@
 "use client";
 
-import { BotIcon, CalendarClock, MessagesSquare, Workflow } from "lucide-react";
+import {
+  BotIcon,
+  CalendarClock,
+  LayersIcon,
+  MessagesSquare,
+  Workflow,
+} from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -97,6 +103,20 @@ export function WorkspaceNavChatList() {
             <Link className="text-muted-foreground" href="/workspace/workflows">
               <Workflow />
               <span>{t.workflows.title}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/capability-groups")}
+            asChild
+          >
+            <Link
+              className="text-muted-foreground"
+              href="/workspace/capability-groups"
+            >
+              <LayersIcon />
+              <span>{t.sidebar.capabilityGroups}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

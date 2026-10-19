@@ -18,26 +18,17 @@ def _definition() -> dict:
         "nodes": [
             {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
             {
-                "id": "group",
-                "type": "ai:capability_group",
-                "params": {"group": "alpha"},
-                "outputs": [{"name": "groups", "type": "array"}],
-            },
-            {
                 "id": "ai",
                 "type": "ai:llm_agent",
                 "params": {"instruction": "Do {{in}}"},
-                "inputs": [
-                    {"name": "in", "type": "data"},
-                    {"name": "capability_groups", "type": "array"},
-                ],
+                "capability_groups": ["alpha"],
+                "inputs": [{"name": "in", "type": "data"}],
                 "outputs": [{"name": "out", "type": "data"}],
             },
             {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
         ],
         "edges": [
             {"source": "start", "source_port": "out", "target": "ai", "target_port": "in"},
-            {"source": "group", "source_port": "groups", "target": "ai", "target_port": "capability_groups"},
             {"source": "ai", "source_port": "out", "target": "end", "target_port": "in"},
         ],
     }

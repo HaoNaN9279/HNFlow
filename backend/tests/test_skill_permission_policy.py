@@ -11,8 +11,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from deerflow.skills.composition import resolve_declaration
 from deerflow.skills.parser import parse_skill_file
 from deerflow.skills.permission_policy import (
@@ -201,76 +199,3 @@ class TestComposition:
         derived = _skill("derived", extends=("base",), permissions=("fs",))
         resolved = resolve_declaration(derived, {"base": base, "derived": derived})
         assert set(resolved.permissions) == {"net", "fs"}
-
-
-# ── 5. gateway integration ───────────────────────────────────────────────────
-
-
-class _FakeGateway:
-    def __init__(self) -> None:
-        self.resolved: list[list[str]] = []
-
-    def resolve_all(self, names: list[str]) -> list[str]:
-        self.resolved.append(list(names))
-        return list(names)
-
-
-class TestGatewayIntegration:
-    def _resolve(self, monkeypatch: pytest.MonkeyPatch, skills: list[Skill], groups: list[str]) -> tuple[list[str], _FakeGateway]:
-        from deerflow.workflow import tool_gateway
-
-        gateway = _FakeGateway()
-        monkeypatch.setattr(tool_gateway, "_load_enabled_skills", lambda _user_id: skills)
-        monkeypatch.setattr(tool_gateway, "build_default_tool_gateway", lambda **kwargs: gateway)
-        return tool_gateway.resolve_capability_tools(groups, user_id="u"), gateway
-
-    def test_unrestricted_groups_keep_every_declared_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        group = _skill("g", allowed_tools=("bash", "read_file"))
-        result, gateway = self._resolve(monkeypatch, [group], ["g"])
-
-        assert sorted(result) == ["bash", "read_file"]
-        assert gateway.resolved == [["bash", "read_file"]]
-
-    def test_declared_permissions_filter_the_tool_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        group = _skill("g", allowed_tools=("bash", "read_file"), permissions=("fs",))
-        result, gateway = self._resolve(monkeypatch, [group], ["g"])
-
-        # ``bash`` needs exec as well -> denied; the node still gets read_file.
-        assert result == ["read_file"]
-        assert gateway.resolved == [["read_file"]]
-
-    def test_an_unclassifiable_tool_is_denied_inside_an_opted_in_group(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        group = _skill("g", allowed_tools=("mcp_mystery", "read_file"), permissions=("fs",))
-        result, _gateway = self._resolve(monkeypatch, [group], ["g"])
-
-        assert result == ["read_file"]
-
-    def test_a_tool_permissions_override_keeps_an_unclassifiable_tool(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        group = _skill("g", allowed_tools=("mcp_mystery",), permissions=("net",), tool_permissions={"mcp_mystery": ("net",)})
-        result, _gateway = self._resolve(monkeypatch, [group], ["g"])
-
-        assert result == ["mcp_mystery"]
-
-    def test_a_group_whose_tools_all_violate_gets_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        group = _skill("g", allowed_tools=("bash",), permissions=("net",))
-        result, gateway = self._resolve(monkeypatch, [group], ["g"])
-
-        assert result == []
-        # Never even asked the gateway: nothing survived adjudication.
-        assert gateway.resolved == []
-
-    def test_permissions_inherited_through_extends_restrict(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        base = _skill("base", permissions=("fs",))
-        derived = _skill("derived", extends=("base",), allowed_tools=("bash", "read_file"))
-        result, _gateway = self._resolve(monkeypatch, [base, derived], ["derived"])
-
-        assert result == ["read_file"]
-
-    def test_several_groups_union_their_permissions(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        fs_group = _skill("fs_group", allowed_tools=("read_file",), permissions=("fs",))
-        exec_group = _skill("exec_group", allowed_tools=("bash",), permissions=("exec",))
-        result, _gateway = self._resolve(monkeypatch, [fs_group, exec_group], ["fs_group", "exec_group"])
-
-        # The union covers both tools; nobody is restricted by the other group's
-        # narrower declaration.
-        assert sorted(result) == ["bash", "read_file"]

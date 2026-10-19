@@ -267,7 +267,7 @@ export const NODE_CATALOG = [
         type: "array",
         required: false,
         description:
-          "Merged capability groups from selector / merge nodes (compile-time wiring)",
+          "Selected capability groups (compile-time selector wiring)",
       },
       {
         name: "template_prompt",
@@ -293,21 +293,9 @@ export const NODE_CATALOG = [
     category: "ai",
     defaultInputs: [],
     defaultOutputs: [{ name: "groups", type: "array", required: true }],
-    defaultParams: { group: "" },
+    defaultParams: { groups: [] },
     description:
-      "Select one capability group. Wire it into a merge node or an LLM Agent.",
-  },
-  {
-    type: "ai:capability_merge",
-    label: "Merge Groups",
-    category: "ai",
-    defaultInputs: [
-      { name: "group_1", type: "array", required: false },
-      { name: "group_2", type: "array", required: false },
-    ],
-    defaultOutputs: [{ name: "groups", type: "array", required: true }],
-    description:
-      "Merge capability groups in slot order. Add or remove input slots in the panel.",
+      "Select one or more capability groups and wire the output into an LLM Agent.",
   },
   {
     type: "ai:prompt_preview",

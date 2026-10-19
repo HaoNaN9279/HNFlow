@@ -18,6 +18,7 @@ from app.gateway.routers import (
     assistants_compat,
     backup,
     browser,
+    capability_groups,
     console,
     environment,
     features,
@@ -571,6 +572,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Memory API is mounted at /api/memory
     app.include_router(memory.router)
+
+    # Capability groups API is mounted at /api/capability-groups
+    app.include_router(capability_groups.router)
 
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)

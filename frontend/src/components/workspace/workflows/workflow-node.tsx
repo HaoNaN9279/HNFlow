@@ -1,7 +1,6 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { PlusIcon } from "lucide-react";
 
 import {
   Node,
@@ -10,10 +9,8 @@ import {
   NodeHeader,
   NodeTitle,
 } from "@/components/ai-elements/node";
-import { Button } from "@/components/ui/button";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import { getNodeCatalogEntry } from "@/core/workflows/canvas/node-catalog";
-import { addMergeInput } from "@/core/workflows/canvas/node-form";
 import type { NodeRunState } from "@/core/workflows/run-state";
 import type { Port, PortType } from "@/core/workflows/types";
 import { cn } from "@/lib/utils";
@@ -127,7 +124,7 @@ function PortRow({
 export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const workflow = data.workflow;
   const entry = getNodeCatalogEntry(workflow.type);
-  const { errors, runState, readonly, updateNode } = useWorkflowEditor();
+  const { errors, runState } = useWorkflowEditor();
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
@@ -141,7 +138,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
       ? lastCompleted.output.prompt
       : null;
   const paramEntries = Object.entries(workflow.params);
-  const isMerge = workflow.type === "ai:capability_merge";
 
   return (
     <Node
@@ -166,18 +162,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
             </NodeDescription>
           )}
         </div>
-        {isMerge && !readonly && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Add capability group input slot"
-            title="Add input slot"
-            onClick={() => updateNode(id, addMergeInput(workflow))}
-          >
-            <PlusIcon className="size-3.5" />
-          </Button>
-        )}
       </NodeHeader>
       <NodeContent className="flex min-h-0 flex-col gap-2 p-2">
         <div className="grid grid-cols-2 gap-x-3">

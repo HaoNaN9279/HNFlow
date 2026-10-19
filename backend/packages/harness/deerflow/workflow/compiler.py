@@ -76,11 +76,11 @@ from deerflow.workflow.budgets import (
     usage_total,
 )
 from deerflow.workflow.budgets import BudgetError as _BudgetError
-from deerflow.workflow.capability_groups import (
-    CapabilityWiringError,
-    is_capability_config_node,
+from deerflow.workflow.capability_group_nodes import (
+    CapabilityGroupWiringError,
+    is_capability_group_node,
     resolve_ai_capability_groups,
-    validate_capability_wiring,
+    validate_capability_group_wiring,
 )
 from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
@@ -2212,8 +2212,8 @@ def _compile_impl(
     _validate_context_policy(def_)
     _validate_prompt_preview(def_)
     try:
-        validate_capability_wiring(def_)
-    except CapabilityWiringError as exc:
+        validate_capability_group_wiring(def_)
+    except CapabilityGroupWiringError as exc:
         raise WorkflowCompileError(str(exc)) from exc
     _validate_retry(def_, ctx)
     _validate_run_budget(def_)
@@ -2246,11 +2246,11 @@ def _compile_impl(
     start_node_id: str | None = None
     end_node_id: str | None = None
 
-    # Capability selector/merge nodes are authoring-only wiring.  Their edges
-    # are resolved statically into AI-node params and must not become runtime
-    # graph edges (a root selector would otherwise need scheduling, and an AI
-    # node with a second incoming edge could be triggered twice).
-    config_node_ids = {node.id for node in def_.nodes if is_capability_config_node(node)}
+    # Capability-group selectors are compile-time wiring only. Their edges are
+    # resolved into the AI node's params and must not become runtime graph edges
+    # (a selector would otherwise need scheduling, and the AI node would gain a
+    # second incoming edge / fan-in).
+    config_node_ids = {node.id for node in def_.nodes if is_capability_group_node(node)}
     runtime_edges: list[Edge] = [edge for edge in def_.edges if edge.source not in config_node_ids and edge.target not in config_node_ids]
 
     # Build incoming-edges index for input resolution
@@ -2268,7 +2268,7 @@ def _compile_impl(
         if node.type == NodeType.AI_LLM_AGENT:
             try:
                 capability_groups = resolve_ai_capability_groups(def_, node)
-            except CapabilityWiringError as exc:
+            except CapabilityGroupWiringError as exc:
                 raise WorkflowCompileError(str(exc)) from exc
         prompt_preview_agent: str | None = None
         if node.type == NodeType.AI_PROMPT_PREVIEW:
@@ -2298,8 +2298,8 @@ def _compile_impl(
                 _register(node.id, end_fn)
             continue  # normal end node → LangGraph END, no add_node
 
-        if is_capability_config_node(node):
-            # Authoring-only: resolved into AI params / stripped edges above.
+        if is_capability_group_node(node):
+            # Authoring-only: resolved into AI params and stripped from edges.
             continue
 
         if node.type == NodeType.FLOW_LOOP:

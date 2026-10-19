@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { listAgents } from "@/core/agents/api";
-import { loadSkills } from "@/core/skills/api";
 
 import { listWorkflows } from "../api";
 import {
@@ -29,21 +28,6 @@ export function useAgentOptions() {
       try {
         const agents = await listAgents();
         return agents.map((agent) => ({ name: agent.name }));
-      } catch {
-        return [];
-      }
-    },
-    staleTime: OPTIONS_STALE_TIME_MS,
-  });
-}
-
-export function useSkillOptions() {
-  return useQuery({
-    queryKey: ["skillOptions"],
-    queryFn: async (): Promise<string[]> => {
-      try {
-        const skills = await loadSkills();
-        return skills.map((skill) => skill.name);
       } catch {
         return [];
       }

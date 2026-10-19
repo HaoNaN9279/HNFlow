@@ -56,9 +56,9 @@ export const AI_NODE_FIELDS: readonly NodeFormField[] = [
 /** Fields for the `ai:capability_group` selector. */
 export const CAPABILITY_GROUP_FIELDS: readonly NodeFormField[] = [
   {
-    key: "group",
-    kind: "select",
-    labelKey: "workflow.nodeForm.capabilityGroup",
+    key: "groups",
+    kind: "multi-select",
+    labelKey: "workflow.nodeForm.capabilityGroups",
   },
 ];
 

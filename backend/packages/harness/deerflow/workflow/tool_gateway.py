@@ -24,14 +24,11 @@ package import graph stays free of the agent tool graph.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from langchain.tools import BaseTool
-
-from deerflow.skills.permission_policy import adjudicate_tools
 
 logger = logging.getLogger(__name__)
 
@@ -403,48 +400,6 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
     return gateway
 
 
-def _load_enabled_skills(user_id: str | None) -> list[Any]:
-    """Load enabled skills for the user, fail-open to an empty list."""
-    try:
-        from deerflow.skills.storage import get_or_new_user_skill_storage
-
-        storage = get_or_new_user_skill_storage(user_id) if user_id is not None else None
-        if storage is None:
-            from deerflow.skills.storage import get_or_new_skill_storage
-
-            storage = get_or_new_skill_storage()
-        return list(storage.load_skills(enabled_only=True))
-    except Exception as e:  # noqa: BLE001 - fail-open by design
-        logger.warning("Tool gateway: failed to load skills for capability groups: %s", e)
-        return []
-
-
-def _declared_permissions(selected_names: set[str], catalog: Mapping[str, Any]) -> tuple[set[str], dict[str, tuple[str, ...]]]:
-    """Union the selected groups' declared ``permissions`` / ``tool-permissions``.
-
-    Read through ``composition.resolve_declaration`` so an inherited
-    declaration counts (a group that ``extends`` a restricted base is restricted
-    too).  A group whose composition is broken contributes nothing here — the
-    caller has already failed closed on the tool list for that case.
-    """
-    from deerflow.skills.composition import CompositionError, resolve_declaration
-
-    declared: set[str] = set()
-    overrides: dict[str, tuple[str, ...]] = {}
-    for name in sorted(selected_names):
-        skill = catalog.get(name)
-        if skill is None:
-            continue
-        try:
-            resolved = resolve_declaration(skill, catalog)
-        except CompositionError:
-            continue
-        declared.update(permission for permission in (resolved.permissions or ()) if permission)
-        for tool_name, permissions in (resolved.tool_permissions or {}).items():
-            overrides[tool_name] = tuple(dict.fromkeys((*overrides.get(tool_name, ()), *tuple(permissions or ()))))
-    return declared, overrides
-
-
 def resolve_capability_tools(
     capability_groups: list[str],
     *,
@@ -453,60 +408,20 @@ def resolve_capability_tools(
     app_config: Any = None,
     instance_repo: Any = None,
 ) -> list[BaseTool]:
-    """Resolve an AI node's tool set from its capability groups (C1).
+    """Resolve an AI node's tool set from its capability groups.
 
-    The tool set is the **union of the selected groups' effective
-    ``allowed-tools`` declarations** (§5.5: a group that inherits tools through
-    ``extends`` contributes them here too), resolved through the gateway.  A
-    node with no capability groups — or whose groups declare no
-    ``allowed-tools`` — gets no tools, matching the "an AI node can only call
-    capabilities its groups declare" boundary (§7.1).  Tool order is sorted by
-    name for prompt-cache stability (§5.9).
+    Capability groups are being rewritten as first-class packages (rules,
+    agents, skills, tools, ...).  Until their tool manifests are part of that
+    package contract, the node deliberately receives no tools rather than
+    falling back to the removed skill-as-capability-group model.
     """
     if not capability_groups:
         return []
-
-    selected_names = set(capability_groups)
-
-    # N14 §5.5 composition: resolve through the *catalog* so ``extends`` is
-    # honoured.  A broken composition (unknown base / cycle / self-extension) is
-    # fail-closed for tools — the node gets none rather than a silently smaller
-    # set than its author declared — and is logged, not raised: an uninstalled
-    # base must not make an otherwise valid workflow unrunnable.
-    from deerflow.skills.composition import CompositionError, resolve_allowed_tools
-
-    try:
-        catalog = {getattr(skill, "name", ""): skill for skill in _load_enabled_skills(user_id)}
-        allowed = resolve_allowed_tools(selected_names, catalog)
-    except CompositionError as exc:
-        logger.warning("AI node capability groups %s have a broken composition (%s); node gets no tools", sorted(selected_names), exc)
-        return []
-
-    if allowed is None:
-        logger.info("AI node capability groups %s declare no allowed-tools; node gets no tools", sorted(selected_names))
-        return []
-    if not allowed:
-        logger.info("AI node capability groups %s declare empty allowed-tools; node gets no tools", sorted(selected_names))
-        return []
-
-    # N14 §24.12 least privilege: a capability group may declare a minimal set of
-    # permissions ({fs, net, exec, secrets}).  When it does, the node only
-    # receives tools that stay inside that declaration — an unclassifiable tool
-    # is denied rather than assumed harmless, and the denial names the knob that
-    # can declare it.  A group that declares nothing is not restricted, so a
-    # package that never asked for least privilege keeps its tools.
-    declared, overrides = _declared_permissions(selected_names, catalog)
-    if declared:
-        allowed_list, denials = adjudicate_tools(declared, allowed, overrides=overrides)
-        for denial in denials:
-            logger.warning("AI node capability group permission denial (groups=%s): %s", sorted(selected_names), denial.reason)
-        if not allowed_list:
-            logger.warning("AI node capability groups %s declare permissions %s and none of their tools survive adjudication", sorted(selected_names), sorted(declared))
-            return []
-        allowed = allowed_list
-
-    gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
-    return gateway.resolve_all(sorted(allowed))
+    logger.warning(
+        "Capability-group tool resolution is not wired yet (groups=%s); AI node gets no tools",
+        sorted(capability_groups),
+    )
+    return []
 
 
 __all__ = [

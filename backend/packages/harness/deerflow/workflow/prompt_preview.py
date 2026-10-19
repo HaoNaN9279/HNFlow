@@ -4,7 +4,7 @@ The canvas can ask for the prompt an AI node *would* assemble without running
 the model.  Runtime-only blocks (node memory and knowledge retrieval) have no
 values before execution, so the response reports them as omitted instead of
 inventing content.  Everything else uses the same assemblers as the real
-executor, including capability groups resolved from selector/merge wiring.
+executor, including the node's capability groups.
 """
 
 from __future__ import annotations
@@ -13,11 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from deerflow.config.agents_config import load_agent_config
-from deerflow.workflow.capability_groups import (
-    CapabilityWiringError,
-    resolve_ai_capability_groups,
-    validate_capability_wiring,
-)
+from deerflow.workflow.capability_group_nodes import CapabilityGroupWiringError, resolve_ai_capability_groups, validate_capability_group_wiring
 from deerflow.workflow.context_policy import BUCKET_ORDER, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.prompts import build_ai_node_buckets
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
@@ -68,9 +64,9 @@ def build_prompt_preview(
         raise PromptPreviewError(f"node '{node_id}' is not an ai:llm_agent node")
 
     try:
-        validate_capability_wiring(definition)
+        validate_capability_group_wiring(definition)
         capability_groups = resolve_ai_capability_groups(definition, node)
-    except CapabilityWiringError as exc:
+    except CapabilityGroupWiringError as exc:
         raise PromptPreviewError(str(exc)) from exc
 
     try:

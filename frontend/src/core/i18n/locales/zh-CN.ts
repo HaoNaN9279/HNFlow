@@ -272,7 +272,37 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     agents: "智能体",
     scheduledTasks: "定时任务",
+    capabilityGroups: "能力组",
     agentsDisabledTooltip: "功能未启用",
+  },
+
+  capabilityGroups: {
+    title: "能力组",
+    description:
+      "能力组是版本化能力包，可包含 rules、agents、skills、tools 等内容；skill 只是其中一种资源。",
+    loading: "正在加载能力组...",
+    loadFailed: "加载能力组失败",
+    retry: "重试",
+    empty: "暂无能力组",
+    emptyHint: "在 capability-groups/<name>/<version>/ 下添加 group.json。",
+    loadingContents: "正在加载内容...",
+    loadContentsFailed: "加载能力组内容失败",
+    noFiles: "该能力组没有可展示的文件",
+    reveal: "在资源管理器中定位",
+    revealFailed: "定位文件失败",
+    revealed: "已在资源管理器中定位",
+    source: { public: "内置", user: "用户" },
+    categories: {
+      rules: "Rules",
+      agents: "Agents",
+      skills: "Skills",
+      tools: "Tools",
+      references: "References",
+      templates: "Templates",
+      assets: "Assets",
+      evals: "Evals",
+      other: "其他",
+    },
   },
 
   // 定时任务
