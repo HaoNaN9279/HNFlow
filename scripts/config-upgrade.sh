@@ -34,6 +34,27 @@ if [ -z "$CONFIG" ]; then
     exit 0
 fi
 
+# Prefer the existing project venv over `uv run`. `uv run` re-resolves the
+# workspace and currently fails when the unpublished tenki-sandbox extra is
+# present; the venv already has the runtime dependencies installed.
+PYTHON_BIN=""
+for candidate in \
+    "$REPO_ROOT/backend/.venv/Scripts/python.exe" \
+    "$REPO_ROOT/backend/.venv/bin/python"; do
+    if [ -x "$candidate" ]; then
+        PYTHON_BIN="$candidate"
+        break
+    fi
+done
+
+run_python() {
+    if [ -n "$PYTHON_BIN" ]; then
+        "$PYTHON_BIN" "$@"
+    else
+        uv run python "$@"
+    fi
+}
+
 # Use inline Python to do migrations + recursive merge with PyYAML
 if command -v cygpath >/dev/null 2>&1; then
     CONFIG_WIN="$(cygpath -w "$CONFIG")"
@@ -43,7 +64,7 @@ else
     EXAMPLE_WIN="$EXAMPLE"
 fi
 
-cd "$REPO_ROOT/backend" && CONFIG_WIN_PATH="$CONFIG_WIN" EXAMPLE_WIN_PATH="$EXAMPLE_WIN" uv run python -c "
+cd "$REPO_ROOT/backend" && CONFIG_WIN_PATH="$CONFIG_WIN" EXAMPLE_WIN_PATH="$EXAMPLE_WIN" run_python -c "
 import os
 import sys, shutil, copy, re
 from pathlib import Path

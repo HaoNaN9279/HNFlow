@@ -100,7 +100,7 @@ if /I "%ACTION%"=="restart" set "SERVE_FLAGS=--restart %MODE% %SKIP_INSTALL%"
 
 if /I not "%ACTION%"=="stop" (
     echo.
-    echo [HNFlow] Starting (production frontend build is reused; first run may build once)...
+    echo [HNFlow] Starting - production frontend build is reused; first run may build once...
 )
 call "%ROOT%scripts\run-with-git-bash.cmd" ./scripts/serve.sh %SERVE_FLAGS%
 

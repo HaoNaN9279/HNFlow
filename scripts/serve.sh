@@ -380,6 +380,24 @@ else
     GATEWAY_EXTRA_FLAGS=""
 fi
 
+# Prefer the project venv for the Gateway. `uv run` re-resolves the workspace
+# and fails on the unpublished tenki-sandbox extra; the venv already contains
+# the runtime dependencies.
+GATEWAY_PYTHON_BIN=""
+for candidate in \
+    "$REPO_ROOT/backend/.venv/Scripts/python.exe" \
+    "$REPO_ROOT/backend/.venv/bin/python"; do
+    if [ -x "$candidate" ]; then
+        GATEWAY_PYTHON_BIN="$candidate"
+        break
+    fi
+done
+if [ -n "$GATEWAY_PYTHON_BIN" ]; then
+    GATEWAY_PYTHON_CMD="\"$GATEWAY_PYTHON_BIN\""
+else
+    GATEWAY_PYTHON_CMD="uv run python"
+fi
+
 # ── Stop existing services (skip if restart already did it) ──────────────────
 
 if ! $ALREADY_STOPPED; then
@@ -506,7 +524,7 @@ mkdir -p temp/client_body_temp temp/proxy_temp temp/fastcgi_temp temp/uwsgi_temp
 
 # 1. Gateway API
 run_service "Gateway" \
-    "cd backend && PYTHONPATH=. uv run python -m uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
+    "cd backend && PYTHONPATH=. $GATEWAY_PYTHON_CMD -m uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 $GATEWAY_EXTRA_FLAGS > ../logs/gateway.log 2>&1" \
     8001 30
 
 # 2. Frontend
