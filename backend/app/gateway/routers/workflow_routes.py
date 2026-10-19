@@ -18,8 +18,11 @@ from app.gateway.deps import get_optional_user_from_request, get_workflow_defini
 from app.gateway.permissions import require_permission
 from deerflow.skills.catalog import SkillCatalog
 from deerflow.skills.types import Skill
+from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
+from deerflow.workflow.executors import build_default_registry
+from deerflow.workflow.runtime_context import build_workflow_compile_context
 from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
@@ -74,6 +77,34 @@ async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+async def _validate_semantics(request: Request, definition: WorkflowDefinition, user: Any) -> None:
+    """Dry-run compile so semantic errors fail the save, not a later run.
+
+    Structural validation only checks graph shape.  Approval/retry/loop/context/
+    output-schema rules live in the compiler; running it here (without executing
+    nodes) turns "saved successfully, failed at run" into a node-level 422.
+    """
+    from app.gateway.services import _build_workflow_template_resolver
+
+    resolver = await _build_workflow_template_resolver(definition, request, user_id=str(user.id))
+    ctx = build_workflow_compile_context(
+        build_default_registry(),
+        checkpointer=None,
+        definition_resolver=resolver,
+    )
+    try:
+        compile_definition(definition, context=ctx)
+    except WorkflowCompileError as exc:
+        message = str(exc)
+        # A dangling template reference is intentionally allowed at save time
+        # (the template may be installed later); compile still reports it at
+        # run time.  Do not turn the save into a stricter contract here.
+        if "subworkflow template" in message and "not found" in message:
+            logger.warning("Definition %s references an unavailable template; semantic dry-run skipped: %s", definition.id, message)
+            return
+        raise HTTPException(status_code=422, detail={"errors": [f"定义语义校验失败: {message}"]}) from exc
 
 
 def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -204,6 +235,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     errors = validate_definition(model)
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
+    await _validate_semantics(request, model, user)
 
     # N14 §24.8: opt-in embedded eval gate (no-op unless require_pass is set).
     await _run_embedded_eval_gate(model)
@@ -314,6 +346,7 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         errors = validate_definition(model)
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
+        await _validate_semantics(request, model, user)
 
         # N14 §24.8: opt-in embedded eval gate (no-op unless require_pass is set).
         await _run_embedded_eval_gate(model)

@@ -92,11 +92,11 @@
 
 - [x] run 记录 `definition` 快照 + `definition_hash`（过渡方案，存于 run kwargs）。
 - [x] resume/rewind/continue 优先加载 run 钉住的快照，legacy run 才回退当前行。
-- [ ] 新增 `workflow_definition_revisions` 表/仓储/迁移；保存产生新 revision。
-- [ ] run 记录 `definition_revision_id`（替代 kwargs 快照）。
+- [x] 新增 `workflow_definition_revisions` 表/仓储/迁移；保存产生新 revision。
+- [ ] run 记录 `definition_revision_id`（当前仍用 kwargs 快照；表格已具备，接线待做）。
 - [ ] 模板按 `(template_id, version)` 解析。
 - [ ] DB 读取走 schema migration 链。
-- [x] 测试：快照 hash/round-trip、malformed snapshot 回退。
+- [x] 测试：快照 hash/round-trip、malformed snapshot 回退；revision 递增/不可变/删除清理。
 
 ### 4.2 metadata 契约
 
@@ -111,9 +111,9 @@
 ### 4.3 保存时语义校验
 
 - [ ] 每种节点类型定义 ParamModel。
-- [ ] 保存路由调用共享语义校验器（必要时 dry-run compile）。
+- [x] 保存路由调用共享语义校验器（dry-run compile；审批/重试/上下文策略等编译期规则提前到保存）。
 - [ ] 前端校验由后端 schema 生成。
-- [ ] 测试：非法 `params` 在保存时返回节点级 422。
+- [x] 测试：语义非法定义在保存时返回 422（`test_create_rejects_semantically_invalid_definition`）。
 
 ## 5. 阶段四：AgentPort（P1）
 

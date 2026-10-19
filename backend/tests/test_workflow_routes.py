@@ -731,3 +731,38 @@ class TestUpdateWorkflowResolvedGroups:
         assert response.status_code == 200, f"Got {response.status_code}: {response.text}"
         _call_model, base_meta_arg = mock_resolve.call_args[0]
         assert base_meta_arg == {}  # empty dict when existing has no metadata
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_semantically_invalid_definition(tmp_path):
+    """A structurally valid definition that cannot compile is rejected at save."""
+    repo = await _make_repo(tmp_path)
+    app = _make_authed_workflow_app(repo)
+    client = TestClient(app)
+
+    bad = {
+        "id": "wf-semantic-bad",
+        "name": "Bad semantics",
+        "nodes": [
+            {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
+            {
+                "id": "ai",
+                "type": "ai:llm_agent",
+                "inputs": [{"name": "in", "type": "data"}],
+                "outputs": [{"name": "out", "type": "data"}],
+                "params": {"instruction": "x", "context_policy": {"include": ["missing"]}},
+            },
+            {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
+        ],
+        "edges": [
+            {"source": "start", "source_port": "out", "target": "ai", "target_port": "in"},
+            {"source": "ai", "source_port": "out", "target": "end", "target_port": "in"},
+        ],
+    }
+
+    with patch("app.gateway.deps.get_app_config", return_value=MagicMock()):
+        response = client.post("/api/workflows", json={"name": "bad", "definition": bad})
+
+    assert response.status_code == 422
+    assert "context_policy" in response.text
+    await close_engine()

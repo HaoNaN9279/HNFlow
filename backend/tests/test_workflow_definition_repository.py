@@ -280,3 +280,41 @@ async def test_resolved_at_iso_serialization(tmp_path):
     assert isinstance(fetched["resolved_at"], str)
 
     await close_engine()
+
+
+@pytest.mark.asyncio
+async def test_definition_revisions_are_immutable_and_increment(tmp_path):
+    await init_engine_from_config(DatabaseConfig(backend="sqlite", sqlite_dir=str(tmp_path)))
+    sf = get_session_factory()
+    assert sf is not None
+
+    repo = WorkflowDefinitionRepository(sf)
+    await repo.create(
+        definition_id="wf-rev",
+        user_id="user-1",
+        name="Rev",
+        schema_version=1,
+        definition=_VALID_DEFINITION,
+        metadata={"lockfile": {"v": 1}},
+    )
+    first = await repo.list_revisions("wf-rev", user_id="user-1")
+    assert len(first) == 1
+    assert first[0]["revision"] == 1
+    assert first[0]["content_hash"]
+
+    changed = {**_VALID_DEFINITION, "name": "Rev v2"}
+    await repo.update("wf-rev", user_id="user-1", updates={"definition": changed})
+    await repo.update("wf-rev", user_id="user-1", updates={"definition": {**changed, "name": "Rev v3"}})
+
+    revisions = await repo.list_revisions("wf-rev", user_id="user-1")
+    assert [r["revision"] for r in revisions] == [3, 2, 1]
+    assert len({r["content_hash"] for r in revisions}) == 3
+
+    fetched = await repo.get_revision(revisions[0]["id"], user_id="user-1")
+    assert fetched is not None
+    assert fetched["definition"]["name"] == "Rev v3"
+
+    await repo.delete("wf-rev", user_id="user-1")
+    assert await repo.list_revisions("wf-rev", user_id="user-1") == []
+
+    await close_engine()

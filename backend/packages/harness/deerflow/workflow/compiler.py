@@ -2387,9 +2387,11 @@ def _compile_impl(
         source = edge.source
         target = edge.target
 
-        # Edges from start node → LangGraph START
+        # Edges from start node → LangGraph START.  A direct start→end graph is
+        # legal, so the target still goes through ``_end_target`` (END sentinel
+        # or the pass-through end node).
         if source == start_node_id:
-            builder.add_edge(START, target)
+            builder.add_edge(START, _end_target(target))
             continue
 
         # All edges from conditional nodes (if / switch / loop / handoff) are
