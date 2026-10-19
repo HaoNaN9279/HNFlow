@@ -1,4 +1,4 @@
-DEER_FLOW_HOME ?= $(CURDIR)/.deer-flow
+﻿DEER_FLOW_HOME ?= $(CURDIR)/.deer-flow
 DEER_FLOW_HOME := $(abspath $(DEER_FLOW_HOME))
 BACKEND_SANDBOX_HOME := $(abspath $(CURDIR)/sandbox)
 
@@ -28,28 +28,28 @@ gateway:
 # Default suite: quiet output. 11k+ tests make `-v` a measurable cost on its
 # own; use `make test-verbose` when a per-test trace is actually wanted.
 test:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m "not live" tests/ -q
+	uv run python -m pytest -m "not live" tests/ -q
 
 test-verbose:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m "not live" tests/ -v
+	uv run python -m pytest -m "not live" tests/ -v
 
 # Focused loop for the workflow/agent refactor.  This is the set that must stay
 # green while changing runtime assembly; it is much cheaper than the full suite.
 test-workflow:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest tests/test_workflow_*.py -q
+	uv run python -m pytest $(wildcard tests/test_workflow_*.py) -q
 
 # Optional parallel run.  pytest-xdist is installed locally with
 # `uv pip install --python .venv pytest-xdist` because the workspace lock is
 # currently blocked by the tenki-sandbox index gap.  `--dist loadfile` keeps a
 # whole test file on one worker so module-level singletons still behave.
 test-parallel:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m "not live" tests/ -q -n auto --dist loadfile
+	uv run python -m pytest -m "not live" tests/ -q -n auto --dist loadfile
 
 test-live:
 	DEER_FLOW_RUN_LIVE_TESTS=1 PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest -m live tests/ -v -s
 
 test-blocking-io:
-	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python -m pytest tests/blocking_io -q --tb=short
+	uv run python -m pytest tests/blocking_io -q --tb=short
 
 lint:
 	uv run ruff check .
@@ -71,3 +71,5 @@ detect-blocking-io:
 migrate-rev:
 	@if [ -z "$(MSG)" ]; then echo 'usage: make migrate-rev MSG="describe the change"'; exit 1; fi
 	PYTHONPATH=. PYTHONIOENCODING=utf-8 PYTHONUTF8=1 uv run python scripts/_autogen_revision.py "$(MSG)"
+
+

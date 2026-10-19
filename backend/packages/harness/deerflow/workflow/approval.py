@@ -40,7 +40,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.types import interrupt
 
@@ -142,9 +142,15 @@ def verify_preview_targets(preview: ActionPreview, *, sandbox: Any | None = None
 async def _build_preview(previewer: Previewer, runtime: WorkflowRuntime, node_id: str, node_type: str, params: dict[str, Any], inputs: dict[str, Any]) -> ActionPreview | None:
     """Run a previewer with the node identity injected (executor-param convention)."""
     preview_params = {**params, "node_id": node_id, "node_type": node_type}
-    preview = previewer(runtime, preview_params, inputs)
+    preview: Any
+    if inspect.iscoroutinefunction(previewer) or inspect.iscoroutinefunction(getattr(previewer, "__call__", None)):
+        preview = await cast(Any, previewer(runtime, preview_params, inputs))
+    else:
+        # Previewers fingerprint host files (blocking IO); keep them off the
+        # event loop just like executors.
+        preview = await asyncio.to_thread(previewer, runtime, preview_params, inputs)  # type: ignore[arg-type]
     if inspect.isawaitable(preview):
-        preview = await preview
+        preview = await cast(Any, preview)
     return preview
 
 

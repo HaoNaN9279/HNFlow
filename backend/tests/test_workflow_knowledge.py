@@ -232,16 +232,17 @@ class TestExecutorRetrieval:
         store = InMemoryKnowledgeStore()
         store.upsert("kb", [Chunk("a#0", "a", "the refund policy is 30 days", source="policy.txt", ordinal=0)])
         await exec_llm_agent(_runtime(store), {"instruction": "hi", "node_id": "n", "retrieval": {"collection": "kb", "query": "refund"}}, {})
-        assert "<context>" in fake_executor["task"]
-        assert "cite:a#0" in fake_executor["task"]
-        assert "30 days" in fake_executor["task"]
+        system_prompt = fake_executor["kwargs"]["config"].system_prompt
+        assert "<context>" in system_prompt
+        assert "cite:a#0" in system_prompt
+        assert "30 days" in system_prompt
 
     @pytest.mark.asyncio
     async def test_no_store_no_injection(self, fake_executor: dict[str, Any]) -> None:
         from deerflow.workflow.executors.ai import exec_llm_agent
 
         await exec_llm_agent(_runtime(None), {"instruction": "hi", "node_id": "n", "retrieval": {"collection": "kb"}}, {})
-        assert "<context>" not in fake_executor["task"]
+        assert "<context>" not in fake_executor["kwargs"]["config"].system_prompt
 
     @pytest.mark.asyncio
     async def test_continue_rejects_retrieval(self, fake_executor: dict[str, Any]) -> None:

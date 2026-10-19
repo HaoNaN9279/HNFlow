@@ -49,6 +49,7 @@ from langgraph.types import Command
 
 from deerflow.runtime.context_keys import WORKFLOW_RUNTIME_CONTEXT_KEY
 from deerflow.runtime.user_context import resolve_runtime_user_id
+from deerflow.workflow.run_snapshot import definition_snapshot, load_definition_snapshot
 
 if TYPE_CHECKING:
     from deerflow.workflow.schema import WorkflowDefinition
@@ -166,7 +167,7 @@ async def start_workflow_run(
     deps = _deps()
     disconnect = deps["DisconnectMode"].cancel if on_disconnect == "cancel" else deps["DisconnectMode"].continue_
 
-    run_kwargs: dict[str, Any] = {"params": params, "definition_id": definition_id}
+    run_kwargs: dict[str, Any] = {"params": params, "definition_id": definition_id, **definition_snapshot(definition)}
     if continue_nodes is not None:
         run_kwargs["continue_nodes"] = continue_nodes
     if origin_thread_id is not None:
@@ -261,17 +262,22 @@ async def resume_workflow_run(task: Any, *, runtime: Any) -> None:
             logger.warning("Human task %s has no resolvable definition_id — skip resume", task_label)
             return
 
-        deps = _deps()
-        row = await deps["get_workflow_definition"](user_id=user_id, definition_id=definition_id)
-        if row is None:
-            logger.warning("Human task %s definition %s not found — skip resume", task_label, definition_id)
-            return
-        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
-        if definition_dict is None:
-            logger.warning("Human task %s definition %s has no body — skip resume", task_label, definition_id)
-            return
+        # Prefer the definition pinned on the run.  Reading the current row
+        # would let an edit while suspended change the graph the checkpoint is
+        # resumed into.
+        definition = load_definition_snapshot(record.kwargs if record is not None else None)
+        if definition is None:
+            deps = _deps()
+            row = await deps["get_workflow_definition"](user_id=user_id, definition_id=definition_id)
+            if row is None:
+                logger.warning("Human task %s definition %s not found �?skip resume", task_label, definition_id)
+                return
+            definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+            if definition_dict is None:
+                logger.warning("Human task %s definition %s has no body �?skip resume", task_label, definition_id)
+                return
 
-        definition = deps["WorkflowDefinition"].model_validate(definition_dict)
+            definition = deps["WorkflowDefinition"].model_validate(definition_dict)
 
         # §25 single-step: a resume of a *step* task keeps stepping (mirrors the
         # app-layer resume path). The task row is the only place that knows
@@ -349,15 +355,18 @@ async def continue_workflow_node(
             raise ValueError(f"cannot continue workflow node '{node_id}': run '{run_id}' has no definition reference — pass definition_id explicitly")
     resolved_params = params if params is not None else (record.kwargs or {}).get("params") or {}
 
-    # Resolve the definition body from the persisted definitions service.
-    deps = _deps()
-    row = await deps["get_workflow_definition"](user_id=user_id, definition_id=resolved_definition_id)
-    if row is None:
-        raise ValueError(f"workflow definition '{resolved_definition_id}' not found for user '{user_id}'")
-    definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
-    if definition_dict is None:
-        raise ValueError(f"workflow definition '{resolved_definition_id}' has no body")
-    definition = deps["WorkflowDefinition"].model_validate(definition_dict)
+    # Resolve the run's pinned definition first.  A continue run must inherit
+    # the graph the original run used, not a later edit.
+    definition = load_definition_snapshot(record.kwargs)
+    if definition is None:
+        deps = _deps()
+        row = await deps["get_workflow_definition"](user_id=user_id, definition_id=resolved_definition_id)
+        if row is None:
+            raise ValueError(f"workflow definition '{resolved_definition_id}' not found for user '{user_id}'")
+        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+        if definition_dict is None:
+            raise ValueError(f"workflow definition '{resolved_definition_id}' has no body")
+        definition = deps["WorkflowDefinition"].model_validate(definition_dict)
 
     started = await start_workflow_run(
         definition_id=resolved_definition_id,

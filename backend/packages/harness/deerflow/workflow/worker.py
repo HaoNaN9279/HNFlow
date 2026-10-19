@@ -15,10 +15,10 @@ from deerflow.runtime.runs.manager import RunManager, RunRecord, RunStartOutcome
 from deerflow.runtime.runs.schemas import RunStatus
 from deerflow.runtime.runs.worker import RunContext
 from deerflow.runtime.stream_bridge.base import StreamBridge
-from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY
-from deerflow.workflow.compiler import CompileContext, compile_definition
+from deerflow.workflow.compiler import compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.failure_taxonomy import classify_failure
+from deerflow.workflow.runtime_context import build_workflow_compile_context, build_workflow_runtime_context
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
 
 logger = logging.getLogger(__name__)
@@ -160,9 +160,13 @@ async def run_workflow(
         graph_input = _build_graph_input(definition, params)
 
     # ── 5. Compile the workflow definition ─────────────────────────────
+    # The compile context is assembled in one place so previewers (approval
+    # gates) and idempotency metadata (retry gates) always travel with the
+    # executors.  Reaching into ``build_context().executors`` here silently
+    # disabled both features in production.
     registry = build_default_registry()
-    compile_ctx = CompileContext(
-        executors=registry.build_context().executors,
+    compile_ctx = build_workflow_compile_context(
+        registry,
         checkpointer=checkpointer,
         definition_resolver=definition_resolver,
         max_delegation_depth=ctx.app_config.subagents.max_delegation_depth if ctx.app_config is not None else 3,
@@ -170,63 +174,35 @@ async def run_workflow(
     graph = compile_definition(definition, context=compile_ctx)
 
     # ── 6. Build config ────────────────────────────────────────────────
-    config: dict[str, Any] = {
-        "configurable": {
-            "thread_id": thread_id,
-        }
-    }
-    if checkpoint_id is not None:
-        # LangGraph resumes from a checkpoint through ``configurable``; the
-        # checkpoint must belong to this thread (LangGraph validates that).
-        config["configurable"]["checkpoint_id"] = checkpoint_id
-    if ctx.app_config is not None:
-        config.setdefault("context", {})
-        if isinstance(config["context"], dict):
-            config["context"]["app_config"] = ctx.app_config
-            config["context"]["thread_id"] = thread_id
-            config["context"]["run_id"] = origin_run_id or run_id
-            config["context"]["delegation_depth"] = 0
-    if human_task_repo is not None:
-        # Injected independently of app_config so the human:task executor and the
-        # hangup backfill (T13-2) both see the repo even when app_config is absent.
-        config.setdefault("context", {})
-        if isinstance(config["context"], dict):
-            config["context"]["human_task_repo"] = human_task_repo
-    if workflow_undo_repo is not None:
-        # N10: the compensation guard records what an irreversible node did so the
-        # run can be undone later. Injected independently of app_config for the
-        # same reason as the human-task repo above; None on memory backends, where
-        # the guard degrades to snapshot-and-rollback without a durable record.
-        config.setdefault("context", {})
-        if isinstance(config["context"], dict):
-            config["context"][UNDO_REPO_CONTEXT_KEY] = workflow_undo_repo
-    # Injected independently of app_config so the ai:llm_agent continue executor
-    # can derive its session checkpoint thread.  None on memory backends — the
-    # executor fails closed when continue is requested without one.
-    config.setdefault("context", {})
-    if isinstance(config["context"], dict):
-        config["context"]["checkpointer"] = checkpointer
-        if debug_step:
-            # §25 single-step: the node wrapper pauses before *every* node while
-            # this run-level flag is set (a resume run re-sets it when the
-            # suspending task was a step, see the human-task resume paths).
-            from deerflow.workflow.breakpoint import DEBUG_STEP_CONTEXT_KEY
-
-            config["context"][DEBUG_STEP_CONTEXT_KEY] = True
-
     # W2B cross-run AI-node continuation.  ``__ai_continue`` carries the
     # per-node continue prompts for this run; ``ai_origin_thread_id`` lets the
     # executor locate the ORIGINAL run's session checkpoint thread (the new
     # run's thread_id differs from the original run's).  Both keys stay absent
     # for ordinary runs so existing behavior is untouched.
+    runtime_extra: dict[str, Any] = {}
     if continue_nodes is not None:
-        config.setdefault("context", {})
-        if isinstance(config["context"], dict):
-            config["context"]["__ai_continue"] = continue_nodes
+        runtime_extra["__ai_continue"] = continue_nodes
     if origin_thread_id is not None:
-        config.setdefault("context", {})
-        if isinstance(config["context"], dict):
-            config["context"]["ai_origin_thread_id"] = origin_thread_id
+        runtime_extra["ai_origin_thread_id"] = origin_thread_id
+
+    config: dict[str, Any] = {
+        "configurable": {
+            "thread_id": thread_id,
+        },
+        "context": build_workflow_runtime_context(
+            record=record,
+            run_ctx=ctx,
+            human_task_repo=human_task_repo,
+            workflow_undo_repo=workflow_undo_repo,
+            origin_run_id=origin_run_id,
+            debug_step=debug_step,
+            extra=runtime_extra,
+        ),
+    }
+    if checkpoint_id is not None:
+        # LangGraph resumes from a checkpoint through ``configurable``; the
+        # checkpoint must belong to this thread (LangGraph validates that).
+        config["configurable"]["checkpoint_id"] = checkpoint_id
 
     # Collect non-start/end node ids for astream_events filtering.
     node_ids: list[str] = [n.id for n in definition.nodes if n.type not in (NodeType.FLOW_START, NodeType.FLOW_END)]
@@ -396,12 +372,14 @@ async def run_workflow(
 
         # ── 10. Determine terminal status ──────────────────────────────
         if record.abort_event.is_set():
+            terminal_status = "interrupted"
             await run_manager.set_status(
                 run_id,
                 RunStatus.interrupted,
                 **terminal_status_kwargs,
             )
         elif has_pending:
+            terminal_status = "interrupted"
             await run_manager.set_status(
                 run_id,
                 RunStatus.interrupted,
@@ -416,6 +394,7 @@ async def run_workflow(
                 except Exception:
                     logger.warning("Failed to backfill checkpoint_ref for run %s (non-fatal)", run_id, exc_info=True)
         else:
+            terminal_status = "success"
             await run_manager.set_status(
                 run_id,
                 RunStatus.success,
@@ -450,7 +429,7 @@ async def run_workflow(
                     event_type="run.end",
                     category="outputs",
                     content=run_end_content,
-                    metadata={"status": "interrupted" if has_pending else "success"},
+                    metadata={"status": terminal_status},
                 )
             except Exception:
                 logger.warning("Failed to persist run.end for run %s (non-fatal)", run_id, exc_info=True)
@@ -535,6 +514,21 @@ async def run_workflow(
                 )
             except Exception:
                 logger.warning("Failed to persist run.error for run %s (non-fatal)", run_id, exc_info=True)
+
+            # Every terminal path must expose one run.end.  Without this an
+            # error run had no token/timing aggregate at all, while a cancelled
+            # run wrote status=success because only ``has_pending`` was checked.
+            try:
+                await event_store.put(
+                    thread_id=thread_id,
+                    run_id=run_id,
+                    event_type="run.end",
+                    category="outputs",
+                    content={"status": "error", "error": error_msg},
+                    metadata={"status": "error"},
+                )
+            except Exception:
+                logger.warning("Failed to persist run.end for failed run %s (non-fatal)", run_id, exc_info=True)
 
     finally:
         await bridge.publish_end(run_id)

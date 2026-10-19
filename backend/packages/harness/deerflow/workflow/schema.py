@@ -206,6 +206,10 @@ class WorkflowMetadata(BaseModel):
     # 也可经 ``POST /api/workflows/{id}/evaluate`` 按需回放（离线确定性）。
     # None = 无内嵌套件（既有定义零行为变化）。
     evals: dict[str, Any] | None = None
+    # 画布位置等纯 UI 数据。它不参与运行语义，但必须被 schema 显式接受：
+    # 前端把 ``metadata.canvas`` 与定义一起保存，``extra="forbid"`` 曾让
+    # 每次画布保存都 422。
+    canvas: dict[str, Any] | None = None
 
 
 class WorkflowDefinition(BaseModel):

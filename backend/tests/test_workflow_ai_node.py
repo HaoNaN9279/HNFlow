@@ -159,17 +159,21 @@ class TestAINodeE2E:
         # Result written back to the node's output port.
         assert state.get("wf:ai_step:out") == "AI 完成"
 
-        # The assembled prompt carries all three layers.
-        prompt = fake_executor["task"]
-        assert "publisher" in prompt  # identity layer: agent name
-        assert "publish" in prompt  # capability layer: group name
-        assert "hello" in prompt  # task layer: {{in}} interpolation
-        assert "publish-skill" in prompt  # capability layer: agent skills whitelist
+        # System prompt carries identity + capability; the task turn carries only
+        # the task layer.  Sending the full prompt in both places duplicates every
+        # instruction and doubles token cost.
+        cfg = fake_executor["kwargs"]["config"]
+        system_prompt = cfg.system_prompt
+        task_prompt = fake_executor["task"]
+        assert "publisher" in system_prompt  # identity layer: agent name
+        assert "publish" in system_prompt  # capability layer: group name
+        assert "publish-skill" in system_prompt  # capability layer: agent skills whitelist
+        assert "请总结：hello" in task_prompt  # task layer: {{in}} interpolation
+        assert "publisher" not in task_prompt
+        assert "publish-skill" not in task_prompt
 
         # The sub-agent was bound with the assembled prompt and the expected
         # safety/checkpoint/recursion flags.
-        cfg = fake_executor["kwargs"]["config"]
-        assert cfg.system_prompt == prompt
         assert cfg.disallowed_tools == ["ask_clarification", "present_files"]
         assert cfg.checkpointer is False
         assert cfg.allow_recursion is False
@@ -225,9 +229,12 @@ class TestIdentityLayer:
         result = await exec_llm_agent(rt, {"instruction": "执行 {{in}}"}, {"in": "value"})
 
         assert result == {"out": "ok"}
-        prompt = fake_executor["task"]
-        assert "通用 AI 助手" in prompt
-        assert "自定义 agent" not in prompt
+        system_prompt = fake_executor["kwargs"]["config"].system_prompt
+        task_prompt = fake_executor["task"]
+        assert "通用 AI 助手" in system_prompt
+        assert "执行 value" in task_prompt
+        assert "通用 AI 助手" not in task_prompt
+        assert "自定义 agent" not in system_prompt
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

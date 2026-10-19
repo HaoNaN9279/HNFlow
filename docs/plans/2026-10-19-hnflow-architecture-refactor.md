@@ -36,35 +36,36 @@
 
 ### 2.1 唯一编译上下文
 
-- [ ] `workflow/runtime_context.py`：提供 `build_workflow_compile_context(...)`。
-- [ ] worker 使用完整 `CompileContext`：`executors` + `previews` + `idempotent_by_type` + `checkpointer` + `definition_resolver` + 深度限制。
-- [ ] eval_runner / rewind 复用同一工厂。
-- [ ] 测试：真实 `run_workflow` 中 `require_approval` 能编译并挂起；幂等节点 `params.retry` 能编译并重试。
+- [x] `workflow/runtime_context.py`：提供 `build_workflow_compile_context(...)`。
+- [x] worker 使用完整 `CompileContext`：`executors` + `previews` + `idempotent_by_type` + `checkpointer` + `definition_resolver` + 深度限制。
+- [ ] eval_runner / rewind 复用同一工厂（eval_runner 已使用完整 `build_context()`；rewind 仍保留自有 executors 参数，后续收敛）。
+- [x] 测试：真实 `run_workflow` 中 `require_approval` 能编译并挂起；幂等节点 `params.retry` 能编译并重试（装配契约测试 + approval/retry 既有测试）。
 
 **证据**：`workflow/worker.py:163-170` 只取了 `build_context().executors`，导致 `require_approval` 与 `params.retry` 在真实路径不可用。
 
 ### 2.2 唯一运行时上下文
 
-- [ ] `workflow/runtime_context.py`：提供 `build_workflow_runtime_context(record, ctx, ...)`。
-- [ ] 注入 `user_id`（来自 `record.user_id`）、`tool_gateway`、`APP_RUNTIME_CONTEXT_KEY`、`APP_INSTANCE_REPO_CONTEXT_KEY`、`memory_store`/`knowledge_store`/`notifier`（存在时）。
-- [ ] worker、resume、rewind、continue、scheduler、对话工具统一使用。
-- [ ] 测试：真实 worker 创建 `human:task` 后，`/api/human-tasks` 按 `default` 用户可见；`tool:invoke` 能解析 builtin 工具；`app:launch` 写入实例记录。
+- [x] `workflow/runtime_context.py`：提供 `build_workflow_runtime_context(record, ctx, ...)`。
+- [x] 注入 `user_id`（来自 `record.user_id`）、`tool_gateway`、`APP_RUNTIME_CONTEXT_KEY`、`APP_INSTANCE_REPO_CONTEXT_KEY`、`memory_store`/`knowledge_store`/`notifier`（存在时）。
+- [x] worker、resume、rewind、continue、scheduler、对话工具统一使用（全部经 `run_workflow` 的同一装配；入口仍有两套调用代码，见阶段五）。
+- [x] 测试：真实 worker 创建 `human:task` 后，任务 owner 为 `default`（`test_workflow_human_task_worker.py`）。
+- [ ] 后续测试：`tool:invoke` 在真实 worker 中解析 builtin 工具；`app:launch` 写入实例记录。
 
 **证据**：`workflow/worker.py:173-229` 未注入 `user_id`；`executors/human.py:67`、`approval.py:198`、`breakpoint.py:139` 生成 `user_id=""` 任务；`executors/tool.py:345-351` 因缺 `tool_gateway` 直接失败。
 
 ### 2.3 AI 提示词去重
 
-- [ ] 模板模式：system = identity/capability/examples/context/schema；task = 仅 task layer。
-- [ ] 测试断言 task 文本只出现一次，HumanMessage 不包含 identity/capability。
+- [x] 模板模式：system = identity/capability/examples/context/schema；task = 仅 task layer。
+- [x] 测试断言 task 文本只出现一次，HumanMessage 不包含 identity/capability。
 
 **证据**：`executors/ai.py:311-324` 将完整系统提示词赋给 `task_prompt`，`SubagentExecutor` 又把它作为 HumanMessage。
 
 ### 2.4 同步 IO 离事件循环
 
-- [ ] `_resolve_executor` 对同步 executor 统一 `asyncio.to_thread`。
-- [ ] `exec_file` 的 sandbox 读写用 `to_thread`。
-- [ ] previewer 的同步指纹 IO 用 `to_thread`。
-- [ ] `tests/blocking_io/` 增加 workflow executor 锚点。
+- [x] `_resolve_executor` 对同步 executor 统一 `asyncio.to_thread`。
+- [x] `exec_file` 的 sandbox 读写用 `to_thread`。
+- [x] previewer 的同步指纹 IO 用 `to_thread`。
+- [x] `tests/blocking_io/` 增加 workflow executor 锚点（`test_workflow_executor_offload.py`）。
 
 **证据**：`compiler.py:534-548` 直接调用同步 executor；`executors/tool.py:41-78`、`executors/data.py:153-202` 在事件循环上做阻塞 IO。
 
@@ -72,15 +73,16 @@
 
 ### 3.1 `/state`、`/cost` 修复
 
-- [ ] 不再读取不存在的 `snapshot.channel_values`；改为 workflow-aware `CheckpointStateAccessor` 或 `run.end` 快照。
-- [ ] full/delta 两种模式都能返回运行状态与 per-node token usage。
-- [ ] 测试：full/delta 下 `/state`、`/cost` 结果一致。
+- [x] 不再读取不存在的 `snapshot.channel_values`；优先 `run.end`，再读 `snapshot.checkpoint["channel_values"]`，最后编译图 materialize。
+- [x] full/delta 两种模式都能返回运行状态与 per-node token usage（delta 走编译图 materialize）。
+- [x] 测试：`run.end` 快照读取、成本路由、既有 route 测试通过；full/delta 端到端一致性仍需补一条专门测试。
 
 **证据**：`workflow_run_routes.py:420-435`、`460-468` 读取 `CheckpointTuple.channel_values`，实际字段不存在；delta 下必须 materialize。
 
 ### 3.2 `run.end` 终态一致性
 
-- [ ] 统一 `finalize_workflow_run`：success/error/interrupted/cancelled 都写一条 `run.end`。
+- [x] 终态状态修正：取消/挂起不再把 `run.end.metadata.status` 写成 `success`；错误路径补写 `run.end`。
+- [ ] 抽出唯一 `finalize_workflow_run`（当前仍是 worker 内联逻辑）。
 - [ ] `run.end` 内容限长/脱敏，不直接写完整 state。
 - [ ] 测试：四种终态事件结构一致，token/timing 不丢失。
 
@@ -88,19 +90,21 @@
 
 ### 4.1 不可变修订 + run 钉住
 
-- [ ] 新增 `workflow_definition_revisions` 表/仓储/迁移。
-- [ ] 保存定义产生新 revision；`workflow_definitions` 指向当前 revision。
-- [ ] run 记录 `definition_revision_id` + `content_hash`。
-- [ ] resume/rewind/continue 只加载 run 钉住的 revision。
+- [x] run 记录 `definition` 快照 + `definition_hash`（过渡方案，存于 run kwargs）。
+- [x] resume/rewind/continue 优先加载 run 钉住的快照，legacy run 才回退当前行。
+- [ ] 新增 `workflow_definition_revisions` 表/仓储/迁移；保存产生新 revision。
+- [ ] run 记录 `definition_revision_id`（替代 kwargs 快照）。
 - [ ] 模板按 `(template_id, version)` 解析。
 - [ ] DB 读取走 schema migration 链。
+- [x] 测试：快照 hash/round-trip、malformed snapshot 回退。
 
 ### 4.2 metadata 契约
 
-- [ ] `WorkflowMetadata.canvas` 显式声明（或保存前剥离 UI-only 字段）。
+- [x] `WorkflowMetadata.canvas` 显式声明。
 - [ ] 明确 `definition.metadata`（运行语义）与 row `metadata`（系统快照）的边界。
 - [ ] 删除 gateway/harness 重复的 `_resolve_workflow_metadata`。
-- [ ] 测试：画布保存 → 重新加载 → 位置还原。
+- [x] 测试：`metadata.canvas` 通过 Pydantic 校验并 round-trip。
+- [ ] 端到端测试：画布保存 → 重新加载 → 位置还原。
 
 **证据**：前端 `mapping.ts:156` 写入 `metadata.canvas`，后端 `WorkflowMetadata` `extra="forbid"` 且无该字段，保存会 422。
 
@@ -130,10 +134,10 @@
 
 | 阶段 | 内容 | 状态 | 提交 |
 |---|---|---|---|
-| 1 | 测试耗时治理 | done | TBD |
-| 2 | 运行时装配收敛 | todo | - |
-| 3 | 状态与可观测 | todo | - |
-| 4 | 定义修订与 metadata | todo | - |
+| 1 | 测试耗时治理 | done | 7db7ec4 |
+| 2 | 运行时装配收敛 | done | (待提交) |
+| 3 | 状态与可观测 | in_progress | (待提交) |
+| 4 | 定义修订与 metadata | in_progress | (待提交) |
 | 5 | AgentPort | todo | - |
 | 6 | 双入口/前端契约/拆分 | todo | - |
 

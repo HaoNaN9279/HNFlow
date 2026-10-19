@@ -542,9 +542,17 @@ async def _resolve_executor(
     Supports sync executors (return plain dict) and async executors
     (return coroutine / awaitable).
     """
-    result = executor(runtime, params, inputs)
+    # Sync executors (bash/file/preview-adjacent helpers) may perform blocking
+    # sandbox IO.  Never call them on the event loop: run them in a worker
+    # thread.  Async executors are awaited directly.
+    is_async = inspect.iscoroutinefunction(executor) or inspect.iscoroutinefunction(getattr(executor, "__call__", None))
+    result: Any
+    if is_async:
+        result = await executor(runtime, params, inputs)
+    else:
+        result = await asyncio.to_thread(cast(Callable[..., Any], executor), runtime, params, inputs)
     if inspect.isawaitable(result):
-        result = await result
+        result = await cast(Awaitable[Any], result)
     return result
 
 
@@ -2032,8 +2040,10 @@ def _make_route_fn(
 
     def _route(state: dict[str, Any]) -> str:
         for condition_port, target in conditional_edges:
-            value = state.get(f"wf:{if_node.id}:{condition_port}")
-            if value:
+            key = f"wf:{if_node.id}:{condition_port}"
+            # Presence, not truthiness: a selected branch may legitimately carry
+            # 0 / "" / False.  The executor writes the unselected branch as None.
+            if key in state and state.get(key) is not None:
                 return target
         if default_target is None:
             raise WorkflowRouteError(f"if node '{if_node.id}': no condition matched and no default edge configured")

@@ -13,6 +13,7 @@ gate; read mode has nothing to preview.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -181,7 +182,12 @@ async def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
     if operation == "read":
         start_line: int | None = params.get("start_line")
         end_line: int | None = params.get("end_line")
-        content = sandbox.read_file(path, start_line=start_line, end_line=end_line)
+        content = await asyncio.to_thread(
+            sandbox.read_file,
+            path,
+            start_line=start_line,
+            end_line=end_line,
+        )
         return {"out": content}
 
     if operation == "write":
@@ -199,7 +205,7 @@ async def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
             enabled=rollback_requested(params),
         )
         try:
-            sandbox.write_file(path, str(content), append=append)
+            await asyncio.to_thread(sandbox.write_file, path, str(content), append=append)
         except Exception as exc:
             await compensation.rollback(reason=str(exc) or type(exc).__name__)
             raise

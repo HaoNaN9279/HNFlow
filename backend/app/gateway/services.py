@@ -66,6 +66,7 @@ from deerflow.runtime.user_context import DEFAULT_USER_ID, reset_current_user
 from deerflow.utils.messages import ORIGINAL_USER_CONTENT_KEY
 from deerflow.utils.thread_id import validate_thread_id
 from deerflow.workflow.compiler import WorkflowCompileError, parse_subworkflow_spec
+from deerflow.workflow.run_snapshot import definition_snapshot
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
 from deerflow.workflow.worker import run_workflow
 
@@ -1375,7 +1376,10 @@ async def start_workflow_run(
                     definition_id,
                     on_disconnect=disconnect,
                     metadata=metadata or {},
-                    kwargs={"params": params, "definition_id": definition_id},
+                    # Pin the exact definition this run was admitted with.
+                    # Resume/rewind/continue read this snapshot instead of the
+                    # row's current (possibly edited) body.
+                    kwargs={"params": params, "definition_id": definition_id, **definition_snapshot(definition)},
                     user_id=DEFAULT_USER_ID,
                 )
 

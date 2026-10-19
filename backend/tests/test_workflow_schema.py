@@ -287,3 +287,16 @@ class TestMetadataLockfile:
         )
         reloaded = WorkflowDefinition.model_validate(wf.model_dump())
         assert reloaded.metadata.lockfile == {"workflow": {"id": "wf-lock", "version": "0.1.0"}}
+
+
+class TestMetadataCanvas:
+    """Canvas positions are explicit UI metadata and must survive validation."""
+
+    def test_canvas_roundtrips(self):
+        wf = WorkflowDefinition(
+            id="wf-canvas",
+            name="Canvas",
+            metadata=WorkflowMetadata(canvas={"positions": {"start": {"x": 1, "y": 2}}}),
+        )
+        reloaded = WorkflowDefinition.model_validate(wf.model_dump())
+        assert reloaded.metadata.canvas == {"positions": {"start": {"x": 1, "y": 2}}}

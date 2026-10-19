@@ -55,25 +55,26 @@ def exec_switch(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[s
 
 
 def exec_if(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate if-conditions and write the matching branch port.
+    """Evaluate if-conditions and select exactly one branch port.
 
-    ``params.port`` (str, default ``"true"``): the output port to write
-    when the condition is truthy.  The compiler's route function reads
-    port values from state to select the active branch.
-
-    For non-trivial condition logic, override this executor in
-    ``CompileContext`` with a custom callable (the built-in
-    ``exec_if`` is intentionally a minimal pass-through that writes
-    the input value to the declared output ports — the route function
-    handles truthy/falsy routing).
+    ``params.ports`` (default ``["true", "false"]``) names the truthy and
+    falsy output ports.  The selected port carries the original input value;
+    the other port is written as ``None`` so a loop iteration can never leave a
+    stale truthy branch behind.  The compiler's route function reads which
+    branch is selected (value is not ``None``), so routing does not depend on
+    edge order.
     """
     ports: list[str] = params.get("ports", ["true", "false"])
+    if not isinstance(ports, list) or len(ports) < 2:
+        raise WorkflowExecutionError("flow:if requires params.ports to list at least a true and a false port")
     input_val = inputs.get("in")
 
-    result: dict[str, Any] = {}
-    for port in ports:
-        result[port] = input_val
-    return result
+    # Write exactly one branch.  The unselected port must be *present* with
+    # ``None`` so a loop iteration cannot leave a stale truthy value behind.
+    # The router routes on "selected" (value is not None), not on truthiness:
+    # a legitimate falsy payload (0 / "" / False) is still a selected branch.
+    selected, other = (ports[0], ports[1]) if input_val else (ports[1], ports[0])
+    return {selected: input_val, other: None}
 
 
 # ── flow:handoff ─────────────────────────────────────────────────────────────

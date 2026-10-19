@@ -20,6 +20,7 @@ from app.gateway.deps import get_human_task_repo, get_optional_user_from_request
 from app.gateway.permissions import require_permission
 from app.gateway.services import start_workflow_run
 from deerflow.workflow.human_task_state import HumanTaskStatus, validate_human_task_submission
+from deerflow.workflow.run_snapshot import load_definition_snapshot
 from deerflow.workflow.schema import WorkflowDefinition
 
 logger = logging.getLogger(__name__)
@@ -86,17 +87,22 @@ async def _resume_workflow(
             logger.warning("Human task %s has no resolvable definition_id — skip resume", task_id)
             return
 
-        repo = get_workflow_definition_repo(request)
-        row = await repo.get(definition_id, user_id=user_id)
-        if row is None:
-            logger.warning("Human task %s definition %s not found — skip resume", task_id, definition_id)
-            return
-        definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
-        if definition_dict is None:
-            logger.warning("Human task %s definition %s has no body — skip resume", task_id, definition_id)
-            return
+        # Prefer the exact definition pinned on the run.  The row may have been
+        # edited while the task was pending; resuming with the new graph would
+        # re-enter a checkpoint that belongs to a different topology.
+        definition = load_definition_snapshot(record.kwargs if record is not None else None)
+        if definition is None:
+            repo = get_workflow_definition_repo(request)
+            row = await repo.get(definition_id, user_id=user_id)
+            if row is None:
+                logger.warning("Human task %s definition %s not found — skip resume", task_id, definition_id)
+                return
+            definition_dict = row.get("definition") if isinstance(row, dict) else getattr(row, "definition", None)
+            if definition_dict is None:
+                logger.warning("Human task %s definition %s has no body — skip resume", task_id, definition_id)
+                return
 
-        definition = WorkflowDefinition.model_validate(definition_dict)
+            definition = WorkflowDefinition.model_validate(definition_dict)
 
         # §25 single-step: a resume of a *step* task keeps stepping, so the
         # operator advances one node per resume instead of the run falling back

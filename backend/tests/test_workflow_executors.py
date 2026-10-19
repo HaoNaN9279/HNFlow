@@ -287,17 +287,69 @@ class TestExecSwitch:
 
 
 class TestExecIf:
-    """flow:if — passthrough to declared ports."""
+    """flow:if selects exactly one branch and preserves its payload."""
 
-    def test_passthrough_default_ports(self) -> None:
+    def test_truthy_input_selects_true_port(self) -> None:
         rt = _dummy_runtime()
         result = exec_if(rt, {}, {"in": "hello"})
-        assert result == {"true": "hello", "false": "hello"}
+        assert result == {"true": "hello", "false": None}
+
+    def test_falsy_payload_still_selects_false_port(self) -> None:
+        rt = _dummy_runtime()
+        result = exec_if(rt, {}, {"in": 0})
+        assert result == {"true": None, "false": 0}
 
     def test_custom_ports(self) -> None:
         rt = _dummy_runtime()
         result = exec_if(rt, {"ports": ["yes", "no"]}, {"in": 1})
-        assert result == {"yes": 1, "no": 1}
+        assert result == {"yes": 1, "no": None}
+
+    def test_invalid_ports_fail_loud(self) -> None:
+        rt = _dummy_runtime()
+        with pytest.raises(WorkflowExecutionError):
+            exec_if(rt, {"ports": ["only-one"]}, {"in": 1})
+
+
+class TestIfRoutingOrder:
+    """flow:if routing must not depend on the order of canvas edges."""
+
+    @pytest.mark.asyncio
+    async def test_false_edge_declared_first_does_not_steal_truthy_input(self) -> None:
+        from deerflow.workflow.schema import PortType, WorkflowDefinition
+
+        if_node = Node(
+            id="check",
+            type=NodeType.FLOW_IF,
+            inputs=[Port(name="in", type=PortType.DATA)],
+            outputs=[Port(name="true", type=PortType.DATA), Port(name="false", type=PortType.DATA)],
+        )
+        definition = WorkflowDefinition(
+            id="if-order",
+            name="if order",
+            nodes=[
+                _start_node(),
+                if_node,
+                _node("yes_node"),
+                _node("no_node"),
+                _end_node(),
+            ],
+            edges=[
+                Edge(source="start", source_port="input", target="check", target_port="in"),
+                # Deliberately declare the false branch first.
+                Edge(source="check", source_port="false", target="no_node", target_port="in", condition="false"),
+                Edge(source="check", source_port="true", target="yes_node", target_port="in", condition="true"),
+                Edge(source="check", source_port="false", target="no_node", target_port="in"),
+                Edge(source="yes_node", source_port="out", target="end", target_port="in"),
+                Edge(source="no_node", source_port="out", target="end", target_port="in"),
+            ],
+        )
+
+        clear_compile_cache()
+        graph = compile_definition(definition, context=build_default_registry().build_context())
+        state = await graph.ainvoke({"wf:start:input": "hello"})
+
+        assert state.get("wf:yes_node:out") == "hello"
+        assert state.get("wf:no_node:out") is None
 
 
 class TestExecLog:
@@ -628,7 +680,7 @@ class TestDirectExecutorCall:
         assert exec_regex(rt, {"pattern": r"\w+"}, {"in": "abc"}) == {"out": "abc"}
 
         # Flow executors — sync
-        assert exec_if(rt, {}, {"in": "x"}) == {"true": "x", "false": "x"}
+        assert exec_if(rt, {}, {"in": "x"}) == {"true": "x", "false": None}
         assert exec_switch(rt, {"cases": [{"value": "y", "port": "p"}]}, {"in": "y"}) == {"p": True}
         # wait tested above (async)
 

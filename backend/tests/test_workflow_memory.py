@@ -195,8 +195,9 @@ class TestExecutorMemory:
             {"instruction": "hi", "node_id": "n", "memory": {"scopes": ["long_term"], "query": "prefers"}},
             {},
         )
-        assert "<memory>" in fake_executor["task"]
-        assert "dark mode" in fake_executor["task"]
+        system_prompt = fake_executor["kwargs"]["config"].system_prompt
+        assert "<memory>" in system_prompt
+        assert "dark mode" in system_prompt
 
     @pytest.mark.asyncio
     async def test_writes_output(self, fake_executor: dict[str, Any]) -> None:

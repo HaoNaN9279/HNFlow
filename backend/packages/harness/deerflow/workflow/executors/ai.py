@@ -320,8 +320,11 @@ async def exec_llm_agent(
         if output_schema is not None:
             buckets["schema"] = schema_instruction(output_schema)
         budget_result = apply_context_budget(buckets, context_policy.budget if context_policy else None)
-        system_prompt = "\n\n".join(budget_result.buckets[name] for name in BUCKET_ORDER if budget_result.buckets.get(name))
-        task_prompt = system_prompt
+        # The task bucket is the *user turn*; everything else is system context.
+        # Sending the full assembled prompt as both the system message and the
+        # HumanMessage duplicated every instruction (and doubled token cost).
+        task_prompt = budget_result.buckets.get("task", "")
+        system_prompt = "\n\n".join(budget_result.buckets[name] for name in BUCKET_ORDER if name != "task" and budget_result.buckets.get(name))
         if context_policy is not None:
             context_usage = budget_result.to_payload()
 
@@ -338,7 +341,6 @@ async def exec_llm_agent(
             block = format_memory_block(records, budget=memory_policy.inject_budget)
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
-                task_prompt = system_prompt
 
         # N14 §24.2: prepend retrieved knowledge (with citations) as a budgeted
         # ``<context>`` block.  A retrieval failure degrades to no context rather
@@ -353,7 +355,6 @@ async def exec_llm_agent(
             block = format_retrieval_block(records, budget=retrieval_policy.ctx_budget)
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
-                task_prompt = system_prompt
 
     # Deferred imports: ``SubagentExecutor`` lives behind a lazy package export,
     # and importing it at module scope would pull the agent graph into the

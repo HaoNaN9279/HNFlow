@@ -22,7 +22,11 @@ from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import _build_workflow_template_resolver, sse_consumer, start_workflow_run, wait_for_run_completion
 from deerflow.config import get_app_config
 from deerflow.runtime.runs.schemas import RunStatus
+from deerflow.workflow.compiler import compile_definition
 from deerflow.workflow.costs import build_run_cost_report
+from deerflow.workflow.executors import build_default_registry
+from deerflow.workflow.run_snapshot import load_definition_snapshot
+from deerflow.workflow.runtime_context import build_workflow_compile_context
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +119,86 @@ async def _require_run_owner(request: Request, run_mgr, run_id: str) -> Any:
     if record is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return record
+
+
+async def _run_end_content(request: Request, record: Any) -> dict[str, Any] | None:
+    """Read the terminal ``run.end`` snapshot, when the run has one."""
+    run_ctx = get_run_context(request)
+    event_store = getattr(run_ctx, "event_store", None)
+    if event_store is None:
+        return None
+    try:
+        events = await event_store.list_events(
+            record.thread_id,
+            record.run_id,
+            event_types=["run.end"],
+        )
+    except Exception:
+        logger.warning("Failed to read run.end for workflow run %s", record.run_id, exc_info=True)
+        return None
+    if not events:
+        return None
+    content = events[-1].get("content")
+    return content if isinstance(content, dict) else None
+
+
+async def _workflow_state_values(
+    request: Request,
+    record: Any,
+    definition_id: str,
+    user: Any,
+) -> dict[str, Any]:
+    """Return the materialized ``wf:*`` state for a workflow run.
+
+    Prefer the persisted ``run.end`` snapshot: it is complete for every terminal
+    status and avoids recompiling the graph.  For a live or legacy run, compile
+    the definition and read through the graph so delta-mode checkpoints are
+    materialized instead of returning the raw sentinel.
+
+    Never read ``CheckpointTuple.channel_values`` directly: LangGraph stores the
+    values under ``snapshot.checkpoint["channel_values"]``, and in delta mode a
+    raw read is incomplete.
+    """
+    end_content = await _run_end_content(request, record)
+    if end_content is not None:
+        values = {key: value for key, value in end_content.items() if isinstance(key, str) and key.startswith("wf:")}
+        if values:
+            return values
+
+    run_ctx = get_run_context(request)
+    if run_ctx.checkpointer is None:
+        raise HTTPException(status_code=503, detail="Checkpointer not configured — state is unavailable")
+
+    # Fast path for a full-mode checkpoint.  ``channel_values`` lives inside
+    # ``snapshot.checkpoint``; accept the legacy attribute too so old callers
+    # and tests that shaped a snapshot directly keep working.
+    try:
+        snapshot = await run_ctx.checkpointer.aget_tuple({"configurable": {"thread_id": record.thread_id}})
+    except Exception:
+        snapshot = None
+    if snapshot is not None:
+        raw_values = getattr(snapshot, "channel_values", None)
+        if not isinstance(raw_values, dict):
+            checkpoint = getattr(snapshot, "checkpoint", None)
+            raw_values = checkpoint.get("channel_values") if isinstance(checkpoint, dict) else None
+        if isinstance(raw_values, dict):
+            return {key: value for key, value in raw_values.items() if isinstance(key, str) and key.startswith("wf:")}
+
+    _, definition = await _resolve_definition(request, definition_id, user)
+    resolver = await _build_workflow_template_resolver(definition, request, user_id=str(user.id))
+    registry = build_default_registry()
+    compile_ctx = build_workflow_compile_context(
+        registry,
+        checkpointer=run_ctx.checkpointer,
+        definition_resolver=resolver,
+        max_delegation_depth=get_app_config().subagents.max_delegation_depth,
+    )
+    graph = compile_definition(definition, context=compile_ctx)
+    snapshot = await graph.aget_state({"configurable": {"thread_id": record.thread_id}})
+    values = getattr(snapshot, "values", None)
+    if not isinstance(values, dict):
+        return {}
+    return {key: value for key, value in values.items() if isinstance(key, str) and key.startswith("wf:")}
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -342,8 +426,11 @@ async def rewind_workflow_run(definition_id: str, run_id: str, body: WorkflowRun
     if ctx.checkpointer is None:
         raise HTTPException(status_code=503, detail="Checkpointer not configured — rewind is unavailable")
 
-    _, definition = await _resolve_definition(request, definition_id, user)
     kwargs = getattr(record, "kwargs", None) or {}
+    definition = load_definition_snapshot(kwargs)
+    if definition is None:
+        # Legacy run without a pinned snapshot: fall back to the current row.
+        _, definition = await _resolve_definition(request, definition_id, user)
     params = kwargs.get("params") if isinstance(kwargs, dict) else None
 
     try:
@@ -409,30 +496,19 @@ async def get_workflow_run_state(definition_id: str, run_id: str, request: Reque
     by the run's ``thread_id``.  Returns ``503`` when no checkpointer
     is configured; returns an empty dict when no checkpoint exists yet.
     """
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     run_mgr = get_run_manager(request)
     record = await _require_run_owner(request, run_mgr, run_id)
 
-    ctx = get_run_context(request)
-    if ctx.checkpointer is None:
-        raise HTTPException(status_code=503, detail="Checkpointer not configured — state is unavailable")
-
     try:
-        snapshot = await ctx.checkpointer.aget_tuple(
-            config={"configurable": {"thread_id": record.thread_id}},
-        )
+        return await _workflow_state_values(request, record, definition_id, user)
+    except HTTPException:
+        raise
     except Exception:
-        logger.exception("Failed to fetch checkpoint state for run %s (thread %s)", run_id, record.thread_id)
+        logger.exception("Failed to read workflow state for run %s (thread %s)", run_id, record.thread_id)
         raise HTTPException(status_code=500, detail="Failed to read checkpoint state")
-
-    if snapshot is None:
-        return {}
-
-    # channel_values may be a dict or a sentinel (delta mode).
-    values = getattr(snapshot, "channel_values", None)
-    if values is None or not isinstance(values, dict):
-        return {}
-
-    return {k: v for k, v in values.items() if k.startswith("wf:")}
 
 
 @router.get("/{definition_id}/runs/{run_id}/cost")
@@ -449,23 +525,21 @@ async def get_workflow_run_cost(definition_id: str, run_id: str, request: Reques
     mixes currencies (unpriced nodes carry ``cost: null``, and the whole
     report is still returned rather than a fabricated zero).
     """
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
     run_mgr = get_run_manager(request)
     record = await _require_run_owner(request, run_mgr, run_id)
 
-    ctx = get_run_context(request)
-    if ctx.checkpointer is None:
-        raise HTTPException(status_code=503, detail="Checkpointer not configured — cost is unavailable")
-
     try:
-        snapshot = await ctx.checkpointer.aget_tuple(
-            config={"configurable": {"thread_id": record.thread_id}},
-        )
+        state = await _workflow_state_values(request, record, definition_id, user)
+    except HTTPException:
+        raise
     except Exception:
-        logger.exception("Failed to fetch checkpoint state for cost of run %s (thread %s)", run_id, record.thread_id)
-        raise HTTPException(status_code=500, detail="Failed to read checkpoint state")
-
-    values = getattr(snapshot, "channel_values", None) if snapshot is not None else None
-    state = values if isinstance(values, dict) else {}
+        # Cost reporting is observability: an unreadable checkpoint or config
+        # must not turn a read-only report into a 500.
+        logger.warning("Failed to fetch workflow state for cost of run %s (thread %s)", run_id, record.thread_id, exc_info=True)
+        state = {}
 
     try:
         models = get_app_config().models

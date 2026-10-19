@@ -210,8 +210,8 @@ class TestTemplateMode:
         # Full three-layer prompt assembled as before.
         assert cfg.system_prompt is not None
         assert "通用 AI 助手" in cfg.system_prompt  # identity layer
-        assert "请总结 x" in cfg.system_prompt  # task layer interpolated
-        assert record["task"] == cfg.system_prompt
+        assert "请总结 x" not in cfg.system_prompt  # task layer is the user turn
+        assert record["task"] == "请总结 x"  # task layer interpolated
 
     @pytest.mark.asyncio
     async def test_blank_string_continue_prompt_uses_template_branch(self, fake_executor: list[dict[str, Any]]) -> None:
