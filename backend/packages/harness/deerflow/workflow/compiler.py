@@ -76,6 +76,12 @@ from deerflow.workflow.budgets import (
     usage_total,
 )
 from deerflow.workflow.budgets import BudgetError as _BudgetError
+from deerflow.workflow.capability_groups import (
+    CapabilityWiringError,
+    is_capability_config_node,
+    resolve_ai_capability_groups,
+    validate_capability_wiring,
+)
 from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
 from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.handoff import (
@@ -461,6 +467,10 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             # content / get_workflow_run.
             fields[f"wf:{node.id}:__token_usage"] = Any
             fields[f"wf:{node.id}:__stop_reason"] = Any
+            # Full assembled prompt for ``ai:prompt_preview``.  Always declared
+            # so a preview node works even when the AI node was authored before
+            # this feature.
+            fields[f"wf:{node.id}:__prompt"] = Any
             if node.params.get("output_schema") is not None:
                 # N14 §24.4 structured-output repair count.
                 fields[f"wf:{node.id}:__schema_repairs"] = Any
@@ -564,6 +574,8 @@ def _make_node_fn(
     *,
     idempotent: bool = False,
     run_budget: RunBudget | None = None,
+    capability_groups: list[str] | None = None,
+    prompt_preview_agent: str | None = None,
 ) -> Callable[..., Any]:
     """Build an async node wrapper that reads inputs from state, calls the
     executor, and writes outputs back to state.
@@ -666,7 +678,15 @@ def _make_node_fn(
         if node.type == NodeType.AI_LLM_AGENT:
             executor_params = dict(node.params)
             executor_params.setdefault("agent_name", node.agent_name)
-            executor_params.setdefault("capability_groups", list(node.capability_groups))
+            executor_params.setdefault(
+                "capability_groups",
+                list(capability_groups) if capability_groups is not None else list(node.capability_groups),
+            )
+            executor_params.setdefault("node_id", node.id)
+        if node.type == NodeType.AI_PROMPT_PREVIEW:
+            executor_params = dict(node.params)
+            if prompt_preview_agent:
+                executor_params.setdefault("agent_node", prompt_preview_agent)
             executor_params.setdefault("node_id", node.id)
         if node.type == NodeType.HUMAN_TASK:
             executor_params = dict(node.params)
@@ -815,6 +835,11 @@ def _make_node_fn(
             context_usage = result.get(CONTEXT_USAGE_RESULT_KEY)
             if isinstance(context_usage, dict):
                 outputs[f"wf:{node.id}:__context_usage"] = context_usage
+            # Full assembled prompt, consumed by an ``ai:prompt_preview`` node
+            # rather than exposed as a declared output port.
+            prompt = result.get("__workflow_prompt")
+            if isinstance(prompt, str):
+                outputs[f"wf:{node.id}:__prompt"] = prompt
 
         # N14 shared workspace: an executor may request writes to shared
         # variables through the reserved ``__shared_writes`` result key; lift
@@ -1879,6 +1904,53 @@ def _validate_context_policy(def_: WorkflowDefinition) -> None:
                 raise WorkflowCompileError(f"node '{node.id}': context_policy.include names undeclared input port '{name}'")
 
 
+def _infer_prompt_preview_agent(
+    node: Node,
+    node_map: dict[str, Node],
+    edges: list[Edge],
+) -> str | None:
+    """Resolve the AI node a prompt-preview node reads.
+
+    An explicit ``params.agent_node`` wins and must name an ``ai:llm_agent``
+    node.  Otherwise exactly one incoming AI edge is used; zero or several
+    candidates are a compile error (an ambiguous preview would silently show
+    the wrong prompt).
+    """
+    configured = node.params.get("agent_node")
+    if configured is not None:
+        if not isinstance(configured, str) or not configured:
+            raise WorkflowCompileError(f"node '{node.id}': params.agent_node must be a non-empty AI node id")
+        target = node_map.get(configured)
+        if target is None:
+            raise WorkflowCompileError(f"node '{node.id}': params.agent_node '{configured}' not found")
+        if target.type != NodeType.AI_LLM_AGENT:
+            raise WorkflowCompileError(f"node '{node.id}': params.agent_node '{configured}' is not an ai:llm_agent node")
+        return configured
+
+    candidates: list[str] = []
+    for edge in edges:
+        if edge.target != node.id:
+            continue
+        source = node_map.get(edge.source)
+        if source is not None and source.type == NodeType.AI_LLM_AGENT:
+            candidates.append(source.id)
+    candidates = list(dict.fromkeys(candidates))
+    if len(candidates) == 1:
+        return candidates[0]
+    if not candidates:
+        raise WorkflowCompileError(f"node '{node.id}': prompt preview needs params.agent_node or an incoming edge from an ai:llm_agent node")
+    raise WorkflowCompileError(f"node '{node.id}': prompt preview has multiple AI sources {candidates}; set params.agent_node explicitly")
+
+
+def _validate_prompt_preview(def_: WorkflowDefinition) -> None:
+    """Validate ``ai:prompt_preview`` targets at compile time."""
+    node_map = {node.id: node for node in def_.nodes}
+    for node in def_.nodes:
+        if node.type != NodeType.AI_PROMPT_PREVIEW:
+            continue
+        _infer_prompt_preview_agent(node, node_map, def_.edges)
+
+
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
 
@@ -2138,6 +2210,11 @@ def _compile_impl(
     _validate_autonomy(def_)
     _validate_output_schema(def_)
     _validate_context_policy(def_)
+    _validate_prompt_preview(def_)
+    try:
+        validate_capability_wiring(def_)
+    except CapabilityWiringError as exc:
+        raise WorkflowCompileError(str(exc)) from exc
     _validate_retry(def_, ctx)
     _validate_run_budget(def_)
     run_budget = parse_run_budget(def_.metadata.model_dump())
@@ -2169,15 +2246,43 @@ def _compile_impl(
     start_node_id: str | None = None
     end_node_id: str | None = None
 
+    # Capability selector/merge nodes are authoring-only wiring.  Their edges
+    # are resolved statically into AI-node params and must not become runtime
+    # graph edges (a root selector would otherwise need scheduling, and an AI
+    # node with a second incoming edge could be triggered twice).
+    config_node_ids = {node.id for node in def_.nodes if is_capability_config_node(node)}
+    runtime_edges: list[Edge] = [edge for edge in def_.edges if edge.source not in config_node_ids and edge.target not in config_node_ids]
+
     # Build incoming-edges index for input resolution
     incoming_edges: dict[str, list[Edge]] = {n.id: [] for n in def_.nodes}
-    for edge in def_.edges:
+    for edge in runtime_edges:
         incoming_edges[edge.target].append(edge)
 
     # ``flow:loop`` id → (generated body node id, the loop output ports that body
     # writes), for loops whose body is declared by ``params.subworkflow``.
     # Filled in Pass A, consumed in Pass B.
     loop_bodies: dict[str, tuple[str, frozenset[str]]] = {}
+
+    def _make_standard_node_fn(node: Node, executor: Executor) -> Callable[..., Any]:
+        capability_groups: list[str] | None = None
+        if node.type == NodeType.AI_LLM_AGENT:
+            try:
+                capability_groups = resolve_ai_capability_groups(def_, node)
+            except CapabilityWiringError as exc:
+                raise WorkflowCompileError(str(exc)) from exc
+        prompt_preview_agent: str | None = None
+        if node.type == NodeType.AI_PROMPT_PREVIEW:
+            prompt_preview_agent = _infer_prompt_preview_agent(node, node_map, def_.edges)
+        return _make_node_fn(
+            node,
+            executor,
+            incoming_edges.get(node.id, []),
+            ctx.previews.get(node.type),
+            idempotent=ctx.idempotent_by_type.get(node.type, False),
+            run_budget=run_budget,
+            capability_groups=capability_groups,
+            prompt_preview_agent=prompt_preview_agent,
+        )
 
     # ── 4. Register nodes ─────────────────────────────────────────────
     for node in def_.nodes:
@@ -2192,6 +2297,10 @@ def _compile_impl(
                 end_fn = _make_end_node_fn(node, incoming_edges.get(node.id, []))
                 _register(node.id, end_fn)
             continue  # normal end node → LangGraph END, no add_node
+
+        if is_capability_config_node(node):
+            # Authoring-only: resolved into AI params / stripped edges above.
+            continue
 
         if node.type == NodeType.FLOW_LOOP:
             # Loop node: register a counting executor that reads/writes
@@ -2299,7 +2408,7 @@ def _compile_impl(
             # route always falls through to default).
             executor = ctx.executors.get(node.type)
             if executor is not None:
-                node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False), run_budget=run_budget)
+                node_fn = _make_standard_node_fn(node, executor)
                 _register(node.id, node_fn)
             else:
 
@@ -2363,7 +2472,7 @@ def _compile_impl(
         if executor is None:
             raise WorkflowCompileError(f"node '{node.id}' type '{node.type.value}' has no registered executor in CompileContext")
 
-        node_fn = _make_node_fn(node, executor, incoming_edges.get(node.id, []), ctx.previews.get(node.type), idempotent=ctx.idempotent_by_type.get(node.type, False), run_budget=run_budget)
+        node_fn = _make_standard_node_fn(node, executor)
         _register(node.id, node_fn)
 
     # Determine whether the end node is a registered pass-through (subgraph
@@ -2383,7 +2492,7 @@ def _compile_impl(
     #            nodes — collected and compiled as add_conditional_edges).
 
     # Pass A: regular edges
-    for edge in def_.edges:
+    for edge in runtime_edges:
         source = edge.source
         target = edge.target
 
@@ -2432,7 +2541,7 @@ def _compile_impl(
             builder.add_conditional_edges(cond_id, _make_handoff_route_fn(cond_id, targets), handoff_path_map)
             continue
 
-        out_edges = [e for e in def_.edges if e.source == cond_id]
+        out_edges = [e for e in runtime_edges if e.source == cond_id]
 
         cond_edges: list[tuple[str, str]] = []  # [(condition_port, target), ...]
         default_target: str | None = None

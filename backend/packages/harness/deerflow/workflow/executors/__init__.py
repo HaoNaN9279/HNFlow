@@ -20,7 +20,7 @@ from deerflow.workflow.registry import (  # noqa: E402
 from deerflow.workflow.schema import NodeType  # noqa: E402
 
 # ── Import public executor functions ─────────────────────────────────────────
-from .ai import exec_llm_agent  # noqa: E402
+from .ai import exec_llm_agent, exec_prompt_preview  # noqa: E402
 from .asset import exec_asset, preview_asset  # noqa: E402
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex, exec_shared, preview_file  # noqa: E402
 from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
@@ -118,6 +118,16 @@ def build_default_registry() -> ExecutorRegistry:
             description="LLM agent executor (three-layer prompt + capability tools)",
         )
     )
+    # Capability selector/merge nodes are compile-time wiring only; the prompt
+    # preview node is a real idempotent read of the AI node's reserved prompt.
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.AI_PROMPT_PREVIEW,
+            executor=exec_prompt_preview,
+            idempotent=True,
+            description="Full prompt preview for an ai:llm_agent node",
+        )
+    )
 
     # ── Human interaction ─────────────────────────────────────────────────
     # A human task suspends the graph; the interrupt itself is the confirmation
@@ -169,6 +179,7 @@ __all__ = [
     "exec_nested_subworkflow",
     # AI
     "exec_llm_agent",
+    "exec_prompt_preview",
     # Human
     "exec_human_task",
     # Local apps (N5)

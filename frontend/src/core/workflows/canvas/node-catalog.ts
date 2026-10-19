@@ -263,6 +263,13 @@ export const NODE_CATALOG = [
     defaultInputs: [
       { name: "in", type: "data", required: true },
       {
+        name: "capability_groups",
+        type: "array",
+        required: false,
+        description:
+          "Merged capability groups from selector / merge nodes (compile-time wiring)",
+      },
+      {
         name: "template_prompt",
         type: "data",
         required: false,
@@ -279,6 +286,41 @@ export const NODE_CATALOG = [
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { instruction: "" },
     description: "Run a one-shot sub-agent from an instruction template.",
+  },
+  {
+    type: "ai:capability_group",
+    label: "Capability Group",
+    category: "ai",
+    defaultInputs: [],
+    defaultOutputs: [{ name: "groups", type: "array", required: true }],
+    defaultParams: { group: "" },
+    description:
+      "Select one capability group. Wire it into a merge node or an LLM Agent.",
+  },
+  {
+    type: "ai:capability_merge",
+    label: "Merge Groups",
+    category: "ai",
+    defaultInputs: [
+      { name: "group_1", type: "array", required: false },
+      { name: "group_2", type: "array", required: false },
+    ],
+    defaultOutputs: [{ name: "groups", type: "array", required: true }],
+    description:
+      "Merge capability groups in slot order. Add or remove input slots in the panel.",
+  },
+  {
+    type: "ai:prompt_preview",
+    label: "Prompt Preview",
+    category: "ai",
+    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultOutputs: [
+      { name: "prompt", type: "data", required: true },
+      { name: "out", type: "data", required: false },
+    ],
+    defaultParams: { agent_node: "" },
+    description:
+      "Show the full prompt assembled by an LLM Agent after it runs, with a static preview button.",
   },
   {
     type: "human:task",

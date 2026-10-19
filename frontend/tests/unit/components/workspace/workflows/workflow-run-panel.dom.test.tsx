@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
+  screen,
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
@@ -24,6 +26,8 @@ rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
       workflows: {
+        collapsePanel: "Collapse panel",
+        expandPanel: "Expand panel",
         run: {
           run: "Run",
           runDisabled: "Save unsaved changes first",
@@ -162,6 +166,29 @@ describe("WorkflowRunPanel idle state", () => {
     expect(
       container.querySelector('[data-testid="workflow-run-terminal"]'),
     ).toBe(null);
+  });
+
+  it("collapses to a bar and expands back", () => {
+    const { container } = renderPanel();
+
+    const panel = screen.getByTestId("workflow-run-panel");
+    const toggle = screen.getByTestId("workflow-run-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(panel.dataset.collapsed).toBe("true");
+    expect(container.textContent).not.toContain(
+      "Run this workflow to see node status",
+    );
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(container.textContent).toContain(
+      "Run this workflow to see node status",
+    );
   });
 });
 

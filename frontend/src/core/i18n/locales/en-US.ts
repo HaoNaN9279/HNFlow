@@ -438,6 +438,8 @@ export const enUS: Translations = {
     saving: "Saving...",
     unsaved: "Unsaved",
     readonly: "Read only",
+    collapsePanel: "Collapse panel",
+    expandPanel: "Expand panel",
     templates: {
       label: "Templates",
       hint: "Insert a collaboration template skeleton onto the canvas",
@@ -446,7 +448,7 @@ export const enUS: Translations = {
       loadFailed: "Failed to load templates",
     },
     canvas: {
-      paletteTitle: "Palette",
+      paletteTitle: "Node Catalog",
       searchPlaceholder: "Search nodes...",
       fitView: "Fit view",
       zoomIn: "Zoom in",
@@ -491,6 +493,25 @@ export const enUS: Translations = {
         continuePromptLabel: "Continue prompt",
         continuePromptHint:
           "Wire a value into the continue_prompt input port on the canvas to resume this agent's session with a new prompt.",
+      },
+      capabilityGroup: {
+        title: "Capability group",
+        groupLabel: "Group",
+        groupPlaceholder: "Select a capability group...",
+        noGroups: "No capability groups installed",
+        mergeTitle: "Capability group merge",
+        addInput: "Add input slot",
+        removeInput: "Remove input slot",
+        inputLabel: "Input slot",
+        promptPreviewTitle: "Prompt preview",
+        promptPreviewAgent: "LLM Agent",
+        promptPreviewAgentPlaceholder: "Select an LLM Agent...",
+        previewButton: "Preview prompt",
+        previewing: "Building preview...",
+        previewFailed: "Prompt preview failed",
+        previewEmpty: "No prompt assembled",
+        runtimeOmitted:
+          "Static preview: runtime memory and knowledge retrieval are not included.",
       },
       subworkflow: {
         title: "Subworkflow",

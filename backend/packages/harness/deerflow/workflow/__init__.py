@@ -24,6 +24,7 @@ from .schema import (
     WorkflowDefinition,
     WorkflowMetadata,
     collect_resolved_groups,
+    declared_capability_groups,
 )
 from .workflow_io import (
     SCHEMA_VERSION,
@@ -42,6 +43,7 @@ __all__ = [
     "WorkflowMetadata",
     "WorkflowDefinition",
     "collect_resolved_groups",
+    "declared_capability_groups",
     "SCHEMA_VERSION",
     "deserialize",
     "ports_compatible",

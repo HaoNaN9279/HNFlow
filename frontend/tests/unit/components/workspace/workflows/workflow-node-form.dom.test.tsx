@@ -167,7 +167,7 @@ afterEach(() => {
 });
 
 describe("WorkflowNodeForm — ai:llm_agent", () => {
-  it("renders the instruction value, selected agent and chosen skills", () => {
+  it("renders the instruction value and selected agent", () => {
     render(
       <WorkflowNodeForm
         node={makeAINode()}
@@ -180,12 +180,6 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
     expect(
       screen.getByRole("combobox", { name: "Agent" }).textContent,
     ).toContain("researcher");
-    expect(
-      screen.getByRole("button", { name: "Remove skill web-research" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("checkbox", { name: "Add skill code-review" }),
-    ).toBeTruthy();
   });
 
   it("commits an edited instruction on blur with top-level fields preserved", () => {
@@ -302,140 +296,6 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
     expect(onChange).toHaveBeenCalledWith(
       expect.objectContaining({ agent_name: null }),
     );
-  });
-
-  it("adds a skill through the checkbox list", () => {
-    const onChange = rs.fn();
-    render(
-      <WorkflowNodeForm
-        node={makeAINode()}
-        readonly={false}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Add skill code-review" }),
-    );
-
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability_groups: ["web-research", "code-review"],
-      }),
-    );
-  });
-
-  it("accumulates consecutive skill picks and reflects them in the UI", () => {
-    const onChange = rs.fn();
-    render(
-      <WorkflowNodeForm
-        node={makeAINode({ capability_groups: [] })}
-        readonly={false}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Add skill web-research" }),
-    );
-    fireEvent.click(
-      screen.getByRole("checkbox", { name: "Add skill code-review" }),
-    );
-
-    // The second pick builds on the first, not on the stale initial value.
-    expect(onChange).toHaveBeenCalledTimes(2);
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        capability_groups: ["web-research", "code-review"],
-      }),
-    );
-
-    // UI follows the draft: both checkboxes checked, both badges shown.
-    expect(
-      screen.getByRole<HTMLInputElement>("checkbox", {
-        name: "Add skill web-research",
-      }).checked,
-    ).toBe(true);
-    expect(
-      screen.getByRole<HTMLInputElement>("checkbox", {
-        name: "Add skill code-review",
-      }).checked,
-    ).toBe(true);
-    expect(
-      screen.getByRole("button", { name: "Remove skill web-research" }),
-    ).toBeTruthy();
-    expect(
-      screen.getByRole("button", { name: "Remove skill code-review" }),
-    ).toBeTruthy();
-  });
-
-  it("unchecks one skill and keeps the other", () => {
-    const onChange = rs.fn();
-    render(
-      <WorkflowNodeForm
-        node={makeAINode({
-          capability_groups: ["web-research", "code-review"],
-        })}
-        readonly={false}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove skill web-research" }),
-    );
-
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ capability_groups: ["code-review"] }),
-    );
-    expect(
-      screen.queryByRole("button", { name: "Remove skill web-research" }),
-    ).toBeNull();
-    expect(
-      screen.getByRole<HTMLInputElement>("checkbox", {
-        name: "Add skill web-research",
-      }).checked,
-    ).toBe(false);
-    expect(
-      screen.getByRole<HTMLInputElement>("checkbox", {
-        name: "Add skill code-review",
-      }).checked,
-    ).toBe(true);
-  });
-
-  it("removes a chosen skill through its badge button", () => {
-    const onChange = rs.fn();
-    render(
-      <WorkflowNodeForm
-        node={makeAINode()}
-        readonly={false}
-        onChange={onChange}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", { name: "Remove skill web-research" }),
-    );
-
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({ capability_groups: [] }),
-    );
-  });
-
-  it("shows the no-skills hint when the skill list is empty", () => {
-    skillOptions = [];
-    render(
-      <WorkflowNodeForm
-        node={makeAINode()}
-        readonly={false}
-        onChange={rs.fn()}
-      />,
-    );
-
-    expect(screen.getByText("No skills available")).toBeTruthy();
   });
 });
 

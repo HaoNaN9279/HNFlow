@@ -7,6 +7,7 @@ validated against the ``WorkflowDefinition`` schema before persistence.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -21,6 +22,7 @@ from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
 from deerflow.workflow.executors import build_default_registry
+from deerflow.workflow.prompt_preview import PromptPreviewError, build_prompt_preview
 from deerflow.workflow.runtime_context import build_workflow_compile_context
 from deerflow.workflow.schema import WorkflowDefinition
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
@@ -45,6 +47,13 @@ class WorkflowUpdateRequest(BaseModel):
     definition: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     version: str | None = None
+
+
+class WorkflowPromptPreviewRequest(BaseModel):
+    node_id: str
+    # The canvas sends its current (possibly unsaved) definition so the preview
+    # matches what the author is looking at.  Omitted means "use the saved one".
+    definition: dict[str, Any] | None = None
 
 
 async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
@@ -301,6 +310,44 @@ async def evaluate_workflow(definition_id: str, request: Request):
         "report": report.to_dict() if report else None,
         "errors": eval_gate_errors(report) if report else [],
     }
+
+
+@router.post("/workflows/{definition_id}/prompt-preview")
+@require_permission("threads", "read")
+async def preview_workflow_prompt(definition_id: str, request: Request, body: WorkflowPromptPreviewRequest):
+    """Assemble an AI node's text prompt without running the model.
+
+    The canvas may send its current definition; otherwise the saved definition
+    is used.  Runtime-only memory/retrieval blocks are reported as omitted by
+    the response rather than fabricated.
+    """
+    user = await get_optional_user_from_request(request)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    if body.definition is not None:
+        raw_definition: Any = body.definition
+    else:
+        repo = get_workflow_definition_repo(request)
+        record = await repo.get(definition_id, user_id=str(user.id))
+        if record is None:
+            raise HTTPException(status_code=404, detail="Workflow definition not found")
+        raw_definition = record.get("definition") if isinstance(record, dict) else getattr(record, "definition", None)
+
+    try:
+        model = WorkflowDefinition.model_validate(raw_definition)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={"errors": _format_validation_errors(exc)}) from exc
+
+    errors = validate_definition(model)
+    if errors:
+        raise HTTPException(status_code=422, detail={"errors": errors})
+
+    try:
+        preview = await asyncio.to_thread(build_prompt_preview, model, body.node_id, user_id=str(user.id))
+    except PromptPreviewError as exc:
+        raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
+    return preview.to_dict()
 
 
 @router.put("/workflows/{definition_id}")

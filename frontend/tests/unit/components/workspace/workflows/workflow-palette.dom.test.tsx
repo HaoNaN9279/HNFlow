@@ -8,6 +8,8 @@ rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
       workflows: {
+        collapsePanel: "Collapse panel",
+        expandPanel: "Expand panel",
         canvas: {
           paletteTitle: "Palette",
           searchPlaceholder: "Search nodes...",
@@ -77,5 +79,25 @@ describe("WorkflowPalette", () => {
 
     expect(screen.getByTestId("palette-item-tool:bash")).toBeTruthy();
     expect(screen.queryByTestId("palette-item-flow:start")).toBeNull();
+  });
+
+  it("collapses to a rail and expands back", () => {
+    render(<WorkflowPalette />);
+
+    const toggle = screen.getByTestId("workflow-palette-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByTestId("palette-item-flow:start")).toBeNull();
+    expect(screen.getByTestId("workflow-palette").dataset.collapsed).toBe(
+      "true",
+    );
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByTestId("palette-item-flow:start")).toBeTruthy();
   });
 });

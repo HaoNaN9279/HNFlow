@@ -53,6 +53,24 @@ export const AI_NODE_FIELDS: readonly NodeFormField[] = [
   },
 ];
 
+/** Fields for the `ai:capability_group` selector. */
+export const CAPABILITY_GROUP_FIELDS: readonly NodeFormField[] = [
+  {
+    key: "group",
+    kind: "select",
+    labelKey: "workflow.nodeForm.capabilityGroup",
+  },
+];
+
+/** Fields for the `ai:prompt_preview` node. */
+export const PROMPT_PREVIEW_FIELDS: readonly NodeFormField[] = [
+  {
+    key: "agent_node",
+    kind: "select",
+    labelKey: "workflow.nodeForm.promptPreviewAgent",
+  },
+];
+
 /**
  * Fields for the `nested:subworkflow` node form — both map into
  * `params.subworkflow`. `version` is optional and only shown when set.

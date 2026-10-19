@@ -6,9 +6,11 @@ import {
 } from "@/core/workflows/canvas/mapping";
 import { getDefaultNode } from "@/core/workflows/canvas/node-catalog";
 import {
+  addMergeInput,
   applyNodeFormValues,
   parseNodeFormValues,
   parseSubworkflowSpec,
+  removeMergeInput,
   serializeSubworkflowSpec,
   validateNodeForm,
   type NodeFormValues,
@@ -157,10 +159,11 @@ describe("applyNodeFormValues", () => {
     expect(applied).not.toBe(node);
   });
 
-  test("default AI node with template_prompt/continue_prompt ports round-trips untouched", () => {
+  test("default AI node with capability/prompt ports round-trips untouched", () => {
     const node = getDefaultNode("ai:llm_agent");
     expect(node.inputs.map((p) => p.name)).toEqual([
       "in",
+      "capability_groups",
       "template_prompt",
       "continue_prompt",
     ]);
@@ -582,5 +585,60 @@ describe("app:* node fields", () => {
     expect(
       validateNodeForm({ ...parseNodeFormValues(node), app: "blender" }).app,
     ).toBeUndefined();
+  });
+});
+
+describe("capability group fields", () => {
+  test("parse/apply round-trips group and prompt-preview agent_node", () => {
+    const selector: WorkflowNode = {
+      id: "n-group",
+      type: "ai:capability_group",
+      inputs: [],
+      outputs: [{ name: "groups", type: "array" }],
+      params: { group: "web-research" },
+    };
+    expect(parseNodeFormValues(selector).group).toBe("web-research");
+    expect(
+      applyNodeFormValues(selector, {
+        ...parseNodeFormValues(selector),
+        group: "code-review",
+      }).params.group,
+    ).toBe("code-review");
+
+    const preview: WorkflowNode = {
+      id: "n-preview",
+      type: "ai:prompt_preview",
+      inputs: [{ name: "in", type: "data" }],
+      outputs: [{ name: "prompt", type: "data" }],
+      params: { agent_node: "n-ai" },
+    };
+    expect(parseNodeFormValues(preview).agent_node).toBe("n-ai");
+    expect(
+      applyNodeFormValues(preview, {
+        ...parseNodeFormValues(preview),
+        agent_node: "n-other",
+      }).params.agent_node,
+    ).toBe("n-other");
+  });
+
+  test("merge input slots are appended and removed without mutating the node", () => {
+    const merge = getDefaultNode("ai:capability_merge");
+    const original = merge.inputs.map((port) => port.name);
+    const added = addMergeInput(merge);
+    expect(added.inputs.map((port) => port.name)).toHaveLength(
+      original.length + 1,
+    );
+    expect(added.inputs.at(-1)?.type).toBe("array");
+    expect(merge.inputs.map((port) => port.name)).toEqual(original);
+
+    const firstInput = added.inputs[0];
+    expect(firstInput).toBeDefined();
+    if (!firstInput) {
+      return;
+    }
+    const removed = removeMergeInput(added, firstInput.name);
+    expect(removed.inputs.map((port) => port.name)).not.toContain(
+      firstInput.name,
+    );
   });
 });

@@ -80,8 +80,8 @@ function WorkflowEditor() {
           onUpdateNode={updateNode}
           onDeleteNode={deleteNode}
         />
-        <WorkflowRunPanel />
       </div>
+      <WorkflowRunPanel />
     </div>
   );
 }

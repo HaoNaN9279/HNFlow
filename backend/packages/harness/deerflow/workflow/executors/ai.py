@@ -15,6 +15,7 @@ from typing import Any
 from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.agent_port import get_agent_adapter
+from deerflow.workflow.capability_groups import CAPABILITY_GROUPS_PORT, normalize_capability_groups
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.knowledge import (
@@ -55,6 +56,10 @@ STOP_REASON_RESULT_KEY = "__stop_reason"
 #: Reserved executor-result key: how many repair attempts a structured-output
 #: node needed (N14 §24.4).  Lifted onto ``wf:<node_id>:__schema_repairs``.
 SCHEMA_REPAIRS_RESULT_KEY = "__schema_repairs"
+
+#: Reserved executor-result key carrying the full assembled prompt.  Lifted
+#: onto ``wf:<node_id>:__prompt`` for ``ai:prompt_preview``.
+PROMPT_RESULT_KEY = "__workflow_prompt"
 
 
 def _autonomy_settings(params: dict[str, Any]) -> tuple[int, Any]:
@@ -198,7 +203,12 @@ async def exec_llm_agent(
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty 'instruction' param")
 
     agent_name = params.get("agent_name")
-    capability_groups = params.get("capability_groups") or []
+    # Compiler-resolved capability list is authoritative.  The runtime input is
+    # accepted as a fallback for direct executor calls and forward compatibility.
+    if CAPABILITY_GROUPS_PORT in inputs and inputs.get(CAPABILITY_GROUPS_PORT) is not None:
+        capability_groups = normalize_capability_groups(inputs[CAPABILITY_GROUPS_PORT])
+    else:
+        capability_groups = normalize_capability_groups(params.get("capability_groups") or [])
 
     context = runtime.context
     user_id = context.get("user_id")
@@ -359,6 +369,11 @@ async def exec_llm_agent(
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
 
+    # Full text prompt the node actually sends: every system bucket (identity /
+    # capability / examples / context / schema / memory / retrieval) plus the
+    # task turn.  ``ai:prompt_preview`` reads this from the reserved channel.
+    preview_prompt = "\n\n".join(part for part in (system_prompt, task_prompt) if part)
+
     # C1: assemble the node's real tool set from its capability groups' union of
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
     node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
@@ -417,6 +432,7 @@ async def exec_llm_agent(
         output: dict[str, Any] = {"out": getattr(result, "result", None)}
     else:
         result, output = await _run_structured_output(adapter, request, task_prompt, output_schema, node_id)
+    output[PROMPT_RESULT_KEY] = preview_prompt
     # Lift the sub-agent's aggregated token usage (input/output/total +
     # prompt-cache cache_read tokens) onto the reserved result key so the
     # compiler can expose it on a declared state channel.  Only present when
@@ -442,3 +458,29 @@ async def exec_llm_agent(
         except Exception:
             logger.warning("ai:llm_agent memory write failed", exc_info=True)
     return output
+
+
+def exec_prompt_preview(
+    runtime: WorkflowRuntime,
+    params: dict[str, Any],
+    inputs: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose the final prompt an AI node assembled (``ai:prompt_preview``).
+
+    The AI executor publishes the full prompt on the reserved
+    ``wf:<ai_node>:__prompt`` channel.  This node reads it back after the AI
+    node has run (the incoming edge is ordering, not content), so a preview
+    shows the real runtime prompt — including selected capability groups and
+    injected memory/retrieval — rather than a stale template.
+    """
+    agent_node = params.get("agent_node")
+    if not isinstance(agent_node, str) or not agent_node:
+        raise WorkflowExecutionError(f"node '{params.get('node_id') or 'ai:prompt_preview'}': prompt preview requires an AI node id")
+    prompt = runtime.state.get(f"wf:{agent_node}:__prompt")
+    if prompt is None:
+        # The AI node may have been skipped or replayed.  An empty preview is
+        # more useful than failing an otherwise successful run.
+        prompt = ""
+    elif not isinstance(prompt, str):
+        prompt = str(prompt)
+    return {"prompt": prompt, "out": prompt}

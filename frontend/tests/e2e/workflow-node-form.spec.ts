@@ -266,7 +266,7 @@ test.describe("Workflow node forms", () => {
     await page.setViewportSize({ width: 1600, height: 900 });
   });
 
-  test("AI node form: edit instruction/agent/skills, save, and restore on reload", async ({
+  test("AI node form: edit instruction/agent, save, and restore on reload", async ({
     page,
   }) => {
     test.setTimeout(60_000);
@@ -304,12 +304,6 @@ test.describe("Workflow node forms", () => {
     await agentInput.fill("publisher");
     await agentInput.blur();
 
-    // skills — tick two from the mocked /api/skills list. `click` (not
-    // `check`) because the checkbox visual state is driven by the form's
-    // local `values` which `handleToggleSkill` does not update (see report).
-    await page.getByLabel("Add skill data-analysis").click();
-    await page.getByLabel("Add skill frontend-design").click();
-
     // Remove the two layout anchors so the saved definition only holds the
     // AI node (same anchor strategy as the T14 canvas spec).
     for (const anchorType of ["flow:if", "tool:bash"]) {
@@ -338,10 +332,6 @@ test.describe("Workflow node forms", () => {
     expect(aiNode.type).toBe("ai:llm_agent");
     expect(aiNode.params.instruction).toBe(instructionText);
     expect(aiNode.agent_name).toBe("publisher");
-    expect(aiNode.capability_groups).toEqual(
-      expect.arrayContaining(["data-analysis", "frontend-design"]),
-    );
-    expect(aiNode.capability_groups).toHaveLength(2);
 
     // Reload — the mocked GET now returns the saved definition; re-select the
     // node and assert every form field was restored.
@@ -354,8 +344,6 @@ test.describe("Workflow node forms", () => {
       restoredPanel.locator('textarea[id$="-instruction"]'),
     ).toHaveValue(instructionText);
     await expect(page.getByLabel("Custom agent name")).toHaveValue("publisher");
-    await expect(page.getByLabel("Add skill data-analysis")).toBeChecked();
-    await expect(page.getByLabel("Add skill frontend-design")).toBeChecked();
   });
 
   test("subworkflow node: pick a template, save, and restore on reload", async ({

@@ -20,7 +20,7 @@ from collections.abc import Iterable, Mapping
 from deerflow.skills.catalog import SkillCatalog
 from deerflow.skills.types import Skill
 from deerflow.workflow.compiler import WorkflowCompileError, parse_subworkflow_spec
-from deerflow.workflow.schema import NodeType, WorkflowDefinition
+from deerflow.workflow.schema import NodeType, WorkflowDefinition, declared_capability_groups
 
 # A graph node is namespaced by reference kind: workflow ids and skill guids
 # live in disjoint namespaces so an id/guid string collision cannot connect them.
@@ -81,7 +81,7 @@ def collect_skill_refs(definition: WorkflowDefinition, catalog: SkillCatalog) ->
     name_to_skill = {s.name: s for s in catalog.skills}
     refs: list[str] = []
     for node in definition.nodes:
-        for name in node.capability_groups:
+        for name in declared_capability_groups(node):
             skill = name_to_skill.get(name)
             if skill is None or skill.skill_id is None:
                 continue

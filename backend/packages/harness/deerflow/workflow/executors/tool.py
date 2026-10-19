@@ -93,6 +93,8 @@ async def exec_http(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
     ``params.method`` (GET/POST/PUT/DELETE/PATCH, default GET),
     ``params.url``, optional ``params.headers``, ``params.json``,
     ``params.params`` (query string), ``params.timeout`` (default 30 s).
+    ``params.trust_env`` optionally overrides ``httpx``'s proxy-environment
+    handling (set ``false`` for a localhost endpoint on a proxied host).
 
     Requires ``params.crash_confirm is True`` because outbound HTTP is
     non-idempotent.
@@ -119,7 +121,9 @@ async def exec_http(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
         merged_headers.setdefault(IDEMPOTENCY_HEADER, str(idempotency_key))
         headers = merged_headers
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
+    trust_env = params.get("trust_env")
+    client_kwargs = {} if trust_env is None else {"trust_env": bool(trust_env)}
+    async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), **client_kwargs) as client:
         response = await client.request(
             method=method,
             url=url,

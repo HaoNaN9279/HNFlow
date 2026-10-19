@@ -108,6 +108,12 @@ class NodeType(StrEnum):
 
     # AI
     AI_LLM_AGENT = "ai:llm_agent"
+    # Authoring-only capability-group wiring (resolved by the compiler, not
+    # executed as runtime nodes).
+    AI_CAPABILITY_GROUP = "ai:capability_group"
+    AI_CAPABILITY_MERGE = "ai:capability_merge"
+    # Reads the reserved final-prompt channel an AI node publishes.
+    AI_PROMPT_PREVIEW = "ai:prompt_preview"
 
     # Local professional software (N5, plan §6.7 / §17)
     APP_LAUNCH = "app:launch"
@@ -233,6 +239,21 @@ class WorkflowDefinition(BaseModel):
 # ── Capability-group resolution ────────────────────────────────────────────────
 
 
+def declared_capability_groups(node: Node) -> list[str]:
+    """Return the group names a node declares for dependency resolution.
+
+    Selector nodes carry their single group in ``params.group``; every other
+    node keeps the historical top-level ``capability_groups`` list.  This is the
+    single helper shared by resolved-group snapshots, validation and the
+    dependency graph, so the new authoring nodes cannot be forgotten in one
+    place while working in another.
+    """
+    if node.type == NodeType.AI_CAPABILITY_GROUP:
+        group = node.params.get("group")
+        return [group] if isinstance(group, str) and group else []
+    return list(node.capability_groups)
+
+
 def collect_resolved_groups(
     definition: WorkflowDefinition,
     catalog: SkillCatalog,
@@ -269,7 +290,7 @@ def collect_resolved_groups(
         raw_entries.append(f"{skill.skill_id}@v{skill.version}")
 
     for node in definition.nodes:
-        for name in node.capability_groups:
+        for name in declared_capability_groups(node):
             _record(name, node.id)
             # §5.5: the inherited packages are dependencies too.  A broken
             # ``extends`` (cycle/unknown base) is reported by
@@ -301,7 +322,7 @@ def validate_capability_groups(
     errors: list[str] = []
     known_names = {s.name for s in catalog.skills}
     for node in definition.nodes:
-        for name in node.capability_groups:
+        for name in declared_capability_groups(node):
             if name not in known_names:
                 errors.append(f"node '{node.id}': capability group '{name}' is not installed")
     return errors

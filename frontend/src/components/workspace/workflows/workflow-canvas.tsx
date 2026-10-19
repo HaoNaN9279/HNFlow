@@ -235,6 +235,7 @@ function CanvasInner() {
 
   return (
     <div ref={wrapperRef} className="min-h-0 min-w-0 flex-1">
+      {/* Middle-button drag pans; left drag remains box selection. */}
       <Canvas
         nodes={nodes}
         edges={edges}
@@ -250,6 +251,7 @@ function CanvasInner() {
         onEdgesDelete={handleEdgesDelete}
         onSelectionChange={handleSelectionChange}
         connectionMode={ConnectionMode.Strict}
+        panOnDrag={[1]}
         nodesDraggable={!readonly}
         nodesConnectable={!readonly}
         elementsSelectable={!readonly}

@@ -1,6 +1,7 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { PlusIcon } from "lucide-react";
 
 import {
   Node,
@@ -9,10 +10,12 @@ import {
   NodeHeader,
   NodeTitle,
 } from "@/components/ai-elements/node";
+import { Button } from "@/components/ui/button";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import { getNodeCatalogEntry } from "@/core/workflows/canvas/node-catalog";
+import { addMergeInput } from "@/core/workflows/canvas/node-form";
 import type { NodeRunState } from "@/core/workflows/run-state";
-import type { PortType } from "@/core/workflows/types";
+import type { Port, PortType } from "@/core/workflows/types";
 import { cn } from "@/lib/utils";
 
 import { useWorkflowEditor } from "./workflow-editor-context";
@@ -29,27 +32,6 @@ const PORT_HANDLE_COLORS: Record<PortType, string> = {
   array: "#db2777",
   record: "#65a30d",
 };
-
-/** Vertical offset of the first port row inside the node (below the header). */
-const PORT_ROW_TOP = 44;
-const PORT_ROW_GAP = 20;
-
-/**
- * Custom React Flow node for workflow steps. Renders the catalog label plus
- * one `Handle` per input (left / target) and output (right / source), each
- * carrying the port name as its handle id so connections round-trip through
- * `flowToDefinition`.
- *
- * Error state comes from the shared editor context: any backend 422 error that
- * references this node id adds `data-error="true"` and a destructive border,
- * which E2E tests assert on.
- *
- * The per-node runtime state (T16) is painted from `runState.nodeStates`:
- * running gets an amber ring, completed a green border, failed the destructive
- * colour. A validation error keeps its own `data-error` attribute; when a node
- * is both invalid and failed the destructive border wins, so the two states
- * never fight visually.
- */
 
 /** Border/ring tint per per-node runtime state (idle keeps the default). */
 function runStateClasses(
@@ -68,14 +50,98 @@ function runStateClasses(
   return undefined;
 }
 
+function formatParamValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (value === undefined) {
+    return "undefined";
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return Object.prototype.toString.call(value);
+  }
+}
+
+/** One port row.  The handle is centered on this row, never offset by a
+ *  hard-coded header height — that offset is what pushed slots outside the
+ *  node when the header/param area grew. */
+function PortRow({
+  port,
+  side,
+  last,
+}: {
+  port: Port;
+  side: "input" | "output";
+  last: boolean;
+}) {
+  return (
+    <div
+      className={cn(
+        "relative flex min-h-6 items-center gap-1.5 text-xs",
+        side === "output" && "justify-end text-right",
+        !last && "mb-1",
+      )}
+    >
+      <Handle
+        type={side === "input" ? "target" : "source"}
+        id={port.name}
+        position={side === "input" ? Position.Left : Position.Right}
+        style={{
+          top: "50%",
+          transform: "translateY(-50%)",
+          backgroundColor: PORT_HANDLE_COLORS[port.type],
+        }}
+      />
+      <span
+        className={cn(
+          "truncate",
+          side === "input" ? "ml-2" : "mr-2",
+          port.required ? "text-foreground" : "text-muted-foreground",
+        )}
+        title={`${port.name}: ${port.type}`}
+      >
+        {port.name}
+      </span>
+      <span className="text-muted-foreground/70 font-mono text-[10px]">
+        {port.type}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Custom React Flow node for workflow steps.
+ *
+ * ComfyUI-style: ports and every `params` entry are visible on the card, not
+ * only in the inspector.  Values scroll inside a bounded body so a long
+ * instruction cannot push the node (or its handles) out of its own box.
+ */
 export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const workflow = data.workflow;
   const entry = getNodeCatalogEntry(workflow.type);
-  const { errors, runState } = useWorkflowEditor();
+  const { errors, runState, readonly, updateNode } = useWorkflowEditor();
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
   const runStateOfNode = runState.nodeStates[id] ?? "idle";
+  const lastCompleted = [...runState.timeline]
+    .reverse()
+    .find((item) => item.nodeId === id && item.status === "completed");
+  const previewText =
+    workflow.type === "ai:prompt_preview" &&
+    typeof lastCompleted?.output?.prompt === "string"
+      ? lastCompleted.output.prompt
+      : null;
+  const paramEntries = Object.entries(workflow.params);
+  const isMerge = workflow.type === "ai:capability_merge";
 
   return (
     <Node
@@ -84,57 +150,101 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
       data-error={hasError ? "true" : undefined}
       data-run-state={runStateOfNode}
       className={cn(
-        "min-w-44",
+        "w-72 max-w-72 min-w-72 gap-0",
         selected && "ring-ring ring-2",
         runStateClasses(runStateOfNode, hasError),
       )}
     >
-      <NodeHeader>
-        <NodeTitle className="text-sm">
-          {entry?.label ?? workflow.type}
-        </NodeTitle>
-        {entry?.description && (
-          <NodeDescription className="line-clamp-1 text-xs">
-            {entry.description}
-          </NodeDescription>
+      <NodeHeader className="flex flex-row items-start justify-between gap-2">
+        <div className="min-w-0">
+          <NodeTitle className="text-sm">
+            {entry?.label ?? workflow.type}
+          </NodeTitle>
+          {entry?.description && (
+            <NodeDescription className="line-clamp-2 text-[11px]">
+              {entry.description}
+            </NodeDescription>
+          )}
+        </div>
+        {isMerge && !readonly && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Add capability group input slot"
+            title="Add input slot"
+            onClick={() => updateNode(id, addMergeInput(workflow))}
+          >
+            <PlusIcon className="size-3.5" />
+          </Button>
         )}
       </NodeHeader>
-      <NodeContent className="flex flex-col gap-1 p-2">
-        {workflow.inputs.map((port, index) => (
-          <div key={port.name} className="relative flex items-center">
-            <Handle
-              type="target"
-              id={port.name}
-              position={Position.Left}
-              style={{
-                top: `${PORT_ROW_TOP + index * PORT_ROW_GAP}px`,
-                backgroundColor: PORT_HANDLE_COLORS[port.type],
-              }}
-            />
-            <span className="text-muted-foreground ml-2.5 text-xs">
-              {port.name}
-            </span>
+      <NodeContent className="flex min-h-0 flex-col gap-2 p-2">
+        <div className="grid grid-cols-2 gap-x-3">
+          <div className="min-w-0">
+            {workflow.inputs.map((port, index) => (
+              <PortRow
+                key={port.name}
+                port={port}
+                side="input"
+                last={index === workflow.inputs.length - 1}
+              />
+            ))}
           </div>
-        ))}
-        {workflow.outputs.map((port, index) => (
-          <div
-            key={port.name}
-            className="relative flex items-center justify-end"
-          >
-            <span className="text-muted-foreground mr-2.5 text-xs">
-              {port.name}
-            </span>
-            <Handle
-              type="source"
-              id={port.name}
-              position={Position.Right}
-              style={{
-                top: `${PORT_ROW_TOP + index * PORT_ROW_GAP}px`,
-                backgroundColor: PORT_HANDLE_COLORS[port.type],
-              }}
-            />
+          <div className="min-w-0">
+            {workflow.outputs.map((port, index) => (
+              <PortRow
+                key={port.name}
+                port={port}
+                side="output"
+                last={index === workflow.outputs.length - 1}
+              />
+            ))}
           </div>
-        ))}
+        </div>
+
+        {previewText !== null && (
+          <div className="flex flex-col gap-1 border-t pt-2">
+            <div className="text-muted-foreground text-[10px] font-medium uppercase">
+              Prompt
+            </div>
+            <pre className="bg-muted/50 max-h-56 overflow-auto rounded p-2 font-mono text-[10px] break-words whitespace-pre-wrap">
+              {previewText || "—"}
+            </pre>
+          </div>
+        )}
+
+        {paramEntries.length > 0 && (
+          <div className="flex flex-col gap-1 border-t pt-2">
+            <div className="text-muted-foreground text-[10px] font-medium uppercase">
+              Params
+            </div>
+            <div className="max-h-44 overflow-auto">
+              {paramEntries.map(([key, value]) => {
+                const text = formatParamValue(value);
+                return (
+                  <div
+                    key={key}
+                    className="grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] gap-2 py-0.5 text-[10px]"
+                  >
+                    <span
+                      className="text-muted-foreground truncate font-mono"
+                      title={key}
+                    >
+                      {key}
+                    </span>
+                    <span
+                      className="break-words whitespace-pre-wrap"
+                      title={text}
+                    >
+                      {text || "—"}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
       </NodeContent>
     </Node>
   );

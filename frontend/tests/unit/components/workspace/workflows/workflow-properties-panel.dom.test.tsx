@@ -8,6 +8,8 @@ rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
       workflows: {
+        collapsePanel: "Collapse panel",
+        expandPanel: "Expand panel",
         properties: {
           title: "Properties",
           paramsTitle: "Parameters",
@@ -69,6 +71,32 @@ describe("WorkflowPropertiesPanel", () => {
       />,
     );
     expect(screen.getByText("No node selected")).toBeTruthy();
+  });
+
+  it("collapses to a rail and expands back", () => {
+    render(
+      <WorkflowPropertiesPanel
+        node={makeNode()}
+        onUpdateNodeParams={rs.fn()}
+        onDeleteNode={rs.fn()}
+      />,
+    );
+
+    const toggle = screen.getByTestId("workflow-properties-toggle");
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByDisplayValue("threshold")).toBeNull();
+    expect(
+      screen.getByTestId("workflow-properties-panel").dataset.collapsed,
+    ).toBe("true");
+
+    fireEvent.click(toggle);
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(screen.getByDisplayValue("threshold")).toBeTruthy();
   });
 
   it("renders the selected node's params as key/value rows", () => {

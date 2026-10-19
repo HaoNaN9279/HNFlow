@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   definitionToFlow,
+  flowToDefinition,
   type PositionsMap,
   type RFEdge,
   type RFNode,
@@ -84,6 +85,8 @@ type WorkflowEditorContextValue = {
    * forms where a params-only write would drop the top-level fields.
    */
   updateNode: (nodeId: string, next: WorkflowNode) => void;
+  /** Current canvas as a definition (unsaved edits included). */
+  currentDefinition: () => WorkflowDefinition;
   deleteNode: (nodeId: string) => void;
   /** Runtime run state for the current workflow (painted on the canvas). */
   runState: WorkflowRunState;
@@ -238,9 +241,36 @@ export function WorkflowEditorProvider({
           node.id === nodeId ? { ...node, data: { workflow: next } } : node,
         ),
       );
+      // Dynamic ports (capability merge) must not leave dangling edges behind.
+      const outputPorts = new Set(next.outputs.map((port) => port.name));
+      const inputPorts = new Set(next.inputs.map((port) => port.name));
+      setEdges((current) =>
+        current.filter((edge) => {
+          if (
+            edge.source === nodeId &&
+            !outputPorts.has(edge.sourceHandle ?? "")
+          ) {
+            return false;
+          }
+          if (
+            edge.target === nodeId &&
+            !inputPorts.has(edge.targetHandle ?? "")
+          ) {
+            return false;
+          }
+          return true;
+        }),
+      );
       markDirty();
     },
-    [markDirty, setNodes],
+    [markDirty, setEdges, setNodes],
+  );
+
+  const currentDefinition = useCallback(
+    () =>
+      flowToDefinition({ nodes, edges }, { def: record.definition, positions })
+        .definition,
+    [edges, nodes, positions, record.definition],
   );
 
   const deleteNode = useCallback(
@@ -370,6 +400,7 @@ export function WorkflowEditorProvider({
       readonly,
       updateNodeParams,
       updateNode,
+      currentDefinition,
       deleteNode,
       runState,
       isRunning,
@@ -399,6 +430,7 @@ export function WorkflowEditorProvider({
       readonly,
       updateNodeParams,
       updateNode,
+      currentDefinition,
       deleteNode,
       runState,
       isRunning,

@@ -218,6 +218,7 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         (NodeType.TOOL_LOG, "Logging executor"),
         # AI
         (NodeType.AI_LLM_AGENT, "LLM agent executor (T6)"),
+        (NodeType.AI_PROMPT_PREVIEW, "Full prompt preview for an AI node"),
         # Local professional software (N5)
         (NodeType.APP_LAUNCH, "Local application launch / attach executor"),
         (NodeType.APP_SCRIPT, "Local application script executor"),

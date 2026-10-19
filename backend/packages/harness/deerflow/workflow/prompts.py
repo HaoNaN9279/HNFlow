@@ -122,7 +122,7 @@ def build_context_layer(include: Sequence[str], inputs: dict[str, Any]) -> str:
     return "<context>\n" + "\n\n".join(parts) + "\n</context>"
 
 
-def build_task_layer(instruction: str | None, inputs: dict[str, Any]) -> str:
+def build_task_layer(instruction: str | None, inputs: dict[str, Any], *, preserve_placeholders: bool = False) -> str:
     """Build the task-layer prompt section by interpolating ``{{port}}``.
 
     Each ``{{name}}`` placeholder is replaced with ``str(inputs[name])``;
@@ -132,6 +132,9 @@ def build_task_layer(instruction: str | None, inputs: dict[str, Any]) -> str:
     Args:
         instruction: The node's instruction template, or ``None``/empty.
         inputs: Runtime input values keyed by port name.
+        preserve_placeholders: Keep an unresolved ``{{name}}`` verbatim instead
+            of replacing it with an empty string.  Used by the static prompt
+            preview, where no runtime inputs exist yet.
 
     Returns:
         The interpolated instruction, or an empty string for a falsy
@@ -141,8 +144,10 @@ def build_task_layer(instruction: str | None, inputs: dict[str, Any]) -> str:
         return ""
 
     def render(match: re.Match[str]) -> str:
-        value = inputs.get(match.group(1).strip())
-        return "" if value is None else str(value)
+        key = match.group(1).strip()
+        if key not in inputs or inputs.get(key) is None:
+            return match.group(0) if preserve_placeholders else ""
+        return str(inputs[key])
 
     return _PLACEHOLDER_PATTERN.sub(render, instruction)
 
@@ -156,6 +161,7 @@ def build_ai_node_buckets(
     user_id: str | None = None,
     agent_skills: list[str] | None = None,
     policy: ContextPolicy | None = None,
+    preserve_placeholders: bool = False,
 ) -> dict[str, str]:
     """Build the named prompt buckets for an AI node, in the fixed N14 §24.3 order.
 
@@ -172,7 +178,7 @@ def build_ai_node_buckets(
     buckets = {
         "identity": build_identity_layer(agent_name, user_id=user_id),
         "capability": build_capability_layer(list(capability_groups), agent_skills=agent_skills),
-        "task": build_task_layer(instruction, inputs),
+        "task": build_task_layer(instruction, inputs, preserve_placeholders=preserve_placeholders),
         "examples": build_examples_layer(policy.examples if policy else ()),
         "context": build_context_layer(policy.include if policy else (), inputs),
     }

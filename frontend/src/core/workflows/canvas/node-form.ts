@@ -35,6 +35,10 @@ export type NodeFormValues = {
   /** `app:*` nodes — `params.app` (required) and `params.script` (app:script only). */
   app?: string;
   script?: string;
+  /** `ai:capability_group` — the selected capability group. */
+  group?: string;
+  /** `ai:prompt_preview` — the AI node whose final prompt is shown. */
+  agent_node?: string;
 };
 
 /** Normalised template subworkflow spec extracted from `params.subworkflow`. */
@@ -160,6 +164,12 @@ export function parseNodeFormValues(node: WorkflowNode): NodeFormValues {
   if (typeof node.params.script === "string") {
     values.script = node.params.script;
   }
+  if (typeof node.params.group === "string") {
+    values.group = node.params.group;
+  }
+  if (typeof node.params.agent_node === "string") {
+    values.agent_node = node.params.agent_node;
+  }
   return values;
 }
 
@@ -216,6 +226,12 @@ export function applyNodeFormValues(
       delete params.script;
     }
   }
+  if (values.group !== undefined) {
+    params.group = values.group;
+  }
+  if (values.agent_node !== undefined) {
+    params.agent_node = values.agent_node;
+  }
   return {
     ...node,
     params,
@@ -236,6 +252,42 @@ export function applyNodeFormValues(
  * them. Without a `node` the declared-port check is skipped and only the
  * non-empty rule applies.
  */
+/** Next unused `group_<n>` input name for a capability-merge node. */
+export function nextMergeInputName(node: WorkflowNode): string {
+  const used = new Set(node.inputs.map((port) => port.name));
+  let index = node.inputs.length + 1;
+  while (used.has(`group_${index}`)) {
+    index += 1;
+  }
+  return `group_${index}`;
+}
+
+/** Add one array input slot to a capability-merge node (immutable). */
+export function addMergeInput(node: WorkflowNode): WorkflowNode {
+  return {
+    ...node,
+    inputs: [
+      ...node.inputs,
+      {
+        name: nextMergeInputName(node),
+        type: "array" as const,
+        required: false,
+      },
+    ],
+  };
+}
+
+/** Remove an input slot from a capability-merge node (immutable). */
+export function removeMergeInput(
+  node: WorkflowNode,
+  portName: string,
+): WorkflowNode {
+  return {
+    ...node,
+    inputs: node.inputs.filter((port) => port.name !== portName),
+  };
+}
+
 export function validateNodeForm(
   values: NodeFormValues,
   node?: Pick<WorkflowNode, "outputs">,

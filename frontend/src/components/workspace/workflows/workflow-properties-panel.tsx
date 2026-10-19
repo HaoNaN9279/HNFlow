@@ -1,6 +1,11 @@
 "use client";
 
-import { PlusIcon, Trash2Icon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -8,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { useI18n } from "@/core/i18n/hooks";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
+import { cn } from "@/lib/utils";
 
 import { WorkflowNodeForm } from "./workflow-node-form";
 import {
@@ -19,8 +25,19 @@ import {
 } from "./workflow-properties-panel-helpers";
 
 /** Params owned by the typed node forms — hidden from the generic editor. */
-const TYPED_NODE_TYPES = new Set(["ai:llm_agent", "nested:subworkflow"]);
-const TYPED_PARAM_KEYS = ["instruction", "subworkflow"] as const;
+const TYPED_NODE_TYPES = new Set([
+  "ai:llm_agent",
+  "ai:capability_group",
+  "ai:capability_merge",
+  "ai:prompt_preview",
+  "nested:subworkflow",
+]);
+const TYPED_PARAM_KEYS = [
+  "instruction",
+  "subworkflow",
+  "group",
+  "agent_node",
+] as const;
 
 type WorkflowPropertiesPanelProps = {
   node: RFNode | null;
@@ -53,6 +70,7 @@ export function WorkflowPropertiesPanel({
   const nodeId = node?.id ?? null;
 
   const [draft, setDraft] = useState<ParamDraftRow[]>([]);
+  const [collapsed, setCollapsed] = useState(false);
   const nextRowIdRef = useRef(0);
 
   // Re-seed the draft only when the selected node changes, so edits in
@@ -69,15 +87,55 @@ export function WorkflowPropertiesPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
 
+  const header = (
+    <div
+      className={cn(
+        "flex items-center gap-2 border-b",
+        collapsed ? "justify-center p-2" : "px-4 py-3",
+      )}
+    >
+      {!collapsed && (
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          {labels.title}
+        </span>
+      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        aria-expanded={!collapsed}
+        aria-label={
+          collapsed ? t.workflows.expandPanel : t.workflows.collapsePanel
+        }
+        title={collapsed ? t.workflows.expandPanel : t.workflows.collapsePanel}
+        onClick={() => setCollapsed((current) => !current)}
+        data-testid="workflow-properties-toggle"
+      >
+        {collapsed ? (
+          <ChevronLeftIcon className="size-4" />
+        ) : (
+          <ChevronRightIcon className="size-4" />
+        )}
+      </Button>
+    </div>
+  );
+
   if (!node || !workflow) {
     return (
-      <aside className="w-72 shrink-0 border-l">
-        <div className="border-b px-4 py-3 text-sm font-medium">
-          {labels.title}
-        </div>
-        <div className="text-muted-foreground p-4 text-sm">
-          {labels.noSelection}
-        </div>
+      <aside
+        className={cn(
+          "flex shrink-0 flex-col border-l",
+          collapsed ? "w-12" : "w-72",
+        )}
+        data-testid="workflow-properties-panel"
+        data-collapsed={collapsed}
+      >
+        {header}
+        {!collapsed && (
+          <div className="text-muted-foreground p-4 text-sm">
+            {labels.noSelection}
+          </div>
+        )}
       </aside>
     );
   }
@@ -130,161 +188,167 @@ export function WorkflowPropertiesPanel({
 
   return (
     <aside
-      className="w-72 shrink-0 overflow-y-auto border-l"
+      className={cn(
+        "flex shrink-0 flex-col border-l",
+        collapsed ? "w-12" : "w-72",
+      )}
       data-testid="workflow-properties-panel"
+      data-collapsed={collapsed}
     >
-      <div className="border-b px-4 py-3 text-sm font-medium">
-        {labels.title}
-      </div>
-      <div className="flex flex-col gap-4 p-4">
-        <div className="flex flex-col gap-1">
-          <div className="text-xs">
-            <span className="text-muted-foreground">
-              {labels.nodeIdLabel}:{" "}
-            </span>
-            <span className="font-mono">{node.id}</span>
-          </div>
-          <div className="text-xs">
-            <span className="text-muted-foreground">
-              {labels.nodeTypeLabel}:{" "}
-            </span>
-            <span className="font-mono">{workflow.type}</span>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <div className="text-xs font-medium">{labels.portsTitle}</div>
-          {workflow.inputs.length > 0 && (
-            <div className="flex flex-col gap-0.5">
-              <div className="text-muted-foreground text-[11px]">
-                {labels.inputs}
+      {header}
+      {!collapsed && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex flex-col gap-4 p-4">
+            <div className="flex flex-col gap-1">
+              <div className="text-xs">
+                <span className="text-muted-foreground">
+                  {labels.nodeIdLabel}:{" "}
+                </span>
+                <span className="font-mono">{node.id}</span>
               </div>
-              {workflow.inputs.map((port) => (
-                <div
-                  key={port.name}
-                  className="text-muted-foreground flex items-center justify-between text-xs"
-                >
-                  <span>{port.name}</span>
-                  <span className="font-mono">{port.type}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {workflow.outputs.length > 0 && (
-            <div className="flex flex-col gap-0.5">
-              <div className="text-muted-foreground text-[11px]">
-                {labels.outputs}
+              <div className="text-xs">
+                <span className="text-muted-foreground">
+                  {labels.nodeTypeLabel}:{" "}
+                </span>
+                <span className="font-mono">{workflow.type}</span>
               </div>
-              {workflow.outputs.map((port) => (
-                <div
-                  key={port.name}
-                  className="text-muted-foreground flex items-center justify-between text-xs"
-                >
-                  <span>{port.name}</span>
-                  <span className="font-mono">{port.type}</span>
-                </div>
-              ))}
             </div>
-          )}
-        </div>
 
-        {onUpdateNode && (
-          <WorkflowNodeForm
-            node={node}
-            readonly={readonly}
-            onChange={(next) => onUpdateNode(node.id, next)}
-          />
-        )}
+            <div className="flex flex-col gap-1">
+              <div className="text-xs font-medium">{labels.portsTitle}</div>
+              {workflow.inputs.length > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-muted-foreground text-[11px]">
+                    {labels.inputs}
+                  </div>
+                  {workflow.inputs.map((port) => (
+                    <div
+                      key={port.name}
+                      className="text-muted-foreground flex items-center justify-between text-xs"
+                    >
+                      <span>{port.name}</span>
+                      <span className="font-mono">{port.type}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {workflow.outputs.length > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  <div className="text-muted-foreground text-[11px]">
+                    {labels.outputs}
+                  </div>
+                  {workflow.outputs.map((port) => (
+                    <div
+                      key={port.name}
+                      className="text-muted-foreground flex items-center justify-between text-xs"
+                    >
+                      <span>{port.name}</span>
+                      <span className="font-mono">{port.type}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
 
-        {/*
+            {onUpdateNode && (
+              <WorkflowNodeForm
+                node={node}
+                readonly={readonly}
+                onChange={(next) => onUpdateNode(node.id, next)}
+              />
+            )}
+
+            {/*
           §25 debugging: an explicit breakpoint toggle. It writes the same
           ``params.breakpoint`` the compiler's gate reads, so the canvas and a
           hand-written definition agree — the generic params editor below can
           still set it, this just makes the intent discoverable (and clears the
           key when switched off instead of leaving `breakpoint: false` behind).
         */}
-        <label
-          className="flex items-center gap-2 text-xs"
-          title={labels.breakpointHint}
-        >
-          <input
-            type="checkbox"
-            checked={workflow.params.breakpoint === true}
-            disabled={readonly}
-            onChange={(event) => {
-              const next = { ...workflow.params };
-              if (event.target.checked) {
-                next.breakpoint = true;
-              } else {
-                delete next.breakpoint;
-              }
-              onUpdateNodeParams(node.id, next);
-            }}
-            aria-label={labels.breakpointLabel}
-            data-testid="workflow-breakpoint-toggle"
-          />
-          <span>{labels.breakpointLabel}</span>
-        </label>
+            <label
+              className="flex items-center gap-2 text-xs"
+              title={labels.breakpointHint}
+            >
+              <input
+                type="checkbox"
+                checked={workflow.params.breakpoint === true}
+                disabled={readonly}
+                onChange={(event) => {
+                  const next = { ...workflow.params };
+                  if (event.target.checked) {
+                    next.breakpoint = true;
+                  } else {
+                    delete next.breakpoint;
+                  }
+                  onUpdateNodeParams(node.id, next);
+                }}
+                aria-label={labels.breakpointLabel}
+                data-testid="workflow-breakpoint-toggle"
+              />
+              <span>{labels.breakpointLabel}</span>
+            </label>
 
-        <div className="flex flex-col gap-2">
-          <div className="text-xs font-medium">{labels.paramsTitle}</div>
-          {draft.map((row, index) => (
-            <div key={row.id} className="flex items-center gap-1">
-              <Input
-                value={row.key}
-                disabled={readonly}
-                aria-label={`${labels.paramKey} ${index + 1}`}
-                onChange={(event) =>
-                  updateRow(index, { key: event.target.value })
-                }
-                onBlur={() => commitRow(index)}
-                className="h-7 w-20 text-xs"
-              />
-              <Input
-                value={row.value}
-                disabled={readonly}
-                aria-label={`${labels.paramValue} ${index + 1}`}
-                onChange={(event) =>
-                  updateRow(index, { value: event.target.value })
-                }
-                onBlur={() => commitRow(index)}
-                className="h-7 min-w-0 flex-1 font-mono text-xs"
-              />
+            <div className="flex flex-col gap-2">
+              <div className="text-xs font-medium">{labels.paramsTitle}</div>
+              {draft.map((row, index) => (
+                <div key={row.id} className="flex items-center gap-1">
+                  <Input
+                    value={row.key}
+                    disabled={readonly}
+                    aria-label={`${labels.paramKey} ${index + 1}`}
+                    onChange={(event) =>
+                      updateRow(index, { key: event.target.value })
+                    }
+                    onBlur={() => commitRow(index)}
+                    className="h-7 w-20 text-xs"
+                  />
+                  <Input
+                    value={row.value}
+                    disabled={readonly}
+                    aria-label={`${labels.paramValue} ${index + 1}`}
+                    onChange={(event) =>
+                      updateRow(index, { value: event.target.value })
+                    }
+                    onBlur={() => commitRow(index)}
+                    className="h-7 min-w-0 flex-1 font-mono text-xs"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    disabled={readonly}
+                    onClick={() => removeRow(index)}
+                    aria-label={`${labels.removeParam} ${row.key || index + 1}`}
+                    title={labels.removeParam}
+                  >
+                    <Trash2Icon className="size-3.5" />
+                  </Button>
+                </div>
+              ))}
               <Button
                 type="button"
-                variant="ghost"
-                size="icon-sm"
+                variant="outline"
+                size="sm"
                 disabled={readonly}
-                onClick={() => removeRow(index)}
-                aria-label={`${labels.removeParam} ${row.key || index + 1}`}
-                title={labels.removeParam}
+                onClick={addRow}
               >
-                <Trash2Icon className="size-3.5" />
+                <PlusIcon className="size-3.5" />
+                {labels.addParam}
               </Button>
             </div>
-          ))}
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={readonly}
-            onClick={addRow}
-          >
-            <PlusIcon className="size-3.5" />
-            {labels.addParam}
-          </Button>
-        </div>
 
-        <Button
-          type="button"
-          variant="destructive"
-          size="sm"
-          disabled={readonly}
-          onClick={() => onDeleteNode(node.id)}
-        >
-          {labels.deleteNode}
-        </Button>
-      </div>
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              disabled={readonly}
+              onClick={() => onDeleteNode(node.id)}
+            >
+              {labels.deleteNode}
+            </Button>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

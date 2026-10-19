@@ -347,6 +347,8 @@ export interface Translations {
     saving: string;
     unsaved: string;
     readonly: string;
+    collapsePanel: string;
+    expandPanel: string;
     templates: {
       label: string;
       hint: string;
@@ -397,6 +399,24 @@ export interface Translations {
         capabilityGroupsPlaceholder: string;
         continuePromptLabel: string;
         continuePromptHint: string;
+      };
+      capabilityGroup: {
+        title: string;
+        groupLabel: string;
+        groupPlaceholder: string;
+        noGroups: string;
+        mergeTitle: string;
+        addInput: string;
+        removeInput: string;
+        inputLabel: string;
+        promptPreviewTitle: string;
+        promptPreviewAgent: string;
+        promptPreviewAgentPlaceholder: string;
+        previewButton: string;
+        previewing: string;
+        previewFailed: string;
+        previewEmpty: string;
+        runtimeOmitted: string;
       };
       subworkflow: {
         title: string;

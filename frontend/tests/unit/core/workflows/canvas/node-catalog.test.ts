@@ -10,9 +10,9 @@ import {
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
 describe("node catalog", () => {
-  test("covers exactly the 29 backend node types", () => {
+  test("covers exactly the 32 backend node types", () => {
     const catalog = getNodeCatalog();
-    expect(catalog).toHaveLength(29);
+    expect(catalog).toHaveLength(32);
     expect(catalog.map((e) => e.type).sort()).toEqual([...NODE_TYPES].sort());
   });
 
@@ -38,7 +38,7 @@ describe("node catalog", () => {
     expect(byCategory("flow")).toBe(9);
     expect(byCategory("data")).toBe(8);
     expect(byCategory("tool")).toBe(5);
-    expect(byCategory("ai")).toBe(1);
+    expect(byCategory("ai")).toBe(4);
     expect(byCategory("app")).toBe(4);
     expect(byCategory("human")).toBe(1);
     expect(byCategory("subworkflow")).toBe(1);
@@ -88,6 +88,7 @@ describe("node catalog", () => {
     const ai = getNodeCatalogEntry("ai:llm_agent")!;
     expect(ai.defaultInputs.map((p) => p.name)).toEqual([
       "in",
+      "capability_groups",
       "template_prompt",
       "continue_prompt",
     ]);
@@ -96,7 +97,12 @@ describe("node catalog", () => {
       type: "data",
       required: true,
     });
-    for (const port of ai.defaultInputs.slice(1)) {
+    expect(ai.defaultInputs[1]).toMatchObject({
+      name: "capability_groups",
+      type: "array",
+      required: false,
+    });
+    for (const port of ai.defaultInputs.slice(2)) {
       expect(port).toMatchObject({ type: "data", required: false });
       expect(typeof port.description).toBe("string");
     }

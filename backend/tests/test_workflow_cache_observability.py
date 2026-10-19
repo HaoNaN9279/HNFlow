@@ -151,7 +151,8 @@ class TestExecLlmAgentTokenUsage:
 
         result = await exec_llm_agent(WorkflowRuntime(), {"instruction": "do {{in}}"}, {"in": "x"})
 
-        assert result == {"out": "ok"}
+        assert result["out"] == "ok"
+        assert result["__workflow_prompt"]
 
     @pytest.mark.asyncio
     async def test_sparse_cache_read_aggregates_to_zero(self, monkeypatch: pytest.MonkeyPatch) -> None:

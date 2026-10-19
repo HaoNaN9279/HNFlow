@@ -158,6 +158,11 @@ class TestAINodeE2E:
 
         # Result written back to the node's output port.
         assert state.get("wf:ai_step:out") == "AI 完成"
+        # The full text prompt is published for ``ai:prompt_preview``.
+        full_prompt = state.get("wf:ai_step:__prompt")
+        assert isinstance(full_prompt, str)
+        assert "publisher" in full_prompt
+        assert "请总结：hello" in full_prompt
 
         # System prompt carries identity + capability; the task turn carries only
         # the task layer.  Sending the full prompt in both places duplicates every
@@ -228,7 +233,8 @@ class TestIdentityLayer:
 
         result = await exec_llm_agent(rt, {"instruction": "执行 {{in}}"}, {"in": "value"})
 
-        assert result == {"out": "ok"}
+        assert result["out"] == "ok"
+        assert result["__workflow_prompt"]
         system_prompt = fake_executor["kwargs"]["config"].system_prompt
         task_prompt = fake_executor["task"]
         assert "通用 AI 助手" in system_prompt

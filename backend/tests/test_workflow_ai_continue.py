@@ -153,7 +153,8 @@ class TestContinueMode:
 
         result = await exec_llm_agent(rt, {"instruction": "首轮 {{in}}", "node_id": "ai_step"}, inputs)
 
-        assert result == {"out": "ok"}
+        assert result["out"] == "ok"
+        assert result["__workflow_prompt"]
         assert len(fake_executor) == 1
         record = fake_executor[0]
         cfg = record["kwargs"]["config"]
@@ -198,7 +199,8 @@ class TestTemplateMode:
 
         result = await exec_llm_agent(rt, {"instruction": "请总结 {{in}}", "node_id": "ai_step"}, inputs)
 
-        assert result == {"out": "ok"}
+        assert result["out"] == "ok"
+        assert result["__workflow_prompt"]
         record = fake_executor[0]
         cfg = record["kwargs"]["config"]
 

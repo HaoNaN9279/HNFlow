@@ -1,5 +1,6 @@
 "use client";
 
+import { ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -60,7 +61,7 @@ function timelineStatusLabel(
 }
 
 /**
- * Right-hand run monitor for the workflow editor. Reads the run state from the
+ * Bottom run monitor for the workflow editor. Reads the run state from the
  * shared editor context and renders the node timeline (started/completed/failed
  * with output or error), the run-level error message and the terminal result.
  * The Run/Stop controls live in the toolbar; this panel is display-only.
@@ -70,6 +71,7 @@ export function WorkflowRunPanel() {
   const { runState } = useWorkflowRun();
   const { definition, workflowId } = useWorkflowEditor();
   const labels = t.workflows.run;
+  const [collapsed, setCollapsed] = useState(false);
 
   const isTerminal =
     runState.status !== "idle" && runState.status !== "running";
@@ -264,328 +266,373 @@ export function WorkflowRunPanel() {
   };
 
   return (
-    <aside
-      className="w-[260px] shrink-0 overflow-y-auto border-l"
+    <section
+      className={cn(
+        "flex w-full shrink-0 flex-col border-t",
+        collapsed ? "h-12" : "h-64",
+      )}
       data-testid="workflow-run-panel"
+      data-collapsed={collapsed}
     >
-      <div className="flex items-center justify-between border-b px-4 py-3">
-        <span className="text-sm font-medium">{labels.panel.title}</span>
-        {runState.status !== "idle" && (
-          <Badge
-            variant="outline"
-            className={RUN_STATUS_BADGE_CLASSES[runState.status]}
-            data-testid="workflow-run-badge"
-            data-status={runState.status}
-          >
-            {labels.runStatus[runState.status]}
-          </Badge>
+      <div
+        className={cn(
+          "flex items-center justify-between gap-2 border-b px-4",
+          collapsed ? "h-12" : "py-3",
         )}
+      >
+        <span className="text-sm font-medium">{labels.panel.title}</span>
+        <div className="flex items-center gap-1.5">
+          {runState.status !== "idle" && (
+            <Badge
+              variant="outline"
+              className={RUN_STATUS_BADGE_CLASSES[runState.status]}
+              data-testid="workflow-run-badge"
+              data-status={runState.status}
+            >
+              {labels.runStatus[runState.status]}
+            </Badge>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed ? t.workflows.expandPanel : t.workflows.collapsePanel
+            }
+            title={
+              collapsed ? t.workflows.expandPanel : t.workflows.collapsePanel
+            }
+            onClick={() => setCollapsed((current) => !current)}
+            data-testid="workflow-run-toggle"
+          >
+            {collapsed ? (
+              <ChevronUpIcon className="size-4" />
+            ) : (
+              <ChevronDownIcon className="size-4" />
+            )}
+          </Button>
+        </div>
       </div>
 
-      {runState.status === "idle" ? (
-        <div className="text-muted-foreground p-4 text-sm">
-          {labels.panel.idleHint}
-        </div>
-      ) : (
-        <div className="flex flex-col gap-4 p-4">
-          {(pauses.length > 0 || tasks.length > 0 || pausesLoadFailed) && (
-            <div
-              className="flex flex-col gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
-              data-testid="workflow-debug-pauses"
-            >
-              <span className="text-xs font-medium">
-                {labels.debugPause.title}
-              </span>
-              <p className="text-muted-foreground text-[11px]">
-                {labels.debugPause.hint}
-              </p>
-              {pausesLoadFailed && (
-                <div className="flex items-center gap-1.5">
-                  <span className="text-destructive text-[11px]">
-                    {labels.debugPause.loadFailed}
-                  </span>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="h-6 px-1.5 text-[11px]"
-                    onClick={() => void loadPauses()}
-                    data-testid="workflow-debug-retry"
-                  >
-                    {labels.debugPause.retry}
-                  </Button>
-                </div>
-              )}
-              {pauses.map((pause) => (
-                <div
-                  key={pause.id}
-                  className="border-muted flex flex-col gap-1 rounded border p-1.5"
-                  data-testid="workflow-debug-pause"
-                  data-pause-id={pause.id}
-                  data-pause-node={pause.nodeId}
-                  data-pause-kind={pause.kind}
-                  data-pause-run={pause.runId}
-                >
-                  <div className="flex items-center justify-between gap-2 text-xs">
-                    <span className="truncate font-mono">{pause.nodeId}</span>
-                    <span className="text-muted-foreground text-[11px]">
-                      {pause.kind === "step"
-                        ? labels.debugPause.step
-                        : labels.debugPause.breakpoint}
-                    </span>
-                  </div>
-                  <span
-                    className="text-muted-foreground truncate font-mono text-[10px]"
-                    title={pause.runId}
-                  >
-                    {labels.debugPause.runHint(pause.runId)}
-                  </span>
-                  {pause.description !== "" && (
-                    <span className="text-muted-foreground text-[11px] break-words">
-                      {pause.description}
-                    </span>
-                  )}
-                  <div className="flex gap-1.5">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-6 px-1.5 text-[11px]"
-                      disabled={pauseBusyId !== null}
-                      onClick={() => void handlePauseAction(pause, "continue")}
-                      data-testid="workflow-debug-continue"
-                      data-pause-id={pause.id}
-                    >
-                      {labels.debugPause.continue}
-                    </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-1.5 text-[11px]"
-                      disabled={pauseBusyId !== null}
-                      onClick={() => void handlePauseAction(pause, "skip")}
-                      data-testid="workflow-debug-skip"
-                      data-pause-id={pause.id}
-                    >
-                      {labels.debugPause.skip}
-                    </Button>
-                  </div>
-                </div>
-              ))}
-              {pauseError != null && (
-                <span
-                  className="text-destructive text-[11px] break-words"
-                  data-testid="workflow-debug-error"
-                >
-                  {pauseError}
-                </span>
-              )}
-              {tasks.map((task) => (
-                <WorkflowHumanTaskForm
-                  key={task.id}
-                  task={task}
-                  onResolved={() => void loadPauses()}
-                />
-              ))}
+      {!collapsed && (
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {runState.status === "idle" ? (
+            <div className="text-muted-foreground p-4 text-sm">
+              {labels.panel.idleHint}
             </div>
-          )}
-
-          {runState.timeline.length > 0 && (
-            <div className="flex flex-col gap-1">
-              <div className="text-xs font-medium">{labels.panel.timeline}</div>
-              {durationReport?.slowest != null && (
+          ) : (
+            <div className="flex flex-col gap-4 p-4">
+              {(pauses.length > 0 || tasks.length > 0 || pausesLoadFailed) && (
                 <div
-                  className="text-muted-foreground text-[11px]"
-                  data-testid="workflow-run-slowest"
-                  data-node={durationReport.slowest.nodeId}
+                  className="flex flex-col gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/5 p-2"
+                  data-testid="workflow-debug-pauses"
                 >
-                  {labels.panel.slowestNode}: {durationReport.slowest.nodeId} ·{" "}
-                  {formatDuration(durationReport.slowest.ms)}
-                </div>
-              )}
-              <ul className="flex flex-col gap-1.5">
-                {runState.timeline.map((entry, index) => {
-                  const statusLabel = timelineStatusLabel(entry.status);
-                  const hasOutput =
-                    entry.output != null &&
-                    Object.keys(entry.output).length > 0;
-                  const duration = durationReport?.durations[entry.nodeId];
-                  // Only the entry that actually finished reports the timing.
-                  const showDuration =
-                    duration != null &&
-                    (entry.status === "completed" || entry.status === "failed");
-                  return (
-                    <li
-                      key={`${entry.nodeId}-${entry.step}-${entry.status}-${index}`}
-                      className="border-muted flex flex-col gap-0.5 rounded-md border p-2"
-                      data-timeline-status={entry.status}
-                      data-timeline-node={entry.nodeId}
+                  <span className="text-xs font-medium">
+                    {labels.debugPause.title}
+                  </span>
+                  <p className="text-muted-foreground text-[11px]">
+                    {labels.debugPause.hint}
+                  </p>
+                  {pausesLoadFailed && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-destructive text-[11px]">
+                        {labels.debugPause.loadFailed}
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-6 px-1.5 text-[11px]"
+                        onClick={() => void loadPauses()}
+                        data-testid="workflow-debug-retry"
+                      >
+                        {labels.debugPause.retry}
+                      </Button>
+                    </div>
+                  )}
+                  {pauses.map((pause) => (
+                    <div
+                      key={pause.id}
+                      className="border-muted flex flex-col gap-1 rounded border p-1.5"
+                      data-testid="workflow-debug-pause"
+                      data-pause-id={pause.id}
+                      data-pause-node={pause.nodeId}
+                      data-pause-kind={pause.kind}
+                      data-pause-run={pause.runId}
                     >
                       <div className="flex items-center justify-between gap-2 text-xs">
                         <span className="truncate font-mono">
-                          {entry.nodeId}
+                          {pause.nodeId}
                         </span>
-                        <span className="flex items-center gap-1">
-                          {showDuration && (
-                            <span
-                              className="text-muted-foreground font-mono text-[11px]"
-                              data-testid="workflow-run-node-duration"
-                              data-node={entry.nodeId}
-                            >
-                              {formatDuration(duration)}
-                            </span>
-                          )}
-                          <span
-                            className={cn(
-                              "rounded-full px-1.5 py-0.5 text-[11px]",
-                              timelineStatusClass(entry.status),
-                            )}
-                          >
-                            {labels.nodeStatus[statusLabel]}
-                          </span>
+                        <span className="text-muted-foreground text-[11px]">
+                          {pause.kind === "step"
+                            ? labels.debugPause.step
+                            : labels.debugPause.breakpoint}
                         </span>
                       </div>
-                      {isTerminal &&
-                        runId != null &&
-                        aiNodeIds.has(entry.nodeId) &&
-                        (continueTarget === entry.nodeId ? (
-                          <div
-                            className="flex flex-col gap-1.5"
-                            data-testid="workflow-run-continue-form"
-                          >
-                            <textarea
-                              className="bg-muted min-h-16 w-full resize-y rounded border p-1.5 font-mono text-[11px]"
-                              value={continuePrompt}
-                              onChange={(event) =>
-                                setContinuePrompt(event.target.value)
-                              }
-                              placeholder={labels.continuePromptPlaceholder}
-                              data-testid="workflow-run-continue-prompt"
-                            />
-                            {continueError != null && (
+                      <span
+                        className="text-muted-foreground truncate font-mono text-[10px]"
+                        title={pause.runId}
+                      >
+                        {labels.debugPause.runHint(pause.runId)}
+                      </span>
+                      {pause.description !== "" && (
+                        <span className="text-muted-foreground text-[11px] break-words">
+                          {pause.description}
+                        </span>
+                      )}
+                      <div className="flex gap-1.5">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-6 px-1.5 text-[11px]"
+                          disabled={pauseBusyId !== null}
+                          onClick={() =>
+                            void handlePauseAction(pause, "continue")
+                          }
+                          data-testid="workflow-debug-continue"
+                          data-pause-id={pause.id}
+                        >
+                          {labels.debugPause.continue}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-6 px-1.5 text-[11px]"
+                          disabled={pauseBusyId !== null}
+                          onClick={() => void handlePauseAction(pause, "skip")}
+                          data-testid="workflow-debug-skip"
+                          data-pause-id={pause.id}
+                        >
+                          {labels.debugPause.skip}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {pauseError != null && (
+                    <span
+                      className="text-destructive text-[11px] break-words"
+                      data-testid="workflow-debug-error"
+                    >
+                      {pauseError}
+                    </span>
+                  )}
+                  {tasks.map((task) => (
+                    <WorkflowHumanTaskForm
+                      key={task.id}
+                      task={task}
+                      onResolved={() => void loadPauses()}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {runState.timeline.length > 0 && (
+                <div className="flex flex-col gap-1">
+                  <div className="text-xs font-medium">
+                    {labels.panel.timeline}
+                  </div>
+                  {durationReport?.slowest != null && (
+                    <div
+                      className="text-muted-foreground text-[11px]"
+                      data-testid="workflow-run-slowest"
+                      data-node={durationReport.slowest.nodeId}
+                    >
+                      {labels.panel.slowestNode}:{" "}
+                      {durationReport.slowest.nodeId} ·{" "}
+                      {formatDuration(durationReport.slowest.ms)}
+                    </div>
+                  )}
+                  <ul className="flex flex-col gap-1.5">
+                    {runState.timeline.map((entry, index) => {
+                      const statusLabel = timelineStatusLabel(entry.status);
+                      const hasOutput =
+                        entry.output != null &&
+                        Object.keys(entry.output).length > 0;
+                      const duration = durationReport?.durations[entry.nodeId];
+                      // Only the entry that actually finished reports the timing.
+                      const showDuration =
+                        duration != null &&
+                        (entry.status === "completed" ||
+                          entry.status === "failed");
+                      return (
+                        <li
+                          key={`${entry.nodeId}-${entry.step}-${entry.status}-${index}`}
+                          className="border-muted flex flex-col gap-0.5 rounded-md border p-2"
+                          data-timeline-status={entry.status}
+                          data-timeline-node={entry.nodeId}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="truncate font-mono">
+                              {entry.nodeId}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              {showDuration && (
+                                <span
+                                  className="text-muted-foreground font-mono text-[11px]"
+                                  data-testid="workflow-run-node-duration"
+                                  data-node={entry.nodeId}
+                                >
+                                  {formatDuration(duration)}
+                                </span>
+                              )}
                               <span
-                                className="text-destructive text-[11px]"
-                                data-testid="workflow-run-continue-error"
+                                className={cn(
+                                  "rounded-full px-1.5 py-0.5 text-[11px]",
+                                  timelineStatusClass(entry.status),
+                                )}
                               >
-                                {continueError}
+                                {labels.nodeStatus[statusLabel]}
                               </span>
-                            )}
-                            <div className="flex gap-1.5">
+                            </span>
+                          </div>
+                          {isTerminal &&
+                            runId != null &&
+                            aiNodeIds.has(entry.nodeId) &&
+                            (continueTarget === entry.nodeId ? (
+                              <div
+                                className="flex flex-col gap-1.5"
+                                data-testid="workflow-run-continue-form"
+                              >
+                                <textarea
+                                  className="bg-muted min-h-16 w-full resize-y rounded border p-1.5 font-mono text-[11px]"
+                                  value={continuePrompt}
+                                  onChange={(event) =>
+                                    setContinuePrompt(event.target.value)
+                                  }
+                                  placeholder={labels.continuePromptPlaceholder}
+                                  data-testid="workflow-run-continue-prompt"
+                                />
+                                {continueError != null && (
+                                  <span
+                                    className="text-destructive text-[11px]"
+                                    data-testid="workflow-run-continue-error"
+                                  >
+                                    {continueError}
+                                  </span>
+                                )}
+                                <div className="flex gap-1.5">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-6 px-1.5 text-[11px]"
+                                    disabled={
+                                      continueSubmitting ||
+                                      continuePrompt.trim() === ""
+                                    }
+                                    onClick={() => handleContinue(entry.nodeId)}
+                                    data-testid="workflow-run-continue-submit"
+                                  >
+                                    {labels.continuePromptSubmit}
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-1.5 text-[11px]"
+                                    disabled={continueSubmitting}
+                                    onClick={() => {
+                                      setContinueTarget(null);
+                                      setContinuePrompt("");
+                                      setContinueError(null);
+                                    }}
+                                  >
+                                    {labels.continueCancel}
+                                  </Button>
+                                </div>
+                              </div>
+                            ) : (
                               <Button
                                 type="button"
                                 size="sm"
                                 variant="outline"
                                 className="h-6 px-1.5 text-[11px]"
-                                disabled={
-                                  continueSubmitting ||
-                                  continuePrompt.trim() === ""
-                                }
-                                onClick={() => handleContinue(entry.nodeId)}
-                                data-testid="workflow-run-continue-submit"
-                              >
-                                {labels.continuePromptSubmit}
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-6 px-1.5 text-[11px]"
-                                disabled={continueSubmitting}
                                 onClick={() => {
-                                  setContinueTarget(null);
+                                  setContinueTarget(entry.nodeId);
                                   setContinuePrompt("");
                                   setContinueError(null);
                                 }}
+                                data-testid="workflow-run-continue"
+                                data-continue-node={entry.nodeId}
                               >
-                                {labels.continueCancel}
+                                {labels.continueSession}
                               </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            className="h-6 px-1.5 text-[11px]"
-                            onClick={() => {
-                              setContinueTarget(entry.nodeId);
-                              setContinuePrompt("");
-                              setContinueError(null);
-                            }}
-                            data-testid="workflow-run-continue"
-                            data-continue-node={entry.nodeId}
-                          >
-                            {labels.continueSession}
-                          </Button>
-                        ))}
-                      {isTerminal && runId != null && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          className="h-6 self-start px-1.5 text-[11px]"
-                          disabled={rewindBusyNode !== null}
-                          title={labels.rewindHint}
-                          onClick={() => void handleRewind(entry.nodeId)}
-                          data-testid="workflow-run-rewind"
-                          data-rewind-node={entry.nodeId}
-                        >
-                          {labels.rewind}
-                        </Button>
-                      )}
-                      {entry.status === "completed" &&
-                        (hasOutput ? (
-                          <details className="text-muted-foreground text-xs">
-                            <summary className="cursor-pointer">
-                              {labels.panel.output}
-                            </summary>
-                            <pre className="bg-muted mt-1 max-h-40 overflow-auto rounded p-1.5 font-mono text-[11px]">
-                              {JSON.stringify(entry.output, null, 2)}
-                            </pre>
-                          </details>
-                        ) : (
-                          <span className="text-muted-foreground text-[11px]">
-                            {labels.panel.noOutput}
-                          </span>
-                        ))}
-                      {entry.error != null && entry.error !== "" && (
-                        <span className="text-destructive text-[11px]">
-                          {entry.error}
-                        </span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          )}
+                            ))}
+                          {isTerminal && runId != null && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-6 self-start px-1.5 text-[11px]"
+                              disabled={rewindBusyNode !== null}
+                              title={labels.rewindHint}
+                              onClick={() => void handleRewind(entry.nodeId)}
+                              data-testid="workflow-run-rewind"
+                              data-rewind-node={entry.nodeId}
+                            >
+                              {labels.rewind}
+                            </Button>
+                          )}
+                          {entry.status === "completed" &&
+                            (hasOutput ? (
+                              <details className="text-muted-foreground text-xs">
+                                <summary className="cursor-pointer">
+                                  {labels.panel.output}
+                                </summary>
+                                <pre className="bg-muted mt-1 max-h-40 overflow-auto rounded p-1.5 font-mono text-[11px]">
+                                  {JSON.stringify(entry.output, null, 2)}
+                                </pre>
+                              </details>
+                            ) : (
+                              <span className="text-muted-foreground text-[11px]">
+                                {labels.panel.noOutput}
+                              </span>
+                            ))}
+                          {entry.error != null && entry.error !== "" && (
+                            <span className="text-destructive text-[11px]">
+                              {entry.error}
+                            </span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
 
-          {runState.errorMessage != null && (
-            <div
-              className="bg-destructive/10 text-destructive border-destructive/30 flex flex-col gap-0.5 rounded-md border p-2 text-xs"
-              data-testid="workflow-run-error"
-            >
-              <span className="font-medium">{labels.panel.errorDetail}</span>
-              <p className="break-words">{runState.errorMessage}</p>
-            </div>
-          )}
+              {runState.errorMessage != null && (
+                <div
+                  className="bg-destructive/10 text-destructive border-destructive/30 flex flex-col gap-0.5 rounded-md border p-2 text-xs"
+                  data-testid="workflow-run-error"
+                >
+                  <span className="font-medium">
+                    {labels.panel.errorDetail}
+                  </span>
+                  <p className="break-words">{runState.errorMessage}</p>
+                </div>
+              )}
 
-          {isTerminal && (
-            <div
-              className="flex items-center justify-between gap-2 text-sm"
-              data-testid="workflow-run-terminal"
-            >
-              <span className="text-muted-foreground text-xs">
-                {labels.panel.terminalStatus}
-              </span>
-              <span className="font-medium">
-                {labels.runStatus[runState.status]}
-              </span>
+              {isTerminal && (
+                <div
+                  className="flex items-center justify-between gap-2 text-sm"
+                  data-testid="workflow-run-terminal"
+                >
+                  <span className="text-muted-foreground text-xs">
+                    {labels.panel.terminalStatus}
+                  </span>
+                  <span className="font-medium">
+                    {labels.runStatus[runState.status]}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
-    </aside>
+    </section>
   );
 }

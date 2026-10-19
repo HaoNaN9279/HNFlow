@@ -483,7 +483,8 @@ class TestExecutorContinueContext:
 
         result = await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x"})
 
-        assert result == {"out": "ok"}
+        assert result["out"] == "ok"
+        assert result["__workflow_prompt"]
         record = fake_executor[0]
         assert record["kwargs"]["config"].checkpointer is True
         # Cross-run continue: the checkpoint thread is derived from the ORIGINAL

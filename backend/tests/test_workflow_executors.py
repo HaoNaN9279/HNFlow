@@ -529,7 +529,7 @@ class TestAINodeCompiled:
 
 
 class TestRegistry:
-    """ExecutorRegistry: 15 types registered, duplicate rejects, build_context works."""
+    """ExecutorRegistry: 25 types registered, duplicate rejects, build_context works."""
 
     # All 15 NodeType values that require runtime executors (excluding flow:start,
     # flow:end, flow:loop, flow:parallel — handled natively by compiler).
@@ -553,6 +553,7 @@ class TestRegistry:
             NodeType.TOOL_LOG,
             NodeType.TOOL_INVOKE,
             NodeType.AI_LLM_AGENT,
+            NodeType.AI_PROMPT_PREVIEW,
             NodeType.APP_LAUNCH,
             NodeType.APP_SCRIPT,
             NodeType.APP_WAIT,
@@ -568,9 +569,9 @@ class TestRegistry:
         registered = set(reg.keys())
         assert registered == self._EXPECTED_EXECUTOR_TYPES
 
-    def test_registry_length_is_24(self) -> None:
+    def test_registry_length_is_25(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 24
+        assert len(reg) == 25
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""

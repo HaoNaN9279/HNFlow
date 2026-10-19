@@ -32,7 +32,7 @@ from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
 from deerflow.skills.catalog import SkillCatalog
-from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups
+from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups, declared_capability_groups
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
     logic duplicated here so the harness layer never imports ``app.*``.
     """
     result = dict(metadata)
-    if not any(node.capability_groups for node in definition.nodes):
+    if not any(declared_capability_groups(node) for node in definition.nodes):
         result["lockfile"] = build_lockfile(definition, result)
         return result
 

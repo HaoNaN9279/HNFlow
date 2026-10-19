@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -15,10 +14,13 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { checkAgentName } from "@/core/agents/api";
 import { useI18n } from "@/core/i18n/hooks";
+import { previewWorkflowPrompt } from "@/core/workflows/api";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import {
+  addMergeInput,
   applyNodeFormValues,
   parseNodeFormValues,
+  removeMergeInput,
   validateNodeForm,
   type NodeFormValues,
 } from "@/core/workflows/canvas/node-form";
@@ -29,11 +31,14 @@ import {
   useWorkflowTemplateOptions,
 } from "@/core/workflows/canvas/use-node-form-options";
 
+import { useWorkflowEditor } from "./workflow-editor-context";
+
 /** Sentinel select values for the agent picker (real names are used verbatim). */
 const AGENT_NONE_VALUE = "__none__";
 const AGENT_CUSTOM_VALUE = "__custom__";
 const CUSTOM_AGENT_LABEL = "Custom agent...";
-const NO_SKILLS_LABEL = "No skills available";
+const CAPABILITY_NONE_VALUE = "__none__";
+const PROMPT_PREVIEW_NONE_VALUE = "__none__";
 
 /** Sentinel select value meaning "this subworkflow port is not mapped". */
 const UNMAPPED_VALUE = "__unmapped__";
@@ -45,9 +50,10 @@ type WorkflowNodeFormProps = {
 };
 
 /**
- * Typed edit form for workflow nodes. Renders a dedicated form for
- * `ai:llm_agent` and `nested:subworkflow`; every other node type returns null
- * so the properties panel keeps its generic key/value editor.
+ * Typed edit form for workflow nodes. Renders dedicated forms for the AI
+ * agent, capability selector/merge, prompt preview, subworkflow and app node
+ * families; every other node type returns null so the properties panel keeps
+ * its generic key/value editor.
  *
  * Commits are local-draft + commit-on-blur/select, matching the properties
  * panel: edits update local state immediately and `onChange` fires with a new
@@ -65,6 +71,29 @@ export function WorkflowNodeForm({
   }
   if (workflow.type === "ai:llm_agent") {
     return <AiAgentForm node={node} readonly={readonly} onChange={onChange} />;
+  }
+  if (workflow.type === "ai:capability_group") {
+    return (
+      <CapabilityGroupForm
+        node={node}
+        readonly={readonly}
+        onChange={onChange}
+      />
+    );
+  }
+  if (workflow.type === "ai:capability_merge") {
+    return (
+      <CapabilityMergeForm
+        node={node}
+        readonly={readonly}
+        onChange={onChange}
+      />
+    );
+  }
+  if (workflow.type === "ai:prompt_preview") {
+    return (
+      <PromptPreviewForm node={node} readonly={readonly} onChange={onChange} />
+    );
   }
   if (workflow.type === "nested:subworkflow") {
     return (
@@ -99,9 +128,6 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
 
   const agentQuery = useAgentOptions();
   const agentNames = (agentQuery.data ?? []).map((agent) => agent.name);
-  const skillQuery = useSkillOptions();
-  const skills = skillQuery.data ?? [];
-  const selectedSkills = values.capability_groups ?? [];
 
   const errors = validateNodeForm(values);
 
@@ -153,15 +179,6 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           // Backend unavailable — skip the existence hint.
         });
     }
-  };
-
-  const handleToggleSkill = (skill: string) => {
-    const nextSkills = selectedSkills.includes(skill)
-      ? selectedSkills.filter((item) => item !== skill)
-      : [...selectedSkills, skill];
-    const next = { ...values, capability_groups: nextSkills };
-    setValues(next);
-    commit(next);
   };
 
   return (
@@ -264,50 +281,252 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           </p>
         )}
       </div>
+    </div>
+  );
+}
 
+function CapabilityGroupForm({
+  node,
+  readonly,
+  onChange,
+}: WorkflowNodeFormProps) {
+  const { t } = useI18n();
+  const labels = t.workflows.properties;
+  const workflow = node.data.workflow;
+  const [values, setValues] = useState<NodeFormValues>(() =>
+    parseNodeFormValues(workflow),
+  );
+  useEffect(() => {
+    setValues(parseNodeFormValues(node.data.workflow));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id]);
+
+  const skillQuery = useSkillOptions();
+  const skills = skillQuery.data ?? [];
+  const selected = values.group ?? "";
+  const selectValue = selected || CAPABILITY_NONE_VALUE;
+
+  const commit = (next: NodeFormValues) => {
+    setValues(next);
+    onChange(applyNodeFormValues(node.data.workflow, next));
+  };
+
+  return (
+    <div className="flex flex-col gap-3 border-b pb-4">
+      <div className="text-xs font-medium">{labels.capabilityGroup.title}</div>
       <div className="flex flex-col gap-1">
         <label className="text-xs font-medium">
-          {labels.ai.capabilityGroupsLabel}
+          {labels.capabilityGroup.groupLabel}
         </label>
-        {selectedSkills.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {selectedSkills.map((skill) => (
-              <Badge key={skill} variant="secondary">
-                {skill}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  disabled={readonly}
-                  onClick={() => handleToggleSkill(skill)}
-                  aria-label={`Remove skill ${skill}`}
-                  className="size-3.5 rounded-full"
-                >
-                  ×
-                </Button>
-              </Badge>
-            ))}
-          </div>
-        )}
-        {skills.length > 0 ? (
-          <div className="flex flex-col gap-1">
+        <Select
+          value={selectValue}
+          disabled={readonly}
+          onValueChange={(value) =>
+            commit({
+              ...values,
+              group: value === CAPABILITY_NONE_VALUE ? "" : value,
+            })
+          }
+        >
+          <SelectTrigger
+            aria-label={labels.capabilityGroup.groupLabel}
+            className="h-7 text-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={CAPABILITY_NONE_VALUE}>
+              {labels.capabilityGroup.groupPlaceholder}
+            </SelectItem>
+            {selected && !skills.includes(selected) && (
+              <SelectItem value={selected}>{selected}</SelectItem>
+            )}
             {skills.map((skill) => (
-              <label key={skill} className="flex items-center gap-1.5 text-xs">
-                <input
-                  type="checkbox"
-                  checked={selectedSkills.includes(skill)}
-                  disabled={readonly}
-                  onChange={() => handleToggleSkill(skill)}
-                  aria-label={`Add skill ${skill}`}
-                />
+              <SelectItem key={skill} value={skill}>
                 {skill}
-              </label>
+              </SelectItem>
             ))}
-          </div>
-        ) : (
-          <p className="text-muted-foreground text-xs">{NO_SKILLS_LABEL}</p>
+          </SelectContent>
+        </Select>
+        {skills.length === 0 && (
+          <p className="text-muted-foreground text-[11px]">
+            {labels.capabilityGroup.noGroups}
+          </p>
         )}
       </div>
+    </div>
+  );
+}
+
+function CapabilityMergeForm({
+  node,
+  readonly,
+  onChange,
+}: WorkflowNodeFormProps) {
+  const { t } = useI18n();
+  const labels = t.workflows.properties;
+  const workflow = node.data.workflow;
+
+  return (
+    <div className="flex flex-col gap-2 border-b pb-4">
+      <div className="text-xs font-medium">
+        {labels.capabilityGroup.mergeTitle}
+      </div>
+      {workflow.inputs.map((port, index) => (
+        <div key={port.name} className="flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground w-6">{index + 1}</span>
+          <span className="flex-1 font-mono">{port.name}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            disabled={readonly || workflow.inputs.length <= 1}
+            aria-label={`${labels.capabilityGroup.removeInput} ${port.name}`}
+            onClick={() => onChange(removeMergeInput(workflow, port.name))}
+          >
+            ×
+          </Button>
+        </div>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={readonly}
+        onClick={() => onChange(addMergeInput(workflow))}
+      >
+        {labels.capabilityGroup.addInput}
+      </Button>
+      <p className="text-muted-foreground text-[11px]">
+        {labels.capabilityGroup.inputLabel}: {workflow.inputs.length}
+      </p>
+    </div>
+  );
+}
+
+function PromptPreviewForm({
+  node,
+  readonly,
+  onChange,
+}: WorkflowNodeFormProps) {
+  const { t } = useI18n();
+  const labels = t.workflows.properties;
+  const workflow = node.data.workflow;
+  const { workflowId, nodes, currentDefinition } = useWorkflowEditor();
+  const [values, setValues] = useState<NodeFormValues>(() =>
+    parseNodeFormValues(workflow),
+  );
+  const [preview, setPreview] = useState<string | null>(null);
+  const [omitted, setOmitted] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setValues(parseNodeFormValues(node.data.workflow));
+    setPreview(null);
+    setOmitted([]);
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [node.id]);
+
+  const aiNodes = nodes
+    .map((item) => item.data?.workflow)
+    .filter((item): item is WorkflowNode => item?.type === "ai:llm_agent");
+  const selected = values.agent_node ?? "";
+  const selectValue = selected || PROMPT_PREVIEW_NONE_VALUE;
+
+  const commit = (next: NodeFormValues) => {
+    setValues(next);
+    onChange(applyNodeFormValues(node.data.workflow, next));
+  };
+
+  const runPreview = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await previewWorkflowPrompt(workflowId, {
+        node_id: node.id,
+        definition: currentDefinition(),
+      });
+      setPreview(result.prompt);
+      setOmitted(result.omitted_runtime_blocks);
+    } catch (previewError) {
+      setError(
+        previewError instanceof Error
+          ? previewError.message
+          : String(previewError),
+      );
+      setPreview(null);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-3 border-b pb-4">
+      <div className="text-xs font-medium">
+        {labels.capabilityGroup.promptPreviewTitle}
+      </div>
+      <div className="flex flex-col gap-1">
+        <label className="text-xs font-medium">
+          {labels.capabilityGroup.promptPreviewAgent}
+        </label>
+        <Select
+          value={selectValue}
+          disabled={readonly}
+          onValueChange={(value) =>
+            commit({
+              ...values,
+              agent_node: value === PROMPT_PREVIEW_NONE_VALUE ? "" : value,
+            })
+          }
+        >
+          <SelectTrigger
+            aria-label={labels.capabilityGroup.promptPreviewAgent}
+            className="h-7 text-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={PROMPT_PREVIEW_NONE_VALUE}>
+              {labels.capabilityGroup.promptPreviewAgentPlaceholder}
+            </SelectItem>
+            {aiNodes.map((aiNode) => (
+              <SelectItem key={aiNode.id} value={aiNode.id}>
+                {aiNode.id}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Button
+        type="button"
+        size="sm"
+        disabled={readonly || loading}
+        onClick={() => void runPreview()}
+      >
+        {loading
+          ? labels.capabilityGroup.previewing
+          : labels.capabilityGroup.previewButton}
+      </Button>
+      {error && (
+        <p className="text-destructive text-xs" role="alert">
+          {labels.capabilityGroup.previewFailed}: {error}
+        </p>
+      )}
+      {preview !== null && (
+        <div className="flex flex-col gap-1">
+          {omitted.length > 0 && (
+            <p className="text-muted-foreground text-[11px]">
+              {labels.capabilityGroup.runtimeOmitted}
+            </p>
+          )}
+          <pre className="bg-muted/50 max-h-72 overflow-auto rounded p-2 font-mono text-[10px] break-words whitespace-pre-wrap">
+            {preview || labels.capabilityGroup.previewEmpty}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

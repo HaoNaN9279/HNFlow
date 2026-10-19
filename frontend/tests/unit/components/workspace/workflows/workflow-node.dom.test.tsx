@@ -6,6 +6,7 @@ import {
   waitFor,
   type RenderResult,
 } from "@testing-library/react";
+import { ReactFlowProvider } from "@xyflow/react";
 import { useEffect } from "react";
 
 import {
@@ -129,12 +130,14 @@ afterEach(() => {
 
 function renderNodes(nodes: RFNode[]): RenderResult {
   return render(
-    <WorkflowEditorProvider record={makeRecord()}>
-      <EditorBridge />
-      {nodes.map((node) => (
-        <WorkflowNode key={node.id} {...nodeProps(node)} />
-      ))}
-    </WorkflowEditorProvider>,
+    <ReactFlowProvider>
+      <WorkflowEditorProvider record={makeRecord()}>
+        <EditorBridge />
+        {nodes.map((node) => (
+          <WorkflowNode key={node.id} {...nodeProps(node)} />
+        ))}
+      </WorkflowEditorProvider>
+    </ReactFlowProvider>,
   );
 }
 
@@ -144,6 +147,28 @@ function nodeCard(container: HTMLElement, type: string): HTMLElement {
   expect(element).toBeTruthy();
   return element as HTMLElement;
 }
+
+describe("WorkflowNode card content", () => {
+  it("renders every param and keeps handles vertically inside their port rows", () => {
+    const node = makeNode("n-params", "data:assign");
+    node.data.workflow.inputs = [{ name: "in", type: "data" }];
+    node.data.workflow.outputs = [{ name: "out", type: "data" }];
+    node.data.workflow.params = { value: "hello", tempo: 120 };
+    const { container } = renderNodes([node]);
+    const card = nodeCard(container, "data:assign");
+
+    expect(card.textContent).toContain("value");
+    expect(card.textContent).toContain("hello");
+    expect(card.textContent).toContain("tempo");
+    expect(card.textContent).toContain("120");
+
+    const handles = card.querySelectorAll<HTMLElement>(".react-flow__handle");
+    expect(handles).toHaveLength(2);
+    for (const handle of handles) {
+      expect(handle.style.top).toBe("50%");
+    }
+  });
+});
 
 describe("WorkflowNode run-state painting", () => {
   it("renders data-run-state idle without a run tint", () => {

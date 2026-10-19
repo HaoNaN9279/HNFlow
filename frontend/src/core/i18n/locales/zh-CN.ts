@@ -421,6 +421,8 @@ export const zhCN: Translations = {
     saving: "正在保存...",
     unsaved: "未保存",
     readonly: "只读",
+    collapsePanel: "收起面板",
+    expandPanel: "展开面板",
     templates: {
       label: "模板",
       hint: "把协作模板骨架插入画布",
@@ -429,7 +431,7 @@ export const zhCN: Translations = {
       loadFailed: "加载模板失败",
     },
     canvas: {
-      paletteTitle: "物料面板",
+      paletteTitle: "节点目录",
       searchPlaceholder: "搜索节点...",
       fitView: "适应视图",
       zoomIn: "放大",
@@ -473,6 +475,24 @@ export const zhCN: Translations = {
         continuePromptLabel: "继续提示词",
         continuePromptHint:
           "在画布上将上游值连入 continue_prompt 输入端口，即可用新提示词继续该智能体的会话。",
+      },
+      capabilityGroup: {
+        title: "能力组",
+        groupLabel: "能力组",
+        groupPlaceholder: "选择能力组...",
+        noGroups: "没有已安装的能力组",
+        mergeTitle: "能力组合并",
+        addInput: "添加输入槽",
+        removeInput: "移除输入槽",
+        inputLabel: "输入槽",
+        promptPreviewTitle: "Prompt 预览",
+        promptPreviewAgent: "LLM Agent",
+        promptPreviewAgentPlaceholder: "选择 LLM Agent...",
+        previewButton: "预览 Prompt",
+        previewing: "正在生成预览...",
+        previewFailed: "Prompt 预览失败",
+        previewEmpty: "未生成 Prompt",
+        runtimeOmitted: "静态预览：不包含运行时记忆与知识检索内容。",
       },
       subworkflow: {
         title: "子工作流",

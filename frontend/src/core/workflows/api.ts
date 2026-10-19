@@ -89,6 +89,43 @@ export async function fetchWorkflowTemplates(): Promise<WorkflowTemplate[]> {
   }));
 }
 
+export type WorkflowPromptPreview = {
+  node_id: string;
+  prompt: string;
+  system_prompt: string;
+  task_prompt: string;
+  capability_groups: string[];
+  omitted_runtime_blocks: string[];
+};
+
+/**
+ * Ask the backend to assemble an AI node's static text prompt.
+ *
+ * The current definition is sent so unsaved canvas edits are reflected.  No
+ * model/tool call happens; runtime-only memory/retrieval blocks are omitted and
+ * reported by the response.
+ */
+export async function previewWorkflowPrompt(
+  workflowId: string,
+  body: { node_id: string; definition?: WorkflowDefinition },
+): Promise<WorkflowPromptPreview> {
+  const response = await fetch(
+    workflowsUrl(`/${encodeURIComponent(workflowId)}/prompt-preview`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+  if (!response.ok) {
+    await throwWorkflowApiError(
+      response,
+      `Failed to preview workflow prompt: ${response.statusText}`,
+    );
+  }
+  return response.json() as Promise<WorkflowPromptPreview>;
+}
+
 /**
  * Read a workflow run's checkpoint channel values (N14x timing readout).
  *
