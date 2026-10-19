@@ -52,8 +52,10 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
     Mirrors ``app.gateway.routers.workflow_routes._resolve_workflow_metadata`` —
     logic duplicated here so the harness layer never imports ``app.*``.
     """
+    result = dict(metadata)
     if not any(node.capability_groups for node in definition.nodes):
-        return metadata
+        result["lockfile"] = build_lockfile(definition, result)
+        return result
 
     try:
         from deerflow.skills.storage import get_or_new_skill_storage
@@ -62,12 +64,12 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
         skills = storage.load_skills(enabled_only=False)
         catalog = SkillCatalog(skills=tuple(skills))
         resolved = collect_resolved_groups(definition, catalog)
-        result = dict(metadata)
         result["resolved_groups"] = resolved if resolved else None
-        return result
     except Exception as e:  # noqa: BLE001 - fail-open by design
         logger.warning("Failed to resolve workflow capability groups: %s", e)
-        return metadata
+
+    result["lockfile"] = build_lockfile(definition, result)
+    return result
 
 
 def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, Any]) -> dict[str, Any]:
@@ -101,9 +103,7 @@ def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, 
 
 def _resolve_metadata_with_lockfile(definition: WorkflowDefinition) -> dict[str, Any]:
     """Resolve capability groups and attach a frozen lockfile to the metadata dict."""
-    metadata = _resolve_workflow_metadata(definition, definition.metadata.model_dump(exclude_none=True))
-    metadata["lockfile"] = build_lockfile(definition, metadata)
-    return metadata
+    return _resolve_workflow_metadata(definition, definition.metadata.model_dump(exclude_none=True))
 
 
 async def get_workflow_definition(user_id: str, definition_id: str) -> dict[str, Any] | None:
