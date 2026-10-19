@@ -93,6 +93,7 @@ def build_workflow_runtime_context(
     origin_run_id: str | None = None,
     debug_step: bool = False,
     tool_gateway: Any | None = None,
+    agent_adapter: Any | None = None,
     memory_store: Any | None = None,
     knowledge_store: Any | None = None,
     notifier: Any | None = None,
@@ -145,6 +146,13 @@ def build_workflow_runtime_context(
         )
     if tool_gateway is not None:
         context["tool_gateway"] = tool_gateway
+
+    if agent_adapter is None:
+        agent_adapter = getattr(run_ctx, "agent_adapter", None)
+    if agent_adapter is not None:
+        from deerflow.workflow.agent_port import AGENT_ADAPTER_CONTEXT_KEY
+
+        context[AGENT_ADAPTER_CONTEXT_KEY] = agent_adapter
 
     if memory_store is not None:
         from deerflow.workflow.memory import MEMORY_STORE_CONTEXT_KEY

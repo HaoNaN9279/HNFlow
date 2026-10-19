@@ -14,6 +14,7 @@ from typing import Any
 
 from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
+from deerflow.workflow.agent_port import get_agent_adapter
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.knowledge import (
@@ -83,13 +84,15 @@ def _check_subagent_completed(result: Any, node_id: Any) -> None:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent execution failed: {error_detail}")
 
 
-async def _run_structured_output(executor: Any, task_prompt: str, schema: dict[str, Any], node_id: Any) -> tuple[Any, dict[str, Any]]:
+async def _run_structured_output(adapter: Any, request: Any, task_prompt: str, schema: dict[str, Any], node_id: Any) -> tuple[Any, dict[str, Any]]:
     """Run the node and coerce its output into ``schema`` (N14 §24.4).
 
-    Bounded repair loop: a parse/validation failure re-runs the sub-agent with
-    the error appended, up to ``schema['max_repairs']`` times; exhausting it
-    fails the node with the last error.
+    Bounded repair loop: a parse/validation failure re-runs the agent with the
+    error appended, up to ``schema['max_repairs']`` times; exhausting it fails
+    the node with the last error.
     """
+    from dataclasses import replace
+
     from deerflow.workflow.structured_output import StructuredOutputError, extract_json_object, validate_payload
 
     last_error: str | None = None
@@ -97,7 +100,7 @@ async def _run_structured_output(executor: Any, task_prompt: str, schema: dict[s
         prompt = task_prompt
         if attempt > 0:
             prompt = f"{task_prompt}\n\nYour previous response was invalid: {last_error}\nRespond again with a single JSON object that matches the schema."
-        result = await executor._aexecute(prompt)
+        result = await adapter.execute(replace(request, task=prompt))
         _check_subagent_completed(result, node_id)
         try:
             fields = validate_payload(extract_json_object(getattr(result, "result", None)), schema)
@@ -356,39 +359,18 @@ async def exec_llm_agent(
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
 
-    # Deferred imports: ``SubagentExecutor`` lives behind a lazy package export,
-    # and importing it at module scope would pull the agent graph into the
-    # workflow compiler's import path (a circular import).  The lazy export is
-    # also the seam tests monkeypatch.
-    from deerflow.subagents import SubagentExecutor
-    from deerflow.subagents.config import SubagentConfig
-
     # C1: assemble the node's real tool set from its capability groups' union of
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
     node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
 
-    # N14 §24.5: an explicit autonomy budget pins this node's hard limits
-    # (max_turns -> recursion_limit, max_tokens -> TokenBudgetConfig).  The
-    # default ``template`` mode resolves to the SubagentConfig defaults, so a
-    # node without ``params.autonomy`` behaves exactly as before.
+    # N14 §24.5: an explicit autonomy budget pins this node's hard limits.
     autonomy_max_turns, autonomy_token_budget = _autonomy_settings(params)
-
-    subagent_config = SubagentConfig(
-        name=f"ai:{node_id}" if node_id else "ai:node",
-        description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
-        system_prompt=system_prompt,
-        tools=None,
-        disallowed_tools=["ask_clarification", "present_files"],
-        checkpointer=is_continue,
-        allow_recursion=False,
-        max_turns=autonomy_max_turns,
-        token_budget=autonomy_token_budget,
-    )
 
     # N14 §24.10: resolve the node's model from its routing policy against the
     # configured model metadata.  A privacy constraint that cannot be met (a
     # required local model that is not configured) fails the node loudly; it must
     # never silently fall back to a remote model.
+    model_name = "inherit"
     if routing_policy is not None:
         try:
             selected_model = select_model(model_infos(getattr(app_config, "models", None)), routing_policy)
@@ -396,34 +378,45 @@ async def exec_llm_agent(
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
         if selected_model is None:
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is set but no models are configured")
-        subagent_config.model = selected_model.name
+        model_name = selected_model.name
 
-    executor_kwargs: dict[str, Any] = {
-        "config": subagent_config,
-        "tools": node_tools,
-        "delegation_depth": delegation_depth,
-    }
-    if user_id is not None:
-        executor_kwargs["user_id"] = user_id
-    if app_config is not None:
-        executor_kwargs["app_config"] = app_config
-    if thread_id is not None:
-        executor_kwargs["thread_id"] = thread_id
-    if is_continue:
-        # Session coordinates: LangGraph resumes the checkpoint thread on the
-        # next continue instead of replaying from scratch.
-        executor_kwargs["checkpointer"] = context["checkpointer"]
-        executor_kwargs["checkpoint_thread_id"] = checkpoint_thread_id
-        executor_kwargs["resume_checkpoint_id"] = None
+    adapter = get_agent_adapter(runtime)
+    from deerflow.workflow.agent_port import CAP_TOOLS, AgentTurnRequest, check_agent_capabilities
 
-    executor = SubagentExecutor(**executor_kwargs)
+    required_capabilities = frozenset({CAP_TOOLS}) if node_tools else frozenset()
+    try:
+        check_agent_capabilities(adapter, required_capabilities)
+    except ValueError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
+    request = AgentTurnRequest(
+        task=task_prompt,
+        system_prompt=system_prompt,
+        tools=node_tools,
+        name=f"ai:{node_id}" if node_id else "ai:node",
+        description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
+        disallowed_tools=["ask_clarification", "present_files"],
+        checkpointer=is_continue,
+        checkpointer_instance=context.get("checkpointer") if is_continue else None,
+        allow_recursion=False,
+        max_turns=autonomy_max_turns,
+        token_budget=autonomy_token_budget,
+        model=model_name,
+        delegation_depth=delegation_depth,
+        user_id=user_id,
+        app_config=app_config,
+        thread_id=thread_id,
+        checkpoint_thread_id=checkpoint_thread_id,
+        resume_checkpoint_id=None,
+        required_capabilities=required_capabilities,
+    )
 
     if output_schema is None:
-        result = await executor._aexecute(task_prompt)
+        result = await adapter.execute(request)
         _check_subagent_completed(result, node_id)
         output: dict[str, Any] = {"out": getattr(result, "result", None)}
     else:
-        result, output = await _run_structured_output(executor, task_prompt, output_schema, node_id)
+        result, output = await _run_structured_output(adapter, request, task_prompt, output_schema, node_id)
     # Lift the sub-agent's aggregated token usage (input/output/total +
     # prompt-cache cache_read tokens) onto the reserved result key so the
     # compiler can expose it on a declared state channel.  Only present when

@@ -117,11 +117,11 @@
 
 ## 5. 阶段四：AgentPort（P1）
 
-- [ ] 新增 `workflow/agent_port.py`：`AgentManifest`、`AgentTurnRequest`、`AgentEvent`、`AgentPort`、能力等级 T0-T5。
-- [ ] 新增 `DeerFlowAgentAdapter`，包装现有 `SubagentExecutor`。
-- [ ] `exec_llm_agent` 只依赖 AgentPort，不直接 import `deerflow.subagents`。
-- [ ] 编译/准入检查节点声明的能力等级与所选 Agent 匹配。
-- [ ] 测试：默认适配器行为不变；一个 fake 外部适配器能完成 T0/T1 节点。
+- [x] 新增 `workflow/agent_port.py`：`AgentManifest`、`AgentTurnRequest`、`AgentTurnResult`、`AgentPort`、能力常量 T0-T5。
+- [x] 新增 `DeerFlowAgentAdapter`，包装现有 `SubagentExecutor`。
+- [x] `exec_llm_agent` 只依赖 AgentPort（`get_agent_adapter`），不再直接构造 `SubagentExecutor`。
+- [x] 运行期检查节点所需能力（当前至少 `tools`；resume/assets 待扩展）。
+- [x] 测试：默认适配器行为不变；fake 外部适配器能完成 T0/T1 节点（`test_workflow_agent_port.py`）。
 
 ## 6. 阶段五：双入口与前端契约（P1/P2）
 
@@ -138,7 +138,7 @@
 | 2 | 运行时装配收敛 | done | 891ad02 |
 | 3 | 状态与可观测 | in_progress | 891ad02 |
 | 4 | 定义修订与 metadata | in_progress | 891ad02 |
-| 5 | AgentPort | todo | - |
+| 5 | AgentPort | done | (待提交) |
 | 6 | 双入口/前端契约/拆分 | todo | - |
 
 ## 8. 提交记录

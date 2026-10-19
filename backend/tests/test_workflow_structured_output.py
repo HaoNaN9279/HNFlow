@@ -116,11 +116,35 @@ class _FakeExecutor:
         return SimpleNamespace(status=SimpleNamespace(value="completed"), result=text, error=None, token_usage_records=[], stop_reason=None)
 
 
+class _FakeAdapter:
+    def __init__(self, executor: _FakeExecutor) -> None:
+        self.executor = executor
+
+    async def execute(self, request: Any) -> Any:
+        from deerflow.workflow.agent_port import AgentTurnResult
+
+        raw = await self.executor._aexecute(request.task)
+        return AgentTurnResult(
+            status=raw.status,
+            result=raw.result,
+            error=raw.error,
+            token_usage_records=raw.token_usage_records,
+            stop_reason=raw.stop_reason,
+            raw=raw,
+        )
+
+
+def _request(task: str) -> Any:
+    from deerflow.workflow.agent_port import AgentTurnRequest
+
+    return AgentTurnRequest(task=task)
+
+
 class TestRepairLoop:
     @pytest.mark.asyncio
     async def test_valid_first_try_zero_repairs(self) -> None:
         executor = _FakeExecutor(['{"summary": "ok", "score": 5}'])
-        _result, output = await _run_structured_output(executor, "PROMPT", SCHEMA, "ai")
+        _result, output = await _run_structured_output(_FakeAdapter(executor), _request("PROMPT"), "PROMPT", SCHEMA, "ai")
         assert output["summary"] == "ok"
         assert output["score"] == 5
         assert output["__schema_repairs"] == 0
@@ -129,7 +153,7 @@ class TestRepairLoop:
     @pytest.mark.asyncio
     async def test_invalid_then_valid_one_repair(self) -> None:
         executor = _FakeExecutor(["not json", '{"summary": "ok", "score": 5}'])
-        _result, output = await _run_structured_output(executor, "PROMPT", SCHEMA, "ai")
+        _result, output = await _run_structured_output(_FakeAdapter(executor), _request("PROMPT"), "PROMPT", SCHEMA, "ai")
         assert output["__schema_repairs"] == 1
         assert len(executor.prompts) == 2
         # The repair prompt carries the validation error.
@@ -139,7 +163,7 @@ class TestRepairLoop:
     async def test_exhausted_repairs_fail_the_node(self) -> None:
         executor = _FakeExecutor(["bad", "still bad"])
         with pytest.raises(WorkflowExecutionError):
-            await _run_structured_output(executor, "PROMPT", SCHEMA, "ai")
+            await _run_structured_output(_FakeAdapter(executor), _request("PROMPT"), "PROMPT", SCHEMA, "ai")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
