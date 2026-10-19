@@ -102,7 +102,7 @@
 
 - [x] `WorkflowMetadata.canvas` 显式声明。
 - [ ] 明确 `definition.metadata`（运行语义）与 row `metadata`（系统快照）的边界。
-- [ ] 删除 gateway/harness 重复的 `_resolve_workflow_metadata`。
+- [x] 删除 gateway/harness 重复的 `_resolve_workflow_metadata`（Gateway 委托 harness 的单一实现）。
 - [x] 测试：`metadata.canvas` 通过 Pydantic 校验并 round-trip。
 - [ ] 端到端测试：画布保存 → 重新加载 → 位置还原。
 
@@ -149,6 +149,7 @@
 | 891ad02 | refactor(workflow): 运行时装配收敛、提示词去重、IO offload、state/cost、run 快照 |
 | 57c8d67 | refactor(workflow): AgentPort + 默认 DeerFlow 适配器 |
 | 42969fd | feat(workflow): 定义修订持久化 + 保存时 dry-run compile 校验 |
+| 6ef62cb | refactor(workflow): metadata 解析单一实现 + 修复 start→end 直连编译 |
 
 ## 9. 验收清单（全部完成时）
 
