@@ -712,6 +712,8 @@ def test_non_openai_provider_does_not_receive_stream_usage_default(monkeypatch):
         use="langchain_ollama:ChatOllama",
         model="qwen2.5",
         base_url="http://127.0.0.1:11434",
+        local=True,
+        cost_tier=0,
         supports_vision=False,
         supports_thinking=False,
     )
@@ -731,6 +733,8 @@ def test_non_openai_provider_does_not_receive_stream_usage_default(monkeypatch):
 
     assert captured.get("base_url") == "http://127.0.0.1:11434"
     assert "stream_usage" not in captured
+    assert "local" not in captured
+    assert "cost_tier" not in captured
 
 
 def test_openai_compatible_provider_multiple_models(monkeypatch):

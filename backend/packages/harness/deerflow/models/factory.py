@@ -222,9 +222,11 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             # Runtime/UI metadata used to size the context indicator. Provider
             # clients do not accept this as a model-constructor argument.
             "context_window",
-            # Presentation-only metadata (consumed by the console's cost
-            # display) — must never reach the provider client, which would
-            # forward unknown kwargs into the completion request payload.
+            # Workflow-routing metadata (consumed by ``workflow/routing.py``)
+            # and presentation-only pricing data. Provider clients accept
+            # neither as constructor arguments.
+            "local",
+            "cost_tier",
             "pricing",
         },
     )
