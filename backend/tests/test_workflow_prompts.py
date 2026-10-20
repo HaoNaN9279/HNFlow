@@ -1,10 +1,16 @@
 """Tests for deerflow.workflow.prompts — three-layer AI-node prompt assembly."""
 
+from types import SimpleNamespace
+
 from deerflow.workflow.prompts import (
+    append_template_prompt,
     assemble_ai_node_prompt,
     build_capability_layer,
+    build_capability_rules_layer,
+    build_capability_skills_layer,
     build_identity_layer,
     build_task_layer,
+    build_template_prompt_layer,
 )
 from deerflow.workflow.schema import Node, NodeType
 
@@ -84,6 +90,70 @@ class TestBuildTaskLayer:
     def test_multiple_placeholders(self):
         result = build_task_layer("端口 {{a}} 和 {{b}}", {"a": "x", "b": 2})
         assert result == "端口 x 和 2"
+
+
+class TestTemplatePromptLayer:
+    """Template prompt = runtime user turn appended after the task layer."""
+
+    def test_interpolates_like_instruction(self):
+        assert build_template_prompt_layer("Answer {{in}}", {"in": "x"}) == "Answer x"
+
+    def test_empty_template_prompt(self):
+        assert build_template_prompt_layer("", {"in": "x"}) == ""
+        assert build_template_prompt_layer(None, {"in": "x"}) == ""
+
+    def test_append_keeps_template_prompt_at_end(self):
+        assert append_template_prompt("Task", "User") == "Task\n\nUser"
+        assert append_template_prompt("", "User") == "User"
+        assert append_template_prompt("Task", "") == "Task"
+
+    def test_assemble_includes_capability_content(self, monkeypatch):
+        monkeypatch.setattr(
+            "deerflow.workflow.prompts.load_agent_soul",
+            lambda agent_name, user_id=None: None,
+        )
+        node = _make_node(
+            capability_groups=["alpha"],
+            params={"instruction": "do {{x}}"},
+        )
+        rule = SimpleNamespace(
+            group_name="alpha",
+            group_version="0.1.0",
+            path="rules/a.md",
+            content="RULE BODY",
+        )
+        skill = SimpleNamespace(name="s1", description="SKILL DESC")
+        prompt = assemble_ai_node_prompt(
+            node,
+            {"x": 1},
+            capability_rules=[rule],
+            capability_skills=[skill],
+        )
+        assert "RULE BODY" in prompt
+        assert "s1: SKILL DESC" in prompt
+        assert "full SKILL.md" not in prompt
+
+
+class TestCapabilityContentLayers:
+    def test_rules_are_source_labelled(self):
+        rule = SimpleNamespace(
+            group_name="alpha",
+            group_version="0.1.0",
+            path="rules/a.md",
+            content="RULE",
+        )
+        result = build_capability_rules_layer([rule])
+        assert "<capability_rules>" in result
+        assert "alpha@0.1.0 / rules/a.md" in result
+        assert "RULE" in result
+
+    def test_skills_render_descriptions_not_bodies(self):
+        skill = SimpleNamespace(name="s1", description="DESC")
+        result = build_capability_skills_layer([skill])
+        assert "<capability_skills>" in result
+        assert "s1: DESC" in result
+        assert "read_capability_skill" in result
+        assert "BODY" not in result
 
 
 class TestAssembleAiNodePrompt:

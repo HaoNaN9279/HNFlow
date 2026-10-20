@@ -190,6 +190,8 @@ async def test_exec_llm_agent_fails_loud_when_declared_tool_is_missing(monkeypat
         "deerflow.workflow.tool_gateway.resolve_capability_tools",
         lambda *args, **kwargs: (_ for _ in ()).throw(ToolResolutionError("builtin tool 'missing' is not available")),
     )
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
 
     with pytest.raises(WorkflowExecutionError, match="missing"):
         await exec_llm_agent(
@@ -203,6 +205,8 @@ async def test_exec_llm_agent_fails_loud_when_declared_tool_is_missing(monkeypat
 async def test_exec_llm_agent_passes_resolved_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     sentinel = [_tool("bash")]
     monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: sentinel)
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
 
     captured: dict[str, Any] = {}
 

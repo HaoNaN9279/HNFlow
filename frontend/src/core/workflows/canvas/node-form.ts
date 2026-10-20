@@ -196,6 +196,11 @@ export function applyNodeFormValues(
     ...node.params,
     instruction: values.instruction ?? "",
   };
+  // The old user-prompt param was removed from AI nodes; drop it from legacy
+  // definitions on the next save so it cannot resurface in the generic editor.
+  if (node.type === "ai:llm_agent") {
+    delete params.user_prompt;
+  }
   const templateId = values.template_id ?? "";
   const existingSubworkflow =
     typeof node.params.subworkflow === "object" &&

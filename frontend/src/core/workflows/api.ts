@@ -49,6 +49,25 @@ async function throwWorkflowApiError(
   throw new Error(fallback);
 }
 
+export type WorkflowPromptComponentState =
+  | "active"
+  | "runtime"
+  | "dropped"
+  | "truncated";
+
+export type WorkflowPromptComponent = {
+  key: string;
+  section: "system" | "task";
+  source: string;
+  summary: string;
+  content: string;
+  estimated_tokens: number;
+  state: WorkflowPromptComponentState;
+  editable: boolean;
+  /** Human-readable source title for multi-file capability rules/skills. */
+  label?: string;
+};
+
 export type WorkflowPromptPreview = {
   node_id: string;
   prompt: string;
@@ -56,6 +75,7 @@ export type WorkflowPromptPreview = {
   task_prompt: string;
   capability_groups: string[];
   omitted_runtime_blocks: string[];
+  components: WorkflowPromptComponent[];
 };
 
 /**

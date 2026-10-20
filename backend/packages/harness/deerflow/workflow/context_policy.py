@@ -13,10 +13,11 @@ Two deliberate boundaries keep this honest and offline:
   BPE download.  It is a budget yardstick, not a billing figure.
 * **Only the *augmentation* buckets are budgeted.**  ``examples`` (declarative
   few-shot) and ``context`` (retrieved/upstream values mounted by port name) are
-  droppable.  The ``identity`` / ``capability`` / ``task`` / ``schema`` buckets
-  are the node's instruction scaffold: truncating them would silently change
-  what the node was asked to do, so an over-budget scaffold is *reported*
-  (``over_budget``) and left intact rather than mangled.
+  droppable.  The ``identity`` / ``capability`` / ``capability_rules`` /
+  ``capability_skills`` / ``task`` / ``schema`` buckets are the node's
+  instruction scaffold: truncating them would silently change what the node was
+  asked to do, so an over-budget scaffold is *reported* (``over_budget``) and
+  left intact rather than mangled.
 
 The bucket order is fixed (``BUCKET_ORDER``) so the assembled prompt is stable
 across runs — a moving prefix defeats provider prompt-cache reuse.
@@ -33,9 +34,19 @@ from typing import Any
 #: ``context_policy``).  Mirrors ``__workflow_token_usage`` / ``__schema_repairs``.
 CONTEXT_USAGE_RESULT_KEY = "__context_usage"
 
-#: Fixed prompt assembly order (N14 §24.3 "确定性排序").  ``examples``/``context``
+#: Fixed prompt assembly order (N14 §24.3 "确定性排序").  Capability rules and
+#: skill descriptions are capability-scoped context; ``examples``/``context``
 #: slot between the task layer and the structured-output schema instruction.
-BUCKET_ORDER: tuple[str, ...] = ("identity", "capability", "task", "examples", "context", "schema")
+BUCKET_ORDER: tuple[str, ...] = (
+    "identity",
+    "capability",
+    "capability_rules",
+    "capability_skills",
+    "task",
+    "examples",
+    "context",
+    "schema",
+)
 
 #: Buckets the budget may drop/truncate, in **priority order** (kept first).
 #: ``examples`` outranks ``context``: a declared few-shot set is part of the
@@ -216,7 +227,8 @@ def apply_context_budget(sections: Mapping[str, str], budget: int | None) -> Con
     """Apply *budget* to the assembled *sections* and return what is kept.
 
     Pure and deterministic.  The non-truncatable scaffold (``identity`` /
-    ``capability`` / ``task`` / ``schema``) is always kept; the truncatable
+    ``capability`` / ``capability_rules`` / ``capability_skills`` / ``task`` /
+    ``schema``) is always kept; the truncatable
     buckets are filled greedily in priority order (``examples`` before
     ``context``), so a tight budget drops context first.  A scaffold that alone
     exceeds the budget is reported via ``over_budget`` and left untouched.

@@ -151,7 +151,11 @@ class TestContinueMode:
         rt = _runtime(thread_id="t1", checkpointer=saver)
         inputs = {"in": "x", "continue_prompt": "请继续处理 {{in}}"}
 
-        result = await exec_llm_agent(rt, {"instruction": "首轮 {{in}}", "node_id": "ai_step"}, inputs)
+        result = await exec_llm_agent(
+            rt,
+            {"instruction": "首轮 {{in}}", "node_id": "ai_step"},
+            inputs,
+        )
 
         assert result["out"] == "ok"
         assert result["__workflow_prompt"]
@@ -169,8 +173,20 @@ class TestContinueMode:
         # turn already carries them. Only the new task layer is executed.
         assert cfg.system_prompt is None
         assert record["task"] == build_task_layer("请继续处理 {{in}}", inputs)
-        assert record["task"] == "请继续处理 x"
         assert "首轮" not in record["task"]
+
+    @pytest.mark.asyncio
+    async def test_continue_ignores_template_prompt(self, fake_executor: list[dict[str, Any]]) -> None:
+        """Continue wins when both runtime turns are present."""
+        rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
+        await exec_llm_agent(
+            rt,
+            {"instruction": "首轮", "node_id": "ai_step"},
+            {"in": "x", "template_prompt": "reset text", "continue_prompt": "继续"},
+        )
+
+        assert fake_executor[0]["task"] == "继续"
+        assert "reset text" not in fake_executor[0]["task"]
 
     @pytest.mark.asyncio
     async def test_continue_keeps_identity_kwargs(self, fake_executor: list[dict[str, Any]]) -> None:

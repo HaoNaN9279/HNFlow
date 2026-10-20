@@ -35,6 +35,9 @@ const TYPED_NODE_TYPES = new Set([
 ]);
 const TYPED_PARAM_KEYS = [
   "instruction",
+  // Legacy key: the form no longer edits it, but keeping it hidden prevents
+  // an old saved value from reappearing in the generic key/value editor.
+  "user_prompt",
   "subworkflow",
   "groups",
   "agent_node",

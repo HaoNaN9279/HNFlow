@@ -221,3 +221,38 @@ def load_capability_group(identifier: str, *, version: str | None = None, user_i
     if version is not None:
         return max(candidates, key=lambda item: (item.source == "user", _version_key(item.version)))
     return max(candidates, key=lambda item: (_version_key(item.version), item.source == "user"))
+
+
+def load_capability_group_closure(
+    references: list[str],
+    *,
+    user_id: str | None = None,
+    bases_first: bool = False,
+) -> list[CapabilityGroup]:
+    """Load selected groups plus their ``extends`` bases, de-duplicated by GUID.
+
+    ``bases_first=False`` (the default) preserves the author-facing order used
+    by tool resolution: each selected group is visited before its bases.
+    ``bases_first=True`` returns a dependency order suitable for prompt
+    assembly, where a base's rules/skills are read before the group that
+    extends it.
+    """
+    ordered: list[CapabilityGroup] = []
+    seen: set[str] = set()
+
+    def visit(reference: str) -> None:
+        group = load_capability_group(reference, user_id=user_id)
+        if group.guid in seen:
+            return
+        seen.add(group.guid)
+        if bases_first:
+            for base in group.extends:
+                visit(base)
+        ordered.append(group)
+        if not bases_first:
+            for base in group.extends:
+                visit(base)
+
+    for reference in references:
+        visit(reference)
+    return ordered

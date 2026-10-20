@@ -557,6 +557,36 @@ export const enUS: Translations = {
         continuePromptLabel: "Continue prompt",
         continuePromptHint:
           "Wire a value into the continue_prompt input port on the canvas to resume this agent's session with a new prompt.",
+        configTitle: "Node configuration",
+        promptComposition: {
+          title: "Prompt composition",
+          hint: "Built from the current node connections. Click a source to inspect it; runtime inputs are loaded when the node runs.",
+          loading: "Building prompt preview...",
+          loadFailed: "Prompt preview failed",
+          retry: "Retry",
+          tokens: "~{count} tokens",
+          sections: { system: "System", task: "User turn" },
+          states: {
+            runtime: "Runtime",
+            dropped: "Dropped",
+            truncated: "Truncated",
+          },
+          sources: {
+            memory: "Memory",
+            retrieval: "Knowledge retrieval",
+            identity: "Identity",
+            capability: "Capability",
+            capability_rules: "Capability rules",
+            capability_skills: "Capability skills",
+            examples: "Examples",
+            context: "Context",
+            schema: "Output schema",
+            task: "Task",
+            template_prompt: "Template prompt",
+          },
+          runtimeUnavailable:
+            "This source is generated at runtime, so the static preview has no content.",
+        },
       },
       capabilityGroup: {
         title: "Capability group",

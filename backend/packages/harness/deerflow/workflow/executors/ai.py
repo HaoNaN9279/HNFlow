@@ -1,10 +1,11 @@
 """AI-node workflow executors.
 
 ``exec_llm_agent`` executes an ``ai:llm_agent`` node by assembling its system
-prompt from three layers (identity / capability / task) and running it through
-a one-shot :class:`deerflow.subagents.SubagentExecutor`.  It follows the
-``Executor`` contract — ``(runtime, params, inputs) -> Awaitable[dict]`` — so
-the compiler's ``_resolve_executor`` awaits it like any async executor.
+prompt from identity, capability (group names, rules, skill descriptions),
+examples/context/schema and task layers, then running it through a one-shot
+:class:`deerflow.subagents.SubagentExecutor`.  It follows the ``Executor``
+contract — ``(runtime, params, inputs) -> Awaitable[dict]`` — so the compiler's
+``_resolve_executor`` awaits it like any async executor.
 """
 
 from __future__ import annotations
@@ -12,9 +13,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from deerflow.capability_groups.discovery import CapabilityGroupError
+from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
 from deerflow.config.agents_config import load_agent_config
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.agent_port import get_agent_adapter
+from deerflow.workflow.capability_skills import build_read_capability_skill_tool
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
 from deerflow.workflow.knowledge import (
@@ -35,7 +39,13 @@ from deerflow.workflow.memory import (
     parse_memory_policy,
     render_query,
 )
-from deerflow.workflow.prompts import build_ai_node_buckets, build_task_layer
+from deerflow.workflow.prompts import (
+    TEMPLATE_PROMPT_PORT,
+    append_template_prompt,
+    build_ai_node_buckets,
+    build_task_layer,
+    build_template_prompt_layer,
+)
 from deerflow.workflow.registry import WorkflowExecutionError
 from deerflow.workflow.routing import RoutingError, model_infos, parse_routing_policy, select_model
 
@@ -186,11 +196,11 @@ async def exec_llm_agent(
     Two modes, selected by ``inputs["continue_prompt"]``:
 
     **Template mode** (no / empty ``continue_prompt``) — the one-shot path:
-    the system prompt is assembled from three layers — identity
-    (``agent_name`` / default lead), capability (``capability_groups`` plus the
-    custom agent's own skills), and task (the ``instruction`` template
-    interpolated with ``inputs``) — and handed to a ``SubagentExecutor``
-    (checkpointer disabled, recursion disabled).
+    the system prompt is assembled from identity (``agent_name`` / default
+    lead), capability (``capability_groups``, their rules, skill descriptions,
+    and the custom agent's own skills), and task (the ``instruction`` template
+    plus an optional runtime ``template_prompt``) — and handed to a
+    ``SubagentExecutor`` (checkpointer disabled, recursion disabled).
 
     **Continue mode** (non-empty ``continue_prompt``) — session continuation:
     the same sub-agent runs under an independent checkpoint thread
@@ -207,6 +217,11 @@ async def exec_llm_agent(
     node_id = params.get("node_id")
     if not instruction:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty 'instruction' param")
+
+    raw_template_prompt = inputs.get(TEMPLATE_PROMPT_PORT)
+    if raw_template_prompt is not None and not isinstance(raw_template_prompt, str):
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': '{TEMPLATE_PROMPT_PORT}' input must be a string")
+    template_prompt = raw_template_prompt or ""
 
     agent_name = params.get("agent_name")
     raw_groups = params.get("capability_groups") or []
@@ -233,6 +248,22 @@ async def exec_llm_agent(
             if isinstance(node_prompt, str) and node_prompt:
                 continue_prompt = node_prompt
     is_continue = bool(continue_prompt)
+    if is_continue and template_prompt:
+        logger.warning(
+            "ai:llm_agent node %r received both continue_prompt and template_prompt; continue mode wins",
+            node_id,
+        )
+
+    capability_rules: list[Any] = []
+    capability_skills: list[Any] = []
+    try:
+        if not is_continue:
+            capability_rules = load_capability_rules(capability_groups, user_id=user_id)
+        # Continue mode does not re-assemble the system prompt, but it must still
+        # expose the scoped reader so the model can load skill bodies on demand.
+        capability_skills = load_capability_skills(capability_groups, user_id=user_id)
+    except (CapabilityContentError, CapabilityGroupError) as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
 
     # N14 §24.4 structured output: normalize the node's output contract up front
     # so a malformed schema fails loudly, and reject the unsupported combo with
@@ -331,6 +362,8 @@ async def exec_llm_agent(
             user_id=user_id,
             agent_skills=agent_skills,
             policy=context_policy,
+            capability_rules=capability_rules,
+            capability_skills=capability_skills,
         )
         if output_schema is not None:
             buckets["schema"] = schema_instruction(output_schema)
@@ -371,6 +404,12 @@ async def exec_llm_agent(
             if block:
                 system_prompt = f"{block}\n\n{system_prompt}"
 
+    # Template mode may receive a runtime user turn from the dedicated
+    # ``template_prompt`` input port.  Continue mode owns the user turn via
+    # ``continue_prompt``; template_prompt is ignored there (continue wins).
+    if not is_continue:
+        task_prompt = append_template_prompt(task_prompt, build_template_prompt_layer(template_prompt, inputs))
+
     # Full text prompt the node actually sends: every system bucket (identity /
     # capability / examples / context / schema / memory / retrieval) plus the
     # task turn.  ``ai:prompt_preview`` reads this from the reserved channel.
@@ -379,6 +418,8 @@ async def exec_llm_agent(
     # C1: assemble the node's real tool set from its capability groups' union of
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
     node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo, node_id=node_id)
+    if capability_skills:
+        node_tools.append(build_read_capability_skill_tool(capability_skills))
 
     # N14 §24.5: an explicit autonomy budget pins this node's hard limits.
     autonomy_max_turns, autonomy_token_budget = _autonomy_settings(params)

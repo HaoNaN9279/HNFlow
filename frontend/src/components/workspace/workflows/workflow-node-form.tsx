@@ -32,6 +32,7 @@ import {
 import type { WorkflowDefinition } from "@/core/workflows/types";
 
 import { useOpenSubworkflow } from "./use-open-subworkflow";
+import { AiPromptComposition } from "./workflow-ai-prompt-composition";
 import { useWorkflowEditor } from "./workflow-editor-context";
 
 /** Sentinel select values for the agent picker (real names are used verbatim). */
@@ -173,104 +174,115 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
 
   return (
     <div className="flex flex-col gap-3 border-b pb-4">
-      <div className="text-xs font-medium">{labels.ai.title}</div>
+      <AiPromptComposition node={node} readonly={readonly} />
 
-      <div className="flex flex-col gap-1">
-        <label
-          htmlFor={`${node.id}-instruction`}
-          className="text-xs font-medium"
-        >
-          {labels.ai.instructionLabel}
-        </label>
-        <Textarea
-          id={`${node.id}-instruction`}
-          value={values.instruction ?? ""}
-          disabled={readonly}
-          placeholder={labels.ai.instructionPlaceholder}
-          aria-invalid={errors.instruction ? true : undefined}
-          onChange={(event) =>
-            setValues((current) => ({
-              ...current,
-              instruction: event.target.value,
-            }))
-          }
-          onBlur={() => commit(values)}
-          className="min-h-20 text-xs"
-        />
-        {errors.instruction && (
-          <p className="text-destructive text-xs" role="alert">
-            {labels.validation.instructionRequired}
-          </p>
-        )}
-      </div>
+      <details className="rounded border">
+        <summary className="text-muted-foreground cursor-pointer px-2 py-1.5 text-xs font-medium">
+          {labels.ai.configTitle}
+        </summary>
+        <div className="flex flex-col gap-3 p-2">
+          <div className="text-xs font-medium">{labels.ai.title}</div>
 
-      <div className="flex flex-col gap-1">
-        <span className="text-xs font-medium">
-          {labels.ai.continuePromptLabel}
-        </span>
-        <p className="text-muted-foreground text-[11px]">
-          {labels.ai.continuePromptHint}
-        </p>
-      </div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium">{labels.ai.agentLabel}</label>
-        {customAgentActive ? (
-          <Input
-            value={values.agent_name ?? ""}
-            disabled={readonly}
-            aria-label="Custom agent name"
-            aria-invalid={errors.agent_name ? true : undefined}
-            onChange={(event) =>
-              setValues((current) => ({
-                ...current,
-                agent_name: event.target.value,
-              }))
-            }
-            onBlur={handleAgentBlur}
-            className="h-7 text-xs"
-          />
-        ) : (
-          <Select
-            value={agentSelectValue}
-            disabled={readonly}
-            onValueChange={handleAgentSelect}
-          >
-            <SelectTrigger
-              aria-label={labels.ai.agentLabel}
-              className="h-7 text-xs"
+          <div className="flex flex-col gap-1">
+            <label
+              htmlFor={`${node.id}-instruction`}
+              className="text-xs font-medium"
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={AGENT_NONE_VALUE}>
-                {labels.ai.agentNoneOption}
-              </SelectItem>
-              {agentNames.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-              <SelectItem value={AGENT_CUSTOM_VALUE}>
-                {CUSTOM_AGENT_LABEL}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        )}
-        <p className="text-muted-foreground text-[11px]">
-          {labels.ai.agentHint}
-        </p>
-        {errors.agent_name && (
-          <p className="text-destructive text-xs" role="alert">
-            {labels.validation.invalidAgentName}
-          </p>
-        )}
-        {agentWarning && (
-          <p className="text-xs text-amber-600" role="alert">
-            {labels.validation.agentNotFoundWarning}
-          </p>
-        )}
-      </div>
+              {labels.ai.instructionLabel}
+            </label>
+            <Textarea
+              id={`${node.id}-instruction`}
+              value={values.instruction ?? ""}
+              disabled={readonly}
+              placeholder={labels.ai.instructionPlaceholder}
+              aria-invalid={errors.instruction ? true : undefined}
+              onChange={(event) =>
+                setValues((current) => ({
+                  ...current,
+                  instruction: event.target.value,
+                }))
+              }
+              onBlur={() => commit(values)}
+              className="min-h-20 text-xs"
+            />
+            {errors.instruction && (
+              <p className="text-destructive text-xs" role="alert">
+                {labels.validation.instructionRequired}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <span className="text-xs font-medium">
+              {labels.ai.continuePromptLabel}
+            </span>
+            <p className="text-muted-foreground text-[11px]">
+              {labels.ai.continuePromptHint}
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium">
+              {labels.ai.agentLabel}
+            </label>
+            {customAgentActive ? (
+              <Input
+                value={values.agent_name ?? ""}
+                disabled={readonly}
+                aria-label="Custom agent name"
+                aria-invalid={errors.agent_name ? true : undefined}
+                onChange={(event) =>
+                  setValues((current) => ({
+                    ...current,
+                    agent_name: event.target.value,
+                  }))
+                }
+                onBlur={handleAgentBlur}
+                className="h-7 text-xs"
+              />
+            ) : (
+              <Select
+                value={agentSelectValue}
+                disabled={readonly}
+                onValueChange={handleAgentSelect}
+              >
+                <SelectTrigger
+                  aria-label={labels.ai.agentLabel}
+                  className="h-7 text-xs"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={AGENT_NONE_VALUE}>
+                    {labels.ai.agentNoneOption}
+                  </SelectItem>
+                  {agentNames.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {name}
+                    </SelectItem>
+                  ))}
+                  <SelectItem value={AGENT_CUSTOM_VALUE}>
+                    {CUSTOM_AGENT_LABEL}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-muted-foreground text-[11px]">
+              {labels.ai.agentHint}
+            </p>
+            {errors.agent_name && (
+              <p className="text-destructive text-xs" role="alert">
+                {labels.validation.invalidAgentName}
+              </p>
+            )}
+            {agentWarning && (
+              <p className="text-xs text-amber-600" role="alert">
+                {labels.validation.agentNotFoundWarning}
+              </p>
+            )}
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

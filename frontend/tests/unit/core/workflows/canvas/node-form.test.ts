@@ -202,6 +202,15 @@ describe("applyNodeFormValues", () => {
     expect(result.params).toEqual({ instruction: "New", extra: 1 });
   });
 
+  test("drops the legacy user_prompt param on save", () => {
+    const legacy = aiNode();
+    legacy.params = { ...legacy.params, user_prompt: "old value" };
+
+    const result = applyNodeFormValues(legacy, { instruction: "New" });
+
+    expect("user_prompt" in result.params).toBe(false);
+  });
+
   test("writes template_id/version into params.subworkflow as a compile spec", () => {
     const result = applyNodeFormValues(subworkflowNode(), {
       template_id: "wf-9",

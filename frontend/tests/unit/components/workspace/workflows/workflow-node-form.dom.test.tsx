@@ -43,6 +43,35 @@ rs.mock("@/core/i18n/hooks", () => ({
             continuePromptLabel: "Continue prompt",
             continuePromptHint:
               "Wire into continue_prompt on the canvas to resume",
+            configTitle: "Node configuration",
+            promptComposition: {
+              title: "Prompt composition",
+              hint: "Built from the current node connections",
+              loading: "Building prompt preview...",
+              loadFailed: "Prompt preview failed",
+              retry: "Retry",
+              tokens: "~{count} tokens",
+              sections: { system: "System", task: "User turn" },
+              states: {
+                runtime: "Runtime",
+                dropped: "Dropped",
+                truncated: "Truncated",
+              },
+              sources: {
+                memory: "Memory",
+                retrieval: "Knowledge retrieval",
+                identity: "Identity",
+                capability: "Capability",
+                capability_rules: "Capability rules",
+                capability_skills: "Capability skills",
+                examples: "Examples",
+                context: "Context",
+                schema: "Output schema",
+                task: "Task",
+                template_prompt: "Template prompt",
+              },
+              runtimeUnavailable: "Runtime content is not available",
+            },
           },
           subworkflow: {
             title: "Subworkflow",
@@ -77,6 +106,32 @@ rs.mock("@/core/i18n/hooks", () => ({
 
 rs.mock("@/core/agents/api", () => ({
   checkAgentName: rs.fn(),
+}));
+
+rs.mock("@/core/workflows/api", () => ({
+  previewWorkflowPrompt: rs.fn().mockResolvedValue({
+    node_id: "n_1",
+    prompt: "",
+    system_prompt: "",
+    task_prompt: "",
+    capability_groups: [],
+    omitted_runtime_blocks: [],
+    components: [],
+  }),
+}));
+
+rs.mock("@/components/workspace/workflows/workflow-editor-context", () => ({
+  useWorkflowEditor: () => ({
+    workflowId: "wf-1",
+    currentDefinition: () => ({
+      id: "wf-1",
+      name: "Workflow",
+      version: "0.1.0",
+      nodes: [],
+      edges: [],
+      metadata: {},
+    }),
+  }),
 }));
 
 rs.mock("@/components/workspace/workflows/use-open-subworkflow", () => ({

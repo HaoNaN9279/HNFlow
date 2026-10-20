@@ -402,27 +402,13 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
 
 def _load_capability_group_closure(references: list[str], *, user_id: str | None) -> list[Any]:
     """Load selected groups plus their ``extends`` bases, de-duplicated by GUID."""
-    from deerflow.capability_groups import CapabilityGroupError, load_capability_group
+    from deerflow.capability_groups import CapabilityGroupError, load_capability_group_closure
     from deerflow.tools.registry import ToolResolutionError
 
-    ordered: list[Any] = []
-    seen: set[str] = set()
-
-    def visit(reference: str) -> None:
-        try:
-            group = load_capability_group(reference, user_id=user_id)
-        except CapabilityGroupError as exc:
-            raise ToolResolutionError(f"capability group {reference!r} is not available: {exc}") from exc
-        if group.guid in seen:
-            return
-        seen.add(group.guid)
-        ordered.append(group)
-        for base in group.extends:
-            visit(base)
-
-    for reference in references:
-        visit(reference)
-    return ordered
+    try:
+        return load_capability_group_closure(references, user_id=user_id)
+    except CapabilityGroupError as exc:
+        raise ToolResolutionError(f"capability group is not available: {exc}") from exc
 
 
 def resolve_capability_tools(

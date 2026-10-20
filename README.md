@@ -248,24 +248,35 @@ make down       # 停止并移除容器
 | **端口（Port）** | 数据输入/输出接口，类型用枚举（data/file/bool/enum），连线时做类型校验；节点间仅通过端口传递数据 |
 | **功能组（Capability Group）** | 按领域划分的能力声明集合（GUID + 语义版本 + 不可变版本目录），AI 节点的能力供给来源 |
 | **人工任务（HumanTask）** | 挂起工作流等待人工处理的节点，支持提交/跳过/打回重交，状态机 `pending → submitted / skipped / reopened / expired` |
-| **AI 节点会话** | AI 节点级会话上下文，`template_prompt` 走 reset 模式、`continue_prompt` 走 continue 模式（见下节） |
+| **AI 节点会话** | AI 节点级会话上下文，`template_prompt` 提供本轮模板输入、`continue_prompt` 走 continue 模式（见下节） |
 | **子工作流（Subworkflow）** | 引用另一 definition 的节点，支持编译期子图与运行期委派两种模式，端口映射通信 |
 | **checkpoint** | LangGraph 断点持久化，一个工作流实例 = 一个 thread_id，支撑断点续跑与挂起恢复 |
 
-### AI 节点会话：双端口模式
+### AI 节点会话：template / continue
 
-AI 节点通过两个输入端口控制执行模式（双端口即模式开关）：
+AI 节点通过两个输入端口控制执行模式：
 
 | 端口 | 有值行为 |
 | --- | --- |
-| `template_prompt` | **reset 模式（默认）**：模板 + 端口输入全量重跑，消息历史清空，适合确定性模板任务 |
-| `continue_prompt` | **continue 模式**：把新提示词 append 到该节点既有会话消息历史，resume 节点 checkpoint 继续执行，适合迭代式任务 |
+| `template_prompt` | **template 模式（默认）**：作为本轮运行时用户输入，插值后追加在 `instruction` 任务之后；节点不读取历史消息 |
+| `continue_prompt` | **continue 模式**：把新提示词追加到该节点既有会话消息历史，续接节点 checkpoint，适合迭代式任务 |
 
-- 优先级定死：`continue_prompt` 有值 → continue；否则 → template，两端口同值歧义在模型层禁止；
-- 会话 key 稳定：`checkpoint_thread_id = {origin_thread_id}:wfai:{node_id}`，跨 run 经 context 注入 `ai_origin_thread_id` 定位旧会话，loop 自环中同节点实例天然满足；
-- continue 不违反「AI 节点 ≠ 自由 ReAct」约束：仍限关联功能组工具，只是多轮受限对话；loop 迭代次数即硬上限，防无限打回；
+- 优先级固定：`continue_prompt` 有值 → continue；否则 → template。两端口同时有值时 continue 优先，`template_prompt` 忽略并记录 warning；
+- 会话 key 稳定：`checkpoint_thread_id = {origin_thread_id}:wfai:{node_id}`，跨 run 经 context 注入 `ai_origin_thread_id` 定位旧会话；
+- 当前 template 分支不创建会话 checkpoint；真正的 `template → continue` 历史连续性是后续增量。现有 continue 适合 continue 会话之间续接；
+- continue 不违反「AI 节点 ≠ 自由 ReAct」约束：仍限关联功能组工具，只是多轮受限对话；loop 迭代次数即硬上限；
 - 触发入口：画布运行面板「继续会话」表单、对话侧 `continue_node(run_id, node_id, prompt)` 工具、REST `POST /workflows/{definition_id}/runs/{run_id}/continue`；
 - 缓存观测：节点 `token_usage`（含稀疏 `cache_read_tokens`）经保留通道由 worker 聚合进 `run.end.content["token_usage"]`，无用量节点保持 absent，绝不补零。
+
+### AI 节点能力内容
+
+AI 节点会读取当前激活能力组（含 `extends` 闭包）的运行时内容：
+
+- `rules/**/*.md`：全部正文注入 `capability_rules` 系统 bucket；
+- `skills/**/SKILL.md`：system prompt 只放 `name + description`，完整正文由只读工具 `read_capability_skill` 按需读取；
+- 能力组工具仍由 `allowed-tools` 并集装配；规则与 skill 名称会出现在 Prompt 来源列表，便于逐项审计。
+
+工作流 `params.user_prompt` 已移除；旧定义中的该参数在运行时忽略，并在下次保存时清理。
 
 ---
 
@@ -290,6 +301,8 @@ lead agent 内置工作流工具，让 AI 对话与画布操作走**同一套 AP
 ## 使用场景示例
 
 **AI 产出 → 人工审核 → 打回重改**（AI 节点 continue 会话 + loop 迭代 + 人工节点的典型组合）：
+
+> 注意：当前 template 分支不会创建 session checkpoint。以下图式的 `template → continue` 自动续接需要后续会话修复；当前 continue 适合在已建立的 continue 会话之间续接。
 
 ```
 start → 任务描述 → AI 节点（template_prompt，初轮 reset）

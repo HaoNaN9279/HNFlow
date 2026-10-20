@@ -114,9 +114,12 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
     import deerflow.subagents as subagents_pkg
 
     monkeypatch.setattr(subagents_pkg, "SubagentExecutor", FakeExecutor)
-    # Keep these prompt/wiring tests hermetic: capability-group tool resolution
-    # (C1) is covered separately in test_workflow_tool_gateway.py.
+    # Keep these prompt/wiring tests hermetic: capability-group tool/content
+    # resolution is covered separately in test_workflow_tool_gateway.py and
+    # test_capability_group_runtime.py.
     monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
     yield captured
 
 
@@ -185,6 +188,73 @@ class TestAINodeE2E:
         assert cfg.name == "ai:ai_step"
 
     @pytest.mark.asyncio
+    async def test_template_prompt_ends_the_task_turn(self, fake_executor: dict[str, Any]) -> None:
+        fake_executor["result"] = _completed_result("ok")
+        rt = WorkflowRuntime()
+
+        result = await exec_llm_agent(
+            rt,
+            {"instruction": "Task {{in}}"},
+            {"in": "value", "template_prompt": "User {{in}}"},
+        )
+
+        system_prompt = fake_executor["kwargs"]["config"].system_prompt
+        assert fake_executor["task"] == "Task value\n\nUser value"
+        assert "User value" not in system_prompt
+        assert result["__workflow_prompt"].endswith("Task value\n\nUser value")
+
+    @pytest.mark.asyncio
+    async def test_legacy_user_prompt_is_ignored(self, fake_executor: dict[str, Any]) -> None:
+        fake_executor["result"] = _completed_result("ok")
+        rt = WorkflowRuntime()
+
+        await exec_llm_agent(
+            rt,
+            {"instruction": "Task", "user_prompt": "legacy"},
+            {"in": "value"},
+        )
+
+        assert fake_executor["task"] == "Task"
+
+    @pytest.mark.asyncio
+    async def test_capability_rules_and_skill_descriptions_reach_prompt(
+        self,
+        fake_executor: dict[str, Any],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        fake_executor["result"] = _completed_result("ok")
+        rule = SimpleNamespace(
+            group_name="publish",
+            group_version="0.1.0",
+            path="rules/a.md",
+            content="RULE BODY",
+        )
+        skill = SimpleNamespace(name="publisher", description="SKILL DESC")
+        monkeypatch.setattr(
+            "deerflow.workflow.executors.ai.load_capability_rules",
+            lambda *args, **kwargs: [rule],
+        )
+        monkeypatch.setattr(
+            "deerflow.workflow.executors.ai.load_capability_skills",
+            lambda *args, **kwargs: [skill],
+        )
+        monkeypatch.setattr(
+            "deerflow.workflow.executors.ai.build_read_capability_skill_tool",
+            lambda skills: "skill-reader",
+        )
+
+        await exec_llm_agent(
+            WorkflowRuntime(),
+            {"instruction": "Task", "capability_groups": ["publish"]},
+            {"in": "value"},
+        )
+
+        system_prompt = fake_executor["kwargs"]["config"].system_prompt
+        assert "RULE BODY" in system_prompt
+        assert "publisher: SKILL DESC" in system_prompt
+        assert fake_executor["kwargs"]["tools"] == ["skill-reader"]
+
+    @pytest.mark.asyncio
     async def test_ai_node_failure_propagates(self, fake_executor: dict[str, Any]) -> None:
         fake_executor["result"] = _failed_result("boom")
         nodes = [_start_node(), _ai_node("ai_step"), _end_node()]
@@ -218,6 +288,12 @@ class TestAINodeErrors:
         rt = WorkflowRuntime()
         with pytest.raises(WorkflowExecutionError, match="instruction"):
             await exec_llm_agent(rt, {"instruction": ""}, {"in": "x"})
+
+    @pytest.mark.asyncio
+    async def test_non_string_template_prompt_raises(self) -> None:
+        rt = WorkflowRuntime()
+        with pytest.raises(WorkflowExecutionError, match="template_prompt"):
+            await exec_llm_agent(rt, {"instruction": "do"}, {"in": "x", "template_prompt": 7})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

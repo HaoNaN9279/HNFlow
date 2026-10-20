@@ -203,7 +203,15 @@ class TestLayerBuilders:
             inputs={"in": "hi"},
             policy=ContextPolicy(examples=("e",), include=("in",)),
         )
-        assert set(buckets) == {"identity", "capability", "task", "examples", "context"}
+        assert set(buckets) == {
+            "identity",
+            "capability",
+            "capability_rules",
+            "capability_skills",
+            "task",
+            "examples",
+            "context",
+        }
         assert list(buckets) == [name for name in BUCKET_ORDER if name in buckets]
 
     def test_assemble_without_policy_unchanged(self) -> None:

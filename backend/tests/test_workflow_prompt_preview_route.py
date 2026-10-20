@@ -45,6 +45,14 @@ def _client(monkeypatch) -> TestClient:
 
 
 def test_prompt_preview_returns_assembled_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deerflow.workflow.prompt_preview.load_capability_rules",
+        lambda groups, user_id=None: [],
+    )
+    monkeypatch.setattr(
+        "deerflow.workflow.prompt_preview.load_capability_skills",
+        lambda groups, user_id=None: [],
+    )
     response = _client(monkeypatch).post(
         "/api/workflows/wf-preview/prompt-preview",
         json={"node_id": "ai", "definition": _definition()},
@@ -55,6 +63,12 @@ def test_prompt_preview_returns_assembled_prompt(monkeypatch) -> None:
     assert "alpha" in body["prompt"]
     assert "Do {{in}}" in body["prompt"]
     assert body["capability_groups"] == ["alpha"]
+    assert [component["key"] for component in body["components"]] == [
+        "identity",
+        "capability",
+        "task",
+    ]
+    assert all(component["editable"] is False for component in body["components"])
 
 
 def test_prompt_preview_rejects_unknown_node(monkeypatch) -> None:

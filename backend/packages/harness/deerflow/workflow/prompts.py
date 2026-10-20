@@ -6,11 +6,13 @@ independent layers, in order:
 1. **Identity layer** (:func:`build_identity_layer`) — who executes the node:
    the default lead agent, or a bound custom agent (``node.agent_name``) whose
    ``SOUL.md`` is loaded leniently.
-2. **Capability layer** (:func:`build_capability_layer`) — which capability
-   groups (plus the custom agent's own skills configuration) contribute the
-   node's allowed-tools union.
+2. **Capability layer** — which capability groups contribute the node's
+   allowed-tools union, their ``rules/**/*.md`` bodies, and the names +
+   descriptions of their skills.  Full skill bodies load on demand through the
+   scoped reader tool, not here.
 3. **Task layer** (:func:`build_task_layer`) — the node's instruction template
-   with ``{{port}}`` placeholders interpolated from runtime inputs.
+   with ``{{port}}`` placeholders interpolated from runtime inputs; an optional
+   ``template_prompt`` input is appended as the runtime user turn.
 
 Every function is a pure transformation of its arguments. The only I/O — the
 custom-agent SOUL read — is delegated to
@@ -21,6 +23,7 @@ graph and executor imports and cannot introduce import cycles.
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
@@ -33,6 +36,9 @@ if TYPE_CHECKING:
 
 # 默认 lead 身份声明：agent_name 为 None（未绑定 custom agent）时使用。
 DEFAULT_LEAD_IDENTITY = "你是一个通用 AI 助手，负责执行当前工作流节点任务。"
+
+#: Input port carrying the template/reset mode's runtime user turn.
+TEMPLATE_PROMPT_PORT = "template_prompt"
 
 # 匹配 ``{{ name }}`` 形式的端口占位符（允许空白，键名不能包含大括号）。
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
@@ -152,6 +158,52 @@ def build_task_layer(instruction: str | None, inputs: dict[str, Any], *, preserv
     return _PLACEHOLDER_PATTERN.sub(render, instruction)
 
 
+def build_template_prompt_layer(
+    template_prompt: str | None,
+    inputs: dict[str, Any],
+    *,
+    preserve_placeholders: bool = False,
+) -> str:
+    """Render the template-mode runtime user turn.
+
+    It shares the task layer's ``{{port}}`` interpolation semantics, including
+    preserving unresolved placeholders for the static preview.
+    """
+    return build_task_layer(template_prompt, inputs, preserve_placeholders=preserve_placeholders)
+
+
+def append_template_prompt(task_prompt: str, template_prompt: str) -> str:
+    """Join the runtime turn after *task_prompt* without blank separators."""
+    return "\n\n".join(part for part in (task_prompt, template_prompt) if part)
+
+
+def build_capability_rules_layer(rules: Sequence[Any]) -> str:
+    """Render every active capability-group rule as a source-labelled block."""
+    if not rules:
+        return ""
+    parts: list[str] = ["<capability_rules>"]
+    for rule in rules:
+        parts.append(f"--- {rule.group_name}@{rule.group_version} / {rule.path} ---\n{rule.content.rstrip()}")
+    parts.append("</capability_rules>")
+    return "\n\n".join(parts)
+
+
+def build_capability_skills_layer(skills: Sequence[Any]) -> str:
+    """Render skill names and descriptions only; bodies load on demand."""
+    if not skills:
+        return ""
+    lines = [
+        "<capability_skills>",
+        "Call read_capability_skill(name) to load a skill's full instructions.",
+    ]
+    for skill in skills:
+        name = html.escape(skill.name, quote=False)
+        description = html.escape(skill.description, quote=False)
+        lines.append(f"- {name}: {description}")
+    lines.append("</capability_skills>")
+    return "\n".join(lines)
+
+
 def build_ai_node_buckets(
     *,
     agent_name: str | None,
@@ -162,13 +214,14 @@ def build_ai_node_buckets(
     agent_skills: list[str] | None = None,
     policy: ContextPolicy | None = None,
     preserve_placeholders: bool = False,
+    capability_rules: Sequence[Any] = (),
+    capability_skills: Sequence[Any] = (),
 ) -> dict[str, str]:
     """Build the named prompt buckets for an AI node, in the fixed N14 §24.3 order.
 
     The single source of truth for the bucket set and order, shared by the
     executor (``executors/ai.py``) and :func:`assemble_ai_node_prompt`.  Returns
-    a mapping keyed by :data:`deerflow.workflow.context_policy.BUCKET_ORDER` names
-    (``identity`` / ``capability`` / ``task`` / ``examples`` / ``context``).
+    a mapping keyed by :data:`deerflow.workflow.context_policy.BUCKET_ORDER` names.
     The ``schema`` bucket is added by the executor (it needs the parsed
     structured-output schema), and the budget is applied separately via
     ``apply_context_budget`` — this function only *builds*.
@@ -178,6 +231,8 @@ def build_ai_node_buckets(
     buckets = {
         "identity": build_identity_layer(agent_name, user_id=user_id),
         "capability": build_capability_layer(list(capability_groups), agent_skills=agent_skills),
+        "capability_rules": build_capability_rules_layer(capability_rules),
+        "capability_skills": build_capability_skills_layer(capability_skills),
         "task": build_task_layer(instruction, inputs, preserve_placeholders=preserve_placeholders),
         "examples": build_examples_layer(policy.examples if policy else ()),
         "context": build_context_layer(policy.include if policy else (), inputs),
@@ -192,24 +247,16 @@ def assemble_ai_node_prompt(
     user_id: str | None = None,
     agent_skills: list[str] | None = None,
     policy: ContextPolicy | None = None,
+    capability_rules: Sequence[Any] = (),
+    capability_skills: Sequence[Any] = (),
 ) -> str:
     """Assemble the complete AI-node prompt (unbudgeted reference path).
 
-    Buckets are assembled in the fixed order identity → capability → task →
-    examples → context, joined by blank lines; empty buckets are omitted. The
-    instruction template is read from ``node.params.get("instruction")``. The
-    executor applies the budget over these buckets plus the structured-output
-    schema; this helper is the pure, budget-free assembler.
-
-    Args:
-        node: The AI node being executed.
-        inputs: Runtime input values keyed by port name.
-        user_id: Owner scope for the custom agent's SOUL lookup.
-        agent_skills: Custom agent's own skills whitelist.
-        policy: Normalized context policy, or ``None`` for a node without one.
-
-    Returns:
-        The full assembled prompt string.
+    Buckets are assembled in the fixed order and joined by blank lines; empty
+    buckets are omitted. The instruction template is read from
+    ``node.params.get("instruction")``. The executor applies the budget over
+    these buckets plus the structured-output schema; this helper is the pure,
+    budget-free assembler.
     """
     buckets = build_ai_node_buckets(
         agent_name=node.agent_name,
@@ -219,5 +266,7 @@ def assemble_ai_node_prompt(
         user_id=user_id,
         agent_skills=agent_skills,
         policy=policy,
+        capability_rules=capability_rules,
+        capability_skills=capability_skills,
     )
     return "\n\n".join(text for text in buckets.values() if text)

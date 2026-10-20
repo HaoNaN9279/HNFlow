@@ -460,6 +460,35 @@ export interface Translations {
         capabilityGroupsPlaceholder: string;
         continuePromptLabel: string;
         continuePromptHint: string;
+        configTitle: string;
+        promptComposition: {
+          title: string;
+          hint: string;
+          loading: string;
+          loadFailed: string;
+          retry: string;
+          tokens: string;
+          sections: { system: string; task: string };
+          states: {
+            runtime: string;
+            dropped: string;
+            truncated: string;
+          };
+          sources: {
+            memory: string;
+            retrieval: string;
+            identity: string;
+            capability: string;
+            capability_rules: string;
+            capability_skills: string;
+            examples: string;
+            context: string;
+            schema: string;
+            task: string;
+            template_prompt: string;
+          };
+          runtimeUnavailable: string;
+        };
       };
       capabilityGroup: {
         title: string;
