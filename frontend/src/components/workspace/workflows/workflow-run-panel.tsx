@@ -24,6 +24,7 @@ import {
 } from "@/core/workflows/run-durations";
 import type { RunStatus } from "@/core/workflows/run-state";
 import { continueWorkflowNode, rewindWorkflowRun } from "@/core/workflows/runs";
+import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
 import { cn } from "@/lib/utils";
 
 import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
@@ -71,7 +72,10 @@ export function WorkflowRunPanel() {
   const { runState } = useWorkflowRun();
   const { definition, workflowId } = useWorkflowEditor();
   const labels = t.workflows.run;
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = usePersistedBoolean(
+    "deerflow.ui.workflow.run.collapsed",
+    false,
+  );
 
   const isTerminal =
     runState.status !== "idle" && runState.status !== "running";

@@ -7,8 +7,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-#: Content categories shown by the management page. ``commands`` is deliberately
-#: absent: HNFlow capability groups do not define command content.
+#: Built-in content categories, in display order. Any other top-level directory
+#: name is a valid category too; those are appended after these in alphabetical
+#: order by :func:`category_sort_key`.
 CAPABILITY_CATEGORIES: tuple[str, ...] = (
     "rules",
     "agents",
@@ -66,15 +67,32 @@ class CapabilityGroupFile:
 
 
 def classify_capability_file(relative_path: str) -> str:
-    """Return the content category for a group-relative POSIX path."""
+    """Return the content category for a group-relative POSIX path.
+
+    Known top-level directories map to their built-in category (``scripts`` →
+    ``tools``, etc.). Any other top-level directory keeps its own name as the
+    category, so users can introduce arbitrary categories by simply creating
+    folders; nesting below that directory is preserved by the management page.
+    """
     parts = [part for part in relative_path.replace("\\", "/").split("/") if part]
     if not parts:
         return "other"
     if len(parts) == 1 and parts[0].lower() == "skill.md":
         return "rules"
-    if parts[0].lower() not in _CATEGORY_BY_DIR and len(parts) > 1 and parts[-1].lower() == "skill.md":
-        return "skills"
-    return _CATEGORY_BY_DIR.get(parts[0].lower(), "other")
+    known = _CATEGORY_BY_DIR.get(parts[0].lower())
+    if known is not None:
+        return known
+    if len(parts) > 1:
+        return parts[0]
+    return "other"
+
+
+def category_sort_key(category: str) -> tuple[int, str]:
+    """Order built-in categories first, then arbitrary ones alphabetically."""
+    try:
+        return (CAPABILITY_CATEGORIES.index(category), "")
+    except ValueError:
+        return (len(CAPABILITY_CATEGORIES), category.lower())
 
 
 def _strip_markdown(text: str) -> str:
@@ -185,5 +203,5 @@ def build_capability_contents(root: Path) -> list[CapabilityGroupFile]:
                 modified_at=_modified_at(path),
             )
         )
-    files.sort(key=lambda item: (CAPABILITY_CATEGORIES.index(item.category), item.path.lower()))
+    files.sort(key=lambda item: (category_sort_key(item.category), item.path.lower()))
     return files

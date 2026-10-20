@@ -78,6 +78,16 @@ describe("WorkflowNodeCatalogDialog", () => {
     expect(onSelect).toHaveBeenCalledWith("data:assign");
   });
 
+  it("lets long descriptions wrap instead of clamping them", () => {
+    renderDialog();
+
+    const item = screen.getByTestId("node-catalog-item-data:assign");
+    const description = item.querySelectorAll("span")[1]!;
+    expect(description.className).toContain("whitespace-normal");
+    expect(description.className).toContain("break-words");
+    expect(description.className).not.toContain("line-clamp-2");
+  });
+
   it("shows an empty state when nothing matches", () => {
     renderDialog();
 

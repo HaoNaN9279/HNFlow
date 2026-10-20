@@ -112,6 +112,38 @@ describe("CapabilityGroupContents", () => {
     expect(screen.getByText("Child skill summary")).toBeTruthy();
   });
 
+  it("renders nested folders and arbitrary category names", () => {
+    render(
+      <CapabilityGroupContents
+        group={{
+          ...group,
+          categories: [
+            {
+              id: "commands",
+              files: [
+                {
+                  path: "commands/nested/build.md",
+                  name: "build.md",
+                  category: "commands",
+                  is_markdown: true,
+                  summary: "Build the project",
+                  size: 10,
+                  modified_at: "",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("commands")).toBeTruthy();
+    expect(
+      screen.getByTestId("capability-group-folder").dataset.folderPath,
+    ).toBe("nested");
+    expect(screen.getByText("Build the project")).toBeTruthy();
+  });
+
   it("reveals a file through the capability-group API", async () => {
     revealMock.mockResolvedValue(undefined);
     render(<CapabilityGroupContents group={group} />);

@@ -13,6 +13,11 @@ import {
   type CreateWorkflowPayload,
   type UpdateWorkflowPayload,
 } from "./api";
+import {
+  clearWorkflowDraft,
+  readWorkflowSession,
+  setWorkflowLocation,
+} from "./editor-session";
 import { WorkflowValidationErrors } from "./errors";
 
 export function useWorkflows() {
@@ -95,8 +100,13 @@ export function useDeleteWorkflow() {
   const { t } = useI18n();
   return useMutation({
     mutationFn: (id: string) => deleteWorkflow(id),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       void queryClient.invalidateQueries({ queryKey: ["workflows"] });
+      clearWorkflowDraft(id);
+      const { location } = readWorkflowSession();
+      if (location.kind === "editor" && location.workflowId === id) {
+        setWorkflowLocation({ kind: "directory" });
+      }
       toast.success(t.workflows.errors.saveSuccess);
     },
     onError: (error: Error) => {

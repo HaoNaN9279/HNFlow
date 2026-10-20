@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, rs } from "@rstest/core";
+import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   cleanup,
@@ -30,6 +30,12 @@ rs.mock("sonner", () => ({
   toast: toastMock,
 }));
 
+const routerMock = rs.hoisted(() => ({ push: rs.fn() }));
+
+rs.mock("next/navigation", () => ({
+  useRouter: () => ({ push: routerMock.push }),
+}));
+
 rs.mock("@/core/workflows/runs", () => ({
   streamWorkflowRun: rs.fn(),
   cancelWorkflowRun: rs.fn(),
@@ -40,12 +46,19 @@ const mockedStream = rs.mocked(streamWorkflowRun);
 rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
+      common: { cancel: "Cancel" },
       workflows: {
         unsaved: "Unsaved",
         readonly: "Read only",
         save: "Save",
         saving: "Saving...",
         backToDirectory: "Workflow directory",
+        leave: {
+          title: "Leave workflow?",
+          description: "This workflow has unsaved changes.",
+          save: "Save and leave",
+          discard: "Leave without saving",
+        },
         run: {
           run: "Run",
           runDisabled: "Save unsaved changes first",
@@ -63,12 +76,18 @@ rs.mock("@/core/i18n/hooks", () => ({
   }),
 }));
 
+beforeEach(() => {
+  window.sessionStorage.clear();
+});
+
 afterEach(() => {
   apiMock.updateWorkflow.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
   mockedStream.mockReset();
+  routerMock.push.mockReset();
   cleanup();
+  window.sessionStorage.clear();
 });
 
 function makeRecord(): WorkflowRecord {
@@ -353,6 +372,51 @@ describe("WorkflowToolbar", () => {
     });
     expect(dirty.disabled).toBe(true);
     expect(dirty.title).toBe("Save unsaved changes first");
+  });
+
+  it("marks the directory link and confirms before leaving a dirty workflow", async () => {
+    renderToolbar();
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+
+    const link = screen.getByTestId("workflow-directory-link");
+    expect(link.getAttribute("data-dirty")).toBe("true");
+    expect(screen.getByTestId("workflow-dirty-dot")).toBeTruthy();
+
+    fireEvent.click(link);
+    expect(screen.getByTestId("workflow-leave-dialog")).toBeTruthy();
+    expect(routerMock.push).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("workflow-leave-discard"));
+    await waitFor(() => {
+      expect(routerMock.push).toHaveBeenCalledWith("/workspace/workflows");
+    });
+  });
+
+  it("saves and then leaves from the confirmation dialog", async () => {
+    apiMock.updateWorkflow.mockResolvedValue(makeRecord());
+    renderToolbar();
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+    fireEvent.click(screen.getByTestId("workflow-directory-link"));
+    fireEvent.click(screen.getByTestId("workflow-leave-save"));
+
+    await waitFor(() => {
+      expect(apiMock.updateWorkflow).toHaveBeenCalledTimes(1);
+      expect(routerMock.push).toHaveBeenCalledWith("/workspace/workflows");
+    });
+  });
+
+  it("keeps the dialog open when saving before leaving fails", async () => {
+    apiMock.updateWorkflow.mockRejectedValue(new Error("network down"));
+    renderToolbar();
+    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
+    fireEvent.click(screen.getByTestId("workflow-directory-link"));
+    fireEvent.click(screen.getByTestId("workflow-leave-save"));
+
+    await waitFor(() => {
+      expect(toastMock.error).toHaveBeenCalled();
+    });
+    expect(screen.getByTestId("workflow-leave-dialog")).toBeTruthy();
+    expect(routerMock.push).not.toHaveBeenCalled();
   });
 
   it("hides the step control while a run is active", async () => {

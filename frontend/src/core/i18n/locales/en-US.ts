@@ -285,10 +285,8 @@ export const enUS: Translations = {
     chats: "Chats",
     recentChats: "Recent chats",
     demoChats: "Demo chats",
-    agents: "Agents",
     scheduledTasks: "Scheduled tasks",
     capabilityGroups: "Capability groups",
-    agentsDisabledTooltip: "Feature not enabled",
   },
 
   capabilityGroups: {
@@ -471,6 +469,12 @@ export const enUS: Translations = {
     collapsePanel: "Collapse panel",
     expandPanel: "Expand panel",
     backToDirectory: "Workflow directory",
+    leave: {
+      title: "Leave workflow?",
+      description: "This workflow has unsaved changes. Save before leaving?",
+      save: "Save and leave",
+      discard: "Leave without saving",
+    },
     nodeCatalog: {
       title: "Add node",
       hint: "Double-click empty canvas space to add a node.",

@@ -106,14 +106,14 @@ export function WorkflowNodeCatalogDialog({
                           key={entry.type}
                           type="button"
                           variant="outline"
-                          className="flex h-auto w-full flex-col items-start gap-0.5 px-3 py-2 text-left"
+                          className="flex h-auto w-full min-w-0 flex-col items-start gap-0.5 px-3 py-2 text-left"
                           data-testid={`node-catalog-item-${entry.type}`}
                           onClick={() => onSelect(entry.type)}
                         >
-                          <span className="text-sm font-medium">
+                          <span className="max-w-full text-sm font-medium break-words whitespace-normal">
                             {entry.label}
                           </span>
-                          <span className="text-muted-foreground line-clamp-2 text-[11px] font-normal">
+                          <span className="text-muted-foreground max-w-full text-[11px] leading-snug font-normal break-words whitespace-normal">
                             {entry.description}
                           </span>
                         </Button>

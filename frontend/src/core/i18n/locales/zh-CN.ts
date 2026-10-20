@@ -270,10 +270,8 @@ export const zhCN: Translations = {
     chats: "对话",
     recentChats: "最近的对话",
     demoChats: "演示对话",
-    agents: "智能体",
     scheduledTasks: "定时任务",
     capabilityGroups: "能力组",
-    agentsDisabledTooltip: "功能未启用",
   },
 
   capabilityGroups: {
@@ -454,6 +452,12 @@ export const zhCN: Translations = {
     collapsePanel: "收起面板",
     expandPanel: "展开面板",
     backToDirectory: "工作流目录",
+    leave: {
+      title: "离开工作流？",
+      description: "当前工作流有未保存的修改。离开前是否保存？",
+      save: "保存并离开",
+      discard: "不保存并离开",
+    },
     nodeCatalog: {
       title: "添加节点",
       hint: "在画布空白处双击即可添加节点。",

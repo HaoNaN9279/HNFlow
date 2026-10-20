@@ -30,6 +30,11 @@ import {
   type RFNode,
 } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
+import {
+  clearWorkflowDraft,
+  readWorkflowDraft,
+  writeWorkflowDraft,
+} from "@/core/workflows/editor-session";
 import type { WorkflowValidationError } from "@/core/workflows/errors";
 import {
   createInitialRunState,
@@ -76,6 +81,8 @@ type WorkflowEditorContextValue = {
   dirty: boolean;
   markDirty: () => void;
   markSaved: () => void;
+  /** Drop the unsaved draft (and its tab-scoped copy) without saving. */
+  discardDraft: () => void;
   readonly: boolean;
   updateNodeParams: (nodeId: string, params: Record<string, unknown>) => void;
   /**
@@ -154,24 +161,80 @@ export function WorkflowEditorProvider({
 
   // Seed the canvas from the persisted definition exactly once. Later
   // background refetches of the same record must not wipe in-progress edits.
+  // A dirty draft from this browser tab wins: it is what the user was editing
+  // before switching tabs.
   const seededRef = useRef(false);
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     if (seededRef.current) {
       return;
     }
     seededRef.current = true;
+    const draft = readWorkflowDraft(record.id);
+    if (draft?.dirty) {
+      setNodes(draft.nodes);
+      setEdges(draft.edges);
+      setPositions(draft.positions);
+      setDirty(true);
+      setHydrated(true);
+      return;
+    }
     const flow = definitionToFlow(record.definition);
     setNodes(flow.nodes);
     setEdges(flow.edges);
     setPositions(flow.positions);
-  }, [record.definition, setEdges, setNodes]);
+    setHydrated(true);
+  }, [record.definition, record.id, setEdges, setNodes]);
+
+  // Mirror unsaved edits into sessionStorage so switching workspace tabs (which
+  // unmounts the editor) does not lose them. Clean editors have no draft.
+  // Writes are debounced because dragging a node re-renders on every frame.
+  const pendingDraftRef = useRef<{
+    nodes: RFNode[];
+    edges: RFEdge[];
+    positions: PositionsMap;
+    dirty: boolean;
+  } | null>(null);
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+    if (!dirty) {
+      pendingDraftRef.current = null;
+      clearWorkflowDraft(record.id);
+      return;
+    }
+    const draft = { nodes, edges, positions, dirty };
+    pendingDraftRef.current = draft;
+    const timer = setTimeout(() => {
+      writeWorkflowDraft(record.id, draft);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [dirty, edges, hydrated, nodes, positions, record.id]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingDraftRef.current) {
+        writeWorkflowDraft(record.id, pendingDraftRef.current);
+      }
+    };
+  }, [record.id]);
 
   const markDirty = useCallback(() => {
     setDirty(true);
   }, []);
   const markSaved = useCallback(() => {
+    // Clear the pending write first: a save-then-leave unmount must not write
+    // the stale dirty draft back after the server accepted it.
+    pendingDraftRef.current = null;
     setDirty(false);
-  }, []);
+    clearWorkflowDraft(record.id);
+  }, [record.id]);
+  const discardDraft = useCallback(() => {
+    pendingDraftRef.current = null;
+    setDirty(false);
+    clearWorkflowDraft(record.id);
+  }, [record.id]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<RFNode>[]) => {
@@ -396,6 +459,7 @@ export function WorkflowEditorProvider({
       dirty,
       markDirty,
       markSaved,
+      discardDraft,
       readonly,
       updateNodeParams,
       updateNode,
@@ -426,6 +490,7 @@ export function WorkflowEditorProvider({
       dirty,
       markDirty,
       markSaved,
+      discardDraft,
       readonly,
       updateNodeParams,
       updateNode,

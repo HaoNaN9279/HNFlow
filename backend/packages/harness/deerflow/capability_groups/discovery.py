@@ -8,7 +8,12 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from deerflow.capability_groups.contents import CapabilityGroupFile, build_capability_contents
+from deerflow.capability_groups.contents import (
+    CAPABILITY_CATEGORIES,
+    CapabilityGroupFile,
+    build_capability_contents,
+    category_sort_key,
+)
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
 
@@ -39,7 +44,7 @@ class CapabilityGroup:
 
     @property
     def counts(self) -> dict[str, int]:
-        result = {category: 0 for category in ("rules", "agents", "skills", "tools", "references", "templates", "assets", "evals", "other")}
+        result = {category: 0 for category in CAPABILITY_CATEGORIES}
         for item in self.files:
             result[item.category] = result.get(item.category, 0) + 1
         return result
@@ -66,8 +71,8 @@ def _grouped_files(files: tuple[CapabilityGroupFile, ...]) -> list[dict[str, obj
     grouped: dict[str, list[dict[str, object]]] = {}
     for item in files:
         grouped.setdefault(item.category, []).append(item.to_dict())
-    order = ("rules", "agents", "skills", "tools", "references", "templates", "assets", "evals", "other")
-    return [{"id": category, "files": grouped[category]} for category in order if category in grouped]
+    order = sorted(grouped, key=category_sort_key)
+    return [{"id": category, "files": grouped[category]} for category in order]
 
 
 def _version_key(version: str) -> tuple[int, ...]:

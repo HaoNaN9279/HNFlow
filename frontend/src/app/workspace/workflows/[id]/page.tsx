@@ -17,6 +17,7 @@ import {
   WorkspaceHeader,
 } from "@/components/workspace/workspace-container";
 import { useI18n } from "@/core/i18n/hooks";
+import { setWorkflowLocation } from "@/core/workflows/editor-session";
 import { useWorkflow } from "@/core/workflows/hooks";
 
 export default function WorkflowEditorPage() {
@@ -58,7 +59,14 @@ function WorkflowEditor() {
     deleteNode,
     readonly,
     clearRun,
+    workflowId,
   } = useWorkflowEditor();
+
+  // Remember that the Workflows tab is currently showing this workflow, so the
+  // sidebar returns here after a tab switch.
+  useEffect(() => {
+    setWorkflowLocation({ kind: "editor", workflowId });
+  }, [workflowId]);
 
   // T16: run state is editor-session state; leaving the page must not leave a
   // stale run painted on the next visit.

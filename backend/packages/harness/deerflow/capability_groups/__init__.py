@@ -8,6 +8,7 @@ from deerflow.capability_groups.contents import (
     CAPABILITY_CATEGORIES,
     CapabilityGroupFile,
     build_capability_contents,
+    category_sort_key,
     classify_capability_file,
     summarize_markdown,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "CapabilityGroupError",
     "CapabilityGroupFile",
     "build_capability_contents",
+    "category_sort_key",
     "classify_capability_file",
     "discover_capability_groups",
     "load_capability_group",

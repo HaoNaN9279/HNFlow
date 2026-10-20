@@ -211,10 +211,8 @@ export interface Translations {
     newChat: string;
     chats: string;
     demoChats: string;
-    agents: string;
     scheduledTasks: string;
     capabilityGroups: string;
-    agentsDisabledTooltip: string;
   };
 
   capabilityGroups: {
@@ -379,6 +377,12 @@ export interface Translations {
     collapsePanel: string;
     expandPanel: string;
     backToDirectory: string;
+    leave: {
+      title: string;
+      description: string;
+      save: string;
+      discard: string;
+    };
     nodeCatalog: {
       title: string;
       hint: string;

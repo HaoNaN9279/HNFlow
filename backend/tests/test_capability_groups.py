@@ -43,13 +43,24 @@ def test_summarize_markdown_falls_back_to_first_paragraph() -> None:
     assert summarize_markdown("\n\n# Heading\n\nThe first paragraph is the summary.\n") == "The first paragraph is the summary."
 
 
-def test_classify_capability_file_has_no_commands_category() -> None:
+def test_classify_capability_file_keeps_arbitrary_top_level_directories() -> None:
     assert classify_capability_file("SKILL.md") == "rules"
     assert classify_capability_file("rules/style.md") == "rules"
     assert classify_capability_file("agents/helper.md") == "agents"
     assert classify_capability_file("skills/child/SKILL.md") == "skills"
     assert classify_capability_file("scripts/run.py") == "tools"
-    assert classify_capability_file("commands/build.md") == "other"
+    assert classify_capability_file("commands/build.md") == "commands"
+    assert classify_capability_file("commands/nested/build.md") == "commands"
+    assert classify_capability_file("docs/guide/SKILL.md") == "docs"
+    assert classify_capability_file("README.md") == "other"
+
+
+def test_group_counts_include_dynamic_categories(tmp_path: Path) -> None:
+    group_dir = _make_group(tmp_path)
+    _write(group_dir / "commands" / "build.md", "# Build\n")
+    files = build_capability_contents(group_dir)
+    category = next(item.category for item in files if item.path == "commands/build.md")
+    assert category == "commands"
 
 
 def test_build_capability_contents_groups_and_skips_manifest(tmp_path: Path) -> None:
@@ -72,6 +83,20 @@ def test_discover_and_load_current_version(tmp_path: Path, monkeypatch: pytest.M
     loaded = load_capability_group("demo")
     assert loaded.guid == "b" * 32
     assert loaded.counts["skills"] == 1
+
+
+def test_detail_lists_dynamic_categories_after_builtins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    group_dir = _make_group(tmp_path)
+    _write(group_dir / "commands" / "nested" / "build.md", "# Build\n")
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+
+    group = load_capability_group("demo")
+    detail = group.detail_dict()
+    categories = detail["categories"]
+    assert isinstance(categories, list)
+    ids = [item["id"] for item in categories]
+    assert ids[-1] == "commands"
+    assert group.counts["commands"] == 1
 
 
 def test_malformed_group_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

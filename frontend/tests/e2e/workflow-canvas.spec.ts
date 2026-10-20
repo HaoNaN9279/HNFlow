@@ -275,6 +275,57 @@ test.describe("Workflow canvas", () => {
     mockLangGraphAPI(page);
   });
 
+  test("wheel zooms the canvas instead of panning it", async ({ page }) => {
+    mockWorkflowsAPI(page, anchorRecord());
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
+    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+
+    const readScale = async () => {
+      const style = await page
+        .locator(".react-flow__viewport")
+        .getAttribute("style");
+      const match = /scale\(([\d.]+)\)/.exec(style ?? "");
+      return match ? Number(match[1]) : Number.NaN;
+    };
+    await expect.poll(readScale).toBeGreaterThan(0);
+    const before = await readScale();
+
+    await page.locator(".react-flow").hover({ position: { x: 400, y: 300 } });
+    await page.mouse.wheel(0, -400);
+
+    await expect.poll(readScale).toBeGreaterThan(before);
+  });
+
+  test("restores the workflow tab location and unsaved canvas draft", async ({
+    page,
+  }) => {
+    mockWorkflowsAPI(page, anchorRecord());
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
+    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+
+    const canvasBox = (await page.locator(".react-flow").boundingBox())!;
+    await addNodeFromCatalog(
+      page,
+      "data:assign",
+      canvasBox.x + 360,
+      canvasBox.y + 160,
+    );
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+    await expect(page.getByTestId("workflow-dirty-dot")).toBeVisible();
+
+    // Switch to another workspace tab, then return through the sidebar. The
+    // workflow tab must reopen the same editor with the unsaved draft intact.
+    await page.locator("a[href='/workspace/chats']").click();
+    await page.waitForURL("**/workspace/chats**");
+    await page.locator("a[href='/workspace/workflows']").click();
+    await page.waitForURL(`**/workspace/workflows/${WORKFLOW_ID}`);
+
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+    await expect(page.getByTestId("workflow-dirty-dot")).toBeVisible();
+  });
+
   test("drag 5 nodes, connect them, save, and restore on reload", async ({
     page,
   }) => {

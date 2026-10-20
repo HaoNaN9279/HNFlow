@@ -11,7 +11,10 @@ export const Canvas = ({ children, ...props }: CanvasProps) => (
     deleteKeyCode={["Backspace", "Delete"]}
     fitView
     panOnDrag={false}
-    panOnScroll
+    // Wheel is zoom, not pan. Middle-button drag (configured by the caller)
+    // remains the way to pan.
+    panOnScroll={false}
+    zoomOnScroll
     selectionOnDrag={true}
     zoomOnDoubleClick={false}
     {...props}

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "@rstest/core";
+import { afterEach, beforeEach, describe, expect, it } from "@rstest/core";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 
@@ -8,10 +8,16 @@ import {
 } from "@/components/workspace/workflows/workflow-editor-context";
 import { I18nProvider } from "@/core/i18n/context";
 import { flowToDefinition } from "@/core/workflows/canvas/mapping";
+import { writeWorkflowDraft } from "@/core/workflows/editor-session";
 import type { WorkflowRecord } from "@/core/workflows/types";
+
+beforeEach(() => {
+  window.sessionStorage.clear();
+});
 
 afterEach(() => {
   cleanup();
+  window.sessionStorage.clear();
 });
 
 function makeRecord(): WorkflowRecord {
@@ -134,6 +140,23 @@ describe("WorkflowEditorProvider canvas positions", () => {
     });
 
     expect(result.current.positions).toEqual({});
+  });
+
+  it("restores a dirty tab-scoped draft before the saved record", async () => {
+    writeWorkflowDraft("wf-1", {
+      nodes: [],
+      edges: [],
+      positions: { "draft-node": { x: 12, y: 34 } },
+      dirty: true,
+    });
+
+    const { result } = renderEditor();
+    await waitFor(() => {
+      expect(result.current.dirty).toBe(true);
+      expect(result.current.positions).toEqual({
+        "draft-node": { x: 12, y: 34 },
+      });
+    });
   });
 
   it("prunePositions with no ids is a no-op", async () => {

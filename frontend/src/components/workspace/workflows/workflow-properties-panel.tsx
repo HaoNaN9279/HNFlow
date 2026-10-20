@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { useI18n } from "@/core/i18n/hooks";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
+import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
 import { cn } from "@/lib/utils";
 
 import { WorkflowNodeForm } from "./workflow-node-form";
@@ -69,7 +70,10 @@ export function WorkflowPropertiesPanel({
   const nodeId = node?.id ?? null;
 
   const [draft, setDraft] = useState<ParamDraftRow[]>([]);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = usePersistedBoolean(
+    "deerflow.ui.workflow.properties.collapsed",
+    false,
+  );
   const nextRowIdRef = useRef(0);
 
   // Re-seed the draft only when the selected node changes, so edits in

@@ -3,6 +3,7 @@
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  FolderIcon,
   FolderOpenIcon,
   RefreshCwIcon,
 } from "lucide-react";
@@ -21,15 +22,20 @@ import {
   useCapabilityGroups,
   revealCapabilityGroupFile,
 } from "@/core/capability-groups/hooks";
+import {
+  buildCapabilityFileTree,
+  type CapabilityTreeNode,
+} from "@/core/capability-groups/tree";
 import type {
   CapabilityGroupDetail,
   CapabilityGroupFile,
   CapabilityGroupSummary,
 } from "@/core/capability-groups/types";
 import { useI18n } from "@/core/i18n/hooks";
+import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
 import { cn } from "@/lib/utils";
 
-const CATEGORY_ORDER = [
+const BUILTIN_CATEGORY_ORDER = [
   "rules",
   "agents",
   "skills",
@@ -40,6 +46,29 @@ const CATEGORY_ORDER = [
   "evals",
   "other",
 ] as const;
+
+/**
+ * Built-in categories keep their curated order; arbitrary top-level folders
+ * (a group may invent its own categories by creating directories) follow
+ * alphabetically.
+ */
+function orderedCategoryIds(ids: Iterable<string>): string[] {
+  const present = new Set(ids);
+  const ordered: string[] = BUILTIN_CATEGORY_ORDER.filter((id) =>
+    present.has(id),
+  );
+  const dynamic = [...present]
+    .filter((id) => !(BUILTIN_CATEGORY_ORDER as readonly string[]).includes(id))
+    .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+  return [...ordered, ...dynamic];
+}
+
+function categoryLabel(
+  labels: ReturnType<typeof useI18n>["t"]["capabilityGroups"],
+  id: string,
+): string {
+  return (labels.categories as Record<string, string | undefined>)[id] ?? id;
+}
 
 export default function CapabilityGroupsPage() {
   const { t } = useI18n();
@@ -101,8 +130,16 @@ export default function CapabilityGroupsPage() {
 function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
   const { t } = useI18n();
   const labels = t.capabilityGroups;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = usePersistedBoolean(
+    `deerflow.ui.capability-group.open.${group.guid}`,
+    false,
+  );
   const detail = useCapabilityGroup(group.guid, group.version, open);
+  const countCategories = orderedCategoryIds(
+    Object.keys(group.counts).filter(
+      (category) => (group.counts[category] ?? 0) > 0,
+    ),
+  );
 
   return (
     <section
@@ -138,14 +175,12 @@ function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
           )}
         </div>
         <span className="text-muted-foreground hidden shrink-0 text-[11px] sm:block">
-          {CATEGORY_ORDER.filter(
-            (category) => (group.counts[category] ?? 0) > 0,
-          )
+          {countCategories
             .map(
               (category) =>
-                `${labels.categories[category]} ${group.counts[category]}`,
+                `${categoryLabel(labels, category)} ${group.counts[category]}`,
             )
-            .join(" 路 ")}
+            .join(" · ")}
         </span>
       </button>
 
@@ -177,6 +212,11 @@ export function CapabilityGroupContents({
   const labels = t.capabilityGroups;
   const [revealingPath, setRevealingPath] = useState<string | null>(null);
   const byCategory = new Map(group.categories.map((item) => [item.id, item]));
+  const categoryIds = orderedCategoryIds(
+    group.categories
+      .filter((item) => item.files.length > 0)
+      .map((item) => item.id),
+  );
 
   const reveal = async (file: CapabilityGroupFile) => {
     setRevealingPath(file.path);
@@ -194,63 +234,179 @@ export function CapabilityGroupContents({
 
   return (
     <div className="flex flex-col">
-      {CATEGORY_ORDER.map((category) => {
+      {categoryIds.map((category) => {
         const entry = byCategory.get(category);
         if (!entry || entry.files.length === 0) {
           return null;
         }
+        const tree = buildCapabilityFileTree(entry.files, category);
         return (
           <div key={category} className="border-b last:border-b-0">
             <div className="bg-muted/30 text-muted-foreground px-3 py-1.5 text-[11px] font-medium tracking-wide uppercase">
-              {labels.categories[category]}
+              {categoryLabel(labels, category)}
             </div>
             <div className="flex flex-col">
-              {entry.files.map((file) => (
-                <div
-                  key={file.path}
-                  className="hover:bg-muted/20 flex items-center gap-3 border-t px-3 py-1.5 first:border-t-0"
-                  data-testid="capability-group-file"
-                  data-file-path={file.path}
-                >
-                  <div
-                    className={cn(
-                      "min-w-0 flex-1 truncate text-xs",
-                      file.is_markdown
-                        ? "text-foreground"
-                        : "text-muted-foreground",
-                    )}
-                    title={file.path}
-                  >
-                    <span className="font-medium">{file.name}</span>
-                    {(file.summary || !file.is_markdown) && (
-                      <span className="text-muted-foreground ml-2">
-                        {file.is_markdown ? file.summary : file.path}
-                      </span>
-                    )}
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    className="size-7 shrink-0"
-                    disabled={revealingPath !== null}
-                    aria-label={`${labels.reveal} ${file.name}`}
-                    title={labels.reveal}
-                    onClick={() => void reveal(file)}
-                  >
-                    <FolderOpenIcon className="size-3.5" />
-                  </Button>
-                </div>
-              ))}
+              <CapabilityTreeNodes
+                nodes={tree}
+                group={group}
+                depth={0}
+                revealingPath={revealingPath}
+                onReveal={(file) => void reveal(file)}
+              />
             </div>
           </div>
         );
       })}
-      {group.categories.length === 0 && (
+      {categoryIds.length === 0 && (
         <div className="text-muted-foreground p-3 text-xs">
           {labels.noFiles}
         </div>
       )}
+    </div>
+  );
+}
+
+function CapabilityTreeNodes({
+  nodes,
+  group,
+  depth,
+  revealingPath,
+  onReveal,
+}: {
+  nodes: CapabilityTreeNode[];
+  group: CapabilityGroupDetail;
+  depth: number;
+  revealingPath: string | null;
+  onReveal: (file: CapabilityGroupFile) => void;
+}) {
+  return (
+    <>
+      {nodes.map((node) =>
+        node.kind === "folder" ? (
+          <CapabilityFolder
+            key={`${group.guid}:${node.path}`}
+            node={node}
+            group={group}
+            depth={depth}
+            revealingPath={revealingPath}
+            onReveal={onReveal}
+          />
+        ) : (
+          <CapabilityFileRow
+            key={`${group.guid}:${node.path}`}
+            file={node.file}
+            depth={depth}
+            revealingPath={revealingPath}
+            onReveal={onReveal}
+          />
+        ),
+      )}
+    </>
+  );
+}
+
+function CapabilityFolder({
+  node,
+  group,
+  depth,
+  revealingPath,
+  onReveal,
+}: {
+  node: Extract<CapabilityTreeNode, { kind: "folder" }>;
+  group: CapabilityGroupDetail;
+  depth: number;
+  revealingPath: string | null;
+  onReveal: (file: CapabilityGroupFile) => void;
+}) {
+  const [open, setOpen] = usePersistedBoolean(
+    `deerflow.ui.capability-group.folder.${group.guid}.${group.version}.${node.path}`,
+    true,
+  );
+
+  return (
+    <div className="flex flex-col">
+      <button
+        type="button"
+        className="hover:bg-muted/20 flex items-center gap-2 border-t px-3 py-1.5 text-left first:border-t-0"
+        style={{ paddingLeft: `${12 + depth * 16}px` }}
+        aria-expanded={open}
+        data-testid="capability-group-folder"
+        data-folder-path={node.path}
+        onClick={() => setOpen((current) => !current)}
+      >
+        {open ? (
+          <ChevronDownIcon className="text-muted-foreground size-3.5 shrink-0" />
+        ) : (
+          <ChevronRightIcon className="text-muted-foreground size-3.5 shrink-0" />
+        )}
+        <FolderIcon className="text-muted-foreground size-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">
+          {node.name}
+        </span>
+        <span className="text-muted-foreground shrink-0 text-[10px]">
+          {node.fileCount}
+        </span>
+      </button>
+      {open && (
+        <CapabilityTreeNodes
+          nodes={node.children}
+          group={group}
+          depth={depth + 1}
+          revealingPath={revealingPath}
+          onReveal={onReveal}
+        />
+      )}
+    </div>
+  );
+}
+
+function CapabilityFileRow({
+  file,
+  depth,
+  revealingPath,
+  onReveal,
+}: {
+  file: CapabilityGroupFile;
+  depth: number;
+  revealingPath: string | null;
+  onReveal: (file: CapabilityGroupFile) => void;
+}) {
+  const { t } = useI18n();
+  const labels = t.capabilityGroups;
+
+  return (
+    <div
+      className="hover:bg-muted/20 flex items-center gap-3 border-t px-3 py-1.5 first:border-t-0"
+      style={{ paddingLeft: `${12 + depth * 16}px` }}
+      data-testid="capability-group-file"
+      data-file-path={file.path}
+    >
+      <div
+        className={cn(
+          "min-w-0 flex-1 truncate text-xs",
+          file.is_markdown ? "text-foreground" : "text-muted-foreground",
+        )}
+        title={file.path}
+      >
+        <span className="font-medium">{file.name}</span>
+        {(file.summary || !file.is_markdown) && (
+          <span className="text-muted-foreground ml-2">
+            {file.is_markdown ? file.summary : file.path}
+          </span>
+        )}
+      </div>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon-sm"
+        className="size-7 shrink-0"
+        disabled={revealingPath !== null}
+        aria-label={`${labels.reveal} ${file.name}`}
+        title={labels.reveal}
+        onClick={() => onReveal(file)}
+      >
+        <FolderOpenIcon className="size-3.5" />
+      </Button>
     </div>
   );
 }
