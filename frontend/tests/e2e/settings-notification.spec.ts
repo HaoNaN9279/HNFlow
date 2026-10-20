@@ -49,7 +49,7 @@ async function installNotificationMock(
 async function openNotificationSettings(page: Page) {
   await page.goto("/workspace/chats/new");
   const sidebar = page.locator("[data-sidebar='sidebar']");
-  await sidebar.getByRole("button", { name: /Settings and more/ }).click();
+  await sidebar.getByRole("button", { name: /^Settings$/ }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
   const dialog = page.getByRole("dialog", { name: "Settings" });
   await expect(dialog).toBeVisible();

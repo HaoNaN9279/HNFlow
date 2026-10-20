@@ -22,6 +22,7 @@ test.describe("Sidebar navigation", () => {
     await expect(sidebar.getByRole("button", { name: "Agents" })).toHaveCount(
       0,
     );
+    await expect(sidebar.getByText("HNFlow", { exact: true })).toBeVisible();
   });
 
   test("mobile welcome layout stays within viewport and opens sidebar", async ({

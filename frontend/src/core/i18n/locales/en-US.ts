@@ -758,13 +758,8 @@ export const enUS: Translations = {
 
   // Workspace
   workspace: {
-    officialWebsite: "DeerFlow's official website",
-    githubTooltip: "DeerFlow on GitHub",
-    settingsAndMore: "Settings and more",
-    visitGithub: "DeerFlow on GitHub",
-    reportIssue: "Report an issue",
-    contactUs: "Contact us",
-    about: "About DeerFlow",
+    githubTooltip: "HNFlow on GitHub",
+    settingsAndMore: "Settings",
   },
 
   // Conversation
@@ -950,7 +945,7 @@ export const enUS: Translations = {
   // Settings
   settings: {
     title: "Settings",
-    description: "Adjust how DeerFlow looks and behaves for you.",
+    description: "Adjust how HNFlow looks and behaves for you.",
     sections: {
       account: "Account",
       appearance: "Appearance",
@@ -958,12 +953,11 @@ export const enUS: Translations = {
       tools: "Tools",
       skills: "Skills",
       notification: "Notification",
-      about: "About",
     },
     memory: {
       title: "Memory",
       description:
-        "DeerFlow automatically learns from your conversations in the background. These memories help DeerFlow understand you better and deliver a more personalized experience.",
+        "HNFlow automatically learns from your conversations in the background. These memories help HNFlow understand you better and deliver a more personalized experience.",
       empty: "No memory data to display.",
       rawJson: "Raw JSON",
       exportButton: "Export memory",

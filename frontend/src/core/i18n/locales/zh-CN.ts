@@ -725,13 +725,8 @@ export const zhCN: Translations = {
 
   // Workspace
   workspace: {
-    officialWebsite: "访问 DeerFlow 官方网站",
-    githubTooltip: "访问 DeerFlow 的 GitHub 仓库",
-    settingsAndMore: "设置和更多",
-    visitGithub: "在 GitHub 上查看 DeerFlow",
-    reportIssue: "报告问题",
-    contactUs: "联系我们",
-    about: "关于 DeerFlow",
+    githubTooltip: "访问 HNFlow 的 GitHub 仓库",
+    settingsAndMore: "设置",
   },
 
   // Conversation
@@ -911,7 +906,7 @@ export const zhCN: Translations = {
   // Settings
   settings: {
     title: "设置",
-    description: "根据你的偏好调整 DeerFlow 的界面和行为。",
+    description: "根据你的偏好调整 HNFlow 的界面和行为。",
     sections: {
       account: "账号",
       appearance: "外观",
@@ -919,12 +914,11 @@ export const zhCN: Translations = {
       tools: "工具",
       skills: "技能",
       notification: "通知",
-      about: "关于",
     },
     memory: {
       title: "记忆",
       description:
-        "DeerFlow 会在后台不断从你的对话中自动学习。这些记忆能帮助 DeerFlow 更好地理解你，并提供更个性化的体验。",
+        "HNFlow 会在后台不断从你的对话中自动学习。这些记忆能帮助 HNFlow 更好地理解你，并提供更个性化的体验。",
       empty: "暂无可展示的记忆数据。",
       rawJson: "原始 JSON",
       exportButton: "导出记忆",

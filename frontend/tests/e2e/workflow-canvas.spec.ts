@@ -372,6 +372,20 @@ test.describe("Workflow canvas", () => {
     mockLangGraphAPI(page);
   });
 
+  test("links the workspace header to the HNFlow repository", async ({
+    page,
+  }) => {
+    mockWorkflowsAPI(page, anchorRecord());
+    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
+
+    await expect(
+      page.locator('header a[href="https://github.com/HaoNaN9279/HNFlow"]'),
+    ).toBeVisible();
+    await expect(
+      page.getByText("HNFlow", { exact: true }).first(),
+    ).toBeVisible();
+  });
+
   test("wheel zooms the canvas instead of panning it", async ({ page }) => {
     mockWorkflowsAPI(page, anchorRecord());
     await page.setViewportSize({ width: 1280, height: 800 });

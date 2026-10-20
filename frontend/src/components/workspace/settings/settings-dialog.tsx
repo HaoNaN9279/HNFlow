@@ -2,7 +2,6 @@
 
 import {
   BellIcon,
-  InfoIcon,
   BrainIcon,
   PaletteIcon,
   SparklesIcon,
@@ -68,20 +67,13 @@ const ToolSettingsPage = dynamic(
     import("./tool-settings-page").then((module) => module.ToolSettingsPage),
   { loading: SettingsPageLoading },
 );
-const AboutSettingsPage = dynamic(
-  () =>
-    import("./about-settings-page").then((module) => module.AboutSettingsPage),
-  { loading: SettingsPageLoading },
-);
-
 export type SettingsSection =
   | "account"
   | "appearance"
   | "memory"
   | "tools"
   | "skills"
-  | "notification"
-  | "about";
+  | "notification";
 
 type SettingsDialogProps = React.ComponentProps<typeof Dialog> & {
   defaultSection?: SettingsSection;
@@ -125,7 +117,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
       },
       { id: "tools", label: t.settings.sections.tools, icon: WrenchIcon },
       { id: "skills", label: t.settings.sections.skills, icon: SparklesIcon },
-      { id: "about", label: t.settings.sections.about, icon: InfoIcon },
     ],
     [
       t.settings.sections.account,
@@ -134,7 +125,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
       t.settings.sections.tools,
       t.settings.sections.skills,
       t.settings.sections.notification,
-      t.settings.sections.about,
     ],
   );
   return (
@@ -189,7 +179,6 @@ export function SettingsDialog(props: SettingsDialogProps) {
                 />
               )}
               {activeSection === "notification" && <NotificationSettingsPage />}
-              {activeSection === "about" && <AboutSettingsPage />}
             </div>
           </ScrollArea>
         </div>
