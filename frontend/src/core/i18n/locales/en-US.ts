@@ -302,6 +302,7 @@ export const enUS: Translations = {
     loadContentsFailed: "Failed to load capability group contents",
     noFiles: "This capability group has no files to show",
     reveal: "Reveal in file manager",
+    revealGroup: "Open capability group folder",
     revealFailed: "Failed to reveal file",
     revealed: "Revealed in file manager",
     source: { public: "Built-in", user: "User" },
@@ -468,6 +469,7 @@ export const enUS: Translations = {
     readonly: "Read only",
     collapsePanel: "Collapse panel",
     expandPanel: "Expand panel",
+    resizePanel: "Resize panel",
     backToDirectory: "Workflow directory",
     leave: {
       title: "Leave workflow?",

@@ -14,6 +14,7 @@ import { useI18n } from "@/core/i18n/hooks";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
+import { useResizablePanel } from "@/hooks/use-resizable-panel";
 import { cn } from "@/lib/utils";
 
 import { WorkflowNodeForm } from "./workflow-node-form";
@@ -74,6 +75,13 @@ export function WorkflowPropertiesPanel({
     "deerflow.ui.workflow.properties.collapsed",
     false,
   );
+  const { size: panelWidth, handleProps } = useResizablePanel({
+    storageKey: "deerflow.ui.workflow.properties.width",
+    defaultSize: 288,
+    min: 200,
+    max: 720,
+    axis: "x",
+  });
   const nextRowIdRef = useRef(0);
 
   // Re-seed the draft only when the selected node changes, so edits in
@@ -89,6 +97,18 @@ export function WorkflowPropertiesPanel({
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodeId]);
+
+  const resizeHandle = !collapsed && (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={t.workflows.resizePanel}
+      tabIndex={0}
+      className="hover:bg-primary/30 focus-visible:bg-primary/30 absolute inset-y-0 -left-1 z-20 w-2 cursor-col-resize touch-none focus-visible:outline-none"
+      data-testid="workflow-properties-resize"
+      {...handleProps}
+    />
+  );
 
   const header = (
     <div
@@ -126,13 +146,12 @@ export function WorkflowPropertiesPanel({
   if (!node || !workflow) {
     return (
       <aside
-        className={cn(
-          "flex shrink-0 flex-col border-l",
-          collapsed ? "w-12" : "w-72",
-        )}
+        className="relative flex shrink-0 flex-col border-l"
+        style={{ width: collapsed ? 48 : panelWidth }}
         data-testid="workflow-properties-panel"
         data-collapsed={collapsed}
       >
+        {resizeHandle}
         {header}
         {!collapsed && (
           <div className="text-muted-foreground p-4 text-sm">
@@ -191,13 +210,12 @@ export function WorkflowPropertiesPanel({
 
   return (
     <aside
-      className={cn(
-        "flex shrink-0 flex-col border-l",
-        collapsed ? "w-12" : "w-72",
-      )}
+      className="relative flex shrink-0 flex-col border-l"
+      style={{ width: collapsed ? 48 : panelWidth }}
       data-testid="workflow-properties-panel"
       data-collapsed={collapsed}
     >
+      {resizeHandle}
       {header}
       {!collapsed && (
         <div className="min-h-0 flex-1 overflow-y-auto">

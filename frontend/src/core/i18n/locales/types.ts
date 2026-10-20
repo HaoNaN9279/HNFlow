@@ -227,6 +227,7 @@ export interface Translations {
     loadContentsFailed: string;
     noFiles: string;
     reveal: string;
+    revealGroup: string;
     revealFailed: string;
     revealed: string;
     source: { public: string; user: string };
@@ -376,6 +377,7 @@ export interface Translations {
     readonly: string;
     collapsePanel: string;
     expandPanel: string;
+    resizePanel: string;
     backToDirectory: string;
     leave: {
       title: string;

@@ -7,7 +7,6 @@ and other resources; a skill is a child resource, not a group.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -17,6 +16,7 @@ from deerflow.capability_groups import (
     CapabilityGroupError,
     discover_capability_groups,
     load_capability_group,
+    resolve_reveal_target,
     reveal_in_file_manager,
 )
 from deerflow.runtime.user_context import get_effective_user_id
@@ -29,7 +29,11 @@ class CapabilityGroupListResponse(BaseModel):
 
 
 class CapabilityGroupRevealRequest(BaseModel):
-    path: str = Field(..., min_length=1, description="Group-relative POSIX path")
+    path: str = Field(
+        default=".",
+        min_length=1,
+        description="Group-relative POSIX path; '.' reveals the group root",
+    )
 
 
 class CapabilityGroupRevealResponse(BaseModel):
@@ -80,14 +84,12 @@ async def reveal_capability_group_file(
 ) -> CapabilityGroupRevealResponse:
     group = await _group_or_404(group_id, version=version)
     relative = body.path.replace("\\", "/")
-    if relative.startswith("/") or ".." in Path(relative).parts:
-        raise HTTPException(status_code=400, detail="path must be relative to the capability group")
-    root = group.root.resolve()
-    target = (root / relative).resolve()
-    if not target.is_relative_to(root):
-        raise HTTPException(status_code=400, detail="path escapes the capability group")
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail=f"file not found: {relative}")
+    try:
+        target = resolve_reveal_target(group.root, relative)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"path not found: {relative}")
     try:
         await asyncio.to_thread(reveal_in_file_manager, target)
     except (FileNotFoundError, OSError, RuntimeError) as exc:

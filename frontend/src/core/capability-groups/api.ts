@@ -53,3 +53,22 @@ export async function revealCapabilityGroupFile(
     throw new Error(await readError(response));
   }
 }
+
+/** Reveal the capability group's own root directory in the host file manager. */
+export async function revealCapabilityGroup(
+  groupId: string,
+  version?: string,
+): Promise<void> {
+  const query = version ? `?version=${encodeURIComponent(version)}` : "";
+  const response = await fetch(
+    url(`/${encodeURIComponent(groupId)}/reveal${query}`),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "." }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+}

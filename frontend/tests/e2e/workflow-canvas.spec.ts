@@ -394,6 +394,51 @@ test.describe("Workflow canvas", () => {
     await expect.poll(readScale).toBeGreaterThan(before);
   });
 
+  test("resizes the properties and run panels", async ({ page }) => {
+    mockWorkflowsAPI(page, anchorRecord());
+    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
+    await expect(page.locator(".react-flow__node")).toHaveCount(2);
+
+    const properties = page.getByTestId("workflow-properties-panel");
+    const propertiesBefore = (await properties.boundingBox())!;
+    const propertiesHandle = (await page
+      .getByTestId("workflow-properties-resize")
+      .boundingBox())!;
+    await page.mouse.move(
+      propertiesHandle.x + propertiesHandle.width / 2,
+      propertiesHandle.y + propertiesHandle.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      propertiesHandle.x - 80,
+      propertiesHandle.y + propertiesHandle.height / 2,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await properties.boundingBox())!.width)
+      .toBeGreaterThan(propertiesBefore.width + 40);
+
+    const runPanel = page.getByTestId("workflow-run-panel");
+    const runBefore = (await runPanel.boundingBox())!;
+    const runHandle = (await page
+      .getByTestId("workflow-run-resize")
+      .boundingBox())!;
+    await page.mouse.move(
+      runHandle.x + runHandle.width / 2,
+      runHandle.y + runHandle.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(runHandle.x + runHandle.width / 2, runHandle.y - 60, {
+      steps: 8,
+    });
+    await page.mouse.up();
+    await expect
+      .poll(async () => (await runPanel.boundingBox())!.height)
+      .toBeGreaterThan(runBefore.height + 30);
+  });
+
   test("restores the workflow tab location and unsaved canvas draft", async ({
     page,
   }) => {

@@ -11,6 +11,7 @@ from deerflow.capability_groups import (
     classify_capability_file,
     discover_capability_groups,
     load_capability_group,
+    resolve_reveal_target,
     summarize_markdown,
 )
 from deerflow.capability_groups import discovery as discovery_module
@@ -97,6 +98,16 @@ def test_detail_lists_dynamic_categories_after_builtins(tmp_path: Path, monkeypa
     ids = [item["id"] for item in categories]
     assert ids[-1] == "commands"
     assert group.counts["commands"] == 1
+
+
+def test_resolve_reveal_target_supports_group_root(tmp_path: Path) -> None:
+    root = tmp_path / "group"
+    _write(root / "rules" / "style.md", "# Style\n")
+
+    assert resolve_reveal_target(root, ".") == root.resolve()
+    assert resolve_reveal_target(root, "rules/style.md") == (root / "rules" / "style.md").resolve()
+    with pytest.raises(ValueError):
+        resolve_reveal_target(root, "../outside.md")
 
 
 def test_malformed_group_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

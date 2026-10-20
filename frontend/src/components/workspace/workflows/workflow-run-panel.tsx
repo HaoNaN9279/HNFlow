@@ -25,6 +25,7 @@ import {
 import type { RunStatus } from "@/core/workflows/run-state";
 import { continueWorkflowNode, rewindWorkflowRun } from "@/core/workflows/runs";
 import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
+import { useResizablePanel } from "@/hooks/use-resizable-panel";
 import { cn } from "@/lib/utils";
 
 import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
@@ -76,6 +77,13 @@ export function WorkflowRunPanel() {
     "deerflow.ui.workflow.run.collapsed",
     false,
   );
+  const { size: panelHeight, handleProps } = useResizablePanel({
+    storageKey: "deerflow.ui.workflow.run.height",
+    defaultSize: 256,
+    min: 96,
+    max: 640,
+    axis: "y",
+  });
 
   const isTerminal =
     runState.status !== "idle" && runState.status !== "running";
@@ -271,13 +279,22 @@ export function WorkflowRunPanel() {
 
   return (
     <section
-      className={cn(
-        "flex w-full shrink-0 flex-col border-t",
-        collapsed ? "h-12" : "h-64",
-      )}
+      className="relative flex w-full shrink-0 flex-col border-t"
+      style={{ height: collapsed ? 48 : panelHeight }}
       data-testid="workflow-run-panel"
       data-collapsed={collapsed}
     >
+      {!collapsed && (
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label={t.workflows.resizePanel}
+          tabIndex={0}
+          className="hover:bg-primary/30 focus-visible:bg-primary/30 absolute inset-x-0 -top-1 z-20 h-2 cursor-row-resize touch-none focus-visible:outline-none"
+          data-testid="workflow-run-resize"
+          {...handleProps}
+        />
+      )}
       <div
         className={cn(
           "flex items-center justify-between gap-2 border-b px-4",

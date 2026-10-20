@@ -18,7 +18,7 @@ from deerflow.capability_groups.discovery import (
     discover_capability_groups,
     load_capability_group,
 )
-from deerflow.capability_groups.reveal import reveal_in_file_manager
+from deerflow.capability_groups.reveal import resolve_reveal_target, reveal_in_file_manager
 
 __all__ = [
     "CAPABILITY_CATEGORIES",
@@ -30,6 +30,7 @@ __all__ = [
     "classify_capability_file",
     "discover_capability_groups",
     "load_capability_group",
+    "resolve_reveal_target",
     "reveal_in_file_manager",
     "summarize_markdown",
 ]

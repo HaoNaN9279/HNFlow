@@ -287,6 +287,7 @@ export const zhCN: Translations = {
     loadContentsFailed: "加载能力组内容失败",
     noFiles: "该能力组没有可展示的文件",
     reveal: "在资源管理器中定位",
+    revealGroup: "打开能力组目录",
     revealFailed: "定位文件失败",
     revealed: "已在资源管理器中定位",
     source: { public: "内置", user: "用户" },
@@ -451,6 +452,7 @@ export const zhCN: Translations = {
     readonly: "只读",
     collapsePanel: "收起面板",
     expandPanel: "展开面板",
+    resizePanel: "调整面板大小",
     backToDirectory: "工作流目录",
     leave: {
       title: "离开工作流？",

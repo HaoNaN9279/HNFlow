@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   loadCapabilityGroup,
   loadCapabilityGroups,
+  revealCapabilityGroup,
   revealCapabilityGroupFile,
 } from "./api";
 
@@ -25,4 +26,4 @@ export function useCapabilityGroup(
   });
 }
 
-export { revealCapabilityGroupFile };
+export { revealCapabilityGroup, revealCapabilityGroupFile };

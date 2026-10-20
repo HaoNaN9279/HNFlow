@@ -20,6 +20,7 @@ import {
 import {
   useCapabilityGroup,
   useCapabilityGroups,
+  revealCapabilityGroup,
   revealCapabilityGroupFile,
 } from "@/core/capability-groups/hooks";
 import {
@@ -135,11 +136,26 @@ function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
     false,
   );
   const detail = useCapabilityGroup(group.guid, group.version, open);
+  const [revealing, setRevealing] = useState(false);
   const countCategories = orderedCategoryIds(
     Object.keys(group.counts).filter(
       (category) => (group.counts[category] ?? 0) > 0,
     ),
   );
+
+  const revealRoot = async () => {
+    setRevealing(true);
+    try {
+      await revealCapabilityGroup(group.guid, group.version);
+      toast.success(labels.revealed);
+    } catch (error) {
+      toast.error(
+        `${labels.revealFailed}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRevealing(false);
+    }
+  };
 
   return (
     <section
@@ -147,42 +163,57 @@ function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
       data-testid="capability-group"
       data-group-name={group.name}
     >
-      <button
-        type="button"
-        className="hover:bg-muted/40 flex w-full items-center gap-3 px-3 py-3 text-left"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        {open ? (
-          <ChevronDownIcon className="text-muted-foreground size-4 shrink-0" />
-        ) : (
-          <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
-        )}
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="truncate text-sm font-medium">{group.name}</span>
-            <Badge variant="outline" className="font-mono text-[10px]">
-              v{group.version}
-            </Badge>
-            <Badge variant="secondary" className="text-[10px]">
-              {labels.source[group.source]}
-            </Badge>
-          </div>
-          {group.description && (
-            <p className="text-muted-foreground mt-0.5 truncate text-xs">
-              {group.description}
-            </p>
+      <div className="hover:bg-muted/40 flex w-full items-center gap-2 px-3 py-3">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-3 text-left"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+        >
+          {open ? (
+            <ChevronDownIcon className="text-muted-foreground size-4 shrink-0" />
+          ) : (
+            <ChevronRightIcon className="text-muted-foreground size-4 shrink-0" />
           )}
-        </div>
-        <span className="text-muted-foreground hidden shrink-0 text-[11px] sm:block">
-          {countCategories
-            .map(
-              (category) =>
-                `${categoryLabel(labels, category)} ${group.counts[category]}`,
-            )
-            .join(" · ")}
-        </span>
-      </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="truncate text-sm font-medium">{group.name}</span>
+              <Badge variant="outline" className="font-mono text-[10px]">
+                v{group.version}
+              </Badge>
+              <Badge variant="secondary" className="text-[10px]">
+                {labels.source[group.source]}
+              </Badge>
+            </div>
+            {group.description && (
+              <p className="text-muted-foreground mt-0.5 truncate text-xs">
+                {group.description}
+              </p>
+            )}
+          </div>
+          <span className="text-muted-foreground hidden shrink-0 text-[11px] sm:block">
+            {countCategories
+              .map(
+                (category) =>
+                  `${categoryLabel(labels, category)} ${group.counts[category]}`,
+              )
+              .join(" · ")}
+          </span>
+        </button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7 shrink-0"
+          disabled={revealing}
+          aria-label={`${labels.revealGroup} ${group.name}`}
+          title={labels.revealGroup}
+          data-testid="capability-group-reveal"
+          onClick={() => void revealRoot()}
+        >
+          <FolderOpenIcon className="size-3.5" />
+        </Button>
+      </div>
 
       {open && (
         <div className="border-t">
