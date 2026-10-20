@@ -405,6 +405,27 @@ export function getNodeCatalogEntry(
   return NODE_CATALOG.find((entry) => entry.type === type);
 }
 
+/** Immutable display name every instance of this node type starts with. */
+export function getDefaultNodeName(type: NodeType): string {
+  return getNodeCatalogEntry(type)?.label ?? type;
+}
+
+/**
+ * Normalize a user-authored instance label. Blank input or the fixed catalog
+ * name means "no override" (the card falls back to the default name), so the
+ * canvas never stores a redundant label.
+ */
+export function normalizeNodeDisplayName(
+  type: NodeType,
+  value: string,
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === getDefaultNodeName(type)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 /**
  * Build a fresh default node for the given type with unique id, deep-copied
  * ports and params. Every call returns an independent object graph.

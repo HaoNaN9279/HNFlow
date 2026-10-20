@@ -60,6 +60,21 @@ describe("workflow editor session", () => {
     expect(resolveWorkflowNavPath(storage)).toBe("/workspace/workflows/wf%201");
   });
 
+  it("restores the full editor URL including the breadcrumb trail", () => {
+    setWorkflowLocation(
+      {
+        kind: "editor",
+        workflowId: "wf-b",
+        href: "/workspace/workflows/wf-b?trail=%5B%5D",
+      },
+      storage,
+    );
+
+    expect(resolveWorkflowNavPath(storage)).toBe(
+      "/workspace/workflows/wf-b?trail=%5B%5D",
+    );
+  });
+
   it("keeps drafts per workflow and clears only the requested one", () => {
     writeDirtyDraft("wf-1");
     writeDirtyDraft("wf-2");

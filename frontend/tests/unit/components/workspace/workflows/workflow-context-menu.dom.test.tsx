@@ -11,6 +11,8 @@ rs.mock("@/core/i18n/hooks", () => ({
           copy: "Copy",
           cut: "Cut",
           paste: "Paste",
+          subworkflowGlobal: "Follow template",
+          subworkflowLocal: "Save locally",
         },
       },
     },
@@ -25,24 +27,28 @@ function renderMenu(
   options: {
     nodeId?: string | null;
     canPaste?: boolean;
+    subworkflowMode?: "global" | "local" | null;
   } = {},
 ) {
   const onCopy = rs.fn();
   const onCut = rs.fn();
   const onPaste = rs.fn();
+  const onSetSubworkflowMode = rs.fn();
   const onClose = rs.fn();
   const nodeId = "nodeId" in options ? options.nodeId! : "n_1";
   render(
     <WorkflowContextMenu
       state={{ x: 100, y: 120, nodeId }}
       canPaste={options.canPaste ?? true}
+      subworkflowMode={options.subworkflowMode ?? null}
       onCopy={onCopy}
       onCut={onCut}
       onPaste={onPaste}
+      onSetSubworkflowMode={onSetSubworkflowMode}
       onClose={onClose}
     />,
   );
-  return { onCopy, onCut, onPaste, onClose };
+  return { onCopy, onCut, onPaste, onSetSubworkflowMode, onClose };
 }
 
 describe("WorkflowContextMenu", () => {
@@ -72,6 +78,16 @@ describe("WorkflowContextMenu", () => {
     expect(
       screen.getByTestId<HTMLButtonElement>("context-menu-paste").disabled,
     ).toBe(true);
+  });
+
+  it("switches subworkflow save modes", () => {
+    const handlers = renderMenu({ subworkflowMode: "global" });
+
+    fireEvent.click(screen.getByTestId("context-menu-subworkflow-local"));
+    fireEvent.click(screen.getByTestId("context-menu-subworkflow-global"));
+
+    expect(handlers.onSetSubworkflowMode).toHaveBeenNthCalledWith(1, "local");
+    expect(handlers.onSetSubworkflowMode).toHaveBeenNthCalledWith(2, "global");
   });
 
   it("closes on Escape", () => {

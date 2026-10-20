@@ -14,8 +14,9 @@
 
 import type { Edge as RFEdgeBase, Node as RFNodeBase } from "@xyflow/react";
 
-import { getDefaultNode } from "./node-catalog";
+import { getDefaultNode, normalizeNodeDisplayName } from "./node-catalog";
 import type {
+  CanvasLabels,
   CanvasPositions,
   NodeType,
   WorkflowDefinition,
@@ -26,8 +27,12 @@ import type {
 
 export { makeNodeId } from "./node-catalog";
 
-/** RF node data: wraps the clean definition node (with ports/params). */
-export type WorkflowNodeData = { workflow: WorkflowNode };
+/** RF node data: wraps the clean definition node (with ports/params) and the
+ *  canvas-only custom label. `displayName` never enters the definition node. */
+export type WorkflowNodeData = {
+  workflow: WorkflowNode;
+  displayName?: string;
+};
 /** RF edge data: carries the definition condition so it survives the round trip. */
 export type WorkflowEdgeData = { condition?: string | null };
 
@@ -75,9 +80,10 @@ export function edgeIdOf(edge: RFEdge): string {
  */
 export function definitionToFlow(def: WorkflowDefinition): FlowResult {
   const canvas = def.metadata.canvas as
-    | { positions?: CanvasPositions }
+    | { positions?: CanvasPositions; labels?: CanvasLabels }
     | undefined;
   const storedPositions = canvas?.positions ?? {};
+  const storedLabels = canvas?.labels ?? {};
 
   const nodes: RFNode[] = def.nodes.map((node, index) => {
     const stored = storedPositions[node.id];
@@ -85,11 +91,18 @@ export function definitionToFlow(def: WorkflowDefinition): FlowResult {
       x: (index % GRID_COLUMNS) * GRID_X,
       y: Math.floor(index / GRID_COLUMNS) * GRID_Y,
     };
+    const displayName = normalizeNodeDisplayName(
+      node.type,
+      storedLabels[node.id] ?? "",
+    );
     return {
       id: node.id,
       type: node.type,
       position: { ...position },
-      data: { workflow: { ...node } },
+      data: {
+        workflow: { ...node },
+        ...(displayName ? { displayName } : {}),
+      },
     };
   });
 
@@ -147,15 +160,27 @@ export function flowToDefinition(
   }));
 
   const collected: CanvasPositions = {};
+  const labels: CanvasLabels = {};
   for (const node of nodes) {
     collected[node.id] = { x: node.position.x, y: node.position.y };
+    const displayName = normalizeNodeDisplayName(
+      node.type as NodeType,
+      node.data?.displayName ?? "",
+    );
+    if (displayName) {
+      labels[node.id] = displayName;
+    }
   }
   const baseCanvas = base.def.metadata.canvas as
-    | { positions?: CanvasPositions }
+    | { positions?: CanvasPositions; labels?: CanvasLabels }
     | undefined;
   const metadata: WorkflowMetadata = {
     ...base.def.metadata,
-    canvas: { ...baseCanvas, positions: { ...base.positions, ...collected } },
+    canvas: {
+      ...baseCanvas,
+      positions: { ...base.positions, ...collected },
+      labels,
+    },
   };
 
   const definition: WorkflowDefinition = {

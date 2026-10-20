@@ -454,6 +454,7 @@ export const zhCN: Translations = {
     expandPanel: "展开面板",
     resizePanel: "调整面板大小",
     backToDirectory: "工作流目录",
+    renameNodeHint: "双击重命名节点",
     leave: {
       title: "离开工作流？",
       description: "当前工作流有未保存的修改。离开前是否保存？",
@@ -470,6 +471,8 @@ export const zhCN: Translations = {
       copy: "复制",
       cut: "剪切",
       paste: "粘贴",
+      subworkflowGlobal: "跟随模板（修改所有引用）",
+      subworkflowLocal: "仅保存到当前父工作流",
     },
     categories: {
       flow: "流程",
@@ -539,6 +542,16 @@ export const zhCN: Translations = {
         inputMappingLabel: "输入映射",
         outputMappingLabel: "输出映射",
         unmappedPlaceholder: "未映射",
+        openButton: "打开子工作流",
+        saveModeLabel: "保存方式",
+        saveModeGlobal: "跟随模板",
+        saveModeLocal: "本地副本",
+        localSnapshotLabel: "本地快照来源",
+        savedToParent: "子工作流已保存到父工作流",
+        embeddedRunDisabled: "本地保存的子工作流请通过父工作流运行",
+        embeddedNotFound: "找不到本地子工作流定义",
+        discardLocalConfirm: "切换回共享模板？当前节点的本地修改将丢弃。",
+        modeChangeFailed: "切换子工作流保存方式失败",
       },
       app: {
         title: "本地应用",
@@ -721,6 +734,7 @@ export const zhCN: Translations = {
   breadcrumb: {
     workspace: "工作区",
     chats: "对话",
+    workflows: "工作流",
   },
 
   // Workspace

@@ -31,7 +31,10 @@ export type NodeCategory =
 /** NodeId → canvas coordinates, stored at `metadata.canvas.positions`. */
 export type CanvasPositions = Record<string, { x: number; y: number }>;
 
-/** Workflow metadata with the canvas position block typed. */
+/** NodeId → user-authored display name, stored at `metadata.canvas.labels`. */
+export type CanvasLabels = Record<string, string>;
+
+/** Workflow metadata with the canvas-only UI block typed. */
 export type WorkflowMetadata = WorkflowMetadataBase & {
-  canvas?: { positions?: CanvasPositions };
+  canvas?: { positions?: CanvasPositions; labels?: CanvasLabels };
 };

@@ -379,6 +379,7 @@ export interface Translations {
     expandPanel: string;
     resizePanel: string;
     backToDirectory: string;
+    renameNodeHint: string;
     leave: {
       title: string;
       description: string;
@@ -395,6 +396,8 @@ export interface Translations {
       copy: string;
       cut: string;
       paste: string;
+      subworkflowGlobal: string;
+      subworkflowLocal: string;
     };
     categories: {
       flow: string;
@@ -462,6 +465,16 @@ export interface Translations {
         inputMappingLabel: string;
         outputMappingLabel: string;
         unmappedPlaceholder: string;
+        openButton: string;
+        saveModeLabel: string;
+        saveModeGlobal: string;
+        saveModeLocal: string;
+        localSnapshotLabel: string;
+        savedToParent: string;
+        embeddedRunDisabled: string;
+        embeddedNotFound: string;
+        discardLocalConfirm: string;
+        modeChangeFailed: string;
       };
       app: {
         title: string;
@@ -635,6 +648,7 @@ export interface Translations {
   breadcrumb: {
     workspace: string;
     chats: string;
+    workflows: string;
   };
 
   // Workspace

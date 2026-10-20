@@ -337,7 +337,10 @@ test.describe("Workflow run monitoring", () => {
       });
     });
 
-    const runButton = page.getByRole("button", { name: "Run" });
+    const runButton = page.getByRole("button", {
+      name: "Run",
+      exact: true,
+    });
     await expect(runButton).toBeEnabled();
     await runButton.click();
 
@@ -386,7 +389,10 @@ test.describe("Workflow run monitoring", () => {
       });
     });
 
-    const runButton = page.getByRole("button", { name: "Run" });
+    const runButton = page.getByRole("button", {
+      name: "Run",
+      exact: true,
+    });
     await expect(runButton).toBeEnabled();
     await runButton.click();
 
@@ -472,7 +478,10 @@ test.describe("Workflow run monitoring", () => {
     });
 
     try {
-      const runButton = page.getByRole("button", { name: "Run" });
+      const runButton = page.getByRole("button", {
+        name: "Run",
+        exact: true,
+      });
       await expect(runButton).toBeEnabled();
       await runButton.click();
 

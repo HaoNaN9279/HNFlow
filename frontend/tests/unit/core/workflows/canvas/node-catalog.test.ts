@@ -3,9 +3,11 @@ import { describe, expect, test } from "@rstest/core";
 import {
   NODE_CATEGORIES,
   getDefaultNode,
+  getDefaultNodeName,
   getNodeCatalog,
   getNodeCatalogEntry,
   makeNodeId,
+  normalizeNodeDisplayName,
 } from "@/core/workflows/canvas/node-catalog";
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
@@ -227,5 +229,13 @@ describe("node catalog", () => {
 
   test("makeNodeId produces n_ + 8 hex chars", () => {
     expect(makeNodeId()).toMatch(/^n_[0-9a-f]{8}$/);
+  });
+
+  test("custom display names trim, reject blanks and fall back to the default name", () => {
+    expect(getDefaultNodeName("flow:start")).toBe("Start");
+    expect(normalizeNodeDisplayName("flow:start", "Entry")).toBe("Entry");
+    expect(normalizeNodeDisplayName("flow:start", "  Entry  ")).toBe("Entry");
+    expect(normalizeNodeDisplayName("flow:start", "   ")).toBeUndefined();
+    expect(normalizeNodeDisplayName("flow:start", "Start")).toBeUndefined();
   });
 });

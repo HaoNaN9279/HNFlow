@@ -29,12 +29,14 @@ import {
   type RFEdge,
   type RFNode,
 } from "@/core/workflows/canvas/mapping";
+import { normalizeNodeDisplayName } from "@/core/workflows/canvas/node-catalog";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import {
   clearWorkflowDraft,
   readWorkflowDraft,
   writeWorkflowDraft,
 } from "@/core/workflows/editor-session";
+import { embeddedSessionKey } from "@/core/workflows/embedded-subworkflow";
 import type { WorkflowValidationError } from "@/core/workflows/errors";
 import {
   createInitialRunState,
@@ -56,9 +58,21 @@ import type {
  * plain state. The provider is mounted once per workflow record in
  * `[id]/page.tsx`; the canvas, toolbar and properties panel all read from it.
  */
+type EmbeddedEditorTarget = {
+  rootId: string;
+  path: string[];
+};
+
 type WorkflowEditorContextValue = {
   workflowId: string;
   definition: WorkflowDefinition;
+  /**
+   * Set when this editor is a local subworkflow snapshot resolved from a root
+   * workflow. Saving writes back into the root workflow's draft, not an API
+   * record, and standalone runs are disabled.
+   */
+  embedded: EmbeddedEditorTarget | null;
+  saveEmbedded: (definition: WorkflowDefinition) => Promise<void>;
   nodes: RFNode[];
   edges: RFEdge[];
   setNodes: Dispatch<SetStateAction<RFNode[]>>;
@@ -83,6 +97,8 @@ type WorkflowEditorContextValue = {
   markSaved: () => void;
   /** Drop the unsaved draft (and its tab-scoped copy) without saving. */
   discardDraft: () => void;
+  /** Synchronously persist the current draft before navigating away. */
+  flushDraft: () => void;
   readonly: boolean;
   updateNodeParams: (nodeId: string, params: Record<string, unknown>) => void;
   /**
@@ -91,6 +107,11 @@ type WorkflowEditorContextValue = {
    * forms where a params-only write would drop the top-level fields.
    */
   updateNode: (nodeId: string, next: WorkflowNode) => void;
+  /**
+   * Set the canvas-only instance label. Blank input or the fixed catalog name
+   * clears the override so the card falls back to the node's default name.
+   */
+  updateNodeDisplayName: (nodeId: string, displayName: string) => void;
   /** Current canvas as a definition (unsaved edits included). */
   currentDefinition: () => WorkflowDefinition;
   deleteNode: (nodeId: string) => void;
@@ -146,10 +167,16 @@ const MODIFYING_EDGE_CHANGE_TYPES = new Set(["add", "remove", "replace"]);
 export function WorkflowEditorProvider({
   record,
   readonly = false,
+  embedded,
   children,
 }: {
   record: WorkflowRecord;
   readonly?: boolean;
+  embedded?: {
+    rootId: string;
+    path: string[];
+    save: (definition: WorkflowDefinition) => Promise<void>;
+  };
   children: ReactNode;
 }) {
   const [nodes, setNodes, baseOnNodesChange] = useNodesState<RFNode>([]);
@@ -158,6 +185,11 @@ export function WorkflowEditorProvider({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [errors, setErrors] = useState<WorkflowValidationError[]>([]);
   const [dirty, setDirty] = useState(false);
+  // Local snapshots share the root workflow's storage; their child draft gets
+  // a synthetic key so it never collides with the persisted child's draft.
+  const sessionKey = embedded
+    ? embeddedSessionKey(embedded.rootId, embedded.path)
+    : record.id;
 
   // Seed the canvas from the persisted definition exactly once. Later
   // background refetches of the same record must not wipe in-progress edits.
@@ -170,7 +202,7 @@ export function WorkflowEditorProvider({
       return;
     }
     seededRef.current = true;
-    const draft = readWorkflowDraft(record.id);
+    const draft = readWorkflowDraft(sessionKey);
     if (draft?.dirty) {
       setNodes(draft.nodes);
       setEdges(draft.edges);
@@ -184,7 +216,7 @@ export function WorkflowEditorProvider({
     setEdges(flow.edges);
     setPositions(flow.positions);
     setHydrated(true);
-  }, [record.definition, record.id, setEdges, setNodes]);
+  }, [record.definition, sessionKey, setEdges, setNodes]);
 
   // Mirror unsaved edits into sessionStorage so switching workspace tabs (which
   // unmounts the editor) does not lose them. Clean editors have no draft.
@@ -195,30 +227,42 @@ export function WorkflowEditorProvider({
     positions: PositionsMap;
     dirty: boolean;
   } | null>(null);
+  // Mirror the latest render synchronously: a navigation can unmount before
+  // the debounce effect has armed `pendingDraftRef`, and losing that draft
+  // would also make a freshly toggled local subworkflow unresolvable.
+  const latestDraftRef = useRef<{
+    nodes: RFNode[];
+    edges: RFEdge[];
+    positions: PositionsMap;
+    dirty: boolean;
+  } | null>(null);
+  latestDraftRef.current =
+    hydrated && dirty ? { nodes, edges, positions, dirty } : null;
   useEffect(() => {
     if (!hydrated) {
       return;
     }
     if (!dirty) {
       pendingDraftRef.current = null;
-      clearWorkflowDraft(record.id);
+      clearWorkflowDraft(sessionKey);
       return;
     }
     const draft = { nodes, edges, positions, dirty };
     pendingDraftRef.current = draft;
     const timer = setTimeout(() => {
-      writeWorkflowDraft(record.id, draft);
+      writeWorkflowDraft(sessionKey, draft);
     }, 200);
     return () => clearTimeout(timer);
-  }, [dirty, edges, hydrated, nodes, positions, record.id]);
+  }, [dirty, edges, hydrated, nodes, positions, sessionKey]);
 
   useEffect(() => {
     return () => {
-      if (pendingDraftRef.current) {
-        writeWorkflowDraft(record.id, pendingDraftRef.current);
+      const draft = pendingDraftRef.current ?? latestDraftRef.current;
+      if (draft) {
+        writeWorkflowDraft(sessionKey, draft);
       }
     };
-  }, [record.id]);
+  }, [sessionKey]);
 
   const markDirty = useCallback(() => {
     setDirty(true);
@@ -228,13 +272,20 @@ export function WorkflowEditorProvider({
     // the stale dirty draft back after the server accepted it.
     pendingDraftRef.current = null;
     setDirty(false);
-    clearWorkflowDraft(record.id);
-  }, [record.id]);
+    clearWorkflowDraft(sessionKey);
+  }, [sessionKey]);
   const discardDraft = useCallback(() => {
     pendingDraftRef.current = null;
+    latestDraftRef.current = null;
     setDirty(false);
-    clearWorkflowDraft(record.id);
-  }, [record.id]);
+    clearWorkflowDraft(sessionKey);
+  }, [sessionKey]);
+  const flushDraft = useCallback(() => {
+    const draft = latestDraftRef.current;
+    if (draft) {
+      writeWorkflowDraft(sessionKey, draft);
+    }
+  }, [sessionKey]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<RFNode>[]) => {
@@ -328,6 +379,38 @@ export function WorkflowEditorProvider({
     [markDirty, setEdges, setNodes],
   );
 
+  const updateNodeDisplayName = useCallback(
+    (nodeId: string, displayName: string) => {
+      const node = nodes.find((item) => item.id === nodeId);
+      if (!node?.data?.workflow) {
+        return;
+      }
+      const next = normalizeNodeDisplayName(
+        node.data.workflow.type,
+        displayName,
+      );
+      if (node.data.displayName === next) {
+        return;
+      }
+      setNodes((current) =>
+        current.map((item) => {
+          if (item.id !== nodeId || !item.data?.workflow) {
+            return item;
+          }
+          const data = { ...item.data };
+          if (next) {
+            data.displayName = next;
+          } else {
+            delete data.displayName;
+          }
+          return { ...item, data };
+        }),
+      );
+      markDirty();
+    },
+    [markDirty, nodes, setNodes],
+  );
+
   const currentDefinition = useCallback(
     () =>
       flowToDefinition({ nodes, edges }, { def: record.definition, positions })
@@ -368,7 +451,7 @@ export function WorkflowEditorProvider({
 
   const startRun = useCallback(
     async (options?: { debugStep?: boolean }) => {
-      if (runActiveRef.current) {
+      if (embedded || runActiveRef.current) {
         return;
       }
       runActiveRef.current = true;
@@ -409,7 +492,7 @@ export function WorkflowEditorProvider({
         runActiveRef.current = false;
       }
     },
-    [workflowId],
+    [embedded, workflowId],
   );
 
   const cancelRun = useCallback(async () => {
@@ -434,6 +517,16 @@ export function WorkflowEditorProvider({
 
   const isRunning = runState.status === "running";
 
+  const saveEmbedded = useCallback(
+    async (next: WorkflowDefinition) => {
+      if (!embedded) {
+        throw new Error("saveEmbedded requires an embedded editor");
+      }
+      await embedded.save(next);
+    },
+    [embedded],
+  );
+
   const selectedNode = useMemo(
     () => nodes.find((node) => node.id === selectedNodeId) ?? null,
     [nodes, selectedNodeId],
@@ -443,6 +536,10 @@ export function WorkflowEditorProvider({
     () => ({
       workflowId,
       definition: record.definition,
+      embedded: embedded
+        ? { rootId: embedded.rootId, path: embedded.path }
+        : null,
+      saveEmbedded,
       nodes,
       edges,
       setNodes,
@@ -460,9 +557,11 @@ export function WorkflowEditorProvider({
       markDirty,
       markSaved,
       discardDraft,
+      flushDraft,
       readonly,
       updateNodeParams,
       updateNode,
+      updateNodeDisplayName,
       currentDefinition,
       deleteNode,
       runState,
@@ -474,6 +573,8 @@ export function WorkflowEditorProvider({
     [
       workflowId,
       record.definition,
+      embedded,
+      saveEmbedded,
       nodes,
       edges,
       setNodes,
@@ -491,9 +592,11 @@ export function WorkflowEditorProvider({
       markDirty,
       markSaved,
       discardDraft,
+      flushDraft,
       readonly,
       updateNodeParams,
       updateNode,
+      updateNodeDisplayName,
       currentDefinition,
       deleteNode,
       runState,

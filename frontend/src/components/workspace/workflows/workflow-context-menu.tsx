@@ -15,9 +15,12 @@ export type WorkflowContextMenuState = {
 type WorkflowContextMenuProps = {
   state: WorkflowContextMenuState;
   canPaste: boolean;
+  /** Current save mode when the target is a `nested:subworkflow` node. */
+  subworkflowMode: "global" | "local" | null;
   onCopy: () => void;
   onCut: () => void;
   onPaste: () => void;
+  onSetSubworkflowMode: (mode: "global" | "local") => void;
   onClose: () => void;
 };
 
@@ -25,9 +28,11 @@ type WorkflowContextMenuProps = {
 export function WorkflowContextMenu({
   state,
   canPaste,
+  subworkflowMode,
   onCopy,
   onCut,
   onPaste,
+  onSetSubworkflowMode,
   onClose,
 }: WorkflowContextMenuProps) {
   const { t } = useI18n();
@@ -50,7 +55,7 @@ export function WorkflowContextMenu({
   const top =
     typeof window === "undefined"
       ? state.y
-      : Math.min(state.y, window.innerHeight - 132);
+      : Math.min(state.y, window.innerHeight - 240);
 
   return (
     <>
@@ -77,6 +82,25 @@ export function WorkflowContextMenu({
             </MenuItem>
             <MenuItem onClick={onCut} testId="context-menu-cut">
               {labels.cut}
+            </MenuItem>
+          </>
+        )}
+        {state.nodeId != null && subworkflowMode != null && (
+          <>
+            <div className="bg-border my-1 h-px" role="separator" />
+            <MenuItem
+              onClick={() => onSetSubworkflowMode("global")}
+              testId="context-menu-subworkflow-global"
+            >
+              {subworkflowMode === "global" ? "✓ " : ""}
+              {labels.subworkflowGlobal}
+            </MenuItem>
+            <MenuItem
+              onClick={() => onSetSubworkflowMode("local")}
+              testId="context-menu-subworkflow-local"
+            >
+              {subworkflowMode === "local" ? "✓ " : ""}
+              {labels.subworkflowLocal}
             </MenuItem>
           </>
         )}

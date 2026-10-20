@@ -197,11 +197,21 @@ export function applyNodeFormValues(
     instruction: values.instruction ?? "",
   };
   const templateId = values.template_id ?? "";
+  const existingSubworkflow =
+    typeof node.params.subworkflow === "object" &&
+    node.params.subworkflow !== null &&
+    !Array.isArray(node.params.subworkflow)
+      ? (node.params.subworkflow as Record<string, unknown>)
+      : null;
   if (templateId) {
     params.subworkflow = serializeSubworkflowSpec({
       template_id: templateId,
       version: values.version,
     });
+  } else if (existingSubworkflow?.type === "inline") {
+    // Local snapshots have no template id; mapping edits must not delete the
+    // embedded definition.
+    params.subworkflow = existingSubworkflow;
   } else {
     delete params.subworkflow;
   }

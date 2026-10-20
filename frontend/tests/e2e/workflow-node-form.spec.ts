@@ -397,7 +397,11 @@ test.describe("Workflow node forms", () => {
     // Reload — the selected template is restored in the select + version line.
     await page.reload();
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
-    await nodeWrapper(page, "nested:subworkflow").click();
+    // The card now exposes an "Open subworkflow" action; click its title to
+    // select the node without activating that action.
+    await nodeWrapper(page, "nested:subworkflow")
+      .getByTestId("workflow-node-display-name")
+      .click();
     const restoredPanel = page.getByTestId("workflow-properties-panel");
     await expect(restoredPanel).toContainText("Subworkflow");
     await expect(

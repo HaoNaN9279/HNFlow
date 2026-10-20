@@ -242,6 +242,55 @@ describe("flowToDefinition", () => {
     expect(definition.metadata.created_at).toBe("2026-01-01T00:00:00Z");
   });
 
+  test("reads custom display names and drops labels that equal the default name", () => {
+    const def = sampleDefinition();
+    def.metadata.canvas = {
+      positions: positionsOf(def),
+      labels: {
+        "n-start": "  Start  ",
+        "n-llm": "  Brain  ",
+      },
+    };
+
+    const flow = definitionToFlow(def);
+
+    expect(flow.nodes[0]!.data.displayName).toBeUndefined();
+    expect(flow.nodes[1]!.data.displayName).toBe("Brain");
+    expect(flow.nodes[2]!.data.displayName).toBeUndefined();
+  });
+
+  test("round-trips custom display names into metadata.canvas.labels", () => {
+    const def = sampleDefinition();
+    const flow = definitionToFlow(def);
+    flow.nodes[1]!.data.displayName = "Thinker";
+    flow.nodes[2]!.data.displayName = "Wrap up";
+
+    const { definition, metadata } = flowToDefinition(flow, {
+      def,
+      positions: {},
+    });
+
+    expect(metadata.canvas?.labels).toEqual({
+      "n-llm": "Thinker",
+      "n-end": "Wrap up",
+    });
+    expect(definition.metadata).toBe(metadata);
+  });
+
+  test("removing a custom display name clears its stored label", () => {
+    const def = sampleDefinition();
+    def.metadata.canvas = {
+      positions: positionsOf(def),
+      labels: { "n-llm": "Thinker" },
+    };
+    const flow = definitionToFlow(def);
+    delete flow.nodes[1]!.data.displayName;
+
+    const { metadata } = flowToDefinition(flow, { def, positions: {} });
+
+    expect(metadata.canvas?.labels).toEqual({});
+  });
+
   test("uses RF node positions and preserves base positions for off-canvas nodes", () => {
     const def = sampleDefinition();
     const flow = definitionToFlow(def);

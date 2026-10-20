@@ -9,6 +9,7 @@ import type { WorkflowNode } from "./types";
 export type ClipboardNode = {
   offset: { x: number; y: number };
   workflow: WorkflowNode;
+  displayName?: string;
 };
 
 export type ClipboardEdge = {
@@ -52,6 +53,7 @@ export function copySelection(
         y: node.position.y - minY,
       },
       workflow: structuredClone(node.data.workflow),
+      ...(node.data.displayName ? { displayName: node.data.displayName } : {}),
     })),
     edges: edges
       .filter(
@@ -96,7 +98,10 @@ export function pasteClipboard(
         x: position.x + item.offset.x,
         y: position.y + item.offset.y,
       },
-      data: { workflow },
+      data: {
+        workflow,
+        ...(item.displayName ? { displayName: item.displayName } : {}),
+      },
       selected: true,
     };
   });

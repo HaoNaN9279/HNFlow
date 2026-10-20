@@ -656,6 +656,54 @@ test.describe("Workflow canvas", () => {
     }
   });
 
+  test("renames a node on double click and persists the instance label", async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    const api = mockWorkflowsAPI(page, connectionRecord());
+    await page.setViewportSize({ width: 1400, height: 900 });
+    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+
+    const start = nodeWrapper(page, "flow:start");
+    const displayName = start.getByTestId("workflow-node-display-name");
+    const defaultName = start.getByTestId("workflow-node-default-name");
+    await expect(displayName).toHaveText("Start");
+    await expect(defaultName).toHaveText("Start");
+
+    await displayName.dblclick();
+    const nameInput = start.getByTestId("workflow-node-name-input");
+    await expect(nameInput).toBeVisible();
+    await nameInput.fill("Entry point");
+    await nameInput.press("Enter");
+
+    await expect(displayName).toHaveText("Entry point");
+    await expect(defaultName).toHaveText("Start");
+    await expect(page.getByTestId("workflow-dirty-dot")).toBeVisible();
+
+    const putDone = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/api/workflows/${WORKFLOW_ID}`) &&
+        response.request().method() === "PUT",
+    );
+    await page.getByRole("button", { name: "保存" }).click();
+    await putDone;
+
+    const putBody = api.getSavedPutBody() as {
+      definition: { nodes: MockNode[] };
+      metadata: { canvas?: { labels?: Record<string, string> } };
+    };
+    expect(putBody.metadata.canvas?.labels).toEqual({ n_start: "Entry point" });
+    expect(
+      putBody.definition.nodes.find((node) => node.id === "n_start"),
+    ).not.toHaveProperty("displayName");
+
+    await page.reload();
+    await expect(page.locator(".react-flow__node")).toHaveCount(3);
+    await expect(displayName).toHaveText("Entry point");
+    await expect(defaultName).toHaveText("Start");
+  });
+
   test("rejects port-type mismatch connections and allows same-type ones", async ({
     page,
   }) => {

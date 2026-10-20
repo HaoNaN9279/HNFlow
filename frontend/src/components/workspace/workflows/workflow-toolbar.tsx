@@ -57,6 +57,9 @@ export function WorkflowToolbar() {
     markSaved,
     discardDraft,
     readonly,
+    embedded,
+    saveEmbedded,
+    currentDefinition,
   } = useWorkflowEditor();
   const { isRunning, startRun, cancelRun } = useWorkflowRun();
   const runLabels = t.workflows.run;
@@ -88,12 +91,31 @@ export function WorkflowToolbar() {
   });
 
   const saveAsync = useCallback(async () => {
+    if (embedded) {
+      await saveEmbedded(currentDefinition());
+      setErrors([]);
+      markSaved();
+      toast.success(t.workflows.properties.subworkflow.savedToParent);
+      return;
+    }
     const { definition: nextDefinition, metadata } = flowToDefinition(
       { nodes, edges },
       { def: definition, positions },
     );
     await saveMutation.mutateAsync({ definition: nextDefinition, metadata });
-  }, [definition, edges, nodes, positions, saveMutation]);
+  }, [
+    currentDefinition,
+    definition,
+    edges,
+    embedded,
+    markSaved,
+    nodes,
+    positions,
+    saveEmbedded,
+    saveMutation,
+    setErrors,
+    t.workflows.properties.subworkflow.savedToParent,
+  ]);
 
   const handleSave = useCallback(() => {
     void saveAsync().catch(() => {
@@ -176,8 +198,14 @@ export function WorkflowToolbar() {
             size="sm"
             className="bg-emerald-600 text-white hover:bg-emerald-600/90"
             onClick={() => void startRun()}
-            disabled={readonly || dirty}
-            title={dirty ? runLabels.runDisabled : undefined}
+            disabled={readonly || dirty || Boolean(embedded)}
+            title={
+              embedded
+                ? t.workflows.properties.subworkflow.embeddedRunDisabled
+                : dirty
+                  ? runLabels.runDisabled
+                  : undefined
+            }
           >
             {runLabels.run}
           </Button>
@@ -185,8 +213,14 @@ export function WorkflowToolbar() {
             size="sm"
             variant="outline"
             onClick={() => void startRun({ debugStep: true })}
-            disabled={readonly || dirty}
-            title={dirty ? runLabels.runDisabled : runLabels.stepHint}
+            disabled={readonly || dirty || Boolean(embedded)}
+            title={
+              embedded
+                ? t.workflows.properties.subworkflow.embeddedRunDisabled
+                : dirty
+                  ? runLabels.runDisabled
+                  : runLabels.stepHint
+            }
             data-testid="workflow-step-run"
           >
             {runLabels.step}

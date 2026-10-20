@@ -55,6 +55,11 @@ rs.mock("@/core/i18n/hooks", () => ({
             inputMappingLabel: "Input mapping",
             outputMappingLabel: "Output mapping",
             unmappedPlaceholder: "Not mapped",
+            openButton: "Open subworkflow",
+            saveModeLabel: "Save mode",
+            saveModeGlobal: "Follow template",
+            saveModeLocal: "Local copy",
+            localSnapshotLabel: "Local snapshot of",
           },
           validation: {
             instructionRequired: "Instruction is required",
@@ -72,6 +77,10 @@ rs.mock("@/core/i18n/hooks", () => ({
 
 rs.mock("@/core/agents/api", () => ({
   checkAgentName: rs.fn(),
+}));
+
+rs.mock("@/components/workspace/workflows/use-open-subworkflow", () => ({
+  useOpenSubworkflow: () => rs.fn(),
 }));
 
 let agentOptions: { name: string }[] = [{ name: "researcher" }];

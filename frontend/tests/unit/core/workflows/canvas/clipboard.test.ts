@@ -23,12 +23,21 @@ function workflowNode(
   };
 }
 
-function rfNode(id: string, x: number, y: number, selected = false): RFNode {
+function rfNode(
+  id: string,
+  x: number,
+  y: number,
+  selected = false,
+  displayName?: string,
+): RFNode {
   return {
     id,
     type: "data:assign",
     position: { x, y },
-    data: { workflow: workflowNode(id) },
+    data: {
+      workflow: workflowNode(id),
+      ...(displayName ? { displayName } : {}),
+    },
     selected,
   };
 }
@@ -126,5 +135,16 @@ describe("workflow canvas clipboard", () => {
       `${pasted.nodes[0]!.id}::out::${pasted.nodes[1]!.id}::in`,
     );
     expect(pasted.edges[0]!.data?.condition).toBe("always");
+  });
+
+  it("carries custom display names through copy and paste", () => {
+    const nodes = [rfNode("a", 0, 0, true, "Entry point")];
+
+    const clipboard = copySelection(nodes, [], ["a"])!;
+    expect(clipboard.nodes[0]!.displayName).toBe("Entry point");
+
+    const pasted = pasteClipboard(clipboard, { x: 10, y: 20 });
+    expect(pasted.nodes[0]!.data.displayName).toBe("Entry point");
+    expect(pasted.nodes[0]!.data.workflow).not.toHaveProperty("displayName");
   });
 });

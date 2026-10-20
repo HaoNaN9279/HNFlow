@@ -30,6 +30,7 @@ import { toast } from "sonner";
 
 import { Canvas } from "@/components/ai-elements/canvas";
 import { useI18n } from "@/core/i18n/hooks";
+import { getWorkflow } from "@/core/workflows/api";
 import {
   copySelection,
   pasteClipboard,
@@ -41,6 +42,12 @@ import {
   type RFNode,
 } from "@/core/workflows/canvas/mapping";
 import { getDefaultNode } from "@/core/workflows/canvas/node-catalog";
+import {
+  readSubworkflowSaveMode,
+  readSubworkflowSource,
+  withGlobalSubworkflowReference,
+  withLocalSubworkflowSnapshot,
+} from "@/core/workflows/canvas/subworkflow";
 import {
   REASON_PORT_NOT_FOUND,
   REASON_PORT_TYPE_MISMATCH,
@@ -102,6 +109,7 @@ function CanvasInner() {
     errors,
     markDirty,
     readonly,
+    updateNode,
   } = useWorkflowEditor();
   const [catalog, setCatalog] = useState<CatalogState>({
     open: false,
@@ -331,6 +339,75 @@ function CanvasInner() {
     setNodes,
   ]);
 
+  const contextSubworkflowMode = useMemo(() => {
+    if (!contextMenu?.nodeId) {
+      return null;
+    }
+    const node = nodes.find((item) => item.id === contextMenu.nodeId);
+    const workflow = node?.data?.workflow;
+    if (workflow?.type !== "nested:subworkflow") {
+      return null;
+    }
+    return readSubworkflowSaveMode(workflow.params);
+  }, [contextMenu, nodes]);
+
+  const handleSetSubworkflowMode = useCallback(
+    async (mode: "global" | "local") => {
+      const nodeId = contextMenu?.nodeId;
+      setContextMenu(null);
+      if (!nodeId) {
+        return;
+      }
+      const node = nodes.find((item) => item.id === nodeId);
+      const workflow = node?.data?.workflow;
+      const source = workflow ? readSubworkflowSource(workflow.params) : null;
+      if (!node || !workflow || !source || source.saveMode === mode) {
+        return;
+      }
+      const templateId =
+        source.kind === "template"
+          ? source.templateId
+          : (source.sourceTemplateId ?? source.definition.id);
+      const version =
+        source.kind === "template" ? source.version : source.sourceVersion;
+
+      try {
+        if (mode === "local") {
+          const record = await getWorkflow(templateId);
+          updateNode(
+            node.id,
+            withLocalSubworkflowSnapshot(
+              workflow,
+              record.definition,
+              templateId,
+              record.version,
+            ),
+          );
+          return;
+        }
+        if (
+          source.kind === "inline" &&
+          !window.confirm(
+            t.workflows.properties.subworkflow.discardLocalConfirm,
+          )
+        ) {
+          return;
+        }
+        updateNode(
+          node.id,
+          withGlobalSubworkflowReference(workflow, templateId, version),
+        );
+      } catch (error) {
+        toast.error(
+          `${t.workflows.properties.subworkflow.modeChangeFailed}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    },
+    [contextMenu, nodes, t, updateNode],
+  );
+
   const handleNodeContextMenu: NodeMouseHandler = useCallback(
     (event, node) => {
       event.preventDefault();
@@ -459,9 +536,11 @@ function CanvasInner() {
         <WorkflowContextMenu
           state={contextMenu}
           canPaste={clipboard != null}
+          subworkflowMode={contextSubworkflowMode}
           onCopy={handleCopy}
           onCut={handleCut}
           onPaste={handlePaste}
+          onSetSubworkflowMode={(mode) => void handleSetSubworkflowMode(mode)}
           onClose={() => setContextMenu(null)}
         />
       )}

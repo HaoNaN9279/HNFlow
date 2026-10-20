@@ -23,12 +23,15 @@ import {
   validateNodeForm,
   type NodeFormValues,
 } from "@/core/workflows/canvas/node-form";
+import { readSubworkflowSource } from "@/core/workflows/canvas/subworkflow";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
 import {
   useAgentOptions,
   useWorkflowTemplateOptions,
 } from "@/core/workflows/canvas/use-node-form-options";
+import type { WorkflowDefinition } from "@/core/workflows/types";
 
+import { useOpenSubworkflow } from "./use-open-subworkflow";
 import { useWorkflowEditor } from "./workflow-editor-context";
 
 /** Sentinel select values for the agent picker (real names are used verbatim). */
@@ -550,10 +553,21 @@ function AppForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   );
 }
 
+function definitionPorts(
+  definition: WorkflowDefinition,
+  type: "flow:start" | "flow:end",
+) {
+  return (
+    definition.nodes.find((item) => item.type === type)?.outputs ?? []
+  ).map(({ name, type: portType }) => ({ name, type: portType }));
+}
+
 function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   const { t } = useI18n();
   const labels = t.workflows.properties;
   const workflow = node.data.workflow;
+  const source = readSubworkflowSource(workflow.params);
+  const openSubworkflow = useOpenSubworkflow();
   const [values, setValues] = useState<NodeFormValues>(() =>
     parseNodeFormValues(workflow),
   );
@@ -571,8 +585,13 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   const selectedTemplate = templates.find(
     (template) => template.id === values.template_id,
   );
-  const startOutputPorts = selectedTemplate?.startOutputPorts ?? [];
-  const endOutputPorts = selectedTemplate?.endOutputPorts ?? [];
+  const localDefinition = source?.kind === "inline" ? source.definition : null;
+  const startOutputPorts = localDefinition
+    ? definitionPorts(localDefinition, "flow:start")
+    : (selectedTemplate?.startOutputPorts ?? []);
+  const endOutputPorts = localDefinition
+    ? definitionPorts(localDefinition, "flow:end")
+    : (selectedTemplate?.endOutputPorts ?? []);
   const mapping = values.mapping ?? { inputs: {}, outputs: {} };
   const showMappingSection =
     startOutputPorts.length > 0 || endOutputPorts.length > 0;
@@ -624,59 +643,98 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
     commit(next);
   };
 
+  const displayVersion =
+    source?.kind === "inline" ? source.sourceVersion : values.version;
+
   return (
     <div className="flex flex-col gap-3 border-b pb-4">
-      <div className="text-xs font-medium">{labels.subworkflow.title}</div>
-
-      <div className="flex flex-col gap-1">
-        <label className="text-xs font-medium">
-          {labels.subworkflow.templateLabel}
-        </label>
-        {templates.length > 0 ? (
-          <Select
-            value={
-              templates.some((template) => template.id === values.template_id)
-                ? values.template_id
-                : undefined
-            }
-            disabled={readonly}
-            onValueChange={handleTemplateSelect}
-          >
-            <SelectTrigger
-              aria-label={labels.subworkflow.templateLabel}
-              className="h-7 text-xs"
-            >
-              <SelectValue
-                placeholder={labels.subworkflow.templatePlaceholder}
-              />
-            </SelectTrigger>
-            <SelectContent>
-              {templates.map((template) => (
-                <SelectItem key={template.id} value={template.id}>
-                  {template.name} ({template.version})
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <p className="text-muted-foreground text-xs">
-            {labels.subworkflow.noTemplates}
-          </p>
-        )}
-        {errors.template_id && (
-          <p className="text-destructive text-xs" role="alert">
-            {labels.validation.templateRequired}
-          </p>
-        )}
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-xs font-medium">{labels.subworkflow.title}</div>
+        <span
+          className="text-muted-foreground text-[11px]"
+          data-testid="workflow-subworkflow-save-mode"
+        >
+          {labels.subworkflow.saveModeLabel}:{" "}
+          {source?.kind === "inline"
+            ? labels.subworkflow.saveModeLocal
+            : labels.subworkflow.saveModeGlobal}
+        </span>
       </div>
 
-      {values.version && (
+      {source && (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => openSubworkflow(workflow)}
+          data-testid="workflow-open-subworkflow"
+        >
+          {labels.subworkflow.openButton}
+        </Button>
+      )}
+
+      {localDefinition ? (
+        <div className="flex flex-col gap-1">
+          <span className="text-xs font-medium">
+            {labels.subworkflow.localSnapshotLabel}
+          </span>
+          <span className="text-muted-foreground font-mono text-xs">
+            {source?.kind === "inline"
+              ? (source.sourceTemplateId ?? localDefinition.id)
+              : localDefinition.id}
+          </span>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          <label className="text-xs font-medium">
+            {labels.subworkflow.templateLabel}
+          </label>
+          {templates.length > 0 ? (
+            <Select
+              value={
+                templates.some((template) => template.id === values.template_id)
+                  ? values.template_id
+                  : undefined
+              }
+              disabled={readonly}
+              onValueChange={handleTemplateSelect}
+            >
+              <SelectTrigger
+                aria-label={labels.subworkflow.templateLabel}
+                className="h-7 text-xs"
+              >
+                <SelectValue
+                  placeholder={labels.subworkflow.templatePlaceholder}
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {templates.map((template) => (
+                  <SelectItem key={template.id} value={template.id}>
+                    {template.name} ({template.version})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              {labels.subworkflow.noTemplates}
+            </p>
+          )}
+          {errors.template_id && (
+            <p className="text-destructive text-xs" role="alert">
+              {labels.validation.templateRequired}
+            </p>
+          )}
+        </div>
+      )}
+
+      {displayVersion && (
         <div className="flex flex-col gap-1">
           <span className="text-xs font-medium">
             {labels.subworkflow.versionLabel}
           </span>
           <span className="text-muted-foreground font-mono text-xs">
-            {values.version}
+            {displayVersion}
           </span>
         </div>
       )}

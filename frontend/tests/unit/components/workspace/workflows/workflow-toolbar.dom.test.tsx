@@ -66,6 +66,12 @@ rs.mock("@/core/i18n/hooks", () => ({
           step: "Step run",
           stepHint: "Pause before every node",
         },
+        properties: {
+          subworkflow: {
+            savedToParent: "Saved to parent workflow",
+            embeddedRunDisabled: "Run the parent workflow",
+          },
+        },
         errors: {
           saveSuccess: "Workflow saved",
           saveFailed: "Failed to save workflow",

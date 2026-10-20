@@ -5,7 +5,12 @@ const SESSION_KEY = "deerflow:workflow-session:v1";
 
 export type WorkflowEditorLocation =
   | { kind: "directory" }
-  | { kind: "editor"; workflowId: string };
+  | {
+      kind: "editor";
+      workflowId: string;
+      /** Full editor URL, including the breadcrumb trail/local target query. */
+      href?: string;
+    };
 
 export type WorkflowEditorDraft = {
   nodes: RFNode[];
@@ -47,11 +52,19 @@ function isLocation(value: unknown): value is WorkflowEditorLocation {
   if (!value || typeof value !== "object") {
     return false;
   }
-  const record = value as { kind?: unknown; workflowId?: unknown };
+  const record = value as {
+    kind?: unknown;
+    workflowId?: unknown;
+    href?: unknown;
+  };
   if (record.kind === "directory") {
     return true;
   }
-  return record.kind === "editor" && typeof record.workflowId === "string";
+  return (
+    record.kind === "editor" &&
+    typeof record.workflowId === "string" &&
+    (record.href === undefined || typeof record.href === "string")
+  );
 }
 
 function isDraft(value: unknown): value is WorkflowEditorDraft {
@@ -185,7 +198,10 @@ export function resolveWorkflowNavPath(
 ): string {
   const { location } = readWorkflowSession(storage);
   if (location.kind === "editor" && location.workflowId) {
-    return `/workspace/workflows/${encodeURIComponent(location.workflowId)}`;
+    return (
+      location.href ??
+      `/workspace/workflows/${encodeURIComponent(location.workflowId)}`
+    );
   }
   return "/workspace/workflows";
 }

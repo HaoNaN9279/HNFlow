@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, rs } from "@rstest/core";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   waitFor,
   type RenderResult,
@@ -27,6 +28,7 @@ rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
     t: {
       workflows: {
+        renameNodeHint: "Double-click to rename this node",
         run: { cancelFailed: "Failed to cancel run" },
       },
     },
@@ -42,14 +44,18 @@ const mockedStream = rs.mocked(streamWorkflowRun);
 
 let bridgeStart: (() => Promise<void>) | undefined;
 let bridgeSetErrors: ((errors: WorkflowValidationError[]) => void) | undefined;
+let bridgeNodes: RFNode[] | undefined;
 
 /** Hands the test the context functions that drive run/node states. */
 function EditorBridge() {
-  const { startRun, setErrors } = useWorkflowEditor();
+  const { nodes, startRun, setErrors } = useWorkflowEditor();
   useEffect(() => {
     bridgeStart = startRun;
     bridgeSetErrors = setErrors;
   }, [setErrors, startRun]);
+  useEffect(() => {
+    bridgeNodes = nodes;
+  }, [nodes]);
   return null;
 }
 
@@ -122,6 +128,10 @@ beforeEach(() => {
   mockedStream.mockReset();
   bridgeStart = undefined;
   bridgeSetErrors = undefined;
+  bridgeNodes = undefined;
+  // The editor mirrors dirty canvases into sessionStorage; without clearing it
+  // a previous test's draft seeds the next provider with the wrong nodes.
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -129,9 +139,14 @@ afterEach(() => {
 });
 
 function renderNodes(nodes: RFNode[]): RenderResult {
+  const record = makeRecord();
+  record.definition = {
+    ...record.definition,
+    nodes: nodes.map((node) => node.data.workflow),
+  };
   return render(
     <ReactFlowProvider>
-      <WorkflowEditorProvider record={makeRecord()}>
+      <WorkflowEditorProvider record={record}>
         <EditorBridge />
         {nodes.map((node) => (
           <WorkflowNode key={node.id} {...nodeProps(node)} />
@@ -167,6 +182,75 @@ describe("WorkflowNode card content", () => {
     for (const handle of handles) {
       expect(handle.style.top).toBe("50%");
     }
+  });
+
+  it("shows the custom display name above the fixed node name", () => {
+    const node = makeNode("n-start", "flow:start");
+    node.data.displayName = "Entry point";
+    const { container } = renderNodes([node]);
+    const card = nodeCard(container, "flow:start");
+
+    const displayName = card.querySelector<HTMLElement>(
+      '[data-testid="workflow-node-display-name"]',
+    );
+    const defaultName = card.querySelector<HTMLElement>(
+      '[data-testid="workflow-node-default-name"]',
+    );
+
+    expect(displayName?.textContent).toBe("Entry point");
+    expect(defaultName?.textContent).toBe("Start");
+    expect(displayName?.parentElement?.className).toContain("text-sm");
+    expect(defaultName?.className).toContain("text-xs");
+    expect(defaultName?.className).toContain("text-muted-foreground");
+  });
+
+  it("renames a node on double click and commits with Enter", async () => {
+    const { container } = renderNodes([makeNode("n-rename", "flow:start")]);
+    const card = nodeCard(container, "flow:start");
+    await waitFor(() =>
+      expect(bridgeNodes?.some((node) => node.id === "n-rename")).toBe(true),
+    );
+
+    fireEvent.doubleClick(
+      card.querySelector('[data-testid="workflow-node-display-name"]')!,
+    );
+    const input = card.querySelector<HTMLInputElement>(
+      '[data-testid="workflow-node-name-input"]',
+    );
+    expect(input).toBeTruthy();
+
+    fireEvent.change(input!, { target: { value: "Begin here" } });
+    fireEvent.keyDown(input!, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(
+        bridgeNodes?.find((node) => node.id === "n-rename")?.data.displayName,
+      ).toBe("Begin here");
+    });
+  });
+
+  it("cancels a rename with Escape", async () => {
+    const { container } = renderNodes([makeNode("n-escape", "flow:start")]);
+    const card = nodeCard(container, "flow:start");
+    await waitFor(() =>
+      expect(bridgeNodes?.some((node) => node.id === "n-escape")).toBe(true),
+    );
+
+    fireEvent.doubleClick(
+      card.querySelector('[data-testid="workflow-node-display-name"]')!,
+    );
+    const input = card.querySelector<HTMLInputElement>(
+      '[data-testid="workflow-node-name-input"]',
+    );
+    fireEvent.change(input!, { target: { value: "Discarded" } });
+    fireEvent.keyDown(input!, { key: "Escape" });
+
+    expect(
+      bridgeNodes?.find((node) => node.id === "n-escape")?.data.displayName,
+    ).toBeUndefined();
+    expect(
+      card.querySelector('[data-testid="workflow-node-name-input"]'),
+    ).toBeNull();
   });
 });
 

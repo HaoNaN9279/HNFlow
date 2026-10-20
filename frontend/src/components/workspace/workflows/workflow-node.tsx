@@ -1,6 +1,7 @@
 "use client";
 
 import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   Node,
@@ -9,12 +10,23 @@ import {
   NodeHeader,
   NodeTitle,
 } from "@/components/ai-elements/node";
+import { Button } from "@/components/ui/button";
+import { useI18n } from "@/core/i18n/hooks";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
-import { getNodeCatalogEntry } from "@/core/workflows/canvas/node-catalog";
+import {
+  getDefaultNodeName,
+  getNodeCatalogEntry,
+} from "@/core/workflows/canvas/node-catalog";
+import {
+  readSubworkflowSaveMode,
+  readSubworkflowSource,
+} from "@/core/workflows/canvas/subworkflow";
+import type { WorkflowNode as WorkflowNodeModel } from "@/core/workflows/canvas/types";
 import type { NodeRunState } from "@/core/workflows/run-state";
 import type { Port, PortType } from "@/core/workflows/types";
 import { cn } from "@/lib/utils";
 
+import { useOpenSubworkflow } from "./use-open-subworkflow";
 import { useWorkflowEditor } from "./workflow-editor-context";
 
 export type WorkflowNodeProps = NodeProps<RFNode>;
@@ -114,6 +126,28 @@ function PortRow({
   );
 }
 
+/** Button-only child so ordinary nodes never mount navigation hooks. */
+function OpenSubworkflowButton({ workflow }: { workflow: WorkflowNodeModel }) {
+  const { t } = useI18n();
+  const openSubworkflow = useOpenSubworkflow();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="nodrag nopan w-full"
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        openSubworkflow(workflow);
+      }}
+      data-testid="workflow-node-open-subworkflow"
+    >
+      {t.workflows.properties.subworkflow.openButton}
+    </Button>
+  );
+}
+
 /**
  * Custom React Flow node for workflow steps.
  *
@@ -122,9 +156,40 @@ function PortRow({
  * instruction cannot push the node (or its handles) out of its own box.
  */
 export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
+  const { t } = useI18n();
   const workflow = data.workflow;
   const entry = getNodeCatalogEntry(workflow.type);
-  const { errors, runState } = useWorkflowEditor();
+  const defaultName = getDefaultNodeName(workflow.type);
+  const displayName = data.displayName?.trim() ?? defaultName;
+  const subworkflowSource = readSubworkflowSource(workflow.params);
+  const subworkflowMode = readSubworkflowSaveMode(workflow.params);
+  const { errors, runState, readonly, updateNodeDisplayName } =
+    useWorkflowEditor();
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(displayName);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!editingName) {
+      setNameDraft(displayName);
+    }
+  }, [displayName, editingName]);
+
+  useEffect(() => {
+    if (editingName) {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }
+  }, [editingName]);
+
+  const commitDisplayName = () => {
+    if (!editingName) {
+      return;
+    }
+    updateNodeDisplayName(id, nameDraft);
+    setEditingName(false);
+  };
+
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
@@ -137,7 +202,10 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
     typeof lastCompleted?.output?.prompt === "string"
       ? lastCompleted.output.prompt
       : null;
-  const paramEntries = Object.entries(workflow.params);
+  const paramEntries = Object.entries(workflow.params).filter(
+    ([key]) =>
+      !(workflow.type === "nested:subworkflow" && key === "subworkflow"),
+  );
 
   return (
     <Node
@@ -145,17 +213,70 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
       data-node-type={workflow.type}
       data-error={hasError ? "true" : undefined}
       data-run-state={runStateOfNode}
+      data-subworkflow-mode={
+        workflow.type === "nested:subworkflow" ? subworkflowMode : undefined
+      }
       className={cn(
         "w-72 max-w-72 min-w-72 gap-0",
         selected && "ring-ring ring-2",
+        workflow.type === "nested:subworkflow" &&
+          (subworkflowMode === "local"
+            ? "border-amber-200"
+            : "border-zinc-400"),
         runStateClasses(runStateOfNode, hasError),
       )}
     >
       <NodeHeader className="flex flex-row items-start justify-between gap-2">
         <div className="min-w-0">
-          <NodeTitle className="text-sm">
-            {entry?.label ?? workflow.type}
+          <NodeTitle
+            className={cn("text-sm", !readonly && "cursor-text")}
+            title={readonly ? undefined : t.workflows.renameNodeHint}
+            onDoubleClick={(event) => {
+              if (readonly) {
+                return;
+              }
+              event.stopPropagation();
+              setNameDraft(displayName);
+              setEditingName(true);
+            }}
+          >
+            {editingName ? (
+              <input
+                ref={nameInputRef}
+                value={nameDraft}
+                data-testid="workflow-node-name-input"
+                aria-label={t.workflows.renameNodeHint}
+                className="nodrag nopan border-input bg-background focus-visible:ring-ring w-full rounded border px-1 text-sm font-semibold outline-none focus-visible:ring-1"
+                onPointerDown={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onChange={(event) => setNameDraft(event.target.value)}
+                onBlur={commitDisplayName}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitDisplayName();
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    setNameDraft(displayName);
+                    setEditingName(false);
+                  }
+                }}
+              />
+            ) : (
+              <span
+                className="block truncate"
+                data-testid="workflow-node-display-name"
+              >
+                {displayName}
+              </span>
+            )}
           </NodeTitle>
+          <div
+            className="text-muted-foreground truncate text-xs"
+            data-testid="workflow-node-default-name"
+          >
+            {defaultName}
+          </div>
           {entry?.description && (
             <NodeDescription className="line-clamp-2 text-[11px]">
               {entry.description}
@@ -164,6 +285,9 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
         </div>
       </NodeHeader>
       <NodeContent className="flex min-h-0 flex-col gap-2 p-2">
+        {workflow.type === "nested:subworkflow" && subworkflowSource && (
+          <OpenSubworkflowButton workflow={workflow} />
+        )}
         <div className="grid grid-cols-2 gap-x-3">
           <div className="min-w-0">
             {workflow.inputs.map((port, index) => (

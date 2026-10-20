@@ -471,6 +471,7 @@ export const enUS: Translations = {
     expandPanel: "Expand panel",
     resizePanel: "Resize panel",
     backToDirectory: "Workflow directory",
+    renameNodeHint: "Double-click to rename this node",
     leave: {
       title: "Leave workflow?",
       description: "This workflow has unsaved changes. Save before leaving?",
@@ -487,6 +488,8 @@ export const enUS: Translations = {
       copy: "Copy",
       cut: "Cut",
       paste: "Paste",
+      subworkflowGlobal: "Follow template (update all references)",
+      subworkflowLocal: "Save only in this parent workflow",
     },
     categories: {
       flow: "Flow",
@@ -558,6 +561,18 @@ export const enUS: Translations = {
         inputMappingLabel: "Input mapping",
         outputMappingLabel: "Output mapping",
         unmappedPlaceholder: "Not mapped",
+        openButton: "Open subworkflow",
+        saveModeLabel: "Save mode",
+        saveModeGlobal: "Follow template",
+        saveModeLocal: "Local copy",
+        localSnapshotLabel: "Local snapshot of",
+        savedToParent: "Subworkflow saved into the parent workflow",
+        embeddedRunDisabled:
+          "Run the parent workflow to execute a locally saved subworkflow",
+        embeddedNotFound: "The local subworkflow definition could not be found",
+        discardLocalConfirm:
+          "Switch back to the shared template? Local changes in this node will be discarded.",
+        modeChangeFailed: "Failed to change the subworkflow save mode",
       },
       app: {
         title: "Local application",
@@ -754,6 +769,7 @@ export const enUS: Translations = {
   breadcrumb: {
     workspace: "Workspace",
     chats: "Chats",
+    workflows: "Workflows",
   },
 
   // Workspace
