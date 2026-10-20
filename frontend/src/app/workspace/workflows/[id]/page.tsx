@@ -8,7 +8,6 @@ import {
   WorkflowEditorProvider,
   useWorkflowEditor,
 } from "@/components/workspace/workflows/workflow-editor-context";
-import { WorkflowPalette } from "@/components/workspace/workflows/workflow-palette";
 import { WorkflowPropertiesPanel } from "@/components/workspace/workflows/workflow-properties-panel";
 import { WorkflowRunPanel } from "@/components/workspace/workflows/workflow-run-panel";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
@@ -71,7 +70,6 @@ function WorkflowEditor() {
     <div className="flex size-full flex-col overflow-hidden">
       <WorkflowToolbar />
       <div className="flex min-h-0 flex-1">
-        <WorkflowPalette />
         <WorkflowCanvas />
         <WorkflowPropertiesPanel
           node={selectedNode}

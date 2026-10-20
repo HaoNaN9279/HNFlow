@@ -49,46 +49,6 @@ async function throwWorkflowApiError(
   throw new Error(fallback);
 }
 
-/**
- * One entry from ``GET /api/workflows/templates`` (N14 §24.6b).
- *
- * ``definition`` arrives as a serialized JSON string on the wire and is parsed
- * here so callers receive the same `WorkflowDefinition` shape the rest of the
- * workflows API uses.
- */
-export type WorkflowTemplate = {
-  name: string;
-  description: string;
-  definition: WorkflowDefinition;
-};
-
-/**
- * List the built-in collaboration templates the canvas can insert.
- *
- * Templates ship with the backend (`workflow/patterns.py`) so the skeleton
- * stays in lockstep with what the compiler accepts; the response definition is
- * a normal (serialized) workflow document.
- */
-export async function fetchWorkflowTemplates(): Promise<WorkflowTemplate[]> {
-  const response = await fetch(workflowsUrl("/templates"));
-  if (!response.ok) {
-    await throwWorkflowApiError(
-      response,
-      `Failed to load workflow templates: ${response.statusText}`,
-    );
-  }
-  const rows = (await response.json()) as Array<{
-    name: string;
-    description: string;
-    definition: string;
-  }>;
-  return rows.map((row) => ({
-    name: row.name,
-    description: row.description,
-    definition: JSON.parse(row.definition) as WorkflowDefinition,
-  }));
-}
-
 export type WorkflowPromptPreview = {
   node_id: string;
   prompt: string;

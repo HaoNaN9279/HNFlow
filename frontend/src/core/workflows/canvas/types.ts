@@ -18,7 +18,7 @@ export type {
   WorkflowDefinition,
 } from "@/core/workflows/types";
 
-/** Palette grouping for a node catalog entry. */
+/** Category grouping for a node catalog entry. */
 export type NodeCategory =
   | "flow"
   | "data"

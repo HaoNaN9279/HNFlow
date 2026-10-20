@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
+import { addNodeFromCatalog } from "./utils/workflow-canvas";
 
 // ---------------------------------------------------------------------------
 // Mock backend — GET/POST /api/workflows, GET/PUT/DELETE /api/workflows/{id},
@@ -216,23 +217,6 @@ function mockWorkflowsAPI(
 // Canvas interaction helpers (mirror the T14 canvas spec)
 // ---------------------------------------------------------------------------
 
-async function dropPaletteItem(
-  page: Page,
-  nodeType: string,
-  clientX: number,
-  clientY: number,
-) {
-  const item = page.getByTestId(`palette-item-${nodeType}`);
-  await expect(item).toHaveCount(1);
-  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
-  await item.dispatchEvent("dragstart", { dataTransfer });
-  await page.locator(".react-flow").dispatchEvent("drop", {
-    dataTransfer,
-    clientX,
-    clientY,
-  });
-}
-
 /** The `.react-flow__node` wrapper hosting a node of the given catalog type. */
 function nodeWrapper(page: Page, nodeType: string): Locator {
   return page.locator(".react-flow__node", {
@@ -277,7 +261,7 @@ test.describe("Workflow node forms", () => {
 
     // Drop the AI node above the anchors and select it.
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "ai:llm_agent",
       canvasBox.x + 360,
@@ -360,7 +344,7 @@ test.describe("Workflow node forms", () => {
     await waitForSettledViewport(page);
 
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "nested:subworkflow",
       canvasBox.x + 360,
@@ -449,7 +433,7 @@ test.describe("Workflow node forms", () => {
     await waitForSettledViewport(page);
 
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "ai:llm_agent",
       canvasBox.x + 360,

@@ -378,19 +378,17 @@ export interface Translations {
     readonly: string;
     collapsePanel: string;
     expandPanel: string;
-    templates: {
-      label: string;
+    backToDirectory: string;
+    nodeCatalog: {
+      title: string;
       hint: string;
-      empty: string;
-      insertFailed: string;
-      loadFailed: string;
-    };
-    canvas: {
-      paletteTitle: string;
       searchPlaceholder: string;
-      fitView: string;
-      zoomIn: string;
-      zoomOut: string;
+      empty: string;
+    };
+    contextMenu: {
+      copy: string;
+      cut: string;
+      paste: string;
     };
     categories: {
       flow: string;

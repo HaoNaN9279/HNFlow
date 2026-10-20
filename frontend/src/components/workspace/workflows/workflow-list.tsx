@@ -32,7 +32,7 @@ import type { WorkflowRecord } from "@/core/workflows/types";
  * The backend validates every saved definition (`validate_definition`) and
  * requires exactly one `flow:start` and one `flow:end`, so an empty graph is
  * rejected with 422. Seed the canvas with a start → end pair (using the same
- * port defaults the palette produces) so creation succeeds and the new
+ * port defaults the node catalog produces) so creation succeeds and the new
  * workflow opens on a legal, runnable skeleton. The id/name are re-stamped at
  * persistence time.
  */

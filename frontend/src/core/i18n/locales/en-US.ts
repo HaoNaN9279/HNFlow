@@ -470,19 +470,17 @@ export const enUS: Translations = {
     readonly: "Read only",
     collapsePanel: "Collapse panel",
     expandPanel: "Expand panel",
-    templates: {
-      label: "Templates",
-      hint: "Insert a collaboration template skeleton onto the canvas",
-      empty: "No templates available",
-      insertFailed: "Failed to insert template",
-      loadFailed: "Failed to load templates",
-    },
-    canvas: {
-      paletteTitle: "Node Catalog",
+    backToDirectory: "Workflow directory",
+    nodeCatalog: {
+      title: "Add node",
+      hint: "Double-click empty canvas space to add a node.",
       searchPlaceholder: "Search nodes...",
-      fitView: "Fit view",
-      zoomIn: "Zoom in",
-      zoomOut: "Zoom out",
+      empty: "No matching nodes",
+    },
+    contextMenu: {
+      copy: "Copy",
+      cut: "Cut",
+      paste: "Paste",
     },
     categories: {
       flow: "Flow",

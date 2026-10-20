@@ -1,7 +1,7 @@
 import type { NodeCategory, NodeType, Port, WorkflowNode } from "./types";
 
 /**
- * Node palette catalogue — every workflow node type with its default
+ * Node catalog — every workflow node type with its default
  * ports and params. Defaults align with the backend executors
  * (`deerflow.workflow.executors.*`) and the compiler's port expectations.
  */
@@ -15,7 +15,7 @@ export type NodeCatalogEntry = {
   description: string;
 };
 
-/** Palette category groups, in render order for the material panel. */
+/** Node category groups, in render order for the catalog dialog. */
 export const NODE_CATEGORIES = [
   { id: "flow", label: "Flow" },
   { id: "data", label: "Data" },

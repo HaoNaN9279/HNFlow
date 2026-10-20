@@ -19,13 +19,11 @@ import type { WorkflowRecord } from "@/core/workflows/types";
 
 const apiMock = rs.hoisted(() => ({
   updateWorkflow: rs.fn(),
-  fetchWorkflowTemplates: rs.fn(),
 }));
 const toastMock = rs.hoisted(() => ({ success: rs.fn(), error: rs.fn() }));
 
 rs.mock("@/core/workflows/api", () => ({
   updateWorkflow: apiMock.updateWorkflow,
-  fetchWorkflowTemplates: apiMock.fetchWorkflowTemplates,
 }));
 
 rs.mock("sonner", () => ({
@@ -47,13 +45,7 @@ rs.mock("@/core/i18n/hooks", () => ({
         readonly: "Read only",
         save: "Save",
         saving: "Saving...",
-        templates: {
-          label: "Templates",
-          hint: "Insert a collaboration template skeleton onto the canvas",
-          empty: "No templates available",
-          insertFailed: "Failed to insert template",
-          loadFailed: "Failed to load templates",
-        },
+        backToDirectory: "Workflow directory",
         run: {
           run: "Run",
           runDisabled: "Save unsaved changes first",
@@ -139,6 +131,14 @@ function renderToolbar(options: { readonly?: boolean } = {}) {
 }
 
 describe("WorkflowToolbar", () => {
+  it("links back to the workflow directory", () => {
+    renderToolbar();
+
+    const link = screen.getByRole("link", { name: "Workflow directory" });
+    expect(link.getAttribute("href")).toBe("/workspace/workflows");
+    expect(screen.queryByRole("button", { name: "Templates" })).toBeNull();
+  });
+
   it("enables save only after the editor is dirty", () => {
     renderToolbar();
 

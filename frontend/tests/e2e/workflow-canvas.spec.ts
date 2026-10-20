@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
+import { addNodeFromCatalog } from "./utils/workflow-canvas";
 
 // ---------------------------------------------------------------------------
 // Mock backend — GET/POST /api/workflows, GET/PUT/DELETE /api/workflows/{id}
@@ -186,23 +187,6 @@ function mockWorkflowsAPI(
 // Canvas interaction helpers
 // ---------------------------------------------------------------------------
 
-async function dropPaletteItem(
-  page: Page,
-  nodeType: string,
-  clientX: number,
-  clientY: number,
-) {
-  const item = page.getByTestId(`palette-item-${nodeType}`);
-  await expect(item).toHaveCount(1);
-  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
-  await item.dispatchEvent("dragstart", { dataTransfer });
-  await page.locator(".react-flow").dispatchEvent("drop", {
-    dataTransfer,
-    clientX,
-    clientY,
-  });
-}
-
 /** The `.react-flow__node` wrapper hosting a node of the given catalog type. */
 function nodeWrapper(page: Page, nodeType: string): Locator {
   return page.locator(".react-flow__node", {
@@ -313,8 +297,8 @@ test.describe("Workflow canvas", () => {
       })
       .toBeTruthy();
 
-    // Drop the five catalog nodes onto the canvas (2-column layout so the
-    // source/target handles stay clear of each other).
+    // Add the five catalog nodes via the double-click picker (2-column layout
+    // so the source/target handles stay clear of each other).
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
     const spots = [
       { type: "flow:start", x: canvasBox.x + 60, y: canvasBox.y + 60 },
@@ -324,7 +308,7 @@ test.describe("Workflow canvas", () => {
       { type: "flow:end", x: canvasBox.x + 60, y: canvasBox.y + 420 },
     ];
     for (const spot of spots) {
-      await dropPaletteItem(page, spot.type, spot.x, spot.y);
+      await addNodeFromCatalog(page, spot.type, spot.x, spot.y);
       // 2 anchors + 1 dropped node per iteration.
       await expect(page.locator(".react-flow__node")).toHaveCount(
         spots.indexOf(spot) + 3,
@@ -476,19 +460,19 @@ test.describe("Workflow canvas", () => {
 
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
     // data:file outputs `file`; data:assign expects `data` on its input.
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "data:file",
       canvasBox.x + 60,
       canvasBox.y + 60,
     );
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "data:assign",
       canvasBox.x + 560,
       canvasBox.y + 60,
     );
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "flow:start",
       canvasBox.x + 60,
@@ -577,7 +561,7 @@ test.describe("Workflow canvas", () => {
 
     // Make the document dirty so Save is enabled, then save into the 422.
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    await dropPaletteItem(
+    await addNodeFromCatalog(
       page,
       "flow:wait",
       canvasBox.x + 120,

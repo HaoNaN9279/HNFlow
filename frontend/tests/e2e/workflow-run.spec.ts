@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import { expect, test, type Page } from "@playwright/test";
 
 import { mockLangGraphAPI } from "./utils/mock-api";
+import { addNodeFromCatalog } from "./utils/workflow-canvas";
 
 // ---------------------------------------------------------------------------
 // Mock backend — workflow editor + run monitoring (T16).
@@ -251,23 +252,6 @@ function failureSse(nodeId: string): string {
 // Canvas interaction helpers (mirror the T14/T15 specs)
 // ---------------------------------------------------------------------------
 
-async function dropPaletteItem(
-  page: Page,
-  nodeType: string,
-  clientX: number,
-  clientY: number,
-) {
-  const item = page.getByTestId(`palette-item-${nodeType}`);
-  await expect(item).toHaveCount(1);
-  const dataTransfer = await page.evaluateHandle(() => new DataTransfer());
-  await item.dispatchEvent("dragstart", { dataTransfer });
-  await page.locator(".react-flow").dispatchEvent("drop", {
-    dataTransfer,
-    clientX,
-    clientY,
-  });
-}
-
 /** Wait until `fitView` has settled (the viewport carries a scale transform). */
 async function waitForSettledViewport(page: Page) {
   await expect
@@ -281,8 +265,8 @@ async function waitForSettledViewport(page: Page) {
 }
 
 /**
- * Open the editor, drop one `ai:llm_agent` node (above the two anchor nodes),
- * save it, and return the dropped node's id — the id the SSE frames must
+ * Open the editor, add one `ai:llm_agent` node (above the two anchor nodes),
+ * save it, and return the added node's id — the id the SSE frames must
  * reference for the canvas to paint the run state.
  */
 async function openEditorWithAiNode(
@@ -294,7 +278,7 @@ async function openEditorWithAiNode(
   await waitForSettledViewport(page);
 
   const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-  await dropPaletteItem(
+  await addNodeFromCatalog(
     page,
     "ai:llm_agent",
     canvasBox.x + 360,

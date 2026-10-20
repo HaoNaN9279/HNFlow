@@ -49,8 +49,7 @@ import type {
  * canvas can feed its `onNodesChange`/`onEdgesChange` straight through, while
  * selection, validation errors, the dirty flag and the readonly mode live in
  * plain state. The provider is mounted once per workflow record in
- * `[id]/page.tsx`; the canvas, palette, toolbar and properties panel all read
- * from it.
+ * `[id]/page.tsx`; the canvas, toolbar and properties panel all read from it.
  */
 type WorkflowEditorContextValue = {
   workflowId: string;

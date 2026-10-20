@@ -453,19 +453,17 @@ export const zhCN: Translations = {
     readonly: "只读",
     collapsePanel: "收起面板",
     expandPanel: "展开面板",
-    templates: {
-      label: "模板",
-      hint: "把协作模板骨架插入画布",
-      empty: "暂无可用模板",
-      insertFailed: "插入模板失败",
-      loadFailed: "加载模板失败",
-    },
-    canvas: {
-      paletteTitle: "节点目录",
+    backToDirectory: "工作流目录",
+    nodeCatalog: {
+      title: "添加节点",
+      hint: "在画布空白处双击即可添加节点。",
       searchPlaceholder: "搜索节点...",
-      fitView: "适应视图",
-      zoomIn: "放大",
-      zoomOut: "缩小",
+      empty: "没有匹配的节点",
+    },
+    contextMenu: {
+      copy: "复制",
+      cut: "剪切",
+      paste: "粘贴",
     },
     categories: {
       flow: "流程",
