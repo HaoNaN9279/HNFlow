@@ -213,6 +213,7 @@ export interface Translations {
     demoChats: string;
     scheduledTasks: string;
     capabilityGroups: string;
+    tools: string;
   };
 
   capabilityGroups: {
@@ -226,6 +227,8 @@ export interface Translations {
     loadingContents: string;
     loadContentsFailed: string;
     noFiles: string;
+    toolReferences: string;
+    toolPermissions: string;
     reveal: string;
     revealGroup: string;
     revealFailed: string;
@@ -241,6 +244,28 @@ export interface Translations {
       assets: string;
       evals: string;
       other: string;
+    };
+  };
+
+  tools: {
+    title: string;
+    description: string;
+    loading: string;
+    loadFailed: string;
+    retry: string;
+    empty: string;
+    emptyHint: string;
+    searchPlaceholder: string;
+    noMatches: string;
+    permissions: string;
+    unknownPermissions: string;
+    source: { package: string; provider: string };
+    providers: {
+      mcp: string;
+      builtin: string;
+      sandbox: string;
+      app: string;
+      python: string;
     };
   };
 
@@ -649,6 +674,7 @@ export interface Translations {
     workspace: string;
     chats: string;
     workflows: string;
+    tools: string;
   };
 
   // Workspace

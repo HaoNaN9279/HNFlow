@@ -16,6 +16,7 @@ from deerflow.capability_groups.contents import (
 )
 from deerflow.config.paths import get_paths
 from deerflow.runtime.user_context import get_effective_user_id
+from deerflow.skills.contract import CAPABILITY_PERMISSIONS
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,8 @@ class CapabilityGroup:
     root: Path
     permissions: tuple[str, ...] = ()
     extends: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
+    tool_permissions: dict[str, tuple[str, ...]] = field(default_factory=dict)
     files: tuple[CapabilityGroupFile, ...] = field(default_factory=tuple)
 
     @property
@@ -58,6 +61,8 @@ class CapabilityGroup:
             "source": self.source,
             "permissions": list(self.permissions),
             "extends": list(self.extends),
+            "tools": list(self.tools),
+            "tool_permissions": {name: list(values) for name, values in self.tool_permissions.items()},
             "counts": self.counts,
         }
 
@@ -107,10 +112,32 @@ def _load_manifest(group_dir: Path, *, name_hint: str, version_hint: str, source
         raise CapabilityGroupError(f"{manifest_path}: description must be a string")
     permissions_raw = raw.get("permissions") or []
     extends_raw = raw.get("extends") or []
+    tools_raw = raw.get("tools") or []
+    tool_permissions_raw = raw.get("tool_permissions") or {}
     if not isinstance(permissions_raw, list) or not all(isinstance(item, str) for item in permissions_raw):
         raise CapabilityGroupError(f"{manifest_path}: permissions must be a list of strings")
+    permissions = tuple(item.strip().lower() for item in permissions_raw if item.strip())
+    unknown_permissions = sorted({item for item in permissions if item not in CAPABILITY_PERMISSIONS})
+    if unknown_permissions:
+        raise CapabilityGroupError(f"{manifest_path}: unknown permissions {unknown_permissions}; allowed: {sorted(CAPABILITY_PERMISSIONS)}")
     if not isinstance(extends_raw, list) or not all(isinstance(item, str) for item in extends_raw):
         raise CapabilityGroupError(f"{manifest_path}: extends must be a list of strings")
+    if not isinstance(tools_raw, list) or not all(isinstance(item, str) and item.strip() for item in tools_raw):
+        raise CapabilityGroupError(f"{manifest_path}: tools must be a list of non-empty strings")
+    if not isinstance(tool_permissions_raw, dict):
+        raise CapabilityGroupError(f"{manifest_path}: tool_permissions must be an object")
+    tool_permissions: dict[str, tuple[str, ...]] = {}
+    for tool_ref, values in tool_permissions_raw.items():
+        if not isinstance(tool_ref, str) or not tool_ref.strip():
+            raise CapabilityGroupError(f"{manifest_path}: tool_permissions keys must be non-empty strings")
+        if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
+            raise CapabilityGroupError(f"{manifest_path}: tool_permissions[{tool_ref!r}] must be a list of strings")
+        normalized = tuple(item.strip().lower() for item in values if item.strip())
+        unknown = sorted({item for item in normalized if item not in CAPABILITY_PERMISSIONS})
+        if unknown:
+            raise CapabilityGroupError(f"{manifest_path}: tool_permissions[{tool_ref!r}] has unknown permissions {unknown}; allowed: {sorted(CAPABILITY_PERMISSIONS)}")
+        tool_permissions[tool_ref.strip()] = normalized
+    tools = tuple(dict.fromkeys(item.strip() for item in tools_raw))
     return CapabilityGroup(
         guid=guid,
         name=name.strip(),
@@ -118,8 +145,10 @@ def _load_manifest(group_dir: Path, *, name_hint: str, version_hint: str, source
         description=description.strip(),
         source=source,
         root=group_dir.resolve(),
-        permissions=tuple(item.strip() for item in permissions_raw if item.strip()),
+        permissions=permissions,
         extends=tuple(item.strip() for item in extends_raw if item.strip()),
+        tools=tools,
+        tool_permissions=tool_permissions,
         files=tuple(build_capability_contents(group_dir)),
     )
 

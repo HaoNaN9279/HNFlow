@@ -149,6 +149,7 @@ def _resolve_node_tools(
     user_id: str | None,
     app_config: Any,
     instance_repo: Any = None,
+    node_id: str | None = None,
 ) -> list[Any]:
     """Resolve the AI node's tool set from its capability groups (C1).
 
@@ -160,13 +161,19 @@ def _resolve_node_tools(
     """
     if not capability_groups:
         return []
-    try:
-        from deerflow.workflow.tool_gateway import resolve_capability_tools
+    from deerflow.tools.registry import ToolResolutionError
+    from deerflow.workflow.tool_gateway import resolve_capability_tools
 
+    try:
         return resolve_capability_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
-    except Exception:
-        logger.warning("ai:llm_agent failed to resolve capability-group tools; continuing without tools", exc_info=True)
-        return []
+    except ToolResolutionError as exc:
+        # An explicitly declared tool is part of the node's contract.  Silently
+        # running with a smaller tool set would make configuration errors look
+        # like model failures, so the node fails loudly instead.
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+    except Exception as exc:
+        logger.warning("ai:llm_agent failed to resolve capability-group tools", exc_info=True)
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': failed to resolve capability-group tools: {exc}") from exc
 
 
 async def exec_llm_agent(
@@ -371,7 +378,7 @@ async def exec_llm_agent(
 
     # C1: assemble the node's real tool set from its capability groups' union of
     # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
-    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
+    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo, node_id=node_id)
 
     # N14 §24.5: an explicit autonomy budget pins this node's hard limits.
     autonomy_max_turns, autonomy_token_budget = _autonomy_settings(params)

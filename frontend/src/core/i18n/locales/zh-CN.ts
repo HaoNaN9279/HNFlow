@@ -272,6 +272,7 @@ export const zhCN: Translations = {
     demoChats: "演示对话",
     scheduledTasks: "定时任务",
     capabilityGroups: "能力组",
+    tools: "工具集",
   },
 
   capabilityGroups: {
@@ -286,6 +287,8 @@ export const zhCN: Translations = {
     loadingContents: "正在加载内容...",
     loadContentsFailed: "加载能力组内容失败",
     noFiles: "该能力组没有可展示的文件",
+    toolReferences: "引用的工具",
+    toolPermissions: "权限",
     reveal: "在资源管理器中定位",
     revealGroup: "打开能力组目录",
     revealFailed: "定位文件失败",
@@ -301,6 +304,30 @@ export const zhCN: Translations = {
       assets: "Assets",
       evals: "Evals",
       other: "其他",
+    },
+  },
+
+  tools: {
+    title: "工具集",
+    description:
+      "当前已部署并可被工作流和智能体使用的全部工具，包括内置、沙箱、本地应用、自定义和 MCP 工具。",
+    loading: "正在加载工具...",
+    loadFailed: "加载工具失败",
+    retry: "重试",
+    empty: "暂无可用工具",
+    emptyHint:
+      "可在 config.yaml、tools/ 下的工具包，或 extensions_config.json 的 MCP server 中配置工具。",
+    searchPlaceholder: "按名称、ID 或描述搜索工具...",
+    noMatches: "没有匹配当前搜索的工具",
+    permissions: "权限",
+    unknownPermissions: "暂无权限元数据",
+    source: { package: "工具包", provider: "Provider" },
+    providers: {
+      mcp: "MCP",
+      builtin: "内置",
+      sandbox: "沙箱",
+      app: "本地应用",
+      python: "自定义",
     },
   },
 
@@ -735,6 +762,7 @@ export const zhCN: Translations = {
     workspace: "工作区",
     chats: "对话",
     workflows: "工作流",
+    tools: "工具集",
   },
 
   // Workspace

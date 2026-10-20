@@ -263,8 +263,38 @@ export function CapabilityGroupContents({
     }
   };
 
+  const toolRefs = group.tools ?? [];
+
   return (
     <div className="flex flex-col">
+      {toolRefs.length > 0 && (
+        <div className="border-b">
+          <div className="bg-muted/30 text-muted-foreground px-3 py-1.5 text-[11px] font-medium tracking-wide uppercase">
+            {labels.toolReferences}
+          </div>
+          <div className="flex flex-col">
+            {toolRefs.map((ref) => {
+              const permissions = group.tool_permissions?.[ref] ?? [];
+              return (
+                <div
+                  key={ref}
+                  className="flex items-center gap-2 border-t px-3 py-1.5 first:border-t-0"
+                  data-testid="capability-group-tool-ref"
+                >
+                  <span className="min-w-0 flex-1 truncate font-mono text-xs">
+                    {ref}
+                  </span>
+                  {permissions.length > 0 && (
+                    <span className="text-muted-foreground shrink-0 text-[10px]">
+                      {labels.toolPermissions}: {permissions.join(", ")}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {categoryIds.map((category) => {
         const entry = byCategory.get(category);
         if (!entry || entry.files.length === 0) {

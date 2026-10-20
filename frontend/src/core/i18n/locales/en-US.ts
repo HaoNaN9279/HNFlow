@@ -287,6 +287,7 @@ export const enUS: Translations = {
     demoChats: "Demo chats",
     scheduledTasks: "Scheduled tasks",
     capabilityGroups: "Capability groups",
+    tools: "Toolset",
   },
 
   capabilityGroups: {
@@ -301,6 +302,8 @@ export const enUS: Translations = {
     loadingContents: "Loading contents...",
     loadContentsFailed: "Failed to load capability group contents",
     noFiles: "This capability group has no files to show",
+    toolReferences: "Referenced tools",
+    toolPermissions: "Permissions",
     reveal: "Reveal in file manager",
     revealGroup: "Open capability group folder",
     revealFailed: "Failed to reveal file",
@@ -316,6 +319,30 @@ export const enUS: Translations = {
       assets: "Assets",
       evals: "Evals",
       other: "Other",
+    },
+  },
+
+  tools: {
+    title: "Toolset",
+    description:
+      "Every tool currently deployed and available to workflows and agents, including built-in, sandbox, local-app, custom, and MCP tools.",
+    loading: "Loading tools...",
+    loadFailed: "Failed to load tools",
+    retry: "Retry",
+    empty: "No tools available",
+    emptyHint:
+      "Configure tools in config.yaml, tool packages under tools/, or MCP servers in extensions_config.json.",
+    searchPlaceholder: "Search tools by name, id, or description...",
+    noMatches: "No tools match the current search",
+    permissions: "Permissions",
+    unknownPermissions: "Permission metadata unavailable",
+    source: { package: "Tool package", provider: "Provider" },
+    providers: {
+      mcp: "MCP",
+      builtin: "Built-in",
+      sandbox: "Sandbox",
+      app: "Local apps",
+      python: "Custom",
     },
   },
 
@@ -770,6 +797,7 @@ export const enUS: Translations = {
     workspace: "Workspace",
     chats: "Chats",
     workflows: "Workflows",
+    tools: "Toolset",
   },
 
   // Workspace

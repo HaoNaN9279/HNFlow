@@ -100,6 +100,20 @@ class TestMcpProvider:
         assert gateway.provider_names() == ["sandbox", "builtin", "mcp", "app"]
         assert gateway.resolve_with_provider("srv_ping") == (gateway.resolve("srv_ping"), tg.PROVIDER_MCP)
 
+    def test_mcp_tools_keep_their_server_origin(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from deerflow.tools.mcp_metadata import get_mcp_origin, tag_mcp_origin
+
+        monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})
+        monkeypatch.setattr(tg, "_builtin_tools", lambda **kwargs: {})
+        monkeypatch.setattr(tg, "_app_tools", lambda **kwargs: {})
+        mcp_tool = _tool("srv_ping")
+        tag_mcp_origin(mcp_tool, server="srv", tool_name="ping")
+        _patch_mcp(monkeypatch, servers={"srv": {"enabled": True}}, tools=[mcp_tool])
+
+        gateway = tg.build_default_tool_gateway()
+
+        assert get_mcp_origin(gateway.resolve("srv_ping")) == ("srv", "ping")
+
     def test_mcp_tools_keep_their_deferred_filter_tag(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from deerflow.tools.mcp_metadata import is_mcp_tool
 
@@ -165,6 +179,24 @@ class TestMcpProvider:
 
 
 # ── C1 wiring: exec_llm_agent passes resolved tools to the sub-agent ─────────
+
+
+@pytest.mark.asyncio
+async def test_exec_llm_agent_fails_loud_when_declared_tool_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from deerflow.tools.registry import ToolResolutionError
+    from deerflow.workflow.registry import WorkflowExecutionError
+
+    monkeypatch.setattr(
+        "deerflow.workflow.tool_gateway.resolve_capability_tools",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ToolResolutionError("builtin tool 'missing' is not available")),
+    )
+
+    with pytest.raises(WorkflowExecutionError, match="missing"):
+        await exec_llm_agent(
+            WorkflowRuntime(),
+            {"instruction": "x", "capability_groups": ["grp"]},
+            {"in": "y"},
+        )
 
 
 @pytest.mark.asyncio

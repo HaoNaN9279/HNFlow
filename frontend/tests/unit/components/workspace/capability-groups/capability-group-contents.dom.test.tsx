@@ -34,6 +34,8 @@ rs.mock("@/core/i18n/hooks", () => ({
         loadingContents: "Loading contents...",
         loadContentsFailed: "Failed",
         noFiles: "No files",
+        toolReferences: "Referenced tools",
+        toolPermissions: "Permissions",
         reveal: "Reveal in file manager",
         revealFailed: "Reveal failed",
         revealed: "Revealed",
@@ -69,6 +71,8 @@ const group: CapabilityGroupDetail = {
   source: "public",
   permissions: [],
   extends: [],
+  tools: ["builtin:read_file", "mcp:github:search"],
+  tool_permissions: { "mcp:github:search": ["net"] },
   counts: { rules: 1, agents: 1, skills: 1, tools: 1 },
   categories: [
     {
@@ -110,6 +114,15 @@ describe("CapabilityGroupContents", () => {
     expect(screen.getByText("Skills")).toBeTruthy();
     expect(screen.getByText("Keep styles consistent")).toBeTruthy();
     expect(screen.getByText("Child skill summary")).toBeTruthy();
+  });
+
+  it("renders referenced tools and their permission overrides", () => {
+    render(<CapabilityGroupContents group={group} />);
+
+    expect(screen.getByText("Referenced tools")).toBeTruthy();
+    expect(screen.getByText("builtin:read_file")).toBeTruthy();
+    expect(screen.getByText("mcp:github:search")).toBeTruthy();
+    expect(screen.getByText("Permissions: net")).toBeTruthy();
   });
 
   it("renders nested folders and arbitrary category names", () => {

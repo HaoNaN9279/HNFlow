@@ -10,6 +10,8 @@ export interface CapabilityGroupSummary {
   source: CapabilityGroupSource;
   permissions: string[];
   extends: string[];
+  tools?: string[];
+  tool_permissions?: Record<string, string[]>;
   counts: CapabilityGroupCounts;
 }
 

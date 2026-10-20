@@ -294,3 +294,43 @@ def validate_capability_groups(
             if reference not in groups:
                 errors.append(f"node '{node.id}': capability group '{reference}' is not installed")
     return errors
+
+
+def validate_capability_tool_refs(definition: WorkflowDefinition, *, user_id: str | None = None) -> list[str]:
+    """Validate tool ids declared by installed capability groups.
+
+    Custom ``tool:`` refs are checked against the package registry at save time.
+    Provider refs (``mcp:`` / ``builtin:`` / ``sandbox:`` / ``app:``) are
+    validated at run time because availability depends on live config/servers.
+    Unknown capability groups stay fail-open here, matching the existing save
+    contract while the group is being authored.
+    """
+    from deerflow.capability_groups import CapabilityGroupError, load_capability_group
+    from deerflow.tools.packages import ToolPackageError, load_tool_package
+
+    errors: list[str] = []
+    for node in definition.nodes:
+        for reference in declared_capability_groups(node):
+            try:
+                group = load_capability_group(reference, user_id=user_id)
+            except CapabilityGroupError:
+                # Unknown groups are an existing fail-open authoring state.
+                continue
+            for tool_ref in group.tools:
+                prefix, _, value = tool_ref.partition(":")
+                if prefix == "tool":
+                    identifier, separator, version = value.rpartition("@v")
+                    if not separator or not identifier or not version:
+                        errors.append(f"node '{node.id}': capability group '{group.name}' has invalid tool reference '{tool_ref}' (expected tool:<guid>@v<version>)")
+                        continue
+                    try:
+                        load_tool_package(identifier, version=version)
+                    except ToolPackageError as exc:
+                        errors.append(f"node '{node.id}': capability group '{group.name}' references unavailable tool package '{tool_ref}': {exc}")
+                elif prefix == "mcp":
+                    server, separator, tool_name = value.partition(":")
+                    if not separator or not server or not tool_name or ":" in tool_name:
+                        errors.append(f"node '{node.id}': capability group '{group.name}' has invalid MCP tool reference '{tool_ref}' (expected mcp:<server>:<tool>)")
+                elif prefix not in {"builtin", "sandbox", "app"} or not value:
+                    errors.append(f"node '{node.id}': capability group '{group.name}' has invalid tool reference '{tool_ref}'")
+    return errors

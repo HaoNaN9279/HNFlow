@@ -20,12 +20,38 @@ from langchain.tools import BaseTool
 
 MCP_TOOL_METADATA_KEY = "deerflow_mcp"
 MCP_TOOL_ROUTING_METADATA_KEY = "deerflow_mcp_routing"
+MCP_TOOL_SERVER_METADATA_KEY = "deerflow_mcp_server"
+MCP_TOOL_NAME_METADATA_KEY = "deerflow_mcp_tool"
 
 
 def tag_mcp_tool(tool: BaseTool) -> BaseTool:
     """Mark ``tool`` as MCP-sourced. Mutates in place and returns it for chaining."""
     tool.metadata = {**(tool.metadata or {}), MCP_TOOL_METADATA_KEY: True}
     return tool
+
+
+def tag_mcp_origin(tool: BaseTool, *, server: str, tool_name: str) -> BaseTool:
+    """Record the MCP server and original tool name behind *tool*.
+
+    Capability groups reference tools by stable ``mcp:<server>:<tool>`` identity,
+    not by the model-visible name (which may be prefixed by the server).
+    """
+    tool.metadata = {
+        **(tool.metadata or {}),
+        MCP_TOOL_SERVER_METADATA_KEY: server,
+        MCP_TOOL_NAME_METADATA_KEY: tool_name,
+    }
+    return tool
+
+
+def get_mcp_origin(tool: BaseTool) -> tuple[str, str] | None:
+    """Return ``(server, original_tool_name)`` for an MCP tool, if recorded."""
+    metadata = getattr(tool, "metadata", None) or {}
+    server = metadata.get(MCP_TOOL_SERVER_METADATA_KEY)
+    tool_name = metadata.get(MCP_TOOL_NAME_METADATA_KEY)
+    if isinstance(server, str) and server and isinstance(tool_name, str) and tool_name:
+        return server, tool_name
+    return None
 
 
 def is_mcp_tool(tool: BaseTool) -> bool:

@@ -4,6 +4,7 @@ import {
   CalendarClock,
   LayersIcon,
   MessagesSquare,
+  WrenchIcon,
   Workflow,
 } from "lucide-react";
 import Link from "next/link";
@@ -85,6 +86,17 @@ export function WorkspaceNavChatList() {
             >
               <LayersIcon />
               <span>{t.sidebar.capabilityGroups}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/tools")}
+            asChild
+          >
+            <Link className="text-muted-foreground" href="/workspace/tools">
+              <WrenchIcon />
+              <span>{t.sidebar.tools}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

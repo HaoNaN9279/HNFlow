@@ -31,6 +31,7 @@ from app.gateway.routers import (
     skills,
     thread_runs,
     threads,
+    tools,
     uploads,
     workflow_routes,
 )
@@ -575,6 +576,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
 
     # Capability groups API is mounted at /api/capability-groups
     app.include_router(capability_groups.router)
+
+    # Unified tool catalog is mounted at /api/tools
+    app.include_router(tools.router)
 
     # Skills API is mounted at /api/skills
     app.include_router(skills.router)

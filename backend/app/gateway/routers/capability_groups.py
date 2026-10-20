@@ -1,7 +1,8 @@
 """Capability-group management API.
 
-Capability groups are versioned packages that own rules, agents, skills, tools
-and other resources; a skill is a child resource, not a group.
+Capability groups are versioned packages that own rules, agents, skills and
+other resources; a skill is a child resource, not a group.  Tools are a
+separate first-class layer referenced by ``group.json.tools``.
 """
 
 from __future__ import annotations

@@ -93,6 +93,11 @@ async def _validate_semantics(request: Request, definition: WorkflowDefinition, 
     nodes) turns "saved successfully, failed at run" into a node-level 422.
     """
     from app.gateway.services import _build_workflow_template_resolver
+    from deerflow.workflow.schema import validate_capability_tool_refs
+
+    tool_errors = validate_capability_tool_refs(definition, user_id=str(user.id))
+    if tool_errors:
+        raise HTTPException(status_code=422, detail={"errors": tool_errors})
 
     resolver = await _build_workflow_template_resolver(definition, request, user_id=str(user.id))
     ctx = build_workflow_compile_context(

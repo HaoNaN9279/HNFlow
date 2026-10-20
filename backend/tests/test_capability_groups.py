@@ -124,3 +124,51 @@ def test_missing_group_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
     with pytest.raises(CapabilityGroupError):
         load_capability_group("missing")
+
+
+def test_group_parses_tool_references_and_permission_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    group_dir = _make_group(tmp_path)
+    manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
+    manifest["tools"] = ["builtin:read_file", "mcp:github:search", "builtin:read_file"]
+    manifest["tool_permissions"] = {"mcp:github:search": ["net"]}
+    (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+
+    group = load_capability_group("demo")
+
+    assert group.tools == ("builtin:read_file", "mcp:github:search")
+    assert group.tool_permissions == {"mcp:github:search": ("net",)}
+    assert group.summary_dict()["tools"] == ["builtin:read_file", "mcp:github:search"]
+
+
+def test_validate_capability_tool_refs_checks_custom_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from deerflow.workflow.schema import Node, NodeType, WorkflowDefinition, validate_capability_tool_refs
+
+    group_dir = _make_group(tmp_path)
+    manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
+    manifest["tools"] = ["tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@v0.1.0", "builtin:read_file"]
+    (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    definition = WorkflowDefinition(
+        id="wf",
+        name="wf",
+        nodes=[Node(id="n", type=NodeType.DATA_ASSIGN, capability_groups=["demo"])],
+        edges=[],
+    )
+
+    errors = validate_capability_tool_refs(definition)
+
+    assert len(errors) == 1
+    assert "unavailable tool package" in errors[0]
+
+
+def test_group_rejects_malformed_tool_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    group_dir = _make_group(tmp_path)
+    manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
+    manifest["tool_permissions"] = {"mcp:github:search": "net"}
+    (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+
+    groups = discover_capability_groups()
+
+    assert groups == []

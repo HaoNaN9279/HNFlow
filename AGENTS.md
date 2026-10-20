@@ -201,6 +201,16 @@ cd frontend && pnpm typecheck         # 仅 TypeScript 类型检查
 - 项目概览与使用 → **[README.md](README.md)**
 - 发版流程 → **[RELEASING.md](RELEASING.md)**
 
+## 工具层（能力组引用的第一层）
+
+工具与能力组是两层：能力组只引用工具，不拥有工具定义。
+
+- **自定义工具包**：`tools/<name>/<version>/tool.json`（仅 public，无 per-user）。工具包用 `guid + version` 稳定标识，provider 支持 `python` / `mcp` / `builtin` / `sandbox` / `app`；实现见 `backend/packages/harness/deerflow/tools/packages.py`。
+- **统一工具 ID**：`tool:<guid>@v<version>`、`mcp:<server>:<tool>`、`builtin:<name>`、`sandbox:<name>`、`app:<name>`。由 `deerflow/tools/registry.py` 解析。
+- **能力组引用**：`capability-groups/<name>/<version>/group.json` 增加 `tools` 与可选 `tool_permissions`。`resolve_capability_tools` 加载能力组闭包、解析工具引用、执行权限裁决；显式声明的工具缺失或越权时 fail-loud，不静默降级。
+- **MCP**：server 配置仍在 `extensions_config.json`；MCP provider 为每个工具记录 `mcp:<server>:<tool>` 元数据，能力组只引用工具 ID，不复制 transport/凭证。
+- **API**：`GET /api/tools` 返回统一工具目录（自定义包 + provider 工具），供能力组管理页选择引用。
+
 ## 跨切约定
 
 以下约定适用于全仓库；模块细节由各模块文档负责。

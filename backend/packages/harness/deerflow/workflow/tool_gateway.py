@@ -400,6 +400,31 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
     return gateway
 
 
+def _load_capability_group_closure(references: list[str], *, user_id: str | None) -> list[Any]:
+    """Load selected groups plus their ``extends`` bases, de-duplicated by GUID."""
+    from deerflow.capability_groups import CapabilityGroupError, load_capability_group
+    from deerflow.tools.registry import ToolResolutionError
+
+    ordered: list[Any] = []
+    seen: set[str] = set()
+
+    def visit(reference: str) -> None:
+        try:
+            group = load_capability_group(reference, user_id=user_id)
+        except CapabilityGroupError as exc:
+            raise ToolResolutionError(f"capability group {reference!r} is not available: {exc}") from exc
+        if group.guid in seen:
+            return
+        seen.add(group.guid)
+        ordered.append(group)
+        for base in group.extends:
+            visit(base)
+
+    for reference in references:
+        visit(reference)
+    return ordered
+
+
 def resolve_capability_tools(
     capability_groups: list[str],
     *,
@@ -410,18 +435,35 @@ def resolve_capability_tools(
 ) -> list[BaseTool]:
     """Resolve an AI node's tool set from its capability groups.
 
-    Capability groups are being rewritten as first-class packages (rules,
-    agents, skills, tools, ...).  Until their tool manifests are part of that
-    package contract, the node deliberately receives no tools rather than
-    falling back to the removed skill-as-capability-group model.
+    Capability groups are references, not tool definitions: each group lists
+    canonical tool ids in ``group.json.tools`` and this function resolves them
+    through the unified :class:`~deerflow.tools.registry.ToolRegistry`.
+
+    Explicitly declared tools are never silently dropped.  A missing group,
+    package, MCP server/tool, or permission failure raises
+    :class:`~deerflow.tools.registry.ToolResolutionError`.
     """
     if not capability_groups:
         return []
-    logger.warning(
-        "Capability-group tool resolution is not wired yet (groups=%s); AI node gets no tools",
-        sorted(capability_groups),
-    )
-    return []
+
+    from deerflow.tools.registry import ToolRegistry
+
+    groups = _load_capability_group_closure(capability_groups, user_id=user_id)
+    refs: list[str] = []
+    permissions: list[str] = []
+    overrides: dict[str, tuple[str, ...]] = {}
+    for group in groups:
+        refs.extend(group.tools)
+        permissions.extend(group.permissions)
+        for ref, values in group.tool_permissions.items():
+            overrides[ref] = tuple(dict.fromkeys((*overrides.get(ref, ()), *values)))
+
+    if not refs:
+        return []
+
+    gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
+    registry = ToolRegistry(gateway)
+    return registry.resolve(list(dict.fromkeys(refs)), permissions=tuple(permissions), overrides=overrides)
 
 
 __all__ = [
