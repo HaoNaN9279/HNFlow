@@ -3,6 +3,51 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 import { mockLangGraphAPI } from "./utils/mock-api";
 import { addNodeFromCatalog } from "./utils/workflow-canvas";
 
+/**
+ * Return a point near `preferred` that is not covered by an existing canvas
+ * node. `fitView` positions the temporary anchors differently on every
+ * viewport height, so hard-coded drop coordinates can land on a node and the
+ * double-click catalog never opens.
+ */
+async function findEmptyCanvasPoint(
+  page: Page,
+  preferred: { x: number; y: number },
+  box: { x: number; y: number; width: number; height: number },
+): Promise<{ x: number; y: number }> {
+  const candidates: { x: number; y: number }[] = [];
+  for (let dy = 0; dy <= 200; dy += 40) {
+    for (let dx = 0; dx <= 200; dx += 40) {
+      candidates.push({ x: preferred.x + dx, y: preferred.y + dy });
+    }
+  }
+  // A node card is wide, so the local neighbourhood can be entirely covered.
+  // Fall back to scanning the whole canvas.
+  for (let y = box.y + 20; y <= box.y + box.height - 20; y += 40) {
+    for (let x = box.x + 20; x <= box.x + box.width - 20; x += 40) {
+      candidates.push({ x, y });
+    }
+  }
+  for (const candidate of candidates) {
+    if (
+      candidate.x < box.x + 20 ||
+      candidate.y < box.y + 20 ||
+      candidate.x > box.x + box.width - 20 ||
+      candidate.y > box.y + box.height - 20
+    ) {
+      continue;
+    }
+    const free = await page.evaluate(({ x, y }) => {
+      return !document
+        .elementsFromPoint(x, y)
+        .some((element) => element.closest(".react-flow__node"));
+    }, candidate);
+    if (free) {
+      return candidate;
+    }
+  }
+  return { x: preferred.x, y: preferred.y };
+}
+
 // ---------------------------------------------------------------------------
 // Mock backend — GET/POST /api/workflows, GET/PUT/DELETE /api/workflows/{id}
 // ---------------------------------------------------------------------------
@@ -66,6 +111,54 @@ function blankRecord(): MockWorkflowRecord {
     created_at: "2026-08-01T00:00:00Z",
     updated_at: "2026-08-01T00:00:00Z",
   };
+}
+
+/**
+ * Three positioned nodes for the connection-validation test. Seeding them in
+ * the definition keeps the viewport stable; adding them through the catalog on
+ * an empty canvas made `fitView` zoom them into each other.
+ */
+function connectionRecord(): MockWorkflowRecord {
+  const record = blankRecord();
+  record.definition.nodes = [
+    {
+      id: "n_file",
+      type: "data:file",
+      inputs: [{ name: "in", type: "file", required: true }],
+      outputs: [{ name: "out", type: "file", required: true }],
+      params: {},
+      capability_groups: [],
+      agent_name: null,
+    },
+    {
+      id: "n_assign",
+      type: "data:assign",
+      inputs: [{ name: "in", type: "data", required: true }],
+      outputs: [{ name: "out", type: "data", required: true }],
+      params: {},
+      capability_groups: [],
+      agent_name: null,
+    },
+    {
+      id: "n_start",
+      type: "flow:start",
+      inputs: [],
+      outputs: [{ name: "out", type: "data", required: true }],
+      params: {},
+      capability_groups: [],
+      agent_name: null,
+    },
+  ];
+  record.definition.metadata = {
+    canvas: {
+      positions: {
+        n_file: { x: 60, y: 120 },
+        n_assign: { x: 700, y: 120 },
+        n_start: { x: 60, y: 420 },
+      },
+    },
+  };
+  return record;
 }
 
 /**
@@ -199,7 +292,11 @@ function handleOf(
   nodeType: string,
   kind: "source" | "target",
 ): Locator {
-  return nodeWrapper(page, nodeType).locator(`.react-flow__handle.${kind}`);
+  // Multi-input nodes (e.g. ai:llm_agent) expose several target handles; the
+  // chain tests connect through the first declared input (`in`).
+  return nodeWrapper(page, nodeType)
+    .locator(`.react-flow__handle.${kind}`)
+    .first();
 }
 
 /**
@@ -359,7 +456,8 @@ test.describe("Workflow canvas", () => {
       { type: "flow:end", x: canvasBox.x + 60, y: canvasBox.y + 420 },
     ];
     for (const spot of spots) {
-      await addNodeFromCatalog(page, spot.type, spot.x, spot.y);
+      const point = await findEmptyCanvasPoint(page, spot, canvasBox);
+      await addNodeFromCatalog(page, spot.type, point.x, point.y);
       // 2 anchors + 1 dropped node per iteration.
       await expect(page.locator(".react-flow__node")).toHaveCount(
         spots.indexOf(spot) + 3,
@@ -503,32 +601,11 @@ test.describe("Workflow canvas", () => {
     page,
   }) => {
     test.setTimeout(45_000);
-    mockWorkflowsAPI(page);
+    mockWorkflowsAPI(page, connectionRecord());
     await page.setViewportSize({ width: 1600, height: 900 });
 
     await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
     await expect(page.locator(".react-flow")).toBeVisible();
-
-    const canvasBox = (await page.locator(".react-flow").boundingBox())!;
-    // data:file outputs `file`; data:assign expects `data` on its input.
-    await addNodeFromCatalog(
-      page,
-      "data:file",
-      canvasBox.x + 60,
-      canvasBox.y + 60,
-    );
-    await addNodeFromCatalog(
-      page,
-      "data:assign",
-      canvasBox.x + 560,
-      canvasBox.y + 60,
-    );
-    await addNodeFromCatalog(
-      page,
-      "flow:start",
-      canvasBox.x + 60,
-      canvasBox.y + 240,
-    );
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
 
     // Mismatch: file -> data is rejected live (invalid connection line),
