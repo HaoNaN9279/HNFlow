@@ -91,6 +91,24 @@ function PortRow({
   side: "input" | "output";
   last: boolean;
 }) {
+  const name = (
+    <span
+      className={cn(
+        "truncate",
+        side === "input" ? "ml-2" : "mr-2",
+        port.required ? "text-foreground" : "text-muted-foreground",
+      )}
+      title={`${port.name}: ${port.type}`}
+    >
+      {port.name}
+    </span>
+  );
+  const type = (
+    <span className="text-muted-foreground/70 font-mono text-[10px]">
+      {port.type}
+    </span>
+  );
+
   return (
     <div
       className={cn(
@@ -98,6 +116,7 @@ function PortRow({
         side === "output" && "justify-end text-right",
         !last && "mb-1",
       )}
+      data-testid={`workflow-port-${side}-${port.name}`}
     >
       <Handle
         type={side === "input" ? "target" : "source"}
@@ -109,19 +128,17 @@ function PortRow({
           backgroundColor: PORT_HANDLE_COLORS[port.type],
         }}
       />
-      <span
-        className={cn(
-          "truncate",
-          side === "input" ? "ml-2" : "mr-2",
-          port.required ? "text-foreground" : "text-muted-foreground",
-        )}
-        title={`${port.name}: ${port.type}`}
-      >
-        {port.name}
-      </span>
-      <span className="text-muted-foreground/70 font-mono text-[10px]">
-        {port.type}
-      </span>
+      {side === "input" ? (
+        <>
+          {name}
+          {type}
+        </>
+      ) : (
+        <>
+          {type}
+          {name}
+        </>
+      )}
     </div>
   );
 }

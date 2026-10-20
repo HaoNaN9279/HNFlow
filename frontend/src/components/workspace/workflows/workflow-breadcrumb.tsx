@@ -31,7 +31,7 @@ export function WorkflowBreadcrumb({
     <>
       {trail.map((entry, index) => (
         <Fragment key={`${entry.id}:${index}`}>
-          <BreadcrumbSeparator className="hidden md:block" />
+          {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
           <BreadcrumbItem className="hidden md:block">
             <BreadcrumbLink asChild>
               <Link href={hrefForTrailEntry(entry, trail.slice(0, index))}>
@@ -41,7 +41,7 @@ export function WorkflowBreadcrumb({
           </BreadcrumbItem>
         </Fragment>
       ))}
-      <BreadcrumbSeparator />
+      {trail.length > 0 && <BreadcrumbSeparator />}
       <BreadcrumbItem>
         <BreadcrumbPage data-testid="workflow-breadcrumb-current">
           {currentName}

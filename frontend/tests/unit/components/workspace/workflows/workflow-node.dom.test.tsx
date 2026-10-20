@@ -184,6 +184,22 @@ describe("WorkflowNode card content", () => {
     }
   });
 
+  it("keeps input names on the left and output types on the left", () => {
+    const node = makeNode("n-ports", "data:assign");
+    node.data.workflow.inputs = [{ name: "in", type: "data" }];
+    node.data.workflow.outputs = [{ name: "out", type: "data" }];
+    const { container } = renderNodes([node]);
+    const card = nodeCard(container, "data:assign");
+
+    expect(
+      card.querySelector('[data-testid="workflow-port-input-in"]')?.textContent,
+    ).toBe("indata");
+    expect(
+      card.querySelector('[data-testid="workflow-port-output-out"]')
+        ?.textContent,
+    ).toBe("dataout");
+  });
+
   it("shows the custom display name above the fixed node name", () => {
     const node = makeNode("n-start", "flow:start");
     node.data.displayName = "Entry point";
