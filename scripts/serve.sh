@@ -338,16 +338,35 @@ export DEERFLOW_PNPM_PYTHON DEERFLOW_PNPM_RUNNER
 if $DEV_MODE; then
     FRONTEND_CMD='"$DEERFLOW_PNPM_PYTHON" "$DEERFLOW_PNPM_RUNNER" run dev'
 else
-    # `next build` is expensive (tens of seconds on this app).  Reuse an
-    # existing production build; build only when there is none.  This is what
-    # makes the default `start.bat prod` path fast on every subsequent launch.
+    # `next build` is expensive (tens of seconds on this app), so reuse an
+    # existing production build when it is current.  A plain restart used to
+    # keep serving a stale bundle forever after source edits; compare the build
+    # stamp against the frontend inputs and rebuild when any of them is newer.
     FRONTEND_SECRET="$($DEERFLOW_PNPM_PYTHON -c 'import secrets; print(secrets.token_hex(16))')"
     FRONTEND_START="env BETTER_AUTH_SECRET=$FRONTEND_SECRET \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run start"
-    if [ -f "$REPO_ROOT/frontend/.next/BUILD_ID" ]; then
-        FRONTEND_CMD="$FRONTEND_START"
-    else
-        echo "No production frontend build found; building once..."
+    BUILD_ID="$REPO_ROOT/frontend/.next/BUILD_ID"
+    FRONTEND_BUILD_STALE=true
+    if [ -f "$BUILD_ID" ]; then
+        FRONTEND_BUILD_STALE=false
+        for source_path in \
+            "$REPO_ROOT/frontend/src" \
+            "$REPO_ROOT/frontend/public" \
+            "$REPO_ROOT/frontend/package.json" \
+            "$REPO_ROOT/frontend/pnpm-lock.yaml" \
+            "$REPO_ROOT/frontend/next.config.js" \
+            "$REPO_ROOT/frontend/postcss.config.js" \
+            "$REPO_ROOT/frontend/tsconfig.json"; do
+            if [ -e "$source_path" ] && [ -n "$(find "$source_path" -newer "$BUILD_ID" -print -quit 2>/dev/null)" ]; then
+                FRONTEND_BUILD_STALE=true
+                break
+            fi
+        done
+    fi
+    if $FRONTEND_BUILD_STALE; then
+        echo "Frontend build is missing or stale; rebuilding..."
         FRONTEND_CMD="env BETTER_AUTH_SECRET=$FRONTEND_SECRET \"\$DEERFLOW_PNPM_PYTHON\" \"\$DEERFLOW_PNPM_RUNNER\" run build && $FRONTEND_START"
+    else
+        FRONTEND_CMD="$FRONTEND_START"
     fi
 fi
 

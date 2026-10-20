@@ -197,6 +197,9 @@ test("template mode saves the shared child workflow", async ({ page }) => {
   await expect(currentCrumb).toHaveText("子流程B");
 
   const childNode = page.locator('[data-node-type="data:assign"]');
+  await expect(childNode.getByTestId("workflow-port-output-out")).toHaveText(
+    "dataout",
+  );
   await childNode.getByTestId("workflow-node-display-name").dblclick();
   const nameInput = childNode.getByTestId("workflow-node-name-input");
   await nameInput.fill("全局修改");
@@ -239,6 +242,11 @@ test("navigates nested workflows and saves a local subworkflow into its parent",
   await expect(
     header.getByRole("link", { name: "工作流", exact: true }),
   ).toHaveAttribute("href", "/workspace/workflows");
+  await expect(
+    header
+      .getByRole("navigation", { name: "breadcrumb" })
+      .locator('[data-slot="breadcrumb-separator"]'),
+  ).toHaveCount(2);
 
   const subworkflowNode = page.locator('[data-node-type="nested:subworkflow"]');
   await expect(subworkflowNode).toHaveAttribute(
