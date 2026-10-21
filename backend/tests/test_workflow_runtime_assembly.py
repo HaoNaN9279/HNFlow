@@ -27,6 +27,28 @@ def test_compile_context_carries_previews() -> None:
     assert ctx.resource_accessors, "automatic resource accessors must travel with the executors"
 
 
+def test_compile_context_carries_model_profiles_and_available_models() -> None:
+    profiles = {"mp-fast": {"id": "mp-fast", "target_model": "cloud", "enabled": True}}
+    ctx = build_workflow_compile_context(
+        build_default_registry(),
+        model_profiles=profiles,
+        available_model_names=frozenset({"cloud"}),
+    )
+
+    assert ctx.model_profiles == profiles
+    assert ctx.available_model_names == frozenset({"cloud"})
+
+
+def test_runtime_context_injects_model_profiles() -> None:
+    profiles = {"mp-fast": {"id": "mp-fast", "target_model": "cloud", "enabled": True}}
+    record = SimpleNamespace(run_id="run", thread_id="thread", user_id="u")
+    run_ctx = SimpleNamespace(checkpointer=None, app_config=None, app_instance_repo=None)
+
+    context = build_workflow_runtime_context(record=record, run_ctx=run_ctx, model_profiles=profiles)
+
+    assert context["model_profiles"] == profiles
+
+
 def test_runtime_context_uses_run_owner_and_origin_run_id() -> None:
     record = SimpleNamespace(run_id="run-new", thread_id="thread-1", user_id="alice")
     run_ctx = SimpleNamespace(checkpointer=object(), app_config=None, app_instance_repo=None)

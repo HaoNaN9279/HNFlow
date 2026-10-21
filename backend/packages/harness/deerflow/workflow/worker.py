@@ -19,6 +19,7 @@ from deerflow.runtime.stream_bridge.base import StreamBridge
 from deerflow.workflow.compiler import compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.failure_taxonomy import classify_failure
+from deerflow.workflow.model_profiles import collect_model_profile_ids, model_names
 from deerflow.workflow.runtime_context import build_workflow_compile_context, build_workflow_runtime_context
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
 
@@ -166,11 +167,22 @@ async def run_workflow(
     # into ``build_context().executors`` here silently disabled both in
     # production.
     registry = build_default_registry()
+    profiles: dict[str, dict[str, Any]] = {}
+    profile_repo = getattr(ctx, "model_profile_repo", None)
+    needs_profiles = bool(collect_model_profile_ids(definition.model_dump(mode="json")))
+    if needs_profiles and profile_repo is not None and getattr(record, "user_id", None):
+        try:
+            rows = await profile_repo.list_by_user(str(record.user_id))
+            profiles = {str(row["id"]): row for row in rows}
+        except Exception:  # noqa: BLE001 - profiles are optional unless a node references one
+            logger.warning("Failed to load model profiles for workflow run %s", run_id, exc_info=True)
     compile_ctx = build_workflow_compile_context(
         registry,
         checkpointer=checkpointer,
         definition_resolver=definition_resolver,
         max_delegation_depth=ctx.app_config.subagents.max_delegation_depth if ctx.app_config is not None else 3,
+        model_profiles=profiles,
+        available_model_names=model_names(getattr(ctx.app_config, "models", None)),
     )
     graph = compile_definition(definition, context=compile_ctx)
 
@@ -197,6 +209,7 @@ async def run_workflow(
             workflow_undo_repo=workflow_undo_repo,
             origin_run_id=origin_run_id,
             debug_step=debug_step,
+            model_profiles=profiles,
             extra=runtime_extra,
         ),
     }

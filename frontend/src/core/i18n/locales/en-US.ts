@@ -288,6 +288,7 @@ export const enUS: Translations = {
     scheduledTasks: "Scheduled tasks",
     capabilityGroups: "Capability groups",
     tools: "Toolset",
+    models: "Model profiles",
   },
 
   capabilityGroups: {
@@ -344,6 +345,53 @@ export const enUS: Translations = {
       app: "Local apps",
       python: "Custom",
     },
+  },
+
+  modelProfiles: {
+    title: "Model profiles",
+    description:
+      "Logical models that AI nodes reference. Each profile points at one actual model configured in config.yaml.",
+    loading: "Loading model profiles...",
+    loadFailed: "Failed to load model profiles",
+    retry: "Retry",
+    empty: "No model profiles yet",
+    emptyHint:
+      "Create a profile after adding at least one model under `models:` in config.yaml.",
+    create: "New profile",
+    createTitle: "Create model profile",
+    editTitle: "Edit model profile",
+    nameLabel: "Name",
+    namePlaceholder: "fast-local",
+    nameHint: "Stable identifier: letters, numbers, dashes and underscores.",
+    displayNameLabel: "Display name",
+    displayNamePlaceholder: "Fast local model",
+    descriptionLabel: "Description",
+    descriptionPlaceholder: "What this profile is for",
+    targetModelLabel: "Actual model",
+    targetModelPlaceholder: "Select a configured model",
+    enabledLabel: "Enabled",
+    enabledHint:
+      "Disabled profiles stay listed but cannot be used by AI nodes.",
+    save: "Save",
+    saving: "Saving...",
+    cancel: "Cancel",
+    delete: "Delete",
+    deleteTitle: "Delete model profile",
+    deleteConfirm: (name: string) => `Delete model profile "${name}"?`,
+    deleteBlocked: (workflows: number) =>
+      `This profile is referenced by ${workflows} workflow(s). Disable it instead.`,
+    created: "Model profile created",
+    updated: "Model profile updated",
+    deleted: "Model profile deleted",
+    saveFailed: "Failed to save model profile",
+    deleteFailed: "Failed to delete model profile",
+    targetMissing: "Target model missing",
+    disabled: "Disabled",
+    referencedBy: (count: number) => `Used by ${count} node(s)`,
+    noModels: "No actual models configured",
+    noModelsHint: "Add models under `models:` in config.yaml first.",
+    nameInvalid: "Use letters, numbers, dashes or underscores.",
+    targetRequired: "Select an actual model.",
   },
 
   // Scheduled tasks
@@ -660,6 +708,11 @@ export const enUS: Translations = {
         agentLabel: "Agent",
         agentNoneOption: "Lead agent (default)",
         agentHint: "^[A-Za-z0-9-]+$ — custom agent name or leave default",
+        modelProfileLabel: "Model profile",
+        modelProfileNoneOption: "Default / inherit",
+        modelProfileHint:
+          "The profile points at one actual model and is resolved when the node runs.",
+        modelProfileMissing: "Selected profile is unavailable",
         capabilityGroupsLabel: "Capability groups (skills)",
         capabilityGroupsPlaceholder: "Select skills...",
         continuePromptLabel: "Continue prompt",

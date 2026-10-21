@@ -227,7 +227,7 @@ def _reachable(
 
 
 _REVIEW_CONTINUE_PORT = "continue_prompt"
-_REVIEW_INCOMPATIBLE_AI_PARAMS = ("output_schema", "context_policy", "model_policy", "memory", "retrieval")
+_REVIEW_INCOMPATIBLE_AI_PARAMS = ("output_schema", "context_policy", "model_policy", "model_profile", "memory", "retrieval")
 
 
 def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[str]:

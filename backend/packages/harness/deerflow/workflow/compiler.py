@@ -95,6 +95,12 @@ from deerflow.workflow.handoff import (
 from deerflow.workflow.handoff import (
     TARGET_PORT as HANDOFF_TARGET_PORT,
 )
+from deerflow.workflow.model_profiles import (
+    ModelProfileError,
+    collect_model_profile_ids,
+    parse_model_profile_id,
+    resolve_model_profile,
+)
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.reliability import (
     IDEMPOTENCY_PARAM,
@@ -346,6 +352,11 @@ class CompileContext:
             (default 3).  Delegation depth is read from the run-time context
             (``delegation_depth``) at node execution; reaching this bound
             raises :class:`WorkflowExecutionError`.
+        model_profiles: User-owned model profiles keyed by profile id.  AI
+            nodes reference one through ``params.model_profile``; the profile
+            points at an actual configured model name.
+        available_model_names: Actual model names from ``config.yaml``.  A
+            profile whose target is absent fails compile/run loudly.
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
@@ -355,6 +366,8 @@ class CompileContext:
     max_nesting_depth: int = 10
     max_delegation_depth: int = 3
     resource_accessors: dict[NodeType, ResourceAccessor] = field(default_factory=dict)
+    model_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    available_model_names: frozenset[str] = frozenset()
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -404,6 +417,19 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     if context is not None and context.definition_resolver is not None:
         _fold_template_digests(digest, def_, context.definition_resolver, set())
+    if context is not None:
+        referenced_profiles = sorted(collect_model_profile_ids(def_.model_dump(mode="json")))
+        if referenced_profiles:
+            parts: list[str] = []
+            for profile_id in referenced_profiles:
+                profile = context.model_profiles.get(profile_id)
+                if profile is None:
+                    parts.append(f"{profile_id}:missing")
+                    continue
+                target = profile.get("target_model")
+                available = isinstance(target, str) and target in context.available_model_names
+                parts.append(f"{profile_id}:{target}:{bool(profile.get('enabled', True))}:{available}")
+            digest.update(f"\0model_profiles:{'|'.join(parts)}".encode())
     return digest.hexdigest()
 
 
@@ -1584,9 +1610,35 @@ def _expand_subworkflow(
         definition_resolver=ctx.definition_resolver,
         max_nesting_depth=ctx.max_nesting_depth,
         max_delegation_depth=ctx.max_delegation_depth,
+        model_profiles=ctx.model_profiles,
+        available_model_names=ctx.available_model_names,
     )
     child_graph = _compile_impl(child, child_ctx, depth=depth + 1, visiting=child_visiting, chain_path=child_chain)
     return child_graph, child
+
+
+def _validate_model_profiles(def_: WorkflowDefinition, ctx: CompileContext) -> None:
+    """Validate ``ai:llm_agent`` -> model-profile references at compile time.
+
+    The profile is the middle layer and the target is the actual configured
+    model.  Unknown/disabled profiles, missing targets, and combining a profile
+    with dynamic ``model_policy`` all fail here rather than at execution.
+    """
+    for node in def_.nodes:
+        params = node.params or {}
+        if "model_profile" not in params:
+            continue
+        if node.type != NodeType.AI_LLM_AGENT:
+            raise WorkflowCompileError(f"node '{node.id}': params.model_profile is only supported on 'ai:llm_agent' nodes")
+        try:
+            profile_id = parse_model_profile_id(params)
+            if profile_id is None:  # pragma: no cover - guarded by the membership check
+                continue
+            if params.get("model_policy") is not None:
+                raise ModelProfileError("params.model_profile cannot be combined with params.model_policy")
+            resolve_model_profile(profile_id, ctx.model_profiles, ctx.available_model_names)
+        except ModelProfileError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
 
 
 def _validate_breakpoints(def_: WorkflowDefinition) -> None:
@@ -2066,6 +2118,7 @@ def _compile_impl(
     _validate_autonomy(def_)
     _validate_output_schema(def_)
     _validate_context_policy(def_)
+    _validate_model_profiles(def_, ctx)
     _validate_prompt_preview(def_)
     try:
         validate_capability_group_wiring(def_)

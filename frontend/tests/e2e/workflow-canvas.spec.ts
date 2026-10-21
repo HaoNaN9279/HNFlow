@@ -223,6 +223,13 @@ function mockWorkflowsAPI(
       body: JSON.stringify([]),
     }),
   );
+  void page.route("**/api/model-profiles*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ profiles: [] }),
+    }),
+  );
 
   void page.route("**/api/workflow-monitor/runs*", (route) =>
     route.fulfill({

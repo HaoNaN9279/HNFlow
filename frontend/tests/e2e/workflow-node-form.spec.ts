@@ -147,6 +147,14 @@ function mockWorkflowsAPI(
   let savedPutBody: Record<string, unknown> | null = null;
   const templates = options?.templates ?? [];
 
+  void page.route("**/api/model-profiles*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ profiles: [] }),
+    }),
+  );
+
   // Workflow list — the subworkflow template picker reads it through
   // `useWorkflowTemplateOptions` (TanStack Query → `listWorkflows`).
   void page.route("**/api/workflows", (route) => {

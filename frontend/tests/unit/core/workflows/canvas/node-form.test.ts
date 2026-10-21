@@ -74,6 +74,7 @@ describe("node form schema", () => {
     expect(AI_NODE_FIELDS.map((f) => f.key)).toEqual([
       "instruction",
       "agent_name",
+      "model_profile",
       "capability_groups",
     ]);
     const byKey = Object.fromEntries(AI_NODE_FIELDS.map((f) => [f.key, f]));
@@ -82,6 +83,7 @@ describe("node form schema", () => {
     expect(byKey.agent_name?.kind).toBe("select");
     expect(byKey.agent_name?.pattern).toBe(AGENT_NAME_PATTERN);
     expect(byKey.agent_name?.options?.[0]?.value).toBe("None");
+    expect(byKey.model_profile?.kind).toBe("select");
     expect(byKey.capability_groups?.kind).toBe("multi-select");
   });
 
@@ -200,6 +202,27 @@ describe("applyNodeFormValues", () => {
   test("writes instruction to params and keeps unrelated params", () => {
     const result = applyNodeFormValues(aiNode(), { instruction: "New" });
     expect(result.params).toEqual({ instruction: "New", extra: 1 });
+  });
+
+  test("reads and writes the model profile reference", () => {
+    const node = {
+      ...aiNode(),
+      params: { ...aiNode().params, model_profile: "mp-fast" },
+    };
+    const values = parseNodeFormValues(node);
+    expect(values.model_profile).toBe("mp-fast");
+
+    const changed = applyNodeFormValues(node, {
+      ...values,
+      model_profile: "mp-big",
+    });
+    expect(changed.params.model_profile).toBe("mp-big");
+
+    const cleared = applyNodeFormValues(changed, {
+      ...values,
+      model_profile: "",
+    });
+    expect("model_profile" in cleared.params).toBe(false);
   });
 
   test("drops the legacy user_prompt param on save", () => {

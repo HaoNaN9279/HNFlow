@@ -266,7 +266,12 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
  * sanitization.
  */
 const DEDICATED_PARAM_KEYS: Partial<Record<NodeType, readonly string[]>> = {
-  "ai:llm_agent": ["instruction", "agent_name", "capability_groups"],
+  "ai:llm_agent": [
+    "instruction",
+    "agent_name",
+    "model_profile",
+    "capability_groups",
+  ],
   "ai:capability_group": ["groups"],
   "ai:prompt_preview": ["agent_node"],
   "app:launch": ["app"],

@@ -42,6 +42,10 @@ rs.mock("@/core/i18n/hooks", () => ({
             agentLabel: "Agent",
             agentNoneOption: "Lead agent (default)",
             agentHint: "^[A-Za-z0-9-]+$",
+            modelProfileLabel: "Model profile",
+            modelProfileNoneOption: "Default / inherit",
+            modelProfileHint: "Resolved at runtime",
+            modelProfileMissing: "Selected profile is unavailable",
             capabilityGroupsLabel: "Capability groups",
             capabilityGroupsPlaceholder: "Select skills...",
             continuePromptLabel: "Continue prompt",
@@ -110,6 +114,10 @@ rs.mock("@/core/i18n/hooks", () => ({
 
 rs.mock("@/core/agents/api", () => ({
   checkAgentName: rs.fn(),
+}));
+
+rs.mock("@/core/model-profiles/hooks", () => ({
+  useModelProfiles: () => ({ data: [], isLoading: false, error: null }),
 }));
 
 rs.mock("@/core/workflows/api", () => ({

@@ -46,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0022_workflow_folders"
+HEAD = "0023_model_profiles"
 BASELINE = "0001_baseline"
 
 

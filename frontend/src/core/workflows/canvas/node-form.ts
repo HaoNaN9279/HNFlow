@@ -28,6 +28,7 @@ export type NodeFormMapping = {
 export type NodeFormValues = {
   instruction?: string;
   agent_name?: string;
+  model_profile?: string;
   capability_groups?: string[];
   template_id?: string;
   version?: string;
@@ -144,6 +145,9 @@ export function parseNodeFormValues(node: WorkflowNode): NodeFormValues {
       ? [...node.capability_groups]
       : [],
   };
+  if (typeof node.params.model_profile === "string") {
+    values.model_profile = node.params.model_profile;
+  }
   const spec = parseSubworkflowSpec(node.params);
   if (spec) {
     if (spec.template_id !== undefined) {
@@ -200,6 +204,13 @@ export function applyNodeFormValues(
   // definitions on the next save so it cannot resurface in the generic editor.
   if (node.type === "ai:llm_agent") {
     delete params.user_prompt;
+  }
+  if (values.model_profile !== undefined) {
+    if (values.model_profile) {
+      params.model_profile = values.model_profile;
+    } else {
+      delete params.model_profile;
+    }
   }
   const templateId = values.template_id ?? "";
   const existingSubworkflow =

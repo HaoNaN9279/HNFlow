@@ -25,6 +25,7 @@ from app.gateway.routers import (
     human_task_routes,
     mcp,
     memory,
+    model_profile_routes,
     models,
     runs,
     scheduled_tasks,
@@ -552,8 +553,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     app.state.extension_diagnostics = initialize_runtime_diagnostics(extension_diagnostics)
 
     # Include routers
-    # Models API is mounted at /api/models
+    # Models API is mounted at /api/models; profiles add the managed middle layer.
     app.include_router(models.router)
+    app.include_router(model_profile_routes.router)
 
     # Features API is mounted at /api/features
     app.include_router(features.router)

@@ -214,6 +214,7 @@ export interface Translations {
     scheduledTasks: string;
     capabilityGroups: string;
     tools: string;
+    models: string;
   };
 
   capabilityGroups: {
@@ -267,6 +268,49 @@ export interface Translations {
       app: string;
       python: string;
     };
+  };
+
+  modelProfiles: {
+    title: string;
+    description: string;
+    loading: string;
+    loadFailed: string;
+    retry: string;
+    empty: string;
+    emptyHint: string;
+    create: string;
+    createTitle: string;
+    editTitle: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    nameHint: string;
+    displayNameLabel: string;
+    displayNamePlaceholder: string;
+    descriptionLabel: string;
+    descriptionPlaceholder: string;
+    targetModelLabel: string;
+    targetModelPlaceholder: string;
+    enabledLabel: string;
+    enabledHint: string;
+    save: string;
+    saving: string;
+    cancel: string;
+    delete: string;
+    deleteTitle: string;
+    deleteConfirm: (name: string) => string;
+    deleteBlocked: (workflows: number) => string;
+    created: string;
+    updated: string;
+    deleted: string;
+    saveFailed: string;
+    deleteFailed: string;
+    targetMissing: string;
+    disabled: string;
+    referencedBy: (count: number) => string;
+    noModels: string;
+    noModelsHint: string;
+    nameInvalid: string;
+    targetRequired: string;
   };
 
   // Scheduled tasks
@@ -478,6 +522,10 @@ export interface Translations {
         agentLabel: string;
         agentNoneOption: string;
         agentHint: string;
+        modelProfileLabel: string;
+        modelProfileNoneOption: string;
+        modelProfileHint: string;
+        modelProfileMissing: string;
         capabilityGroupsLabel: string;
         capabilityGroupsPlaceholder: string;
         continuePromptLabel: string;

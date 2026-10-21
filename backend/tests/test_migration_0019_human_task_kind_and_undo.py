@@ -85,7 +85,7 @@ async def test_migration_adds_kind_column_and_undo_table(tmp_path: Path) -> None
         with sqlite3.connect(db_path) as raw:
             columns = {row[1] for row in raw.execute("PRAGMA table_info(human_tasks)").fetchall()}
             assert "kind" in columns
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0022_workflow_folders"
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0023_model_profiles"
             # 0022 intentionally clears old workflow content, including the
             # pre-0019 legacy row.
             assert raw.execute("SELECT COUNT(*) FROM human_tasks").fetchone()[0] == 0
@@ -120,7 +120,7 @@ async def test_migration_is_idempotent_when_the_objects_already_exist(tmp_path: 
     try:
         assert "workflow_undo_records" in _table_names(db_path)
         with sqlite3.connect(db_path) as raw:
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0022_workflow_folders"
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0023_model_profiles"
     finally:
         await close_engine()
 

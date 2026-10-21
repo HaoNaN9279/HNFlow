@@ -35,6 +35,8 @@ def build_workflow_compile_context(
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None,
     max_nesting_depth: int = 10,
     max_delegation_depth: int = 3,
+    model_profiles: dict[str, dict[str, Any]] | None = None,
+    available_model_names: frozenset[str] | None = None,
 ) -> CompileContext:
     """Build a complete :class:`CompileContext` from an executor registry.
 
@@ -51,6 +53,8 @@ def build_workflow_compile_context(
         definition_resolver=definition_resolver,
         max_nesting_depth=max_nesting_depth,
         max_delegation_depth=max_delegation_depth,
+        model_profiles=dict(model_profiles or {}),
+        available_model_names=frozenset(available_model_names or ()),
     )
 
 
@@ -97,6 +101,7 @@ def build_workflow_runtime_context(
     memory_store: Any | None = None,
     knowledge_store: Any | None = None,
     notifier: Any | None = None,
+    model_profiles: dict[str, dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build ``config['context']`` for a workflow run.
@@ -164,6 +169,10 @@ def build_workflow_runtime_context(
         context[KNOWLEDGE_STORE_CONTEXT_KEY] = knowledge_store
     if notifier is not None:
         context["notifier"] = notifier
+    if model_profiles is not None:
+        from deerflow.workflow.model_profiles import MODEL_PROFILES_CONTEXT_KEY
+
+        context[MODEL_PROFILES_CONTEXT_KEY] = model_profiles
 
     if debug_step:
         from deerflow.workflow.breakpoint import DEBUG_STEP_CONTEXT_KEY

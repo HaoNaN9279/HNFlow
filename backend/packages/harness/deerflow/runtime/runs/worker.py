@@ -470,6 +470,9 @@ class RunContext:
     #: Durable local-application instance repository (N6); ``None`` on the
     #: memory backend or when ``apps.persist_sessions`` is off.
     app_instance_repo: Any | None = field(default=None)
+    #: User-managed model profiles (AI node -> profile -> actual LLM). ``None``
+    #: on the memory backend; compile/runtime fail only when a node references one.
+    model_profile_repo: Any | None = field(default=None)
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:

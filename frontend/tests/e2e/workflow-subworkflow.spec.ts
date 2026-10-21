@@ -108,6 +108,14 @@ function mockWorkflows(page: Page) {
   const parentPuts: Record<string, unknown>[] = [];
   const childPuts: Record<string, unknown>[] = [];
 
+  void page.route("**/api/model-profiles*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ profiles: [] }),
+    }),
+  );
+
   void page.route("**/api/workflows/wf-a", (route) => {
     const request = route.request();
     if (request.method() === "GET") {

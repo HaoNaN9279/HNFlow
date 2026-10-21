@@ -47,6 +47,11 @@ export const AI_NODE_FIELDS: readonly NodeFormField[] = [
     helperKey: "workflow.nodeForm.agentNameHelper",
   },
   {
+    key: "model_profile",
+    kind: "select",
+    labelKey: "workflow.nodeForm.modelProfile",
+  },
+  {
     key: "capability_groups",
     kind: "multi-select",
     labelKey: "workflow.nodeForm.capabilityGroups",

@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  BrainCircuitIcon,
   CalendarClock,
   LayoutDashboardIcon,
   LayersIcon,
@@ -112,6 +113,20 @@ export function WorkspaceNavChatList() {
             <Link className="text-muted-foreground" href="/workspace/tools">
               <WrenchIcon />
               <span>{t.sidebar.tools}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/model-profiles")}
+            asChild
+          >
+            <Link
+              className="text-muted-foreground"
+              href="/workspace/model-profiles"
+            >
+              <BrainCircuitIcon />
+              <span>{t.sidebar.models}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

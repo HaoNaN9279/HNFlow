@@ -39,6 +39,12 @@ from deerflow.workflow.memory import (
     parse_memory_policy,
     render_query,
 )
+from deerflow.workflow.model_profiles import (
+    MODEL_PROFILES_CONTEXT_KEY,
+    ModelProfileError,
+    parse_model_profile_id,
+    resolve_model_profile,
+)
 from deerflow.workflow.prompts import (
     TEMPLATE_PROMPT_PORT,
     append_template_prompt,
@@ -306,6 +312,14 @@ async def exec_llm_agent(
         routing_policy = parse_routing_policy(params)
     except RoutingError as exc:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_policy: {exc}") from exc
+    try:
+        model_profile_id = parse_model_profile_id(params)
+    except ModelProfileError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_profile: {exc}") from exc
+    if model_profile_id is not None and routing_policy is not None:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_profile cannot be combined with model_policy")
+    if model_profile_id is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_profile is not supported with session continuation (continue mode)")
     if routing_policy is not None and is_continue:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is not supported with session continuation (continue mode)")
 
@@ -438,7 +452,16 @@ async def exec_llm_agent(
     # required local model that is not configured) fails the node loudly; it must
     # never silently fall back to a remote model.
     model_name = "inherit"
-    if routing_policy is not None:
+    if model_profile_id is not None:
+        try:
+            model_name = resolve_model_profile(
+                model_profile_id,
+                context.get(MODEL_PROFILES_CONTEXT_KEY) or {},
+                getattr(app_config, "models", None),
+            )
+        except ModelProfileError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+    elif routing_policy is not None:
         try:
             selected_model = select_model(model_infos(getattr(app_config, "models", None)), routing_policy)
         except RoutingError as exc:

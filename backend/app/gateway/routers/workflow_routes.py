@@ -21,6 +21,7 @@ from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
 from deerflow.workflow.executors import build_default_registry
+from deerflow.workflow.model_profiles import collect_model_profile_ids, model_names
 from deerflow.workflow.prompt_preview import PromptPreviewError, build_prompt_preview
 from deerflow.workflow.runtime_context import build_workflow_compile_context
 from deerflow.workflow.schema import WorkflowDefinition
@@ -102,10 +103,21 @@ async def _validate_semantics(request: Request, definition: WorkflowDefinition, 
         raise HTTPException(status_code=422, detail={"errors": tool_errors})
 
     resolver = await _build_workflow_template_resolver(definition, request, user_id=str(user.id))
+    profiles: dict[str, Any] = {}
+    available_models: frozenset[str] = frozenset()
+    if collect_model_profile_ids(definition.model_dump(mode="json")):
+        repo = getattr(request.app.state, "model_profile_repo", None)
+        if repo is not None:
+            profiles = {str(row["id"]): row for row in await repo.list_by_user(str(user.id))}
+        from deerflow.config import get_app_config
+
+        available_models = model_names(get_app_config().models)
     ctx = build_workflow_compile_context(
         build_default_registry(),
         checkpointer=None,
         definition_resolver=resolver,
+        model_profiles=profiles,
+        available_model_names=available_models,
     )
     try:
         compile_definition(definition, context=ctx)

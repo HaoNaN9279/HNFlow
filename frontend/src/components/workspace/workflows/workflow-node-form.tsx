@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { checkAgentName } from "@/core/agents/api";
 import { useCapabilityGroups } from "@/core/capability-groups/hooks";
 import { useI18n } from "@/core/i18n/hooks";
+import { useModelProfiles } from "@/core/model-profiles/hooks";
 import { previewWorkflowPrompt } from "@/core/workflows/api";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import {
@@ -40,6 +41,8 @@ import { WorkflowNodeParams } from "./workflow-node-params";
 const AGENT_NONE_VALUE = "__none__";
 const AGENT_CUSTOM_VALUE = "__custom__";
 const CUSTOM_AGENT_LABEL = "Custom agent...";
+const MODEL_PROFILE_NONE_VALUE = "__none__";
+const MODEL_PROFILE_MISSING_VALUE = "__missing__";
 const PROMPT_PREVIEW_NONE_VALUE = "__none__";
 
 /** Sentinel select value meaning "this subworkflow port is not mapped". */
@@ -183,6 +186,8 @@ function AiAgentForm({
 
   const agentQuery = useAgentOptions();
   const agentNames = (agentQuery.data ?? []).map((agent) => agent.name);
+  const profilesQuery = useModelProfiles();
+  const profiles = profilesQuery.data ?? [];
 
   const errors = validateNodeForm(values);
 
@@ -210,6 +215,15 @@ function AiAgentForm({
     const next = {
       ...values,
       agent_name: value === AGENT_NONE_VALUE ? "" : value,
+    };
+    setValues(next);
+    commit(next);
+  };
+
+  const handleModelProfileSelect = (value: string) => {
+    const next = {
+      ...values,
+      model_profile: value === MODEL_PROFILE_NONE_VALUE ? "" : value,
     };
     setValues(next);
     commit(next);
@@ -348,6 +362,58 @@ function AiAgentForm({
                 {labels.validation.agentNotFoundWarning}
               </p>
             )}
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium">
+              {labels.ai.modelProfileLabel}
+            </label>
+            <Select
+              value={
+                values.model_profile
+                  ? profiles.some(
+                      (profile) => profile.id === values.model_profile,
+                    )
+                    ? values.model_profile
+                    : MODEL_PROFILE_MISSING_VALUE
+                  : MODEL_PROFILE_NONE_VALUE
+              }
+              disabled={readonly}
+              onValueChange={handleModelProfileSelect}
+            >
+              <SelectTrigger
+                aria-label={labels.ai.modelProfileLabel}
+                className="h-7 text-xs"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={MODEL_PROFILE_NONE_VALUE}>
+                  {labels.ai.modelProfileNoneOption}
+                </SelectItem>
+                {values.model_profile &&
+                  !profiles.some(
+                    (profile) => profile.id === values.model_profile,
+                  ) && (
+                    <SelectItem value={MODEL_PROFILE_MISSING_VALUE}>
+                      {labels.ai.modelProfileMissing}
+                    </SelectItem>
+                  )}
+                {profiles.map((profile) => (
+                  <SelectItem
+                    key={profile.id}
+                    value={profile.id}
+                    disabled={!profile.enabled}
+                  >
+                    {profile.display_name}
+                    {profile.enabled ? "" : ` (${t.modelProfiles.disabled})`}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground text-[11px]">
+              {labels.ai.modelProfileHint}
+            </p>
           </div>
         </div>
       </details>
