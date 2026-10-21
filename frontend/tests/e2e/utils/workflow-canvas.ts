@@ -11,7 +11,21 @@ export async function addNodeFromCatalog(
   clientX: number,
   clientY: number,
 ) {
-  await page.mouse.dblclick(clientX, clientY);
+  // Dispatch on the pane so the drop point remains usable even when a larger
+  // resizable node card covers those viewport coordinates.
+  await page.evaluate(
+    ({ clientX, clientY }) => {
+      const pane = document.querySelector(".react-flow__pane");
+      pane?.dispatchEvent(
+        new MouseEvent("dblclick", {
+          bubbles: true,
+          clientX,
+          clientY,
+        }),
+      );
+    },
+    { clientX, clientY },
+  );
 
   const dialog = page.getByTestId("workflow-node-catalog");
   await expect(dialog).toBeVisible();

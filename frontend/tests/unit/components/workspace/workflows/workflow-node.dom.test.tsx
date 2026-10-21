@@ -29,6 +29,21 @@ rs.mock("@/core/i18n/hooks", () => ({
     t: {
       workflows: {
         renameNodeHint: "Double-click to rename this node",
+        properties: {
+          breakpointLabel: "Pause before this node (breakpoint)",
+          breakpointHint: "Pause before this node",
+          deleteNode: "Delete node",
+          paramsTitle: "Parameters",
+          params: {
+            invalidValue: "Invalid value",
+            jsonHint: "Enter JSON",
+            fields: {
+              breakpoint: "Breakpoint",
+              duration: "Duration (s)",
+              onReject: "On reject",
+            },
+          },
+        },
         run: { cancelFailed: "Failed to cancel run" },
       },
     },
@@ -138,7 +153,7 @@ afterEach(() => {
   cleanup();
 });
 
-function renderNodes(nodes: RFNode[]): RenderResult {
+function renderNodes(nodes: RFNode[], selectedId?: string): RenderResult {
   const record = makeRecord();
   record.definition = {
     ...record.definition,
@@ -149,7 +164,11 @@ function renderNodes(nodes: RFNode[]): RenderResult {
       <WorkflowEditorProvider record={record}>
         <EditorBridge />
         {nodes.map((node) => (
-          <WorkflowNode key={node.id} {...nodeProps(node)} />
+          <WorkflowNode
+            key={node.id}
+            {...nodeProps(node)}
+            selected={node.id === selectedId}
+          />
         ))}
       </WorkflowEditorProvider>
     </ReactFlowProvider>,
@@ -182,6 +201,34 @@ describe("WorkflowNode card content", () => {
     for (const handle of handles) {
       expect(handle.style.top).toBe("50%");
     }
+  });
+
+  it("renders fixed params and node actions when selected", async () => {
+    const node = makeNode("n-selected", "flow:wait");
+    node.data.workflow.params = { duration: 3 };
+    const { container } = renderNodes([node], node.id);
+    const card = nodeCard(container, "flow:wait");
+
+    const duration = card.querySelector<HTMLInputElement>(
+      '[aria-label="Duration (s)"]',
+    );
+    expect(duration?.value).toBe("3");
+    expect(
+      card.querySelector('[data-testid="workflow-node-delete"]'),
+    ).toBeTruthy();
+
+    await waitFor(() =>
+      expect(bridgeNodes?.some((item) => item.id === "n-selected")).toBe(true),
+    );
+    fireEvent.click(
+      card.querySelector('[data-testid="workflow-breakpoint-toggle"]')!,
+    );
+    await waitFor(() =>
+      expect(
+        bridgeNodes?.find((item) => item.id === "n-selected")?.data.workflow
+          .params.breakpoint,
+      ).toBe(true),
+    );
   });
 
   it("keeps input names on the left and output types on the left", () => {

@@ -37,6 +37,8 @@ import {
   type WorkflowClipboard,
 } from "@/core/workflows/canvas/clipboard";
 import {
+  DEFAULT_NODE_HEIGHT,
+  DEFAULT_NODE_WIDTH,
   makeEdgeId,
   type RFEdge,
   type RFNode,
@@ -184,6 +186,8 @@ function CanvasInner() {
         id: workflowNode.id,
         type: workflowNode.type,
         position: catalog.position,
+        width: DEFAULT_NODE_WIDTH,
+        height: DEFAULT_NODE_HEIGHT,
         data: { workflow: workflowNode },
       };
       setNodes((current) => current.concat(newNode));

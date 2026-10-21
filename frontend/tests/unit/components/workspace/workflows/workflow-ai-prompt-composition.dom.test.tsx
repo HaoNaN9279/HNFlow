@@ -89,7 +89,7 @@ rs.mock("@/core/workflows/api", () => ({
         key: "capability_rule:alpha@0.1.0:rules/a.md",
         section: "system",
         source: "capability_group:alpha@0.1.0/rules/a.md",
-        summary: "alpha@0.1.0 · rules/a.md · Rule",
+        summary: "alpha@0.1.0 路 rules/a.md 路 Rule",
         content: "RULE BODY",
         estimated_tokens: 2,
         state: "active",
@@ -152,7 +152,7 @@ afterEach(cleanup);
 
 describe("AiPromptComposition", () => {
   it("lists capability rules and opens a read-only content dialog", async () => {
-    render(<AiPromptComposition node={node} readonly={false} />);
+    render(<AiPromptComposition nodeId={node.id} active readonly={false} />);
 
     const source = await screen.findByTestId(
       "prompt-source-capability_rule:alpha@0.1.0:rules/a.md",
@@ -172,7 +172,7 @@ describe("AiPromptComposition", () => {
   });
 
   it("shows runtime prompt inputs without an editable textarea", async () => {
-    render(<AiPromptComposition node={node} readonly={false} />);
+    render(<AiPromptComposition nodeId={node.id} active readonly={false} />);
 
     const source = await screen.findByTestId("prompt-source-template_prompt");
     expect(screen.queryByTestId("ai-user-prompt-card")).toBeNull();

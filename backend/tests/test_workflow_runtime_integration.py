@@ -12,8 +12,7 @@ Exercises the conversation-side workflow dispatch + worker chain end to end:
 
 Scenarios:
 1. 对话发起运行收到进度: dispatch → poll → success + node events + summary
-2. 人为节点失败 → agent 可分析: bash (sandbox mocked off) → error +
-   ``idempotent_retryable=False``; idempotent executor patched → ``True``
+2. 人为节点失败 → agent 可分析: bash (sandbox mocked off) → error + failed node/error
 3. 危险节点启动被拒: pending-review gate blocks before admission (no run record)
 4. list → submit → resume 生效: real human-task repo + real definition row +
    resume dispatch reuses the original run (worker mocked)
@@ -198,7 +197,6 @@ def test_scenario1_dispatch_run_receives_progress(tmp_path) -> None:
             assert summary["total_nodes"] == 1
             assert summary["current_node"] is None
             assert summary["failed_node"] is None
-            assert summary["idempotent_retryable"] is None
 
             await bridge.cleanup(record.run_id, delay=0)
         finally:
@@ -210,7 +208,7 @@ def test_scenario1_dispatch_run_receives_progress(tmp_path) -> None:
 # ── Scenario 2: node failure → agent can analyse ────────────────────────────
 
 
-def test_scenario2_bash_failure_not_retryable(tmp_path) -> None:
+def test_scenario2_bash_failure(tmp_path) -> None:
     """Real ``tool:bash`` executor with the sandbox acquisition mocked off."""
 
     async def _scenario() -> None:
@@ -239,42 +237,6 @@ def test_scenario2_bash_failure_not_retryable(tmp_path) -> None:
             summary = await wrt._rt_aggregate_summary(wrt._rt_deps(), record.run_id, runtime, "error", definition)
             assert summary["failed_node"] == "bash_step"
             assert "sandbox unavailable" in summary["failed_error"]
-            assert summary["idempotent_retryable"] is False  # tool:bash is non-idempotent
-
-            await bridge.cleanup(record.run_id, delay=0)
-        finally:
-            await _close_sqlite()
-
-    asyncio.run(_scenario())
-
-
-def test_scenario2_idempotent_node_failure_retryable(tmp_path) -> None:
-    """Idempotent executor patched to raise → run error, but retryable."""
-
-    async def _scenario() -> None:
-        try:
-            sf = await _init_sqlite(tmp_path)
-            definition = _linear_definition("assign_step", NodeType.DATA_ASSIGN, {}, "wf-assign-fail")
-            await _persist_definition(sf, definition)
-            run_mgr = RunManager()
-            bridge = MemoryStreamBridge()
-            event_store = DbRunEventStore(sf)
-            runtime = _make_runtime(_make_ctx(run_mgr, bridge, event_store))
-
-            with patch("deerflow.workflow.executors.exec_assign", side_effect=WorkflowExecutionError("boom")):
-                started = await start_workflow_run(definition.id, definition, {"input": "x"}, runtime=runtime)
-                status, record = await _run_to_terminal(started, runtime)
-
-            assert status == "error"
-            progress = await list_run_events(record.run_id, runtime=runtime)
-            failed = [p for p in progress if p["status"] == "failed"]
-            assert len(failed) == 1
-            assert failed[0]["node_id"] == "assign_step"
-            assert "boom" in failed[0]["error"]
-
-            summary = await wrt._rt_aggregate_summary(wrt._rt_deps(), record.run_id, runtime, "error", definition)
-            assert summary["failed_node"] == "assign_step"
-            assert summary["idempotent_retryable"] is True  # data:assign is idempotent
 
             await bridge.cleanup(record.run_id, delay=0)
         finally:

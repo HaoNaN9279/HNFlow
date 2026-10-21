@@ -145,7 +145,7 @@ export const NODE_CATALOG = [
     category: "data",
     defaultInputs: [{ name: "in", type: "data", required: true }],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
-    defaultParams: { to: "string" },
+    defaultParams: { to: "str" },
     description: "Type conversion (bool/int/float/string).",
   },
   {

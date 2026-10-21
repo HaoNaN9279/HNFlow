@@ -2,8 +2,8 @@
 
 These pin the two failures that made production differ from unit tests:
 
-- the compiler must receive previewers and idempotency metadata, not just
-  executors, so approval/retry nodes are not rejected at compile time;
+- the compiler must receive previewers, not just executors, so approval nodes
+  are not rejected at compile time;
 - ``config['context']`` must carry the run owner and the capability services
   (tool gateway, app manager, optional stores), so HumanTasks and
   ``tool:invoke`` work in a real run.
@@ -19,14 +19,12 @@ from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.runtime_context import build_workflow_compile_context, build_workflow_runtime_context
 
 
-def test_compile_context_carries_previews_and_idempotency() -> None:
+def test_compile_context_carries_previews() -> None:
     registry = build_default_registry()
     ctx = build_workflow_compile_context(registry)
 
     assert ctx.executors
     assert ctx.previews, "approval previewers must travel with the executors"
-    assert ctx.idempotent_by_type, "retry gating needs the registry idempotency map"
-    assert ctx.idempotent_by_type[next(iter(ctx.idempotent_by_type))] is not None
 
 
 def test_runtime_context_uses_run_owner_and_origin_run_id() -> None:

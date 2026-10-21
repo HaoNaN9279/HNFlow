@@ -75,7 +75,7 @@ class TestAggregate:
         assert totals["cache_read_tokens"] == 1
 
     def test_ignores_non_usage(self) -> None:
-        assert aggregate_token_usage({"wf:a:__retry": 2, "plain": 1})["total_tokens"] == 0
+        assert aggregate_token_usage({"wf:a:__duration_ms": 2, "plain": 1})["total_tokens"] == 0
 
 
 class TestEvaluate:

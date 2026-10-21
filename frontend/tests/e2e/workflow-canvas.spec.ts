@@ -408,31 +408,11 @@ test.describe("Workflow canvas", () => {
     await expect.poll(readScale).toBeGreaterThan(before);
   });
 
-  test("resizes the properties and run panels", async ({ page }) => {
+  test("resizes the run panel", async ({ page }) => {
     mockWorkflowsAPI(page, anchorRecord());
     await page.setViewportSize({ width: 1600, height: 900 });
     await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
     await expect(page.locator(".react-flow__node")).toHaveCount(2);
-
-    const properties = page.getByTestId("workflow-properties-panel");
-    const propertiesBefore = (await properties.boundingBox())!;
-    const propertiesHandle = (await page
-      .getByTestId("workflow-properties-resize")
-      .boundingBox())!;
-    await page.mouse.move(
-      propertiesHandle.x + propertiesHandle.width / 2,
-      propertiesHandle.y + propertiesHandle.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(
-      propertiesHandle.x - 80,
-      propertiesHandle.y + propertiesHandle.height / 2,
-      { steps: 8 },
-    );
-    await page.mouse.up();
-    await expect
-      .poll(async () => (await properties.boundingBox())!.width)
-      .toBeGreaterThan(propertiesBefore.width + 40);
 
     const runPanel = page.getByTestId("workflow-run-panel");
     const runBefore = (await runPanel.boundingBox())!;
@@ -487,7 +467,7 @@ test.describe("Workflow canvas", () => {
   }) => {
     test.setTimeout(90_000);
     const api = mockWorkflowsAPI(page, anchorRecord());
-    await page.setViewportSize({ width: 1600, height: 900 });
+    await page.setViewportSize({ width: 1600, height: 1000 });
 
     await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
     await expect(page.locator(".react-flow__node")).toHaveCount(2);
@@ -504,25 +484,31 @@ test.describe("Workflow canvas", () => {
       })
       .toBeTruthy();
 
-    // Add the five catalog nodes via the double-click picker (2-column layout
-    // so the source/target handles stay clear of each other).
+    // Keep the settled viewport, then remove the anchors before adding the
+    // larger resizable cards: anchors and the first row would otherwise
+    // overlap and intercept each other's handles.
+    for (const anchorType of ["flow:if", "tool:bash"]) {
+      await nodeWrapper(page, anchorType).click();
+      await page.keyboard.press("Delete");
+    }
+    await expect(page.locator(".react-flow__node")).toHaveCount(0);
+
+    // Add the five catalog nodes via the double-click picker (3 columns on the
+    // first row, 2 on the second, with room for the 320px cards).
     const canvasBox = (await page.locator(".react-flow").boundingBox())!;
     const spots = [
-      { type: "flow:start", x: canvasBox.x + 60, y: canvasBox.y + 60 },
-      { type: "ai:llm_agent", x: canvasBox.x + 360, y: canvasBox.y + 60 },
-      { type: "human:task", x: canvasBox.x + 60, y: canvasBox.y + 240 },
-      { type: "data:assign", x: canvasBox.x + 360, y: canvasBox.y + 240 },
-      { type: "flow:end", x: canvasBox.x + 60, y: canvasBox.y + 420 },
+      { type: "flow:start", x: canvasBox.x + 40, y: canvasBox.y + 40 },
+      { type: "ai:llm_agent", x: canvasBox.x + 460, y: canvasBox.y + 40 },
+      { type: "human:task", x: canvasBox.x + 880, y: canvasBox.y + 40 },
+      { type: "data:assign", x: canvasBox.x + 250, y: canvasBox.y + 280 },
+      { type: "flow:end", x: canvasBox.x + 670, y: canvasBox.y + 280 },
     ];
-    for (const spot of spots) {
+    for (const [index, spot] of spots.entries()) {
       const point = await findEmptyCanvasPoint(page, spot, canvasBox);
       await addNodeFromCatalog(page, spot.type, point.x, point.y);
-      // 2 anchors + 1 dropped node per iteration.
-      await expect(page.locator(".react-flow__node")).toHaveCount(
-        spots.indexOf(spot) + 3,
-      );
+      await expect(page.locator(".react-flow__node")).toHaveCount(index + 1);
     }
-    await expect(page.locator(".react-flow__node")).toHaveCount(7);
+    await expect(page.locator(".react-flow__node")).toHaveCount(5);
 
     // Chain start -> llm -> human -> assign -> end (all `data` ports).
     await dragConnect(
@@ -546,15 +532,6 @@ test.describe("Workflow canvas", () => {
       handleOf(page, "data:assign", "source"),
       handleOf(page, "flow:end", "target"),
     );
-    await expect(page.locator(".react-flow__edge")).toHaveCount(4);
-
-    // Remove the two layout anchors so the saved definition only contains
-    // the five dragged nodes.
-    for (const anchorType of ["flow:if", "tool:bash"]) {
-      await nodeWrapper(page, anchorType).click();
-      await page.keyboard.press("Delete");
-    }
-    await expect(page.locator(".react-flow__node")).toHaveCount(5);
     await expect(page.locator(".react-flow__edge")).toHaveCount(4);
 
     // Save and assert the PUT body: 5 nodes, 4 edges, 5 canvas positions.

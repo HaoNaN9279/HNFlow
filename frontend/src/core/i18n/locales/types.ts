@@ -449,6 +449,11 @@ export interface Translations {
       nodeIdLabel: string;
       nodeTypeLabel: string;
       noSelection: string;
+      params: {
+        fields: Record<string, string>;
+        invalidValue: string;
+        jsonHint: string;
+      };
       ai: {
         title: string;
         instructionLabel: string;

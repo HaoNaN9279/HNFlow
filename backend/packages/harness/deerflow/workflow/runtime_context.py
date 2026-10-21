@@ -38,15 +38,14 @@ def build_workflow_compile_context(
 ) -> CompileContext:
     """Build a complete :class:`CompileContext` from an executor registry.
 
-    The registry is the source of truth for **all three** compile-time facts:
-    executors, previewers (approval gates), and idempotency (retry gates).
-    Callers must not reach into ``build_context().executors`` themselves.
+    The registry is the source of truth for both compile-time facts: executors
+    and previewers (approval gates). Callers must not reach into
+    ``build_context().executors`` themselves.
     """
     built = registry.build_context()
     return CompileContext(
         executors=dict(built.executors),
         previews=dict(built.previews),
-        idempotent_by_type=dict(built.idempotent_by_type),
         checkpointer=checkpointer,
         definition_resolver=definition_resolver,
         max_nesting_depth=max_nesting_depth,

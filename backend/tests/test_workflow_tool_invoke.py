@@ -15,12 +15,12 @@ import pytest
 from langchain_core.tools import InjectedToolArg, StructuredTool
 from pydantic import BaseModel, Field
 
-from deerflow.workflow.compiler import WorkflowCompileError, WorkflowRuntime, clear_compile_cache, compile_definition
+from deerflow.workflow.compiler import WorkflowRuntime, clear_compile_cache
 from deerflow.workflow.danger import dangerous_node_types
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.executors.tool import exec_tool_invoke
 from deerflow.workflow.registry import WorkflowExecutionError, crash_confirm_required
-from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
+from deerflow.workflow.schema import NodeType
 from deerflow.workflow.tool_gateway import PROVIDER_APP, PROVIDER_BUILTIN, StaticToolProvider, ToolGateway
 
 # ── tool doubles ──────────────────────────────────────────────────────────────
@@ -89,25 +89,6 @@ class TestRegistration:
 
     def test_pending_review(self) -> None:
         assert NodeType.TOOL_INVOKE in dangerous_node_types()
-
-    def test_retry_is_refused_at_compile_time(self) -> None:
-        # Non-idempotent nodes cannot be retried (§24.7) — the invoke may be a
-        # mutation, so a retry could repeat it.
-        definition = WorkflowDefinition(
-            id="wf-invoke-retry",
-            name="retry",
-            nodes=[
-                Node(id="start", type=NodeType.FLOW_START, outputs=[Port(name="input", type=PortType.DATA)]),
-                Node(id="i1", type=NodeType.TOOL_INVOKE, params={"tool": "echo", "retry": {"max_attempts": 2}}, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)]),
-                Node(id="end", type=NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)]),
-            ],
-            edges=[
-                Edge(source="start", source_port="input", target="i1", target_port="in"),
-                Edge(source="i1", source_port="out", target="end", target_port="in"),
-            ],
-        )
-        with pytest.raises(WorkflowCompileError, match="retry"):
-            compile_definition(definition, context=build_default_registry().build_context())
 
 
 # ── guards ────────────────────────────────────────────────────────────────────

@@ -126,8 +126,7 @@ class ExecutorRegistry:
         """
         executors: dict[NodeType, Executor] = {nt: reg.executor for nt, reg in self._registrations.items()}
         previews: dict[NodeType, Previewer] = {nt: reg.preview for nt, reg in self._registrations.items() if reg.preview is not None}
-        idempotent_by_type: dict[NodeType, bool] = {nt: reg.idempotent for nt, reg in self._registrations.items()}
-        return CompileContext(executors=executors, previews=previews, idempotent_by_type=idempotent_by_type)
+        return CompileContext(executors=executors, previews=previews)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -143,7 +142,7 @@ _NON_IDEMPOTENT_TYPES: frozenset[NodeType] = frozenset(
         NodeType.TOOL_HTTP,
         # §25 工具节点化: the resolved tool may be bash/app/HTTP, so a direct
         # invocation is non-idempotent by construction (and therefore
-        # crash-confirm gated and refused as a retry target).
+        # crash-confirm gated).
         NodeType.TOOL_INVOKE,
         NodeType.APP_LAUNCH,
         NodeType.APP_SCRIPT,

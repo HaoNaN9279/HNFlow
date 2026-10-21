@@ -18,7 +18,6 @@ import {
   type WorkflowPromptComponent,
   type WorkflowPromptPreview,
 } from "@/core/workflows/api";
-import type { RFNode } from "@/core/workflows/canvas/mapping";
 
 import { useWorkflowEditor } from "./workflow-editor-context";
 
@@ -27,7 +26,8 @@ type PromptLabels = ReturnType<
 >["t"]["workflows"]["properties"]["ai"]["promptComposition"];
 
 type AiPromptCompositionProps = {
-  node: RFNode;
+  nodeId: string;
+  active: boolean;
   readonly: boolean;
 };
 
@@ -59,7 +59,8 @@ function stateLabel(labels: PromptLabels, state: string): string | null {
 }
 
 export function AiPromptComposition({
-  node,
+  nodeId,
+  active,
   readonly,
 }: AiPromptCompositionProps) {
   const { t } = useI18n();
@@ -78,12 +79,15 @@ export function AiPromptComposition({
   });
 
   useEffect(() => {
+    if (!active) {
+      return;
+    }
     let cancelled = false;
     const timer = window.setTimeout(() => {
       setLoading(true);
       setError(null);
       previewWorkflowPrompt(workflowId, {
-        node_id: node.id,
+        node_id: nodeId,
         definition: currentDefinition(),
       })
         .then((result) => {
@@ -115,7 +119,7 @@ export function AiPromptComposition({
     // `definitionSignature` is the stable summary; the callback itself changes
     // with every editor render and is intentionally not a dependency.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workflowId, node.id, definitionSignature, reloadToken]);
+  }, [active, workflowId, nodeId, definitionSignature, reloadToken]);
 
   const sources = preview?.components ?? [];
 
@@ -202,7 +206,7 @@ export function AiPromptComposition({
               <DialogHeader>
                 <DialogTitle>{sourceTitle(labels, selected)}</DialogTitle>
                 <DialogDescription className="font-mono text-[11px] break-all">
-                  {selected.source} 路 {labels.sections[selected.section]}
+                  {selected.source} 璺?{labels.sections[selected.section]}
                 </DialogDescription>
               </DialogHeader>
               <div className="flex items-center gap-1.5">

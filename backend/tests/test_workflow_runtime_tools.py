@@ -191,13 +191,12 @@ def test_run_workflow_wait_success_aggregates_progress():
     assert payload["completed_nodes"] == 2
     assert payload["total_nodes"] == 3  # n1 + n2 + n3 (start/end excluded)
     assert payload["failed_node"] is None
-    assert payload["idempotent_retryable"] is None
 
 
 # ── run_workflow: wait=True failure aggregation ─────────────────────────────
 
 
-def test_run_workflow_wait_failure_bash_not_retryable():
+def test_run_workflow_wait_failure_bash():
     definition = _definition(dangerous=NodeType.TOOL_BASH.value)
     # n1 is tool:bash but carries crash_confirm=false → not pending, start allowed.
     definition.nodes[1] = definition.nodes[1].model_copy(update={"params": {"command": "echo hi", "crash_confirm": False}})
@@ -225,36 +224,7 @@ def test_run_workflow_wait_failure_bash_not_retryable():
     assert payload["status"] == "error"
     assert payload["failed_node"] == "n1"
     assert payload["failed_error"] == "boom"
-    assert payload["idempotent_retryable"] is False  # tool:bash is non-idempotent
     assert payload["completed_nodes"] == 0
-
-
-def test_run_workflow_wait_failure_idempotent_node_retryable():
-    definition = _definition()
-    import deerflow.workflow.dispatch as dispatch_mod
-
-    with (
-        patch("deerflow.persistence.workflow_definitions.service.get_workflow_definition", new=AsyncMock(return_value=_definition_row(definition))),
-        patch.object(dispatch_mod, "start_workflow_run", new=AsyncMock(return_value={"run_id": "run-1", "thread_id": "t-1", "status": "running"})),
-        patch.object(dispatch_mod, "get_workflow_run", new=AsyncMock(return_value={"run_id": "run-1", "thread_id": "t-1", "status": "error"})),
-        patch.object(
-            dispatch_mod,
-            "list_run_events",
-            new=AsyncMock(
-                return_value=[
-                    _progress_entry("started", "n1"),
-                    _progress_entry("failed", "n1", error="boom"),
-                ]
-            ),
-        ),
-    ):
-        command = run_workflow.func(definition_id="wf-1", params={}, runtime=_runtime(), wait=True)
-
-    payload = _command_payload(command)
-    assert payload["ok"] is True
-    assert payload["status"] == "error"
-    assert payload["failed_node"] == "n1"
-    assert payload["idempotent_retryable"] is True  # data:assign is idempotent
 
 
 # ── run_workflow: wait timeout ──────────────────────────────────────────────

@@ -270,9 +270,9 @@ test.describe("Workflow node forms", () => {
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
     await nodeWrapper(page, "ai:llm_agent").click();
 
-    const panel = page.getByTestId("workflow-properties-panel");
-    await expect(panel).toContainText("AI Agent");
-    const instruction = panel.locator('textarea[id$="-instruction"]');
+    const card = nodeWrapper(page, "ai:llm_agent");
+    await expect(card).toContainText("AI Agent");
+    const instruction = card.locator('textarea[id$="-instruction"]');
     await expect(instruction).toBeVisible();
 
     // instruction — required field, fill it.
@@ -281,7 +281,7 @@ test.describe("Workflow node forms", () => {
     await instruction.blur();
 
     // agent — switch to Custom agent... and type a name.
-    await panel.getByRole("combobox", { name: "Agent" }).click();
+    await card.getByRole("combobox", { name: "Agent" }).click();
     await page.getByRole("option", { name: "Custom agent..." }).click();
     const agentInput = page.getByLabel("Custom agent name");
     await expect(agentInput).toBeVisible();
@@ -322,10 +322,10 @@ test.describe("Workflow node forms", () => {
     await page.reload();
     await expect(page.locator(".react-flow__node")).toHaveCount(1);
     await nodeWrapper(page, "ai:llm_agent").click();
-    const restoredPanel = page.getByTestId("workflow-properties-panel");
-    await expect(restoredPanel).toContainText("AI Agent");
+    const restoredCard = nodeWrapper(page, "ai:llm_agent");
+    await expect(restoredCard).toContainText("AI Agent");
     await expect(
-      restoredPanel.locator('textarea[id$="-instruction"]'),
+      restoredCard.locator('textarea[id$="-instruction"]'),
     ).toHaveValue(instructionText);
     await expect(page.getByLabel("Custom agent name")).toHaveValue("publisher");
   });
@@ -353,11 +353,11 @@ test.describe("Workflow node forms", () => {
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
     await nodeWrapper(page, "nested:subworkflow").click();
 
-    const panel = page.getByTestId("workflow-properties-panel");
-    await expect(panel).toContainText("Subworkflow");
+    const card = nodeWrapper(page, "nested:subworkflow");
+    await expect(card).toContainText("Subworkflow");
 
     // The template select lists the mocked /api/workflows records.
-    const templateSelect = panel.getByRole("combobox", {
+    const templateSelect = card.getByRole("combobox", {
       name: "Workflow template",
     });
     await expect(templateSelect).toBeVisible();
@@ -402,13 +402,13 @@ test.describe("Workflow node forms", () => {
     await nodeWrapper(page, "nested:subworkflow")
       .getByTestId("workflow-node-display-name")
       .click();
-    const restoredPanel = page.getByTestId("workflow-properties-panel");
-    await expect(restoredPanel).toContainText("Subworkflow");
+    const restoredCard = nodeWrapper(page, "nested:subworkflow");
+    await expect(restoredCard).toContainText("Subworkflow");
     await expect(
-      restoredPanel.getByRole("combobox", { name: "Workflow template" }),
+      restoredCard.getByRole("combobox", { name: "Workflow template" }),
     ).toContainText("Report Generator (1.0.0)");
     await expect(
-      restoredPanel.getByText("1.0.0", { exact: true }),
+      restoredCard.getByText("1.0.0", { exact: true }),
     ).toBeVisible();
   });
 
@@ -446,22 +446,22 @@ test.describe("Workflow node forms", () => {
     await expect(page.locator(".react-flow__node")).toHaveCount(3);
     await nodeWrapper(page, "ai:llm_agent").click();
 
-    const panel = page.getByTestId("workflow-properties-panel");
-    await expect(panel).toContainText("AI Agent");
+    const card = nodeWrapper(page, "ai:llm_agent");
+    await expect(card).toContainText("AI Agent");
 
     // Empty instruction surfaces the inline (non-blocking) required error.
-    const instruction = panel.locator('textarea[id$="-instruction"]');
+    const instruction = card.locator('textarea[id$="-instruction"]');
     await expect(instruction).toBeVisible();
-    await expect(panel.getByText("Instruction is required")).toBeVisible();
+    await expect(card.getByText("Instruction is required")).toBeVisible();
 
     // An invalid custom agent name surfaces the pattern error inline too.
-    await panel.getByRole("combobox", { name: "Agent" }).click();
+    await card.getByRole("combobox", { name: "Agent" }).click();
     await page.getByRole("option", { name: "Custom agent..." }).click();
     const agentInput = page.getByLabel("Custom agent name");
     await agentInput.fill("bad_name");
     await agentInput.blur();
     await expect(
-      panel.getByText("Agent name must match ^[A-Za-z0-9-]+$"),
+      card.getByText("Agent name must match ^[A-Za-z0-9-]+$"),
     ).toBeVisible();
 
     // Validation is advisory: Save stays enabled and PUTs anyway.

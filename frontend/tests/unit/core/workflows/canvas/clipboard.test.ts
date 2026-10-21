@@ -63,6 +63,21 @@ describe("workflow canvas clipboard", () => {
     expect(copySelection([rfNode("a", 0, 0)], [], ["missing"])).toBeNull();
   });
 
+  it("preserves explicit canvas dimensions through copy and paste", () => {
+    const node = rfNode("a", 0, 0, true);
+    node.width = 480;
+    node.height = 520;
+
+    const clipboard = copySelection([node], [], ["a"])!;
+    expect(clipboard.nodes[0]).toEqual(
+      expect.objectContaining({ width: 480, height: 520 }),
+    );
+
+    const pasted = pasteClipboard(clipboard, { x: 10, y: 20 });
+    expect(pasted.nodes[0]!.width).toBe(480);
+    expect(pasted.nodes[0]!.height).toBe(520);
+  });
+
   it("copies selected nodes relative to the selection top-left", () => {
     const nodes = [
       rfNode("a", 100, 200, true),

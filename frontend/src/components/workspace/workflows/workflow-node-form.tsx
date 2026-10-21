@@ -34,6 +34,7 @@ import type { WorkflowDefinition } from "@/core/workflows/types";
 import { useOpenSubworkflow } from "./use-open-subworkflow";
 import { AiPromptComposition } from "./workflow-ai-prompt-composition";
 import { useWorkflowEditor } from "./workflow-editor-context";
+import { WorkflowNodeParams } from "./workflow-node-params";
 
 /** Sentinel select values for the agent picker (real names are used verbatim). */
 const AGENT_NONE_VALUE = "__none__";
@@ -44,25 +45,29 @@ const PROMPT_PREVIEW_NONE_VALUE = "__none__";
 /** Sentinel select value meaning "this subworkflow port is not mapped". */
 const UNMAPPED_VALUE = "__unmapped__";
 
+type WorkflowNodeFormNode = Pick<RFNode, "id" | "data">;
+
 type WorkflowNodeFormProps = {
-  node: RFNode;
+  node: WorkflowNodeFormNode;
   readonly: boolean;
+  active?: boolean;
   onChange: (next: WorkflowNode) => void;
 };
 
 /**
- * Typed edit form for workflow nodes. Renders dedicated forms for the AI
- * agent, prompt preview, subworkflow and app node families; every other node
- * type returns null so the properties panel keeps its generic key/value editor.
+ * Typed edit form for workflow nodes. Dedicated forms cover the AI agent,
+ * prompt preview, subworkflow and app families; every type then gets the fixed
+ * schema-driven params editor. The canvas renders this only for the selected
+ * node, so prompt preview work and form hooks stay scoped to one card.
  *
- * Commits are local-draft + commit-on-blur/select, matching the properties
- * panel: edits update local state immediately and `onChange` fires with a new
+ * Commits are local-draft + commit-on-blur/select; `onChange` fires with a new
  * immutable `WorkflowNode` produced by `applyNodeFormValues`. Saving stays the
  * toolbar's job — this form never calls the API directly.
  */
 export function WorkflowNodeForm({
   node,
   readonly,
+  active,
   onChange,
 }: WorkflowNodeFormProps) {
   const workflow = node.data?.workflow;
@@ -70,34 +75,93 @@ export function WorkflowNodeForm({
     return null;
   }
   if (workflow.type === "ai:llm_agent") {
-    return <AiAgentForm node={node} readonly={readonly} onChange={onChange} />;
+    return (
+      <div className="flex flex-col gap-3">
+        <AiAgentForm
+          node={node}
+          readonly={readonly}
+          active={active}
+          onChange={onChange}
+        />
+        <WorkflowNodeParams
+          workflow={workflow}
+          readonly={readonly}
+          onChange={onChange}
+        />
+      </div>
+    );
   }
   if (workflow.type === "ai:capability_group") {
     return (
-      <CapabilityGroupSelectorForm
-        node={node}
-        readonly={readonly}
-        onChange={onChange}
-      />
+      <div className="flex flex-col gap-3">
+        <CapabilityGroupSelectorForm
+          node={node}
+          readonly={readonly}
+          onChange={onChange}
+        />
+        <WorkflowNodeParams
+          workflow={workflow}
+          readonly={readonly}
+          onChange={onChange}
+        />
+      </div>
     );
   }
   if (workflow.type === "ai:prompt_preview") {
     return (
-      <PromptPreviewForm node={node} readonly={readonly} onChange={onChange} />
+      <div className="flex flex-col gap-3">
+        <PromptPreviewForm
+          node={node}
+          readonly={readonly}
+          onChange={onChange}
+        />
+        <WorkflowNodeParams
+          workflow={workflow}
+          readonly={readonly}
+          onChange={onChange}
+        />
+      </div>
     );
   }
   if (workflow.type === "nested:subworkflow") {
     return (
-      <SubworkflowForm node={node} readonly={readonly} onChange={onChange} />
+      <div className="flex flex-col gap-3">
+        <SubworkflowForm node={node} readonly={readonly} onChange={onChange} />
+        <WorkflowNodeParams
+          workflow={workflow}
+          readonly={readonly}
+          onChange={onChange}
+        />
+      </div>
     );
   }
   if (workflow.type.startsWith("app:")) {
-    return <AppForm node={node} readonly={readonly} onChange={onChange} />;
+    return (
+      <div className="flex flex-col gap-3">
+        <AppForm node={node} readonly={readonly} onChange={onChange} />
+        <WorkflowNodeParams
+          workflow={workflow}
+          readonly={readonly}
+          onChange={onChange}
+        />
+      </div>
+    );
   }
-  return null;
+  return (
+    <WorkflowNodeParams
+      workflow={workflow}
+      readonly={readonly}
+      onChange={onChange}
+    />
+  );
 }
 
-function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
+function AiAgentForm({
+  node,
+  readonly,
+  onChange,
+  active,
+}: WorkflowNodeFormProps) {
   const { t } = useI18n();
   const labels = t.workflows.properties;
   const workflow = node.data.workflow;
@@ -167,16 +231,20 @@ function AiAgentForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
           }
         })
         .catch(() => {
-          // Backend unavailable — skip the existence hint.
+          // Backend unavailable —skip the existence hint.
         });
     }
   };
 
   return (
-    <div className="flex flex-col gap-3 border-b pb-4">
-      <AiPromptComposition node={node} readonly={readonly} />
+    <div className="flex flex-col gap-3">
+      <AiPromptComposition
+        nodeId={node.id}
+        active={active === true}
+        readonly={readonly}
+      />
 
-      <details className="rounded border">
+      <details className="rounded border" open>
         <summary className="text-muted-foreground cursor-pointer px-2 py-1.5 text-xs font-medium">
           {labels.ai.configTitle}
         </summary>
@@ -316,7 +384,7 @@ function CapabilityGroupSelectorForm({
   };
 
   return (
-    <div className="flex flex-col gap-3 border-b pb-4">
+    <div className="flex flex-col gap-3">
       <div className="text-xs font-medium">{labels.capabilityGroup.title}</div>
       <div className="text-muted-foreground text-[11px]">
         {labels.capabilityGroup.groupLabel}
@@ -424,7 +492,7 @@ function PromptPreviewForm({
   };
 
   return (
-    <div className="flex flex-col gap-3 border-b pb-4">
+    <div className="flex flex-col gap-3">
       <div className="text-xs font-medium">
         {labels.capabilityGroup.promptPreviewTitle}
       </div>
@@ -511,7 +579,7 @@ function AppForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
   };
 
   return (
-    <div className="flex flex-col gap-3 border-b pb-4">
+    <div className="flex flex-col gap-3">
       <div className="text-xs font-medium">{labels.app.title}</div>
 
       <div className="flex flex-col gap-1">
@@ -659,7 +727,7 @@ function SubworkflowForm({ node, readonly, onChange }: WorkflowNodeFormProps) {
     source?.kind === "inline" ? source.sourceVersion : values.version;
 
   return (
-    <div className="flex flex-col gap-3 border-b pb-4">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-medium">{labels.subworkflow.title}</div>
         <span

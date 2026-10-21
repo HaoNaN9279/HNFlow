@@ -34,7 +34,14 @@ export type CanvasPositions = Record<string, { x: number; y: number }>;
 /** NodeId → user-authored display name, stored at `metadata.canvas.labels`. */
 export type CanvasLabels = Record<string, string>;
 
+/** NodeId → user-resized dimensions, stored at `metadata.canvas.sizes`. */
+export type CanvasSizes = Record<string, { width: number; height: number }>;
+
 /** Workflow metadata with the canvas-only UI block typed. */
 export type WorkflowMetadata = WorkflowMetadataBase & {
-  canvas?: { positions?: CanvasPositions; labels?: CanvasLabels };
+  canvas?: {
+    positions?: CanvasPositions;
+    labels?: CanvasLabels;
+    sizes?: CanvasSizes;
+  };
 };

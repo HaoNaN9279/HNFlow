@@ -370,7 +370,11 @@ describe("F4 verification — mapping layer passes top-level fields through", ()
     expect(definition.nodes[0]!.capability_groups).toEqual(["research", "web"]);
     expect(definition.nodes[1]!.agent_name).toBeNull();
     expect(definition.nodes[1]!.capability_groups).toEqual([]);
-    expect(definition.nodes).toEqual(def.nodes);
+    // Custom params are deleted by the fixed schema on save.
+    expect(definition.nodes[0]!.params).toEqual({
+      instruction: "Summarize the input",
+    });
+    expect(definition.nodes[1]!.params).toEqual(subworkflowNode().params);
   });
 });
 

@@ -114,6 +114,8 @@ export type WorkflowMetadata = {
  */
 export type CanvasMetadata = {
   positions?: Record<string, { x: number; y: number }>;
+  labels?: Record<string, string>;
+  sizes?: Record<string, { width: number; height: number }>;
 };
 
 /** Top-level workflow definition — the serialisable root document. */

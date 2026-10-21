@@ -25,6 +25,7 @@ import { useI18n } from "@/core/i18n/hooks";
 import {
   definitionToFlow,
   flowToDefinition,
+  sanitizeFlowNode,
   type PositionsMap,
   type RFEdge,
   type RFNode,
@@ -204,7 +205,7 @@ export function WorkflowEditorProvider({
     seededRef.current = true;
     const draft = readWorkflowDraft(sessionKey);
     if (draft?.dirty) {
-      setNodes(draft.nodes);
+      setNodes(draft.nodes.map(sanitizeFlowNode));
       setEdges(draft.edges);
       setPositions(draft.positions);
       setDirty(true);

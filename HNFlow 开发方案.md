@@ -170,7 +170,7 @@ class AgentPort(Protocol):
 - 端口→state channel：`wf:<node_id>:<port>`；
 - 保留通道使用 `__` 前缀，不进入节点事件输出；
 - 子图展开、循环、try/finally、handoff 由编译层原生处理；
-- 编译上下文必须完整携带：`executors`、`previews`、`idempotent_by_type`、`checkpointer`、`definition_resolver`、嵌套/委派深度限制；
+- 编译上下文必须完整携带：`executors`、`previews`、`checkpointer`、`definition_resolver`、嵌套/委派深度限制；
 - 编译使用**单一工厂**构造，禁止调用方拆 `build_context().executors`。
 
 ### 5.3 运行修订
@@ -373,7 +373,7 @@ lockfile 必须在运行时可被消费，否则只是装饰。
 
 - 保存含 `metadata.canvas` 的定义；
 - `human:task` 在真实 worker 中创建后，`/api/human-tasks` 可见并可提交；
-- `require_approval` 与 `params.retry` 在真实 `run_workflow` 中可用；
+- `require_approval` 与 `params.idempotency` 在真实 `run_workflow` 中可用；
 - full/delta 两种 checkpoint 模式下 `/state`、`/cost` 一致；
 - 修改定义后 resume/rewind 仍使用 run 钉住的修订；
 - bash/file 节点执行期间其他 run 的 SSE 心跳不被阻塞。
@@ -386,7 +386,7 @@ lockfile 必须在运行时可被消费，否则只是装饰。
 
 1. **契约冻结**：定义 schema、run event、AgentPort、ToolDescriptor、HumanTask。
 2. **运行时装配收敛**：唯一 compile context / runtime context / Run Service。
-3. **P0 修复**：审批、retry、人工任务、工具节点、state/cost、IO 阻塞。
+3. **P0 修复**：审批、人工任务、工具节点、state/cost、IO 阻塞。
 4. **修订钉住**：不可变定义修订 + run snapshot + lockfile 消费。
 5. **AgentPort 落地**：DeerFlow 作为默认适配器；外部 Agent 按 T0-T5 能力等级接入。
 6. **前端契约生成**：停止手写镜像校验。

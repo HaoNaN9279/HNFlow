@@ -9,7 +9,6 @@ import {
   WorkflowEditorProvider,
   useWorkflowEditor,
 } from "@/components/workspace/workflows/workflow-editor-context";
-import { WorkflowPropertiesPanel } from "@/components/workspace/workflows/workflow-properties-panel";
 import { WorkflowRunPanel } from "@/components/workspace/workflows/workflow-run-panel";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
 import {
@@ -117,15 +116,7 @@ export default function WorkflowEditorPage() {
 
 /** Layout shell that wires the shared editor state into the panes. */
 function WorkflowEditor() {
-  const {
-    selectedNode,
-    updateNode,
-    updateNodeParams,
-    deleteNode,
-    readonly,
-    clearRun,
-    workflowId,
-  } = useWorkflowEditor();
+  const { clearRun, workflowId } = useWorkflowEditor();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -152,13 +143,6 @@ function WorkflowEditor() {
       <WorkflowToolbar />
       <div className="flex min-h-0 flex-1">
         <WorkflowCanvas />
-        <WorkflowPropertiesPanel
-          node={selectedNode}
-          readonly={readonly}
-          onUpdateNodeParams={updateNodeParams}
-          onUpdateNode={updateNode}
-          onDeleteNode={deleteNode}
-        />
       </div>
       <WorkflowRunPanel />
     </div>

@@ -37,11 +37,11 @@
 ### 2.1 唯一编译上下文
 
 - [x] `workflow/runtime_context.py`：提供 `build_workflow_compile_context(...)`。
-- [x] worker 使用完整 `CompileContext`：`executors` + `previews` + `idempotent_by_type` + `checkpointer` + `definition_resolver` + 深度限制。
+- [x] worker 使用完整 `CompileContext`：`executors` + `previews` + `checkpointer` + `definition_resolver` + 深度限制。
 - [ ] eval_runner / rewind 复用同一工厂（eval_runner 已使用完整 `build_context()`；rewind 仍保留自有 executors 参数，后续收敛）。
-- [x] 测试：真实 `run_workflow` 中 `require_approval` 能编译并挂起；幂等节点 `params.retry` 能编译并重试（装配契约测试 + approval/retry 既有测试）。
+- [x] 测试：真实 `run_workflow` 中 `require_approval` 能编译并挂起；`params.idempotency` 注入 executor（装配契约测试 + approval/idempotency 既有测试）。
 
-**证据**：`workflow/worker.py:163-170` 只取了 `build_context().executors`，导致 `require_approval` 与 `params.retry` 在真实路径不可用。
+**证据**：`workflow/worker.py:163-170` 只取了 `build_context().executors`，导致 `require_approval` 在真实路径不可用。
 
 ### 2.2 唯一运行时上下文
 
@@ -112,7 +112,7 @@
 ### 4.3 保存时语义校验
 
 - [ ] 每种节点类型定义 ParamModel。
-- [x] 保存路由调用共享语义校验器（dry-run compile；审批/重试/上下文策略等编译期规则提前到保存）。
+- [x] 保存路由调用共享语义校验器（dry-run compile；审批/幂等/上下文策略等编译期规则提前到保存）。
 - [ ] 前端校验由后端 schema 生成。
 - [x] 测试：语义非法定义在保存时返回 422（`test_create_rejects_semantically_invalid_definition`）。
 

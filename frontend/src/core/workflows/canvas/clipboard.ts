@@ -1,4 +1,10 @@
-import { makeEdgeId, type RFEdge, type RFNode } from "./mapping";
+import {
+  DEFAULT_NODE_HEIGHT,
+  DEFAULT_NODE_WIDTH,
+  makeEdgeId,
+  type RFEdge,
+  type RFNode,
+} from "./mapping";
 import { makeNodeId } from "./node-catalog";
 import type { WorkflowNode } from "./types";
 
@@ -10,6 +16,8 @@ export type ClipboardNode = {
   offset: { x: number; y: number };
   workflow: WorkflowNode;
   displayName?: string;
+  width?: number;
+  height?: number;
 };
 
 export type ClipboardEdge = {
@@ -54,6 +62,8 @@ export function copySelection(
       },
       workflow: structuredClone(node.data.workflow),
       ...(node.data.displayName ? { displayName: node.data.displayName } : {}),
+      ...(typeof node.width === "number" ? { width: node.width } : {}),
+      ...(typeof node.height === "number" ? { height: node.height } : {}),
     })),
     edges: edges
       .filter(
@@ -102,6 +112,8 @@ export function pasteClipboard(
         workflow,
         ...(item.displayName ? { displayName: item.displayName } : {}),
       },
+      width: item.width ?? DEFAULT_NODE_WIDTH,
+      height: item.height ?? DEFAULT_NODE_HEIGHT,
       selected: true,
     };
   });

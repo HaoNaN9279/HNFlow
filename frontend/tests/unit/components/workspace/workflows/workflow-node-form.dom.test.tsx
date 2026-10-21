@@ -8,7 +8,6 @@ import {
 } from "@testing-library/react";
 
 import { WorkflowNodeForm } from "@/components/workspace/workflows/workflow-node-form";
-import { WorkflowPropertiesPanel } from "@/components/workspace/workflows/workflow-properties-panel";
 import { checkAgentName } from "@/core/agents/api";
 import type { RFNode } from "@/core/workflows/canvas/mapping";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
@@ -31,6 +30,11 @@ rs.mock("@/core/i18n/hooks", () => ({
           nodeIdLabel: "Node ID",
           nodeTypeLabel: "Node type",
           noSelection: "No node selected",
+          params: {
+            invalidValue: "Invalid value",
+            jsonHint: "Enter JSON",
+            fields: { breakpoint: "Breakpoint" },
+          },
           ai: {
             title: "AI Agent",
             instructionLabel: "Instruction",
@@ -96,7 +100,7 @@ rs.mock("@/core/i18n/hooks", () => ({
             invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
             agentNotFoundWarning: "Agent does not exist yet",
             mappingInvalid:
-              "Invalid port mapping — output maps to an undeclared parent port",
+              "Invalid port mapping —output maps to an undeclared parent port",
           },
         },
       },
@@ -230,7 +234,7 @@ afterEach(() => {
   cleanup();
 });
 
-describe("WorkflowNodeForm — ai:llm_agent", () => {
+describe("WorkflowNodeForm —ai:llm_agent", () => {
   it("renders the instruction value and selected agent", () => {
     render(
       <WorkflowNodeForm
@@ -283,7 +287,7 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
     expect(
       screen.getByText("Wire into continue_prompt on the canvas to resume"),
     ).toBeTruthy();
-    // No textarea — the value arrives via canvas edges, not the form.
+    // No textarea —the value arrives via canvas edges, not the form.
     expect(screen.queryByLabelText("Continue prompt")).toBeNull();
   });
 
@@ -363,7 +367,7 @@ describe("WorkflowNodeForm — ai:llm_agent", () => {
   });
 });
 
-describe("WorkflowNodeForm — nested:subworkflow", () => {
+describe("WorkflowNodeForm —nested:subworkflow", () => {
   it("renders template options as name (version) and keeps the current spec", () => {
     render(
       <WorkflowNodeForm
@@ -474,7 +478,7 @@ describe("WorkflowNodeForm — nested:subworkflow", () => {
   });
 });
 
-describe("WorkflowNodeForm — nested:subworkflow port mapping", () => {
+describe("WorkflowNodeForm —nested:subworkflow port mapping", () => {
   function renderPorted(
     onChange: ReturnType<typeof rs.fn>,
     workflow: Partial<WorkflowNode> = {},
@@ -677,15 +681,14 @@ describe("WorkflowNodeForm — nested:subworkflow port mapping", () => {
 
     expect(
       screen.getByText(
-        "Invalid port mapping — output maps to an undeclared parent port",
+        "Invalid port mapping —output maps to an undeclared parent port",
       ),
     ).toBeTruthy();
   });
 });
-
-describe("WorkflowNodeForm — fallback", () => {
-  it("renders nothing for a non-typed node so the generic editor stays", () => {
-    const { container } = render(
+describe("WorkflowNodeForm — fixed params", () => {
+  it("renders the fixed params editor for a simple node", () => {
+    render(
       <WorkflowNodeForm
         node={makeNode("n_3", "flow:if")}
         readonly={false}
@@ -693,32 +696,22 @@ describe("WorkflowNodeForm — fallback", () => {
       />,
     );
 
-    expect(container.firstChild).toBeNull();
+    expect(screen.getByLabelText("Breakpoint")).toBeTruthy();
   });
-});
 
-describe("WorkflowNodeForm — properties panel integration", () => {
-  it("keeps typed instruction out of the generic key/value draft (R4)", () => {
-    const onUpdateNode = rs.fn();
-    const onUpdateNodeParams = rs.fn();
+  it("keeps typed instruction out of the raw params row", () => {
     render(
-      <WorkflowPropertiesPanel
+      <WorkflowNodeForm
         node={makeAINode({
           params: { instruction: "Do the thing", extra: 1 },
         })}
-        onUpdateNodeParams={onUpdateNodeParams}
-        onUpdateNode={onUpdateNode}
-        onDeleteNode={rs.fn()}
+        readonly={false}
+        onChange={rs.fn()}
       />,
     );
 
-    // Typed form zone renders the instruction textarea...
     expect(screen.getByDisplayValue("Do the thing")).toBeTruthy();
-
-    // ...and the generic draft keeps only the non-typed key.
-    expect(screen.getByDisplayValue("extra")).toBeTruthy();
-    expect(screen.getByDisplayValue("1")).toBeTruthy();
     expect(screen.queryByDisplayValue("instruction")).toBeNull();
-    expect(screen.queryByLabelText("Parameter name 2")).toBeNull();
+    expect(screen.queryByDisplayValue("extra")).toBeNull();
   });
 });

@@ -31,7 +31,7 @@ class TestExtractNodeOutputs:
         assert extract_node_outputs(state) == {"a": {"out": 1, "extra": 2}, "b": {"out": "x"}}
 
     def test_skips_non_wf_and_reserved(self) -> None:
-        assert extract_node_outputs({"wf:x:__retry": 1, "wf:shared:s": 2, "plain": 3}) == {}
+        assert extract_node_outputs({"wf:x:__duration_ms": 1, "wf:shared:s": 2, "plain": 3}) == {}
 
 
 class TestAssertionValidation:

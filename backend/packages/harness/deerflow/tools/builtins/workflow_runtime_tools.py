@@ -383,20 +383,14 @@ async def _rt_aggregate_summary(
     events = await deps["list_run_events"](run_id, runtime=runtime)
     progress = _rt_collect_progress(events, definition, deps["flow_types"])
 
-    idempotent_retryable: bool | None = None
-    failed_node = progress["failed_node"]
-    if failed_node is not None and progress["failed_type"] is not None:
-        idempotent_retryable = progress["failed_type"] not in deps["non_idempotent_types"]
-
     return {
         "run_id": run_id,
         "status": status,
         "completed_nodes": progress["completed_count"],
         "total_nodes": progress["total_nodes"],
         "current_node": progress["current_node"],
-        "failed_node": failed_node,
+        "failed_node": progress["failed_node"],
         "failed_error": progress["failed_error"],
-        "idempotent_retryable": idempotent_retryable,
     }
 
 
@@ -467,7 +461,6 @@ def _rt_deps() -> dict[str, Any]:
         start_workflow_run,
         undo_workflow_run,
     )
-    from deerflow.workflow.registry import _NON_IDEMPOTENT_TYPES
     from deerflow.workflow.schema import NodeType, WorkflowDefinition
 
     return {
@@ -482,7 +475,6 @@ def _rt_deps() -> dict[str, Any]:
         "undo_workflow_run": undo_workflow_run,
         "WorkflowRunNotFoundError": WorkflowRunNotFoundError,
         "WorkflowDispatchUnavailableError": WorkflowDispatchUnavailableError,
-        "non_idempotent_types": _NON_IDEMPOTENT_TYPES,
         "flow_types": (NodeType.FLOW_START, NodeType.FLOW_END),
     }
 

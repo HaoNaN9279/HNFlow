@@ -53,7 +53,7 @@ def build_default_registry() -> ExecutorRegistry:
     # §24.6a controlled dynamic handoff: routes to a whitelisted expert node and
     # fails on a selection outside it.  Idempotent — the executor only maps a
     # value onto a declared candidate (the run budget it counts is carried by
-    # state, so a retry cannot double-spend it).
+    # state, so it cannot be double-spent).
     reg.register(ExecutorRegistration(node_type=NodeType.FLOW_HANDOFF, executor=exec_handoff, idempotent=True, description="Controlled dynamic handoff router (whitelisted experts, budgeted)"))
     reg.register(ExecutorRegistration(node_type=NodeType.FLOW_WAIT, executor=exec_wait, idempotent=True, description="Delay / sleep executor"))
 
@@ -91,7 +91,7 @@ def build_default_registry() -> ExecutorRegistry:
     # §25 工具节点化: call one gateway tool directly (no model turn).  Non-idempotent
     # by construction — the resolved tool may write files, drive a local
     # application, or perform network IO — so it is crash-confirm gated like
-    # bash/http and refused as a retry target.
+    # bash/http.
     reg.register(
         ExecutorRegistration(
             node_type=NodeType.TOOL_INVOKE,

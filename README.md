@@ -52,6 +52,8 @@ HNFlow 是「图驱动的确定性编排引擎」，与「对话驱动的 super 
 基于 React Flow 的画布页面（`/workspace/workflows/[id]`）提供拖拽建图、连线、参数编辑、保存校验的完整体验：
 
 - 节点物料面板按类型分类：流程控制 / 数据操作 / 工具调用 / AI / 人工 / 子工作流；
+- 节点参数直接显示在节点卡片上：选中后原位展开编辑区，节点可拖拽调整尺寸，内容随宽度重排；节点尺寸随定义保存到 `metadata.canvas.sizes`；
+- 每个节点类型的参数由固定 schema 决定，不再提供任意 key/value 自定义参数；
 - 端口连线实时类型校验（如 string 不能连 file），与后端校验规则保持一致；
 - 保存时自动调用后端校验器，422 错误在画布上定位并高亮具体节点；
 - 运行视图实时展示节点状态徽标（Idle / Running / Success / Failed / WaitingForHuman），由 SSE 事件驱动；
@@ -294,7 +296,7 @@ lead agent 内置工作流工具，让 AI 对话与画布操作走**同一套 AP
 | `list_human_tasks(status)` / `submit_human_task(task_id, values)` / `skip_human_task(task_id)` | 查询待办、提交（校验 output_spec + validation_rules 后触发 resume）、跳过 |
 | `pause_workflow` / `resume_workflow` / `cancel_workflow` | 运行控制（包装 run API） |
 
-约束：生成结果必须通过图结构校验才可保存——「Agent 只能调用已注册能力」是强制边界；异常修复的自动重试仅限幂等节点，非幂等节点（bash/http 等）失败转人工确认。
+约束：生成结果必须通过图结构校验才可保存——「Agent 只能调用已注册能力」是强制边界。
 
 ---
 
@@ -347,7 +349,7 @@ HNFlow 默认面向**本地信任环境模型**（个人 / 小团队本机部署
 - **默认 loopback 绑定**：compose 入口默认 `127.0.0.1:2026`，不暴露公网；需要对外服务时显式设置 `BIND_HOST` 并自行评估风险；
 - **沙箱隔离**：bash / command 等命令类节点强制走 Sandbox 执行（本地 / Docker 模式），禁止直连宿主 shell；文件写入同样受沙箱文件系统约束；
 - **危险节点默认待审核**：AI 生成的 bash / http 等危险节点默认写入 `pending_review_nodes` 元数据，运行时要求人工确认；生成工具的任何结果必须过图结构校验才可保存；
-- **人工确认兜底**：非幂等节点（bash / http / MCP 调用）失败不自动重试，转人工确认；涉及覆盖、提交、删除、发布等操作必须用户二次确认；
+- **人工确认兜底**：节点失败直接终止，由人工确认后处理；涉及覆盖、提交、删除、发布等操作必须用户二次确认；
 - **依赖静态校验**：功能组依赖存在性、版本范围、循环引用在保存时静态拦截，节点锁定 `guid@version`，新版本只提示不自动升级；
 - **用户隔离**：user_id 作用域存储，多用户同名工作流互不可见；
 - **部署提醒**：若部署到共享环境或多 worker 生产模式，请按上节「服务拓扑 / 快速开始」的说明配置持久化数据库、Redis stream bridge 与所有权心跳，并参考 `make doctor` 输出。

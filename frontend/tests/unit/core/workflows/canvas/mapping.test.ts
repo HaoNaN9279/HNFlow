@@ -124,14 +124,14 @@ describe("definitionToFlow", () => {
       const key = `${x},${y}`;
       expect(seen.has(key)).toBe(false);
       seen.add(key);
-      // Grid invariant: x on the 280 column, y on the 120 row.
-      expect(x % 280).toBe(0);
-      expect(y % 120).toBe(0);
+      // Grid invariant: x on the 400 column, y on the 420 row.
+      expect(x % 400).toBe(0);
+      expect(y % 420).toBe(0);
       expect(node.id).toBe(def.nodes[i]!.id);
     }
     expect(nodes[0]!.position).toEqual({ x: 0, y: 0 });
-    expect(nodes[1]!.position).toEqual({ x: 280, y: 0 });
-    expect(nodes[2]!.position).toEqual({ x: 560, y: 0 });
+    expect(nodes[1]!.position).toEqual({ x: 400, y: 0 });
+    expect(nodes[2]!.position).toEqual({ x: 800, y: 0 });
   });
 
   test("wraps to the next grid row every 3 nodes", () => {
@@ -147,7 +147,7 @@ describe("definitionToFlow", () => {
       agent_name: null,
     });
     const { nodes } = definitionToFlow(def);
-    expect(nodes[3]!.position).toEqual({ x: 0, y: 120 });
+    expect(nodes[3]!.position).toEqual({ x: 0, y: 420 });
   });
 
   test("edge ids are deterministic and port-qualified", () => {
@@ -169,7 +169,7 @@ describe("definitionToFlow", () => {
     expect(edges[0]!.data?.condition).toBeUndefined();
   });
 
-  test("tolerates unknown node types without dropping data", () => {
+  test("keeps unknown node type while sanitizing its params", () => {
     const def = sampleDefinition();
     const unknownType = "legacy:custom" as NodeType;
     def.nodes.push({
@@ -185,7 +185,7 @@ describe("definitionToFlow", () => {
     const { nodes } = definitionToFlow(def);
     expect(nodes).toHaveLength(4);
     expect(nodes[3]!.data.workflow.type).toBe(unknownType);
-    expect(nodes[3]!.data.workflow.params).toEqual({ keep: "me" });
+    expect(nodes[3]!.data.workflow.params).toEqual({});
   });
 });
 
@@ -325,7 +325,7 @@ describe("flowToDefinition", () => {
     expect(rebuilt?.params).toEqual({ message: "" });
   });
 
-  test("preserves unknown types with data.workflow through the round trip", () => {
+  test("sanitizes unknown types with data.workflow through the round trip", () => {
     const def = sampleDefinition();
     const unknownType = "legacy:custom" as NodeType;
     def.nodes.push({
@@ -342,7 +342,43 @@ describe("flowToDefinition", () => {
     const { definition } = flowToDefinition(flow, { def, positions: {} });
     expect(definition.nodes).toHaveLength(4);
     expect(definition.nodes[3]!.type).toBe(unknownType);
-    expect(definition.nodes[3]!.params).toEqual({ keep: "me" });
+    expect(definition.nodes[3]!.params).toEqual({});
+  });
+});
+
+describe("canvas node sizes", () => {
+  test("uses defaults and restores stored sizes", () => {
+    const def = sampleDefinition();
+    def.metadata.canvas = {
+      sizes: {
+        "n-llm": { width: 480, height: 520 },
+      },
+    };
+
+    const { nodes } = definitionToFlow(def);
+
+    expect(nodes[0]!.width).toBe(320);
+    expect(nodes[0]!.height).toBe(360);
+    expect(nodes[1]!.width).toBe(480);
+    expect(nodes[1]!.height).toBe(520);
+  });
+
+  test("writes explicit React Flow dimensions into metadata.canvas.sizes", () => {
+    const def = sampleDefinition();
+    const flow = definitionToFlow(def);
+    flow.nodes[0]!.width = 420;
+    flow.nodes[0]!.height = 500;
+
+    const { metadata } = flowToDefinition(flow, { def, positions: {} });
+
+    expect(metadata.canvas?.sizes?.["n-start"]).toEqual({
+      width: 420,
+      height: 500,
+    });
+    expect(metadata.canvas?.sizes?.["n-llm"]).toEqual({
+      width: 320,
+      height: 360,
+    });
   });
 });
 

@@ -121,7 +121,7 @@ describe("node catalog", () => {
       value: null,
     });
     expect(getNodeCatalogEntry("data:convert")!.defaultParams).toEqual({
-      to: "string",
+      to: "str",
     });
     expect(getNodeCatalogEntry("data:file")!.defaultParams).toEqual({
       operation: "read",
