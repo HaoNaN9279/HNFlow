@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo
+from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo, get_workflow_folder_repo
 from app.gateway.permissions import require_permission
 from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
@@ -39,6 +39,7 @@ class WorkflowCreateRequest(BaseModel):
     definition: dict[str, Any]
     metadata: dict[str, Any] = Field(default_factory=dict)
     version: str = "0.1.0"
+    folder_id: str | None = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -46,6 +47,7 @@ class WorkflowUpdateRequest(BaseModel):
     definition: dict[str, Any] | None = None
     metadata: dict[str, Any] | None = None
     version: str | None = None
+    folder_id: str | None = None
 
 
 class WorkflowPromptPreviewRequest(BaseModel):
@@ -173,6 +175,15 @@ async def _check_workflow_dependency_cycles(
     return find_dependency_cycles(definitions, ())
 
 
+async def _validate_folder(request: Request, folder_id: str | None, user: Any) -> None:
+    if folder_id is None:
+        return
+    repo = get_workflow_folder_repo(request)
+    folder = await repo.get(folder_id, user_id=str(user.id))
+    if folder is None:
+        raise HTTPException(status_code=404, detail="Workflow folder not found")
+
+
 def _format_validation_errors(exc: ValidationError) -> list[str]:
     """Convert a Pydantic v2 ValidationError into a list of human-readable strings."""
     return [f"瀹氫箟缁撴瀯闈炴硶: {'.'.join(str(loc) for loc in e['loc'])} 鈥?{e['msg']}" for e in exc.errors(include_url=False)]
@@ -223,6 +234,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     errors = validate_definition(model)
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
+    await _validate_folder(request, body.folder_id, user)
     await _validate_semantics(request, model, user)
 
     # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
@@ -242,6 +254,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
         definition=model.model_dump(mode="json"),
         metadata=metadata,
         version=body.version,
+        folder_id=body.folder_id,
     )
     return result
 
@@ -362,6 +375,10 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         raise HTTPException(status_code=404, detail="Workflow definition not found")
 
     updates: dict[str, Any] = {}
+
+    if "folder_id" in body.model_fields_set:
+        await _validate_folder(request, body.folder_id, user)
+        updates["folder_id"] = body.folder_id
 
     if body.definition is not None:
         try:

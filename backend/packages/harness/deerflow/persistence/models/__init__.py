@@ -23,6 +23,7 @@ from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
 from deerflow.persistence.workflow_definitions.revision_model import WorkflowDefinitionRevisionRow
+from deerflow.persistence.workflow_folders.model import WorkflowFolderRow
 from deerflow.persistence.workflow_undo.model import WorkflowUndoRow
 from deerflow.persistence.workflow_workbenches.model import (
     WorkflowWorkbenchMemberRow,
@@ -41,6 +42,7 @@ __all__ = [
     "ThreadMetaRow",
     "WorkflowDefinitionRow",
     "WorkflowDefinitionRevisionRow",
+    "WorkflowFolderRow",
     "WorkflowUndoRow",
     "WorkflowWorkbenchMemberRow",
     "WorkflowWorkbenchRow",

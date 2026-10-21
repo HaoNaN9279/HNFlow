@@ -22,8 +22,10 @@ import {
   resolveEmbeddedDefinition,
   saveEmbeddedDefinition,
 } from "@/core/workflows/embedded-subworkflow";
+import { workflowFolderPath } from "@/core/workflows/folder-tree";
 import { useWorkflow } from "@/core/workflows/hooks";
 import { parseLocalPath, parseWorkflowTrail } from "@/core/workflows/trail";
+import { useWorkflowFolders } from "@/core/workflows/workflow-folders";
 
 export default function WorkflowEditorPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,6 +41,15 @@ export default function WorkflowEditorPage() {
   const workbenchId = searchParams.get("workbench");
   const isEmbedded = Boolean(localRoot && localPathKey);
   const workflowQuery = useWorkflow(isEmbedded ? localRoot : id);
+  const foldersQuery = useWorkflowFolders();
+  const folderPath = useMemo(
+    () =>
+      workflowFolderPath(
+        foldersQuery.data ?? [],
+        workflowQuery.data?.folder_id,
+      ),
+    [foldersQuery.data, workflowQuery.data?.folder_id],
+  );
 
   const embeddedRecord = useMemo(() => {
     if (!isEmbedded || !workflowQuery.data) {
@@ -82,6 +93,7 @@ export default function WorkflowEditorPage() {
             trail={trail}
             currentName={currentName}
             workbenchId={workbenchId}
+            folderPath={folderPath}
           />
         ) : null}
       </WorkspaceHeader>

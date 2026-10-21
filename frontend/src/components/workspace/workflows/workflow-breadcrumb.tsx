@@ -13,11 +13,13 @@ import {
   hrefForTrailEntry,
   type WorkflowTrailEntry,
 } from "@/core/workflows/trail";
+import type { WorkflowFolder } from "@/core/workflows/workflow-folders";
 
 type WorkflowBreadcrumbProps = {
   trail: WorkflowTrailEntry[];
   currentName: string;
   workbenchId?: string | null;
+  folderPath?: WorkflowFolder[];
 };
 
 /**
@@ -28,12 +30,29 @@ export function WorkflowBreadcrumb({
   trail,
   currentName,
   workbenchId,
+  folderPath = [],
 }: WorkflowBreadcrumbProps) {
   return (
     <>
+      {folderPath.map((folder, index) => (
+        <Fragment key={folder.id}>
+          {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
+          <BreadcrumbItem className="hidden md:block">
+            <BreadcrumbLink asChild>
+              <Link
+                href={`/workspace/workflows?folder=${encodeURIComponent(folder.id)}`}
+              >
+                {folder.name}
+              </Link>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+        </Fragment>
+      ))}
       {trail.map((entry, index) => (
         <Fragment key={`${entry.id}:${index}`}>
-          {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
+          {(folderPath.length > 0 || index > 0) && (
+            <BreadcrumbSeparator className="hidden md:block" />
+          )}
           <BreadcrumbItem className="hidden md:block">
             <BreadcrumbLink asChild>
               <Link
@@ -49,7 +68,7 @@ export function WorkflowBreadcrumb({
           </BreadcrumbItem>
         </Fragment>
       ))}
-      {trail.length > 0 && <BreadcrumbSeparator />}
+      {(folderPath.length > 0 || trail.length > 0) && <BreadcrumbSeparator />}
       <BreadcrumbItem>
         <BreadcrumbPage data-testid="workflow-breadcrumb-current">
           {currentName}

@@ -13,6 +13,8 @@ class WorkflowDefinitionRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    #: Optional workflow directory folder. ``None`` means the root directory.
+    folder_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     schema_version: Mapped[int] = mapped_column(Integer)
     definition: Mapped[dict] = mapped_column(JSON)

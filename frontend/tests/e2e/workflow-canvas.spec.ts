@@ -216,6 +216,14 @@ function mockWorkflowsAPI(
   let record = initialState ?? blankRecord();
   let savedPutBody: Record<string, unknown> | null = null;
 
+  void page.route("**/api/workflow-folders*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    }),
+  );
+
   void page.route("**/api/workflow-monitor/runs*", (route) =>
     route.fulfill({
       status: 200,

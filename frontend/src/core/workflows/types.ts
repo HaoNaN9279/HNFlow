@@ -140,6 +140,7 @@ export type WorkflowRecord = {
   id: string;
   user_id: string;
   name: string;
+  folder_id?: string | null;
   schema_version: number;
   definition: WorkflowDefinition;
   metadata: Record<string, unknown>;

@@ -83,9 +83,12 @@ async def test_migration_adds_kind_column_and_undo_table(tmp_path: Path) -> None
         assert "ix_workflow_undo_records_run_id" in _index_names(db_path)
 
         with sqlite3.connect(db_path) as raw:
-            # The pre-existing row reads back as a plain task — additive default.
-            assert raw.execute("SELECT kind FROM human_tasks WHERE id='ht-legacy'").fetchone()[0] == "task"
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0021_workflow_workbenches"
+            columns = {row[1] for row in raw.execute("PRAGMA table_info(human_tasks)").fetchall()}
+            assert "kind" in columns
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0022_workflow_folders"
+            # 0022 intentionally clears old workflow content, including the
+            # pre-0019 legacy row.
+            assert raw.execute("SELECT COUNT(*) FROM human_tasks").fetchone()[0] == 0
             # An approval kind is accepted and distinguishable.
             raw.execute(
                 "INSERT INTO human_tasks (id, user_id, workflow_run_id, node_id, status, kind, description, inputs_snapshot, output_spec, validation_rules, checkpoint_ref, created_at, updated_at) "
@@ -93,7 +96,7 @@ async def test_migration_adds_kind_column_and_undo_table(tmp_path: Path) -> None
             )
             raw.commit()
             kinds = dict(raw.execute("SELECT id, kind FROM human_tasks").fetchall())
-        assert kinds == {"ht-legacy": "task", "ht-approval": "approval"}
+        assert kinds == {"ht-approval": "approval"}
     finally:
         await close_engine()
 
@@ -117,7 +120,7 @@ async def test_migration_is_idempotent_when_the_objects_already_exist(tmp_path: 
     try:
         assert "workflow_undo_records" in _table_names(db_path)
         with sqlite3.connect(db_path) as raw:
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0021_workflow_workbenches"
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0022_workflow_folders"
     finally:
         await close_engine()
 

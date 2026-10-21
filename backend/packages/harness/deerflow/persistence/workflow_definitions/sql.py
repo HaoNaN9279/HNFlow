@@ -52,11 +52,13 @@ class WorkflowDefinitionRepository:
         metadata: dict[str, Any] | None = None,
         version: str = "0.1.0",
         resolved_at: datetime | None = None,
+        folder_id: str | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(UTC)
         row = WorkflowDefinitionRow(
             id=definition_id,
             user_id=user_id,
+            folder_id=folder_id,
             name=name,
             schema_version=schema_version,
             definition=definition,

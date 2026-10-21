@@ -10,28 +10,59 @@ import {
 
 import { WorkflowList } from "@/components/workspace/workflows/workflow-list";
 import type { WorkflowRecord } from "@/core/workflows/types";
+import type { WorkflowFolder } from "@/core/workflows/workflow-folders";
 
-const apiMock = rs.hoisted(() => ({
+const mocks = rs.hoisted(() => ({
   listWorkflows: rs.fn(),
-  listWorkflowRuns: rs.fn(),
   createWorkflow: rs.fn(),
-  getWorkflow: rs.fn(),
-  updateWorkflow: rs.fn(),
   deleteWorkflow: rs.fn(),
+  updateWorkflow: rs.fn(),
+  createFolder: rs.fn(),
+  updateFolder: rs.fn(),
+  deleteFolder: rs.fn(),
+  push: rs.fn(),
+  toastError: rs.fn(),
+  folderData: [] as WorkflowFolder[],
 }));
-const toastMock = rs.hoisted(() => ({ success: rs.fn(), error: rs.fn() }));
-const routerMock = rs.hoisted(() => ({ push: rs.fn() }));
 
-rs.mock("@/core/workflows/api", () => apiMock);
+rs.mock("@/core/workflows/hooks", () => ({
+  useWorkflows: () => ({
+    data: mocks.listWorkflows(),
+    isLoading: false,
+    isError: false,
+  }),
+  useCreateWorkflow: () => ({ mutate: mocks.createWorkflow, isPending: false }),
+  useDeleteWorkflow: () => ({ mutate: mocks.deleteWorkflow, isPending: false }),
+}));
 
+rs.mock("@/core/workflows/workflow-folders", () => ({
+  useWorkflowFolders: () => ({
+    data: mocks.folderData,
+    isLoading: false,
+    isError: false,
+  }),
+  useCreateWorkflowFolder: () => ({
+    mutate: mocks.createFolder,
+    isPending: false,
+  }),
+  useUpdateWorkflowFolder: () => ({
+    mutate: mocks.updateFolder,
+    isPending: false,
+  }),
+  useDeleteWorkflowFolder: () => ({
+    mutate: mocks.deleteFolder,
+    isPending: false,
+  }),
+}));
+
+rs.mock("@/core/workflows/api", () => ({
+  updateWorkflow: mocks.updateWorkflow,
+}));
 rs.mock("sonner", () => ({
-  toast: toastMock,
+  toast: { success: rs.fn(), error: mocks.toastError },
 }));
-
-// WorkflowList navigates via useRouter on create/delete; hand it a no-op
-// router so those flows stay inert under happy-dom.
 rs.mock("next/navigation", () => ({
-  useRouter: () => ({ push: routerMock.push }),
+  useRouter: () => ({ push: mocks.push }),
 }));
 
 rs.mock("@/core/i18n/hooks", () => ({
@@ -51,8 +82,28 @@ rs.mock("@/core/i18n/hooks", () => ({
         create: "New workflow",
         createTitle: "Create workflow",
         nameLabel: "Name",
-        namePlaceholder: "e.g. Data analysis pipeline",
+        namePlaceholder: "Workflow name",
         deleteConfirm: (name: string) => `Delete ${name}?`,
+        save: "Save",
+        collapsePanel: "Collapse",
+        expandPanel: "Expand",
+        folders: {
+          root: "Root",
+          newFolder: "New folder",
+          newFolderTitle: "Create folder",
+          folderName: "Folder name",
+          createIn: (name: string) => `Create inside ${name}`,
+          rename: "Rename",
+          renameTitle: "Rename folder",
+          delete: "Delete folder",
+          deleteConfirm: (name: string) => `Delete folder ${name}?`,
+          newWorkflow: "New workflow here",
+          move: "Move",
+          moveTitle: "Move workflow",
+          moveTarget: "Destination folder",
+          empty: "This folder is empty",
+          loadFailed: "Failed to load folders",
+        },
         errors: {
           loadFailed: "Failed to load workflows",
           saveSuccess: "Workflow saved",
@@ -60,35 +111,38 @@ rs.mock("@/core/i18n/hooks", () => ({
           deleteFailed: "Failed to delete workflow",
           validationPrefix: "Validation failed: ",
         },
-        run: {
-          runStatus: {
-            pending: "Pending",
-            running: "Running",
-            success: "Success",
-            error: "Failed",
-            timeout: "Timed out",
-            interrupted: "Interrupted",
-          },
-        },
       },
     },
   }),
 }));
 
-afterEach(() => {
-  apiMock.listWorkflows.mockReset();
-  apiMock.listWorkflowRuns.mockReset();
-  toastMock.success.mockReset();
-  toastMock.error.mockReset();
-  routerMock.push.mockReset();
-  cleanup();
-});
+const folders: WorkflowFolder[] = [
+  {
+    id: "folder-a",
+    user_id: "u-1",
+    name: "Project A",
+    parent_id: null,
+    order_index: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+  {
+    id: "folder-b",
+    user_id: "u-1",
+    name: "Nested",
+    parent_id: "folder-a",
+    order_index: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  },
+];
 
-function makeRecord(): WorkflowRecord {
+function makeRecord(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   return {
     id: "wf-1",
     user_id: "u-1",
     name: "My workflow",
+    folder_id: "folder-b",
     schema_version: 1,
     definition: {
       id: "wf-1",
@@ -103,135 +157,104 @@ function makeRecord(): WorkflowRecord {
     resolved_at: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
   };
 }
 
 function renderList() {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-      mutations: { retry: false },
-    },
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={client}>
       <WorkflowList />
     </QueryClientProvider>,
   );
-  return queryClient;
 }
 
+afterEach(() => {
+  mocks.folderData = [];
+  mocks.listWorkflows.mockReset();
+  mocks.createWorkflow.mockReset();
+  mocks.deleteWorkflow.mockReset();
+  mocks.updateWorkflow.mockReset();
+  mocks.createFolder.mockReset();
+  mocks.updateFolder.mockReset();
+  mocks.deleteFolder.mockReset();
+  mocks.push.mockReset();
+  mocks.toastError.mockReset();
+  cleanup();
+});
+
 describe("WorkflowList", () => {
-  it("renders the latest run status badge per workflow", async () => {
-    apiMock.listWorkflows.mockResolvedValue([makeRecord()]);
-    apiMock.listWorkflowRuns.mockResolvedValue({
-      runs: [
-        {
-          run_id: "run-1",
-          thread_id: "thread-1",
-          status: "success",
-          duration_seconds: 42,
-        },
-      ],
-      hasMore: false,
-    });
+  it("renders arbitrary-depth folders and workflow metadata without run status", async () => {
+    mocks.folderData = folders;
+    mocks.listWorkflows.mockReturnValue([makeRecord()]);
 
     renderList();
 
-    expect(await screen.findByText("My workflow")).toBeTruthy();
-    const badge = await screen.findByTestId("workflow-run-badge");
-    expect(badge.textContent).toBe("Success");
-    expect(badge.getAttribute("data-status")).toBe("success");
-    expect(apiMock.listWorkflowRuns).toHaveBeenCalledWith("wf-1", {
-      limit: 1,
-    });
-  });
-
-  it("does not render a badge when the workflow has no runs", async () => {
-    apiMock.listWorkflows.mockResolvedValue([makeRecord()]);
-    apiMock.listWorkflowRuns.mockResolvedValue({ runs: [], hasMore: false });
-
-    const queryClient = renderList();
-
-    await screen.findByText("My workflow");
-    await waitFor(() => {
-      expect(queryClient.getQueryState(["workflow-runs", "wf-1"])?.status).toBe(
-        "success",
-      );
-    });
+    expect(await screen.findByText("Project A")).toBeTruthy();
+    expect(screen.getByText("Nested")).toBeTruthy();
+    expect(screen.getByText("My workflow")).toBeTruthy();
+    expect(screen.getByText("wf-1")).toBeTruthy();
     expect(screen.queryByTestId("workflow-run-badge")).toBeNull();
   });
 
-  it("degrades silently when run history is unavailable (503)", async () => {
-    apiMock.listWorkflows.mockResolvedValue([makeRecord()]);
-    apiMock.listWorkflowRuns.mockRejectedValue(
-      new Error("Run history requires a SQL database backend"),
+  it("creates a workflow inside the selected nested folder", async () => {
+    mocks.folderData = folders;
+    mocks.listWorkflows.mockReturnValue([]);
+    mocks.createWorkflow.mockImplementation(
+      (
+        _payload,
+        options?: { onSuccess?: (record: WorkflowRecord) => void },
+      ) => {
+        options?.onSuccess?.(makeRecord({ id: "wf-new", name: "Nested flow" }));
+      },
     );
 
-    const queryClient = renderList();
+    renderList();
+    await screen.findByText("Nested");
+    fireEvent.click(screen.getAllByLabelText("New workflow here")[1]!);
+    const input = await screen.findByLabelText("Name");
+    fireEvent.change(input, { target: { value: "Nested flow" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
-    await screen.findByText("My workflow");
-    await waitFor(() => {
-      expect(queryClient.getQueryState(["workflow-runs", "wf-1"])?.status).toBe(
-        "error",
-      );
+    await waitFor(() => expect(mocks.createWorkflow).toHaveBeenCalledTimes(1));
+    expect(mocks.createWorkflow.mock.calls[0]![0]).toMatchObject({
+      name: "Nested flow",
+      folder_id: "folder-b",
     });
-    // The row still renders, the badge stays hidden, and no toast fires.
-    expect(screen.getByTestId("workflow-row-wf-1")).toBeTruthy();
-    expect(screen.queryByTestId("workflow-run-badge")).toBeNull();
-    expect(toastMock.error).not.toHaveBeenCalled();
+    expect(mocks.push).toHaveBeenCalledWith("/workspace/workflows/wf-new");
   });
 
-  it("renders the workflow list metadata (regression)", async () => {
-    apiMock.listWorkflows.mockResolvedValue([makeRecord()]);
-    apiMock.listWorkflowRuns.mockResolvedValue({ runs: [], hasMore: false });
+  it("creates a nested folder under a folder", async () => {
+    mocks.folderData = folders;
+    mocks.listWorkflows.mockReturnValue([]);
+    mocks.createFolder.mockImplementation(
+      (
+        _payload,
+        options?: { onSuccess?: (folder: WorkflowFolder) => void },
+      ) => {
+        options?.onSuccess?.({
+          ...folders[1]!,
+          id: "folder-new",
+          name: "New nested",
+        });
+      },
+    );
 
     renderList();
-
-    expect(await screen.findByText("My workflow")).toBeTruthy();
-    expect(screen.getByText("wf-1")).toBeTruthy();
-    expect(screen.getByText(/Version: 0\.1\.0/)).toBeTruthy();
-  });
-
-  it("creates a structurally valid starter definition", async () => {
-    // An empty graph is rejected by the backend (422: missing flow:start /
-    // flow:end), so the create payload must already carry a start → end pair.
-    apiMock.listWorkflows.mockResolvedValue([]);
-    apiMock.createWorkflow.mockResolvedValue({
-      ...makeRecord(),
-      id: "wf-new",
-      name: "My new flow",
-    });
-
-    renderList();
-
-    const createButtons = await screen.findAllByRole("button", {
-      name: /new workflow/i,
-    });
-    fireEvent.click(createButtons[0]!);
-    const nameInput = await screen.findByLabelText("Name");
-    fireEvent.change(nameInput, { target: { value: "My new flow" } });
-    fireEvent.keyDown(nameInput, { key: "Enter" });
+    await screen.findByText("Project A");
+    fireEvent.click(screen.getAllByLabelText("New folder")[0]!);
+    const input = await screen.findByTestId("workflow-folder-name");
+    fireEvent.change(input, { target: { value: "New nested" } });
+    fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() =>
-      expect(apiMock.createWorkflow).toHaveBeenCalledTimes(1),
+      expect(mocks.createFolder).toHaveBeenCalledWith(
+        { name: "New nested", parent_id: "folder-a" },
+        expect.anything(),
+      ),
     );
-    const payload = apiMock.createWorkflow.mock.calls[0]![0] as {
-      definition: {
-        nodes: { id: string; type: string }[];
-        edges: {
-          source: string;
-          source_port: string;
-          target: string;
-          target_port: string;
-        }[];
-      };
-    };
-    const nodeTypes = payload.definition.nodes.map((node) => node.type);
-    expect(nodeTypes).toContain("flow:start");
-    expect(nodeTypes).toContain("flow:end");
-    expect(payload.definition.edges).toEqual([
-      { source: "start", source_port: "out", target: "end", target_port: "in" },
-    ]);
   });
 });

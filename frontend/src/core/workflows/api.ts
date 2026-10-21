@@ -137,6 +137,7 @@ export type CreateWorkflowPayload = {
   definition: WorkflowDefinition;
   metadata?: Record<string, unknown>;
   version?: string;
+  folder_id?: string | null;
 };
 
 export type UpdateWorkflowPayload = {
@@ -144,6 +145,7 @@ export type UpdateWorkflowPayload = {
   definition?: WorkflowDefinition;
   metadata?: Record<string, unknown>;
   version?: string;
+  folder_id?: string | null;
 };
 
 export async function listWorkflows(): Promise<WorkflowRecord[]> {

@@ -431,6 +431,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             )
             from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
             from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
+            from deerflow.persistence.workflow_folders import WorkflowFolderRepository
             from deerflow.persistence.workflow_undo import WorkflowUndoRepository
             from deerflow.persistence.workflow_workbenches import WorkflowWorkbenchRepository
 
@@ -438,6 +439,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_repo = ScheduledTaskRepository(sf)
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
+            app.state.workflow_folder_repo = WorkflowFolderRepository(sf)
             app.state.workflow_workbench_repo = WorkflowWorkbenchRepository(sf)
             app.state.human_task_repo = HumanTaskRepository(sf)
             # Durable undo records (N10): what each irreversible node did, so a
@@ -455,6 +457,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
             app.state.workflow_definition_repo = None
+            app.state.workflow_folder_repo = None
             app.state.workflow_workbench_repo = None
             app.state.human_task_repo = None
             app.state.workflow_undo_repo = None
@@ -615,6 +618,13 @@ def get_workflow_workbench_repo(request: Request):
     val = getattr(request.app.state, "workflow_workbench_repo", None)
     if val is None:
         raise HTTPException(status_code=503, detail="Workflow workbench repo not available")
+    return val
+
+
+def get_workflow_folder_repo(request: Request):
+    val = getattr(request.app.state, "workflow_folder_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Workflow folder repo not available")
     return val
 
 

@@ -396,6 +396,23 @@ export interface Translations {
     nameLabel: string;
     namePlaceholder: string;
     deleteConfirm: (name: string) => string;
+    folders: {
+      root: string;
+      newFolder: string;
+      newFolderTitle: string;
+      folderName: string;
+      createIn: (name: string) => string;
+      rename: string;
+      renameTitle: string;
+      delete: string;
+      deleteConfirm: (name: string) => string;
+      newWorkflow: string;
+      move: string;
+      moveTitle: string;
+      moveTarget: string;
+      empty: string;
+      loadFailed: string;
+    };
     save: string;
     saving: string;
     unsaved: string;
