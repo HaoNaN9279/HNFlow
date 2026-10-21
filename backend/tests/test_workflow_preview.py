@@ -119,7 +119,7 @@ def test_diff_targets_reports_disappearance(tmp_path: Path) -> None:
 def test_diff_targets_reports_appearance_of_an_observed_absence(tmp_path: Path) -> None:
     """ "Observed missing" is a real observation, so an appearance must be caught.
 
-    This is the overwrite hazard an approval exists to prevent: the human
+    This is the overwrite hazard a preview exists to prevent: the human
     confirmed "create this file", and while they were deciding something
     created it.
     """

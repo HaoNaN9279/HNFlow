@@ -57,6 +57,7 @@ export const NODE_TYPES = [
   "app:collect",
   // Human interaction
   "human:task",
+  "human:review",
   // Composition
   "nested:subworkflow",
 ] as const;

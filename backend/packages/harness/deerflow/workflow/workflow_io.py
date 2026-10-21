@@ -14,6 +14,11 @@ import json
 from collections.abc import Callable, Iterator
 from typing import Any
 
+from deerflow.workflow.review import (
+    REVIEW_APPROVED_PORT,
+    REVIEW_INPUT_PORT,
+    REVIEW_REJECTED_PORT,
+)
 from deerflow.workflow.schema import (
     Edge,
     Node,
@@ -59,6 +64,7 @@ def validate_definition(def_: WorkflowDefinition, known_agent_names: set[str] | 
     errors.extend(_check_single_start_end(node_map, def_.edges))
     errors.extend(_check_edge_references(node_map, def_.edges))
     errors.extend(_check_port_types(node_map, def_.edges))
+    errors.extend(_check_review_nodes(node_map, def_.edges))
     errors.extend(_check_params_json_compatible(def_.nodes))
     errors.extend(_check_subworkflow_params(def_.nodes))
     if known_agent_names is not None:
@@ -122,9 +128,14 @@ def _find_cycles(node_ids: set[str], node_map: dict[str, Node], edges: list[Edge
     """
     errors: list[str] = []
 
-    # Build adjacency list (source → list of targets, ignoring port names)
+    # Build adjacency list (source → list of targets, ignoring port names).
+    # A review's rejected edge is the one intentional back-edge in the graph;
+    # it is validated separately (target must be an upstream AI node) and is
+    # excluded here so the remaining graph still rejects every other cycle.
     adj: dict[str, list[str]] = {}
     for e in edges:
+        if _is_review_reject_edge(e, node_map):
+            continue
         adj.setdefault(e.source, []).append(e.target)
 
     # Ensure all nodes have entries (isolated nodes have no edges)
@@ -178,6 +189,112 @@ def _cycle_contains_loop(cycle_path: list[str], node_map: dict[str, Node]) -> bo
         if node is not None and node.type == NodeType.FLOW_LOOP:
             return True
     return False
+
+
+def _is_review_reject_edge(edge: Edge, node_map: dict[str, Node]) -> bool:
+    source = node_map.get(edge.source)
+    return source is not None and source.type == NodeType.HUMAN_REVIEW and edge.source_port == REVIEW_REJECTED_PORT
+
+
+def _reachable(
+    start: str,
+    target: str,
+    edges: list[Edge],
+    node_map: dict[str, Node],
+) -> bool:
+    """Return whether *target* is reachable from *start* without review back-edges."""
+    if start == target:
+        return True
+    adjacency: dict[str, list[str]] = {}
+    for edge in edges:
+        if _is_review_reject_edge(edge, node_map):
+            continue
+        adjacency.setdefault(edge.source, []).append(edge.target)
+    seen: set[str] = set()
+    stack = [start]
+    while stack:
+        current = stack.pop()
+        if current == target:
+            return True
+        if current in seen:
+            continue
+        seen.add(current)
+        stack.extend(adjacency.get(current, []))
+    return False
+
+
+# ── Private: human review node checks ────────────────────────────────────────────
+
+
+_REVIEW_CONTINUE_PORT = "continue_prompt"
+_REVIEW_INCOMPATIBLE_AI_PARAMS = ("output_schema", "context_policy", "model_policy", "memory", "retrieval")
+
+
+def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[str]:
+    """Validate a ``human:review`` node's fixed approve/reject routing shape.
+
+    The rejected edge is the graph's one intentional back-edge.  To keep that
+    from becoming an arbitrary-cycle escape hatch every review must have
+    exactly one approved edge and one rejected edge, and the rejected edge must
+    target an upstream ``ai:llm_agent`` node through its ``continue_prompt``
+    input.  The target's first template turn is compiled with a session, so a
+    later rejection can genuinely continue the conversation.
+    """
+    errors: list[str] = []
+    starts = [node for node in node_map.values() if node.type == NodeType.FLOW_START]
+    start_id = starts[0].id if len(starts) == 1 else None
+
+    for node in node_map.values():
+        if node.type != NodeType.HUMAN_REVIEW:
+            continue
+
+        input_ports = {port.name: port for port in node.inputs}
+        if REVIEW_INPUT_PORT not in input_ports:
+            errors.append(f"node '{node.id}': human:review requires a '{REVIEW_INPUT_PORT}' input port")
+        elif input_ports[REVIEW_INPUT_PORT].type is not PortType.DATA:
+            errors.append(f"node '{node.id}': human:review input '{REVIEW_INPUT_PORT}' must be data")
+
+        output_ports = {port.name: port for port in node.outputs}
+        for port_name in (REVIEW_APPROVED_PORT, REVIEW_REJECTED_PORT):
+            if port_name not in output_ports:
+                errors.append(f"node '{node.id}': human:review requires a '{port_name}' output port")
+            elif output_ports[port_name].type is not PortType.DATA:
+                errors.append(f"node '{node.id}': human:review output '{port_name}' must be data")
+
+        approved_edges = [edge for edge in edges if edge.source == node.id and edge.source_port == REVIEW_APPROVED_PORT]
+        rejected_edges = [edge for edge in edges if edge.source == node.id and edge.source_port == REVIEW_REJECTED_PORT]
+        if len(approved_edges) != 1:
+            errors.append(f"node '{node.id}': human:review requires exactly one '{REVIEW_APPROVED_PORT}' out-edge (found {len(approved_edges)})")
+        if len(rejected_edges) != 1:
+            errors.append(f"node '{node.id}': human:review requires exactly one '{REVIEW_REJECTED_PORT}' out-edge (found {len(rejected_edges)})")
+        if len(approved_edges) == 1 and len(rejected_edges) == 1 and approved_edges[0].target == rejected_edges[0].target:
+            errors.append(f"node '{node.id}': approved and rejected edges must target different nodes")
+
+        for edge in rejected_edges:
+            target = node_map.get(edge.target)
+            if target is None:
+                continue  # _check_edge_references already reported it
+            if target.id in (node.id, start_id) or target.type == NodeType.FLOW_END:
+                errors.append(f"node '{node.id}': rejected target '{target.id}' cannot be the review itself, flow:start, or flow:end")
+                continue
+            if target.type != NodeType.AI_LLM_AGENT:
+                errors.append(f"node '{node.id}': rejected target '{target.id}' must be an ai:llm_agent (got '{target.type.value}')")
+                continue
+            target_inputs = {port.name: port for port in target.inputs}
+            if _REVIEW_CONTINUE_PORT not in target_inputs:
+                errors.append(f"node '{node.id}': rejected target '{target.id}' must declare a '{_REVIEW_CONTINUE_PORT}' input")
+            elif edge.target_port != _REVIEW_CONTINUE_PORT:
+                errors.append(f"node '{node.id}': rejected edge must target '{target.id}.{_REVIEW_CONTINUE_PORT}' (got '{edge.target_port}')")
+            incompatible = [key for key in _REVIEW_INCOMPATIBLE_AI_PARAMS if (target.params or {}).get(key) is not None]
+            if incompatible:
+                errors.append(f"node '{node.id}': rejected target '{target.id}' uses {', '.join(incompatible)}, which is not supported with session continuation")
+            if start_id is not None:
+                if not _reachable(start_id, target.id, edges, node_map):
+                    errors.append(f"node '{node.id}': rejected target '{target.id}' is not reachable from flow:start")
+                if not _reachable(target.id, node.id, edges, node_map):
+                    errors.append(f"node '{node.id}': rejected target '{target.id}' has no forward path back to the review")
+
+    return errors
 
 
 # ── Private: start/end node checks ───────────────────────────────────────────────

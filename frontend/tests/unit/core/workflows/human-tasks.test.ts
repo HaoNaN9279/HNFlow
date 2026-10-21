@@ -65,7 +65,7 @@ describe("parseHumanTask", () => {
       description: "[step] 节点 a 在单步调试中暂停",
       outputSpec: [],
       validationRules: { enum: {}, pattern: {} },
-      preview: null,
+      review: null,
     });
   });
 
@@ -147,7 +147,7 @@ describe("pendingDebugPauses", () => {
   it("returns nothing for a list with no pending debug work", () => {
     expect(pendingDebugPauses([])).toEqual([]);
     expect(
-      pendingDebugPauses([parseHumanTask(stepTask({ kind: "approval" }))!]),
+      pendingDebugPauses([parseHumanTask(stepTask({ kind: "review" }))!]),
     ).toEqual([]);
   });
 });
@@ -364,11 +364,11 @@ describe("humanTaskFields", () => {
     });
   });
 
-  it("keeps the approval gate's boolean decision as a choice", () => {
+  it("keeps a review's boolean decision as a choice", () => {
     const fields = humanTaskFields(
       parsed({
         ...taskRow([{ name: "decision", type: "bool", required: true }]),
-        kind: "approval",
+        kind: "review",
         validation_rules: { enum: { decision: { enum: [true, false] } } },
       }),
     );
@@ -428,7 +428,7 @@ describe("serializeHumanTaskDrafts", () => {
     ),
   );
 
-  it("starts booleans unset (an untouched approval must not submit a rejection)", () => {
+  it("starts booleans unset (an untouched review must not submit a rejection)", () => {
     const drafts = initialHumanTaskDrafts(fields);
     expect(drafts.confirmed).toBeNull();
     expect(drafts.note).toBe("");
@@ -509,7 +509,7 @@ describe("serializeHumanTaskDrafts", () => {
     const boolFields = humanTaskFields(
       parsed({
         ...taskRow([{ name: "decision", type: "bool", required: true }]),
-        kind: "approval",
+        kind: "review",
         validation_rules: { enum: { decision: { enum: [true, false] } } },
       }),
     );
@@ -557,7 +557,7 @@ describe("pendingHumanTasks", () => {
       parsed({
         ...taskRow([{ name: "x", type: "data" }]),
         id: "ht-ap",
-        kind: "approval",
+        kind: "review",
       }),
       parsed(stepTask()),
       parsed({
@@ -570,7 +570,7 @@ describe("pendingHumanTasks", () => {
     const pending = pendingHumanTasks(rows);
 
     expect(pending.map((task) => task.id)).toEqual(["ht-task", "ht-ap"]);
-    expect(pending.map((task) => task.kind)).toEqual(["task", "approval"]);
+    expect(pending.map((task) => task.kind)).toEqual(["task", "review"]);
   });
 
   it("pins the open run's tasks first without hiding another run's", () => {
@@ -589,72 +589,60 @@ describe("pendingHumanTasks", () => {
   });
 });
 
-describe("approval previews", () => {
-  it("reduces a stored preview", () => {
+describe("review snapshots", () => {
+  it("reduces a stored review snapshot", () => {
     const task = parsed({
       ...taskRow([{ name: "decision", type: "bool", required: true }]),
-      kind: "approval",
+      kind: "review",
       inputs_snapshot: {
-        kind: "approval",
-        preview: {
-          action: "overwrite",
-          summary: "Overwrite hero.blend",
-          reversible: false,
-          recovery: "restore from backup",
-          targets: [
-            {
-              ref: {
-                uri: "asset://host/C:/x/hero.blend",
-                path: "C:/x/hero.blend",
-              },
-            },
-          ],
-          required_confirmations: ["type the file name"],
-        },
+        kind: "review",
+        visit: 2,
+        previous_rejections: 1,
+        target_node_id: "ai_writer",
+        instructions: "Check the citations",
+        in: { draft: "hello" },
       },
     });
 
-    expect(task.preview).toEqual({
-      action: "overwrite",
-      summary: "Overwrite hero.blend",
-      reversible: false,
-      recovery: "restore from backup",
-      targets: ["asset://host/C:/x/hero.blend"],
-      requiredConfirmations: ["type the file name"],
+    expect(task.review).toEqual({
+      visit: 2,
+      previousRejections: 1,
+      targetNodeId: "ai_writer",
+      instructions: "Check the citations",
+      input: { draft: "hello" },
     });
   });
 
-  it("is null for a non-approval snapshot or a missing preview", () => {
-    expect(parsed(taskRow([{ name: "x", type: "data" }])).preview).toBeNull();
+  it("is null for a non-review snapshot or a malformed payload", () => {
+    expect(parsed(taskRow([{ name: "x", type: "data" }])).review).toBeNull();
     expect(
       parsed({
         ...taskRow([{ name: "x", type: "data" }]),
-        kind: "approval",
-        inputs_snapshot: { kind: "approval" },
-      }).preview,
+        kind: "review",
+        inputs_snapshot: { kind: "task" },
+      }).review,
     ).toBeNull();
     expect(
       parsed({
         ...taskRow([{ name: "x", type: "data" }]),
-        kind: "approval",
+        kind: "review",
         inputs_snapshot: "nope",
-      }).preview,
+      }).review,
     ).toBeNull();
   });
 
-  it("tolerates a preview with missing pieces", () => {
+  it("defaults visit and previous rejection counts defensively", () => {
     const task = parsed({
       ...taskRow([{ name: "decision", type: "bool" }]),
-      kind: "approval",
-      inputs_snapshot: { kind: "approval", preview: {} },
+      kind: "review",
+      inputs_snapshot: { kind: "review" },
     });
-    expect(task.preview).toEqual({
-      action: "",
-      summary: "",
-      reversible: null,
-      recovery: null,
-      targets: [],
-      requiredConfirmations: [],
+    expect(task.review).toEqual({
+      visit: 1,
+      previousRejections: 0,
+      targetNodeId: "",
+      instructions: "",
+      input: undefined,
     });
   });
 });

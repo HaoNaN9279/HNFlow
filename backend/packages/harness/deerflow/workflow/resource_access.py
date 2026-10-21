@@ -42,7 +42,7 @@ class ResourceAccess:
 
 #: Executor hook: ``(runtime, params, inputs) -> iterable of ResourceAccess``.
 #: It must be pure and synchronous; it is called immediately before execution,
-#: after approval/breakpoint gates have completed.
+#: after breakpoint gates have completed.
 ResourceAccessor = Callable[[Any, dict[str, Any], dict[str, Any]], Iterable[ResourceAccess]]
 
 

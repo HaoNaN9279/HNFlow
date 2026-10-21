@@ -95,7 +95,6 @@ from deerflow.workflow.handoff import (
 from deerflow.workflow.handoff import (
     TARGET_PORT as HANDOFF_TARGET_PORT,
 )
-from deerflow.workflow.preview import Previewer
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
 from deerflow.workflow.reliability import (
     IDEMPOTENCY_PARAM,
@@ -108,6 +107,16 @@ from deerflow.workflow.replay import MODE_REPLAY as REPLAY_MODE_REPLAY
 from deerflow.workflow.replay import REPLAY_CONTEXT_KEY
 from deerflow.workflow.resource_access import ResourceAccessor
 from deerflow.workflow.resource_locking import ResourceLockError, hold_resource_locks
+from deerflow.workflow.review import (
+    REVIEW_APPROVED_PORT,
+    REVIEW_DECISION_APPROVED,
+    REVIEW_DECISION_CHANNEL,
+    REVIEW_DECISION_REJECTED,
+    REVIEW_REJECTED_PORT,
+    REVIEW_TARGET_PARAM,
+    REVIEW_VISIT_CHANNEL,
+    review_state_key,
+)
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
@@ -314,16 +323,14 @@ class CompileContext:
 
     Fields:
         executors: ``NodeType`` → executor callable registry.
-        previews: ``NodeType`` → previewer callable registry (N10).  A node
-            whose type has a previewer can carry ``params.require_approval``
-            and will suspend for human confirmation before executing.  Kept as
-            plain callables (not registry objects) so the compiler never
-            imports :mod:`deerflow.workflow.registry` — which imports this
-            module — and no import cycle forms.
+        previews: ``NodeType`` → previewer callable registry.  Kept for the
+            read-only definition preview endpoint; the compiler itself does not
+            execute previewers.  Plain callables (not registry objects) keep
+            the compiler free of a registry import cycle.
         resource_accessors: ``NodeType`` → resource-access callable registry
             (N13).  The compiler derives automatic locks from the accessor
-            after approval/breakpoint gates and holds them for the executor
-            call.  Missing entries mean the node type declares no resources.
+            after breakpoint gates and holds them for the executor call.
+            Missing entries mean the node type declares no resources.
         checkpointer: Optional LangGraph checkpointer for the top-level graph.
             Subgraphs are always compiled with ``checkpointer=None`` so their
             channels never pollute the parent thread checkpoint.
@@ -342,7 +349,7 @@ class CompileContext:
     """
 
     executors: dict[NodeType, Executor] = field(default_factory=dict)
-    previews: dict[NodeType, Previewer] = field(default_factory=dict)
+    previews: dict[NodeType, Callable[..., Any]] = field(default_factory=dict)
     checkpointer: Any | None = None
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
     max_nesting_depth: int = 10
@@ -387,12 +394,6 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
     if context is not None and context.executors:
         type_fp = "|".join(sorted(t.value for t in context.executors))
         digest.update(f"\0executors:{type_fp}".encode())
-    if context is not None and context.previews:
-        # The preview set decides whether a ``require_approval`` node is
-        # approvable at compile time, so two contexts that differ only in
-        # previewers must not share a cache entry.
-        preview_fp = "|".join(sorted(t.value for t in context.previews))
-        digest.update(f"\0previews:{preview_fp}".encode())
     if context is not None and context.resource_accessors:
         # A different accessor for the same node type can derive a different
         # lock set, so it must not reuse a compiled graph.  The cache is
@@ -447,6 +448,11 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             if isinstance(shared_name, str) and shared_name:
                 shared_key = f"{SHARED_CHANNEL_PREFIX}{shared_name}"
                 fields[shared_key] = Annotated[list, _shared_array_reducer] if shared_policies.get(shared_name, "overwrite") == "array" else Any
+        if node.type == NodeType.HUMAN_REVIEW:
+            # Routing truth and per-visit identity for a review loop.  Both are
+            # engine bookkeeping; the node event exposes only approved/rejected.
+            fields[review_state_key(node.id, REVIEW_DECISION_CHANNEL)] = Any
+            fields[review_state_key(node.id, REVIEW_VISIT_CHANNEL)] = Any
         # N14x: every node declares a reserved execution-duration channel so the
         # write in ``_make_node_fn`` persists into the final state → run.end
         # ``node_timings`` → get_workflow_run.  Declared for every node type
@@ -565,12 +571,13 @@ def _make_node_fn(
     node: Node,
     executor: Executor,
     incoming_edges: list[Edge],
-    previewer: Previewer | None = None,
     resource_accessor: ResourceAccessor | None = None,
     *,
     run_budget: RunBudget | None = None,
     capability_groups: list[str] | None = None,
     prompt_preview_agent: str | None = None,
+    review_target: str | None = None,
+    review_retry_target: bool = False,
 ) -> Callable[..., Any]:
     """Build an async node wrapper that reads inputs from state, calls the
     executor, and writes outputs back to state.
@@ -584,18 +591,17 @@ def _make_node_fn(
     Only output ports that the executor actually returned are written
     to state.
 
-    When *previewer* is supplied and the node carries
-    ``params.require_approval``, the node suspends for human approval before
-    running and re-verifies the approved preview afterwards (N10, see
-    :mod:`deerflow.workflow.approval`).
-
     When the node requests an idempotency key (``params.idempotency``) it is
     injected into the executor params as ``__idempotency_key`` for the tool
     executors to forward.
 
-    When *resource_accessor* is supplied, it runs after approval/breakpoint
-    gates and its write accesses are held as cross-process locks around the
-    executor call only; read-only accesses do not lock.
+    When *resource_accessor* is supplied, it runs after the breakpoint gate and
+    its write accesses are held as cross-process locks around the executor call
+    only; read-only accesses do not lock.
+
+    ``review_target`` is the compiler-resolved target of a ``human:review``
+    node's rejected edge.  It is injected into the executor params so the task
+    snapshot can show which AI node will retry.
     """
     from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
 
@@ -665,6 +671,10 @@ def _make_node_fn(
                 list(capability_groups) if capability_groups is not None else list(node.capability_groups),
             )
             executor_params.setdefault("node_id", node.id)
+            if review_retry_target:
+                # The first template turn must persist its session so a later
+                # rejected review can continue the same conversation.
+                executor_params["__review_session"] = True
         if node.type == NodeType.AI_PROMPT_PREVIEW:
             executor_params = dict(node.params)
             if prompt_preview_agent:
@@ -676,6 +686,10 @@ def _make_node_fn(
             from deerflow.workflow.human_task_state import derive_output_spec  # deferred import — keeps the compiler's import graph free of a human-task cycle
 
             executor_params.setdefault("output_spec", derive_output_spec(node))
+        if node.type == NodeType.HUMAN_REVIEW:
+            executor_params = dict(node.params)
+            executor_params.setdefault("node_id", node.id)
+            executor_params.setdefault(REVIEW_TARGET_PARAM, review_target)
         if node.type == NodeType.FLOW_HANDOFF:
             # §24.6a: the handoff executor needs its own node id to read the
             # reserved handoff counter (its budget) — a definition cannot know
@@ -686,10 +700,8 @@ def _make_node_fn(
         # §25 debugging: an explicit breakpoint suspends the node *before* it
         # executes, so an operator can inspect state and then resume (or skip).
         # Single-step mode (a run-level switch) does the same for **every** node.
-        # Both run ahead of the approval gate: a paused node has not previewed
-        # anything yet, and the approval gate's own suspension must not be
-        # shadowed by a pause the operator already cleared.  A node that stepped
-        # is not paused again by its own breakpoint — one pause per node visit.
+        # A node that stepped is not paused again by its own breakpoint — one
+        # pause per node visit.
         from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND, breakpoint_requested, run_breakpoint, step_mode_requested
 
         paused = False
@@ -697,47 +709,13 @@ def _make_node_fn(
             step_decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value, kind=STEP_SNAPSHOT_KIND)
             paused = True
             if step_decision.skipped:
-                # Same contract as a skipped ``human:task`` / rejected approval:
-                # continue with the node's output ports unset.
+                # Same contract as a skipped ``human:task``: continue with the
+                # node's output ports unset.
                 return {}
         if not paused and breakpoint_requested(executor_params):
             decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value)
             if decision.skipped:
                 return {}
-
-        # N10: human approval gate — preview the action, suspend, then verify the
-        # approved preview is still fresh before letting the executor run.
-        # Deferred imports: ``deerflow.workflow.approval`` imports the registry,
-        # which imports this module — a module-level import would cycle.
-        if previewer is not None:
-            # Approvable (mutating) nodes get their own identity, exactly like
-            # ``ai:llm_agent`` / ``human:task``: the previewer and the
-            # compensation guard both need a stable node id, and neither can read
-            # it off the definition once the executor is running.
-            executor_params = dict(executor_params)
-            executor_params.setdefault("node_id", node.id)
-            executor_params.setdefault("node_type", node.type.value)
-
-            from deerflow.workflow.approval import approval_required
-
-            if approval_required(executor_params):
-                from deerflow.workflow.approval import ON_REJECT_FAIL, on_reject_policy, run_approval
-
-                decision = await run_approval(
-                    runtime,
-                    node_id=node.id,
-                    node_type=node.type.value,
-                    previewer=previewer,
-                    params=executor_params,
-                    inputs=inputs,
-                )
-                if not decision.approved:
-                    note = f": {decision.note}" if decision.note else ""
-                    if on_reject_policy(executor_params) == ON_REJECT_FAIL:
-                        raise WorkflowExecutionError(f"node '{node.id}': rejected by the approver{note}")
-                    # ``skip``: continue with the node's output ports unset,
-                    # exactly like a skipped ``human:task``.
-                    return {}
 
         # N14 §24.7: a node that asks for an idempotency key gets a stable one
         # (per run+node) injected for the tool executors to forward, so an
@@ -760,13 +738,13 @@ def _make_node_fn(
         duration_ms: float | None = None
         if result is None:
             # N13: the compiler, not the author, owns resource locking.  The
-            # accessor runs after approval/breakpoint gates (a pending human
+            # accessor runs after the breakpoint gate (a pending human pause
             # must not hold a file lock) and only write access participates.
             accesses = tuple(resource_accessor(runtime, executor_params, inputs)) if resource_accessor is not None else ()
             try:
                 async with hold_resource_locks(accesses):
                     # N14x: node timing.  Measured around the *work* segment
-                    # only — approvals, human waits, and lock waits are
+                    # only — human waits and lock waits are
                     # excluded, because none of them is node execution cost.
                     _started = time.perf_counter()
                     result = await _resolve_executor(executor, runtime, executor_params, inputs)
@@ -780,6 +758,17 @@ def _make_node_fn(
         for p in node.outputs:
             if p.name in result:
                 outputs[f"wf:{node.id}:{p.name}"] = result[p.name]
+
+        # Human review routes on a reserved decision channel, not on the
+        # approved/rejected payload values: an approved value may legitimately
+        # be None/empty, and routing must still select the approved branch.
+        if node.type == NodeType.HUMAN_REVIEW:
+            decision = result.get(REVIEW_DECISION_CHANNEL)
+            if decision in (REVIEW_DECISION_APPROVED, REVIEW_DECISION_REJECTED):
+                outputs[review_state_key(node.id, REVIEW_DECISION_CHANNEL)] = decision
+            visit = result.get(REVIEW_VISIT_CHANNEL)
+            if isinstance(visit, int) and not isinstance(visit, bool) and visit > 0:
+                outputs[review_state_key(node.id, REVIEW_VISIT_CHANNEL)] = visit
 
         # N14x: every node reports how long its work took, on the reserved
         # channel declared in ``_build_state_schema``.  A replayed node writes
@@ -1600,25 +1589,6 @@ def _expand_subworkflow(
     return child_graph, child
 
 
-def _validate_approval_nodes(def_: WorkflowDefinition, ctx: CompileContext) -> None:
-    """Reject ``require_approval`` on node types that cannot describe themselves.
-
-    An approvable node must have a previewer, otherwise the human would be asked
-    to confirm an action nobody could describe.  Catching it here (rather than at
-    execution time) fails the definition at save/compile, which is where the
-    mistake actually is.  ``on_reject`` is validated here too for the same reason.
-    """
-    for node in def_.nodes:
-        params = node.params or {}
-        if params.get("require_approval") is not True:
-            continue
-        if node.type not in ctx.previews:
-            raise WorkflowCompileError(f"node '{node.id}': require_approval is not supported for node type '{node.type.value}' (no previewer is registered for it)")
-        on_reject = params.get("on_reject", "fail")
-        if on_reject not in ("fail", "skip"):
-            raise WorkflowCompileError(f"node '{node.id}': on_reject must be 'fail' or 'skip', got {on_reject!r}")
-
-
 def _validate_breakpoints(def_: WorkflowDefinition) -> None:
     """Reject ``params.breakpoint`` where it could never take effect (§25).
 
@@ -1995,6 +1965,25 @@ def _make_route_fn(
 # ── Compile entry point ───────────────────────────────────────────────────
 
 
+def _make_review_route_fn(node_id: str, approved_target: str, rejected_target: str) -> Callable[[dict[str, Any]], str]:
+    """Route a ``human:review`` node by its reserved decision channel.
+
+    The payload on ``approved`` may legitimately be ``None`` (an upstream node
+    produced no value), so routing on port presence would lose the approved
+    branch.  The executor writes the explicit decision instead.
+    """
+
+    def _route(state: dict[str, Any]) -> str:
+        decision = state.get(review_state_key(node_id, REVIEW_DECISION_CHANNEL))
+        if decision == REVIEW_DECISION_APPROVED:
+            return approved_target
+        if decision == REVIEW_DECISION_REJECTED:
+            return rejected_target
+        raise WorkflowRouteError(f"review node '{node_id}': no valid decision (got {decision!r})")
+
+    return _route
+
+
 def _make_handoff_route_fn(node_id: str, targets: tuple[str, ...]) -> Callable[[dict[str, Any]], str]:
     """Build the routing function for a ``flow:handoff`` node (§24.6a).
 
@@ -2069,7 +2058,6 @@ def _compile_impl(
     errors = validate_definition(def_)
     if errors:
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
-    _validate_approval_nodes(def_, ctx)
     _validate_breakpoints(def_)
     _validate_handoff(def_)
     _validate_loop_bodies(def_)
@@ -2101,7 +2089,7 @@ def _compile_impl(
         to filter out child-subgraph node events.
 
         Automatic resource locks (N13) are applied inside ``_make_node_fn``,
-        after approval/breakpoint gates, so they do not need a wrapper here.
+        after the breakpoint gate, so they do not need a wrapper here.
         """
         node = node_map.get(node_id)
         builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn, node.type if node is not None else None))
@@ -2128,6 +2116,11 @@ def _compile_impl(
     # Filled in Pass A, consumed in Pass B.
     loop_bodies: dict[str, tuple[str, frozenset[str]]] = {}
 
+    # A rejected review edge points at an AI node whose first template turn must
+    # persist a session so the retry can continue it.  The same target id also
+    # tells the review executor which node the task snapshot describes.
+    review_targets = {edge.target for edge in runtime_edges if edge.source_port == REVIEW_REJECTED_PORT and node_map.get(edge.source) is not None and node_map[edge.source].type == NodeType.HUMAN_REVIEW}
+
     def _make_standard_node_fn(node: Node, executor: Executor) -> Callable[..., Any]:
         capability_groups: list[str] | None = None
         if node.type == NodeType.AI_LLM_AGENT:
@@ -2138,15 +2131,19 @@ def _compile_impl(
         prompt_preview_agent: str | None = None
         if node.type == NodeType.AI_PROMPT_PREVIEW:
             prompt_preview_agent = _infer_prompt_preview_agent(node, node_map, def_.edges)
+        review_target = None
+        if node.type == NodeType.HUMAN_REVIEW:
+            review_target = next((edge.target for edge in runtime_edges if edge.source == node.id and edge.source_port == REVIEW_REJECTED_PORT), None)
         return _make_node_fn(
             node,
             executor,
             incoming_edges.get(node.id, []),
-            ctx.previews.get(node.type),
             ctx.resource_accessors.get(node.type),
             run_budget=run_budget,
             capability_groups=capability_groups,
             prompt_preview_agent=prompt_preview_agent,
+            review_target=review_target,
+            review_retry_target=node.id in review_targets,
         )
 
     # ── 4. Register nodes ─────────────────────────────────────────────
@@ -2373,7 +2370,7 @@ def _compile_impl(
         # Adding the default edge here would unconditionally fire the
         # default target alongside any routed branch.
         src_node = node_map[source]
-        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF):
+        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW):
             continue
 
         # Non-conditional source node: conditional edges are NOT allowed.
@@ -2390,10 +2387,22 @@ def _compile_impl(
 
     # Pass B: conditional edges from if / switch / loop / handoff nodes
     for node in def_.nodes:
-        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF):
+        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW):
             continue
 
         cond_id = node.id
+
+        if node.type == NodeType.HUMAN_REVIEW:
+            approved = next(edge for edge in runtime_edges if edge.source == cond_id and edge.source_port == REVIEW_APPROVED_PORT)
+            rejected = next(edge for edge in runtime_edges if edge.source == cond_id and edge.source_port == REVIEW_REJECTED_PORT)
+            approved_target = _end_target(approved.target)
+            rejected_target = _end_target(rejected.target)
+            builder.add_conditional_edges(
+                cond_id,
+                _make_review_route_fn(cond_id, approved.target, rejected.target),
+                {approved.target: approved_target, rejected.target: rejected_target},
+            )
+            continue
 
         # §24.6a: a handoff's routes come from ``params.candidates`` (validated
         # in ``_validate_handoff``), not from definition edges — the candidate

@@ -49,16 +49,12 @@ class ExecutorRegistration:
         requires_confirmation: When ``True`` the executor must check
             ``params.crash_confirm`` before executing.  Default
             ``True`` for non-idempotent types (bash, http).
-        preview: Optional previewer (N10) describing this node type's
-            mutation *before* it runs.  Registering one makes the node
-            type **approvable**: a node with ``params.require_approval``
-            suspends for human confirmation, and its effect is described
-            by this callable.  ``None`` means the type has nothing
-            previewable (read-only or control-flow nodes), so
-            ``require_approval`` on it is a configuration error.
+        preview: Optional previewer describing this node type's effect for
+            the read-only definition preview endpoint.  It no longer gates
+            execution; ``None`` means the type has nothing previewable.
         resource_access: Optional N13 accessor declaring the external
             resources this node type reads/writes.  The compiler derives the
-            automatic lock set from it after approval/breakpoint gates.
+            automatic lock set from it after the breakpoint gate.
             ``None`` means the executor declares no resource access (pure
             nodes or executors whose side effects cannot be determined).
     """
@@ -128,9 +124,9 @@ class ExecutorRegistry:
 
         The returned context is ready to pass to
         :func:`deerflow.workflow.compile_definition`.  Registered previewers
-        (N10) and resource accessors (N13) travel alongside the executors so
-        the compiler can gate approvals and derive automatic locks without
-        importing this registry.
+        and resource accessors (N13) travel alongside the executors so the
+        compiler can derive automatic locks without importing this registry;
+        previewers remain available to the read-only preview endpoint.
         """
         executors: dict[NodeType, Executor] = {nt: reg.executor for nt, reg in self._registrations.items()}
         previews: dict[NodeType, Previewer] = {nt: reg.preview for nt, reg in self._registrations.items() if reg.preview is not None}

@@ -152,8 +152,8 @@ export function WorkflowRunPanel() {
     (rows: HumanTaskRecord[]) => {
       setPauses(pendingDebugPauses(rows, { preferredRunId: runId }));
       // Everything else pending is a submission form (a ``human:task`` node or an
-      // approval gate).  A rewind / resume admits a new run id, so these are
-      // deliberately not scoped to the panel's own run — a paused approval must
+      // review gate).  A rewind / resume admits a new run id, so these are
+      // deliberately not scoped to the panel's own run — a paused review must
       // stay reachable no matter which run started it.
       setTasks(pendingHumanTasks(rows, { preferredRunId: runId }));
     },

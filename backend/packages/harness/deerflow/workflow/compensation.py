@@ -2,9 +2,10 @@
 
 An irreversible node can ask for :func:`rollback_requested` support: before it
 mutates anything it snapshots every file it is about to touch, and if the node
-then fails it puts them back.  This is the "补偿动作" half of §21 — the approval
-gate (``workflow/approval.py``) covers the "preview + confirm" half, and the
-run-level ``POST …/undo`` route replays the same records later.
+then fails it puts them back.  This is the "补偿动作" half of §21 — the
+read-only preview endpoint covers the "preview" half, an explicit
+``human:review`` node covers confirmation, and the run-level ``POST …/undo``
+route replays the same records later.
 
 Boundaries, deliberately:
 

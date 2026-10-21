@@ -239,6 +239,26 @@ class TestTemplateMode:
 
         assert fake_executor[0]["kwargs"]["config"].checkpointer is False
 
+    @pytest.mark.asyncio
+    async def test_review_retry_target_persists_first_template_turn(self, fake_executor: list[dict[str, Any]]) -> None:
+        """A review retry target gets a session even without a continue prompt."""
+        saver = InMemorySaver()
+        rt = _runtime(thread_id="t1", checkpointer=saver)
+
+        await exec_llm_agent(
+            rt,
+            {"instruction": "first {{in}}", "node_id": "ai_step", "__review_session": True},
+            {"in": "x"},
+        )
+
+        record = fake_executor[0]
+        cfg = record["kwargs"]["config"]
+        assert cfg.checkpointer is True
+        assert record["kwargs"]["checkpointer"] is saver
+        assert record["kwargs"]["checkpoint_thread_id"] == "t1:wfai:ai_step"
+        assert cfg.system_prompt is not None
+        assert record["task"] == "first x"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 3. Fail-closed: continue without a checkpointer

@@ -161,10 +161,10 @@ async def run_workflow(
         graph_input = _build_graph_input(definition, params)
 
     # ── 5. Compile the workflow definition ─────────────────────────────
-    # The compile context is assembled in one place so previewers (approval
-    # gates) and resource accessors (automatic locks) always travel with the
-    # executors.  Reaching into ``build_context().executors`` here silently
-    # disabled both features in production.
+    # The compile context is assembled in one place so previewers and resource
+    # accessors (automatic locks) always travel with the executors.  Reaching
+    # into ``build_context().executors`` here silently disabled both in
+    # production.
     registry = build_default_registry()
     compile_ctx = build_workflow_compile_context(
         registry,

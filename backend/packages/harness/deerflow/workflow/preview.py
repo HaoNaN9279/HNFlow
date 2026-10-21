@@ -2,9 +2,9 @@
 
 Dev plan §21 asks for irreversible operations (overwrite a file, delete a layer,
 publish) to be **previewed and confirmed** before they run, with a compensation
-action attached.  This module owns the "preview" half; the confirmation half is
-:mod:`deerflow.workflow.approval` and the compensation half is
-:mod:`deerflow.workflow.undo`.
+action attached.  This module owns the read-only "preview" half used by the
+definition preview endpoint; confirmation is an explicit ``human:review`` node
+in the graph, and the compensation half is :mod:`deerflow.workflow.undo`.
 
 Design:
 
@@ -19,12 +19,12 @@ Design:
 - **Only ``observed`` targets are re-verified.**  Each target is a
   :class:`PreviewTarget` pairing an :class:`AssetRef` with an ``observed`` flag:
   an *observed* target was actually inspected (so a missing file is a real
-  observation and an appearance during the approval is detectable), while a
+  observation and an appearance during the preview is detectable), while a
   *declared* target merely names a path.  Sandbox targets are declared on
   purpose — fingerprinting one means downloading the whole file (``read_file``
   is text-only, so binary content needs ``download_file``), which is not worth
   paying just to describe a write.  The realistic hazard is the *host* side (a
-  human editing a file in the professional application while the approval is
+  human editing a file in the professional application while the preview is
   pending), and host fingerprints are cheap.
 - **Previewers are registered next to their executor**
   (``ExecutorRegistration.preview``) and reach the compiler through
@@ -75,8 +75,8 @@ class PreviewTarget(BaseModel):
     ``observed`` is what separates "the preview inspected this path and it was
     *missing*" from "the preview merely named this path".  Without it, a declared
     absence and an uninspected path are the same value (no fingerprint), and a
-    file that appeared while the approval was pending could not be caught —
-    which is precisely the overwrite hazard an approval exists to prevent.
+    file that appeared while the preview was pending could not be caught —
+    which is precisely the overwrite hazard an review exists to prevent.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -101,7 +101,7 @@ def declare(ref: AssetRef) -> PreviewTarget:
 class ActionPreview(BaseModel):
     """What one mutating node action will do, described before it runs.
 
-    Serialised into the approval HumanTask's ``inputs_snapshot`` and returned by
+    Serialised into the review HumanTask's ``inputs_snapshot`` and returned by
     the read-only preview route, so both a human and the canvas see the same
     shape.
     """
@@ -117,7 +117,7 @@ class ActionPreview(BaseModel):
     sources: list[PreviewTarget] = Field(default_factory=list, description="Read-only inputs the action consumes.")
     targets: list[PreviewTarget] = Field(default_factory=list, description="Files the action creates, overwrites or deletes.")
     risks: list[str] = Field(default_factory=list, description="Conditions the approver should know about.")
-    required_confirmations: list[str] = Field(default_factory=list, description="Non-approval gates this action still passes through (e.g. crash_confirm).")
+    required_confirmations: list[str] = Field(default_factory=list, description="Non-review gates this action still passes through (e.g. crash_confirm).")
 
     def to_port(self) -> dict[str, Any]:
         """Return the JSON-safe dict carried in a HumanTask snapshot / API response."""

@@ -97,10 +97,6 @@ const COMMON_FIELDS: readonly NodeParamField[] = [
   boolean("breakpoint", "breakpoint"),
   json("idempotency", "idempotency", { helperKey: "jsonHint" }),
   json("merge", "merge", { helperKey: "jsonHint" }),
-  boolean("require_approval", "requireApproval"),
-  select("on_reject", "onReject", ["fail", "skip"], {
-    defaultValue: "fail",
-  }),
   boolean("detect_conflicts", "detectConflicts"),
   boolean("rollback_on_failure", "rollbackOnFailure"),
 ];
@@ -238,6 +234,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
     json("output_spec", "outputSpec", { helperKey: "jsonHint" }),
     json("validation_rules", "validationRules", { helperKey: "jsonHint" }),
   ],
+  "human:review": [textarea("instructions", "reviewInstructions")],
   "app:launch": [
     select("mode", "appLaunchMode", ["launch", "attach"], {
       defaultValue: "launch",

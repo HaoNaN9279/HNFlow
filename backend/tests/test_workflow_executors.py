@@ -559,6 +559,7 @@ class TestRegistry:
             NodeType.APP_WAIT,
             NodeType.APP_COLLECT,
             NodeType.HUMAN_TASK,
+            NodeType.HUMAN_REVIEW,
             NodeType.NESTED_SUBWORKFLOW,
         }
     )
@@ -569,9 +570,9 @@ class TestRegistry:
         registered = set(reg.keys())
         assert registered == self._EXPECTED_EXECUTOR_TYPES
 
-    def test_registry_length_is_25(self) -> None:
+    def test_registry_length_is_26(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 25
+        assert len(reg) == 26
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""

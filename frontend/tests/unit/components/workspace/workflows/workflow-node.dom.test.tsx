@@ -40,7 +40,6 @@ rs.mock("@/core/i18n/hooks", () => ({
             fields: {
               breakpoint: "Breakpoint",
               duration: "Duration (s)",
-              onReject: "On reject",
             },
           },
         },

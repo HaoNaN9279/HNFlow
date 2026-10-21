@@ -7,7 +7,7 @@ All data executors are **idempotent** — repeated execution with the same
 inputs produces the same outputs.  ``data:file`` write mode is the exception:
 it checks ``crash_confirm`` internally before writing.
 
-``preview_file`` (N10) describes a write *before* it happens, for the approval
+``preview_file`` (N10) describes a write *before* it happens, for the preview
 gate; read mode has nothing to preview.
 """
 
@@ -232,7 +232,7 @@ def preview_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[
     The target is a *declared* sandbox ref (no fingerprint): the abstract
     ``Sandbox`` has no ``stat``, so observing content would mean downloading the
     whole existing file.  The summary therefore reports what will be written
-    (length only — never the content, which may hold a secret the approval row
+    (length only — never the content, which may hold a secret the preview row
     must not retain) rather than what is being replaced.
     """
     if str(params.get("operation", "read")).lower() != "write":

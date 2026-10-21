@@ -6,11 +6,12 @@ after-the-fact run inspector.  A breakpoint is the minimal useful primitive:
 an operator can inspect the run's state, then resume to let it continue — or
 skip the node.
 
-It deliberately reuses the machinery the N10 approval gate already proved:
+It deliberately reuses the same machinery as ``human:task`` and
+``human:review``:
 
 * the same **HumanTask row** (so the existing submit/skip tools, the
   ``/api/human-tasks`` routes, and the interrupted-run resume path all work
-  unchanged — a breakpoint is just a task with nothing to approve);
+  unchanged — a breakpoint is just a task with no decision port);
 * the same ``interrupt()`` suspension, and therefore the same
   ``(run_id, node_id)`` row-reuse rule: LangGraph re-executes a node from its
   head on resume, so an existing row is reused rather than minting a duplicate
@@ -20,9 +21,8 @@ It deliberately reuses the machinery the N10 approval gate already proved:
 
 Two things it deliberately does **not** have: a preview (there is nothing to
 verify — a breakpoint approves nothing) and a fingerprint re-check (nothing is
-mutated before the pause).  That is the whole difference from the approval
-gate, and it is why this lives in its own module rather than adding a branch
-inside ``approval.py``.
+mutated before the pause).  That is why it lives in its own module rather than
+adding a branch to the ``human:task`` executor.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ if TYPE_CHECKING:  # pragma: no cover — typing only
 
 logger = logging.getLogger(__name__)
 
-#: ``params.breakpoint`` — explicit ``True`` only (mirrors ``require_approval``).
+#: ``params.breakpoint`` — explicit ``True`` only.
 BREAKPOINT_PARAM = "breakpoint"
 
 #: Marker stored on the task row's ``inputs_snapshot``.
@@ -61,7 +61,7 @@ _DESCRIPTION_LIMIT = 500
 #: A port is required, not cosmetic: LangGraph treats a **falsy** ``Command(resume=...)``
 #: payload as "not resumed" and re-suspends, so a breakpoint whose submission was an
 #: empty dict would wedge the run forever.  Declaring one required boolean (constrained
-#: by the shared ``enum`` rule, mirroring the approval task) guarantees the resume
+#: by the shared ``enum`` rule) guarantees the resume
 #: payload that comes back through ``submit_human_task`` is non-empty.
 BREAKPOINT_OUTPUT_SPEC: dict[str, Any] = {
     "ports": [
@@ -88,7 +88,7 @@ class BreakpointDecision:
         """Parse an ``interrupt()`` resume payload.
 
         Everything except the shared skip sentinel means "continue" — a
-        breakpoint is not a decision, so requiring an explicit approval *here*
+        breakpoint is not a decision, so requiring an explicit acknowledgement here
         would make resuming needlessly brittle.  The ``acknowledge`` port is
         what the *task* requires (see ``BREAKPOINT_OUTPUT_SPEC``); by the time a
         payload reaches the node it has already passed the shared submission

@@ -5,7 +5,6 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/core/i18n/hooks";
 import {
-  APPROVAL_TASK_KIND,
   humanTaskFields,
   initialHumanTaskDrafts,
   serializeHumanTaskDrafts,
@@ -15,21 +14,22 @@ import {
   type HumanTaskField,
   type HumanTaskRecord,
 } from "@/core/workflows/human-tasks";
-import { cn } from "@/lib/utils";
+
+import { WorkflowReviewForm } from "./workflow-review-form";
 
 /**
- * Generic form for a pending human task / approval (N14aj).
+ * Generic form for a pending human task.
  *
  * The fields are exactly what the row declares (`output_spec` + its
  * `validation_rules`), so the canvas asks for what the backend validator will
  * check and nothing else — the task row is the single source of truth, and a
  * canvas that invented a field could never submit it.
  *
- * Booleans are deliberately a two-button choice rather than a checkbox: an
- * approval's `false` is a *rejection*, and an untouched checkbox would submit
- * one without the human ever deciding.  Submission is all-or-nothing; a local
- * serialization error is shown before any request is made, and a backend
- * rejection (the row's own rules) is surfaced verbatim.
+ * A `human:review` row is rendered by the dedicated review card instead; its
+ * two fixed outcomes and continue-prompt field are not a generic port form.
+ * Submission is all-or-nothing; a local serialization error is shown before any
+ * request is made, and a backend rejection (the row's own rules) is surfaced
+ * verbatim.
  */
 export function WorkflowHumanTaskForm({
   task,
@@ -46,6 +46,10 @@ export function WorkflowHumanTaskForm({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  if (task.review !== null) {
+    return <WorkflowReviewForm task={task} onResolved={onResolved} />;
+  }
 
   const setDraft = (name: string, value: HumanTaskDraft) => {
     setDrafts((current) => ({ ...current, [name]: value }));
@@ -93,9 +97,7 @@ export function WorkflowHumanTaskForm({
     >
       <div className="flex items-center justify-between gap-2 text-xs">
         <span className="truncate font-mono">{task.nodeId}</span>
-        <span className="text-muted-foreground text-[11px]">
-          {task.kind === APPROVAL_TASK_KIND ? labels.approval : labels.task}
-        </span>
+        <span className="text-muted-foreground text-[11px]">{labels.task}</span>
       </div>
       <span
         className="text-muted-foreground truncate font-mono text-[10px]"
@@ -105,51 +107,6 @@ export function WorkflowHumanTaskForm({
       </span>
       {task.description !== "" && (
         <span className="text-[11px] break-words">{task.description}</span>
-      )}
-
-      {task.preview !== null && (
-        <div
-          className="bg-muted/50 flex flex-col gap-0.5 rounded p-1.5 text-[11px]"
-          data-testid="workflow-human-task-preview"
-        >
-          <span className="font-medium">{labels.previewTitle}</span>
-          {task.preview.summary !== "" && (
-            <span className="break-words">{task.preview.summary}</span>
-          )}
-          {task.preview.action !== "" && (
-            <span className="text-muted-foreground font-mono text-[10px]">
-              {task.preview.action}
-            </span>
-          )}
-          {task.preview.targets.length > 0 && (
-            <ul className="text-muted-foreground flex flex-col gap-0.5 font-mono text-[10px]">
-              {task.preview.targets.map((target) => (
-                <li key={target} className="truncate" title={target}>
-                  {target}
-                </li>
-              ))}
-            </ul>
-          )}
-          <span
-            className={cn(
-              task.preview.reversible === false
-                ? "text-amber-600 dark:text-amber-400"
-                : "text-muted-foreground",
-            )}
-          >
-            {task.preview.reversible === false
-              ? labels.irreversible
-              : labels.reversible}
-            {task.preview.recovery !== null &&
-              ` · ${labels.recovery}: ${task.preview.recovery}`}
-          </span>
-          {task.preview.requiredConfirmations.length > 0 && (
-            <span className="text-muted-foreground">
-              {labels.confirmations}:{" "}
-              {task.preview.requiredConfirmations.join(", ")}
-            </span>
-          )}
-        </div>
       )}
 
       {fields.length === 0 ? (

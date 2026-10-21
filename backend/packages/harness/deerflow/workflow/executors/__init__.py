@@ -27,6 +27,7 @@ from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
 from .knowledge import exec_knowledge, knowledge_resource_access  # noqa: E402
 from .local_app import app_resource_access, exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
+from .review import exec_human_review  # noqa: E402
 from .tool import bash_resource_access, exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke, tool_invoke_resource_access  # noqa: E402
 
 # ── Default registry assembly ────────────────────────────────────────────────
@@ -161,6 +162,10 @@ def build_default_registry() -> ExecutorRegistry:
     # A human task suspends the graph; the interrupt itself is the confirmation
     # boundary, so no crash-confirm gate is applied.
     reg.register(ExecutorRegistration(node_type=NodeType.HUMAN_TASK, executor=exec_human_task, idempotent=False, description="Human task executor (interrupt / HumanTask)"))
+    # Review is a HumanTask with a routing decision: approved continues, rejected
+    # routes back to the configured AI continue target.  The interrupt is the
+    # confirmation boundary, so it is not crash-confirm gated.
+    reg.register(ExecutorRegistration(node_type=NodeType.HUMAN_REVIEW, executor=exec_human_review, idempotent=False, description="Human review executor (approve / reject with retry target)"))
 
     # ── Local professional software (N5) ──────────────────────────────────
     # launch/script start a process / mutate in-app state → non-idempotent and
@@ -252,6 +257,7 @@ __all__ = [
     "exec_prompt_preview",
     # Human
     "exec_human_task",
+    "exec_human_review",
     # Local apps (N5)
     "exec_app_launch",
     "exec_app_script",

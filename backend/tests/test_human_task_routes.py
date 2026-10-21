@@ -46,11 +46,12 @@ def _make_authed_app(repo) -> FastAPI:
     return app
 
 
-def _make_task(status: str = "pending", output_spec: dict | None = None, validation_rules: dict | None = None) -> dict:
+def _make_task(status: str = "pending", output_spec: dict | None = None, validation_rules: dict | None = None, kind: str = "task") -> dict:
     return {
         "id": "ht-abc",
         "user_id": _STUB_USER_ID,
         "status": status,
+        "kind": kind,
         "output_spec": output_spec,
         "validation_rules": validation_rules,
         "submission": None,
@@ -166,6 +167,19 @@ def test_skip_success_returns_200():
     assert response.status_code == 200
     assert response.json()["status"] == "skipped"
     mock_repo.skip.assert_awaited_once_with("ht-abc", user_id=_STUB_USER_ID)
+
+
+def test_skip_review_task_returns_409():
+    mock_repo = MagicMock()
+    mock_repo.get = AsyncMock(return_value=_make_task(kind="review"))
+    mock_repo.skip = AsyncMock()
+    app = _make_authed_app(mock_repo)
+    client = TestClient(app)
+
+    response = client.post("/api/human-tasks/ht-abc/skip")
+    assert response.status_code == 409
+    assert "approve or reject" in response.json()["detail"]["errors"][0]
+    mock_repo.skip.assert_not_called()
 
 
 def test_skip_conflict_returns_409():

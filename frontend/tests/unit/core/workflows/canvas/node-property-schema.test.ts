@@ -15,6 +15,16 @@ describe("fixed node property schema", () => {
     expect(keys.has("ports")).toBe(true);
     expect(keys.has("breakpoint")).toBe(true);
     expect(keys.has("resource_lock")).toBe(false);
+    expect(keys.has("require_approval")).toBe(false);
+    expect(keys.has("on_reject")).toBe(false);
+  });
+
+  test("review nodes expose their review instructions", () => {
+    const keys = new Set(
+      getNodeParamFields("human:review").map((field) => field.key),
+    );
+    expect(keys.has("instructions")).toBe(true);
+    expect(keys.has("require_approval")).toBe(false);
   });
 
   test("legacy resource lock params are dropped", () => {

@@ -491,8 +491,8 @@ def preview_app_launch(runtime: WorkflowRuntime, params: dict[str, Any], inputs:
     risks = ["a started instance keeps running until it is closed (closing it is cleanup, not a rollback)"]
     if _allow_preempt(_manager(runtime), app):
         # Declarative only: who is using the application is decided live when the
-        # node runs, not frozen into an approval snapshot (a person leaving or
-        # arriving between approval and execution is the expected case).
+        # node runs, not frozen into an review snapshot (a person leaving or
+        # arriving between preview and execution is the expected case).
         risks.append(f"if a person is using {app}, this may take the application over (allow_preempt is declared)")
     return make_preview(
         params,

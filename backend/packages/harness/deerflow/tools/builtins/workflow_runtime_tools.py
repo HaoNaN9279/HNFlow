@@ -494,13 +494,13 @@ def list_human_tasks(runtime: Runtime, status: str | None = None, kind: str | No
 
     Returns tasks newest-first. A ``status`` filter (``pending`` / ``reopened``
     / ``submitted`` / ``skipped`` / ``expired``) narrows the result; omitting it
-    returns every task of the user. A ``kind`` filter (``task`` / ``approval``)
-    selects plain human tasks versus the approval requests an irreversible node
-    suspends on. Requires the workflow runtime injection (SQL database backend).
+    returns every task of the user. A ``kind`` filter (``task`` / ``review``)
+    selects plain human tasks versus human-review decisions. Requires the
+    workflow runtime injection (SQL database backend).
 
     Args:
         status: Optional status to filter by.
-        kind: Optional kind to filter by — ``approval`` for approval requests.
+        kind: Optional kind to filter by — ``review`` for human-review decisions.
     """
     tool_call_id = runtime.tool_call_id
     try:
@@ -577,6 +577,10 @@ def skip_human_task(task_id: str, runtime: Runtime) -> Command:
         task = _rt_run_async(repo.get(task_id, user_id=user_id))
         if task is None:
             return _rt_error_command("skip_human_task", tool_call_id, [_not_found_error(task_id)])
+        from deerflow.workflow.review import REVIEW_TASK_KIND
+
+        if (task.get("kind") if isinstance(task, dict) else getattr(task, "kind", None)) == REVIEW_TASK_KIND:
+            return _rt_error_command("skip_human_task", tool_call_id, [_conflict_error("Review tasks require an approve or reject decision")])
 
         result = _rt_run_async(repo.skip(task_id, user_id=user_id))
         if result is None:
@@ -665,7 +669,7 @@ def _task_summary(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": row.get("id"),
         "node_id": row.get("node_id"),
-        "kind": row.get("kind") or "task",  # N10: "approval" for an approval request
+        "kind": row.get("kind") or "task",  # "review" for human-review decisions
         "description": row.get("description") or "",
         "status": row.get("status"),
         "created_at": row.get("created_at"),

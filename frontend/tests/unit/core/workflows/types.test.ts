@@ -1,4 +1,4 @@
-﻿import { describe, expect, test } from "@rstest/core";
+import { describe, expect, test } from "@rstest/core";
 
 import {
   type CanvasMetadata,
@@ -19,7 +19,7 @@ describe("workflow type constants", () => {
     ]);
   });
 
-  test("NODE_TYPES has exactly the 31 backend values", () => {
+  test("NODE_TYPES has exactly the 32 backend values", () => {
     expect(NODE_TYPES).toEqual([
       "flow:start",
       "flow:end",
@@ -51,12 +51,13 @@ describe("workflow type constants", () => {
       "app:wait",
       "app:collect",
       "human:task",
+      "human:review",
       "nested:subworkflow",
     ]);
   });
 
   test("NODE_TYPES covers 9 flow / 8 data / 5 tool / 4 app categories plus AI, human, nested", () => {
-    expect(NODE_TYPES).toHaveLength(31);
+    expect(NODE_TYPES).toHaveLength(32);
     expect(NODE_TYPES.filter((n) => n.startsWith("flow:"))).toHaveLength(9);
     expect(NODE_TYPES.filter((n) => n.startsWith("data:"))).toHaveLength(8);
     expect(NODE_TYPES.filter((n) => n.startsWith("tool:"))).toHaveLength(5);

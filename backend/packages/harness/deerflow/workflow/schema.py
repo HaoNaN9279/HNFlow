@@ -122,6 +122,8 @@ class NodeType(StrEnum):
 
     # Human interaction
     HUMAN_TASK = "human:task"
+    # Explicit approve/reject gate with a static retry edge.
+    HUMAN_REVIEW = "human:review"
 
     # Composition
     NESTED_SUBWORKFLOW = "nested:subworkflow"

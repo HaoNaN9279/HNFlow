@@ -248,6 +248,11 @@ async def exec_llm_agent(
             if isinstance(node_prompt, str) and node_prompt:
                 continue_prompt = node_prompt
     is_continue = bool(continue_prompt)
+    # A review retry target is compiled with a session even on its first
+    # template turn, so a later rejection can continue the exact conversation
+    # the reviewer saw.  Ordinary one-shot AI nodes keep checkpointer=False.
+    session_enabled = params.get("__review_session") is True
+    checkpoint_enabled = is_continue or session_enabled
     if is_continue and template_prompt:
         logger.warning(
             "ai:llm_agent node %r received both continue_prompt and template_prompt; continue mode wins",
@@ -322,10 +327,12 @@ async def exec_llm_agent(
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': retrieval is not supported with session continuation (continue mode)")
 
     # Continue mode: identity/capability are already in the session's first
-    # turn, so the executed task is only the new task layer.  A missing
-    # checkpointer (memory backend) or an unresolvable session key fails
-    # closed — a silent one-shot fallback would break loop continuation.
-    if is_continue:
+    # turn, so the executed task is only the new task layer.  A session-enabled
+    # first template turn persists the same session for a later review retry.
+    # A missing checkpointer (memory backend) or an unresolvable session key
+    # fails closed — a silent one-shot fallback would break continuation.
+    checkpoint_thread_id: str | None = None
+    if checkpoint_enabled:
         checkpointer = context.get("checkpointer")
         if checkpointer is None:
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent continue requires a checkpointer in runtime context (memory backend does not support session continuation)")
@@ -339,12 +346,14 @@ async def exec_llm_agent(
         # Falls back to the current thread id (W1A in-loop behavior).
         checkpoint_thread_prefix = context.get("ai_origin_thread_id") or thread_id
         checkpoint_thread_id = f"{checkpoint_thread_prefix}:wfai:{node_id}"
+
+    if is_continue:
         system_prompt: str | None = None
         task_prompt = build_task_layer(continue_prompt, inputs)
     else:
-        checkpoint_thread_id = None
-        # Template mode (one-shot): full three-layer prompt, no checkpointer —
-        # a later continue never re-uses a stale session from an earlier loop.
+        # Template mode: full three-layer prompt.  An ordinary one-shot node
+        # leaves checkpoint_thread_id=None; a review retry target keeps the
+        # session coordinates set above.
         # Custom-agent skills whitelist feeds the capability layer (None = all
         # enabled, [] = disabled, a list = exactly those skills).  A missing
         # agent binding (agent_name=None) leaves the layer at "all enabled".
@@ -454,8 +463,8 @@ async def exec_llm_agent(
         name=f"ai:{node_id}" if node_id else "ai:node",
         description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
         disallowed_tools=["ask_clarification", "present_files"],
-        checkpointer=is_continue,
-        checkpointer_instance=context.get("checkpointer") if is_continue else None,
+        checkpointer=checkpoint_enabled,
+        checkpointer_instance=context.get("checkpointer") if checkpoint_enabled else None,
         allow_recursion=False,
         max_turns=autonomy_max_turns,
         token_budget=autonomy_token_budget,

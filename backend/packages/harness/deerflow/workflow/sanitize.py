@@ -2,7 +2,7 @@
 
 §24.12's local-scope threat model is mostly satisfied by existing mechanisms:
 the sandbox isolates commands, dangerous nodes are review-marked, irreversible
-operations go through the N10 preview/approval boundary, and request-scoped
+operations go through the preview/review boundary, and request-scoped
 secrets never enter the prompt.  The one genuinely new surface is *content an AI
 node pulls into its own prompt* — retrieved knowledge chunks (N14 §24.2) and
 stored memory (N14 §24.1).  A document or memory item containing a

@@ -2,8 +2,7 @@
 
 These pin the two failures that made production differ from unit tests:
 
-- the compiler must receive previewers, not just executors, so approval nodes
-  are not rejected at compile time;
+- the compiler must receive previewers for the read-only preview endpoint;
 - ``config['context']`` must carry the run owner and the capability services
   (tool gateway, app manager, optional stores), so HumanTasks and
   ``tool:invoke`` work in a real run.
@@ -24,7 +23,7 @@ def test_compile_context_carries_previews() -> None:
     ctx = build_workflow_compile_context(registry)
 
     assert ctx.executors
-    assert ctx.previews, "approval previewers must travel with the executors"
+    assert ctx.previews, "previewers must travel with the executors"
     assert ctx.resource_accessors, "automatic resource accessors must travel with the executors"
 
 

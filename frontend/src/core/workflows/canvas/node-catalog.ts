@@ -317,7 +317,20 @@ export const NODE_CATALOG = [
     defaultInputs: [{ name: "in", type: "data", required: true }],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: { description: "" },
-    description: "Suspend the workflow for a human approval/input.",
+    description: "Suspend the workflow for a human review/input.",
+  },
+  {
+    type: "human:review",
+    label: "Human Review",
+    category: "human",
+    defaultInputs: [{ name: "in", type: "data", required: true }],
+    defaultOutputs: [
+      { name: "approved", type: "data", required: true },
+      { name: "rejected", type: "data", required: true },
+    ],
+    defaultParams: { instructions: "" },
+    description:
+      "Approve or reject a result; rejection routes feedback back to an LLM Agent continue target.",
   },
   {
     type: "app:launch",

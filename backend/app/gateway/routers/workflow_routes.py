@@ -88,7 +88,7 @@ async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
 async def _validate_semantics(request: Request, definition: WorkflowDefinition, user: Any) -> None:
     """Dry-run compile so semantic errors fail the save, not a later run.
 
-    Structural validation only checks graph shape.  Approval/retry/loop/context/
+    Structural validation only checks graph shape.  Review/retry/loop/context/
     output-schema rules live in the compiler; running it here (without executing
     nodes) turns "saved successfully, failed at run" into a node-level 422.
     """

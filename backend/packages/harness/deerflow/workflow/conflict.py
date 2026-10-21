@@ -1,8 +1,8 @@
 """Optimistic conflict detection for a node's own working window (N10b, §17 / §21).
 
-Dev plan §21 lists **conflict detection** beside preview/approval and preemption.
+Dev plan §21 lists **conflict detection** beside preview and preemption.
 N10's staleness guard already covers the *human decision* window: a preview frozen
-at approval time is re-inspected before the executor is allowed to run.  What is
+at preview time is re-inspected before the executor is allowed to run.  What is
 left is the window a node owns itself — while it waits (for a person to release a
 local application, for an admission slot), the host files it declared can change
 under it.
@@ -72,7 +72,7 @@ class WorkflowConflictError(WorkflowExecutionError):
 def observe_host_ref(ref: AssetRef) -> AssetRef:
     """Fingerprint a host path *including its content*.
 
-    Unlike the approval preview (which hashes only when the caller asked for it),
+    Unlike the action preview (which hashes only when the caller asked for it),
     conflict detection hashes by default: a rewrite with the same size in the same
     second is exactly what a person working in the application produces, and a
     size+mtime check would miss it.  The caller opted in, so the double read is

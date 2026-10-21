@@ -75,13 +75,7 @@ rs.mock("@/core/i18n/hooks", () => ({
           humanTask: {
             title: "Waiting human task",
             task: "Human task",
-            approval: "Approval",
             runHint: (runId: string) => `run ${runId}`,
-            previewTitle: "What will happen",
-            reversible: "Reversible",
-            irreversible: "Irreversible",
-            recovery: "Recovery",
-            confirmations: "Confirmations",
             noFields: "This task declares no fields to fill in",
             submit: "Submit",
             skip: "Skip",
@@ -91,6 +85,25 @@ rs.mock("@/core/i18n/hooks", () => ({
             true: "true",
             false: "false",
             patternHint: "Format:",
+          },
+          review: {
+            title: "Human review",
+            runHint: (runId: string) => `run ${runId}`,
+            attempt: (visit: number) => `Attempt ${visit}`,
+            previousRejections: (count: number) =>
+              `${count} previous rejections`,
+            target: (nodeId: string) => `Reject retries: ${nodeId}`,
+            instructions: "Review instructions",
+            input: "Submitted result",
+            approve: "Approve",
+            reject: "Reject",
+            feedback: "Continue prompt",
+            feedbackHint: "Sent to the agent on rejection.",
+            submit: "Submit decision",
+            submitting: "Submitting...",
+            actionFailed: "Review action failed",
+            loadFailed: "Failed to load pending reviews",
+            retry: "Retry",
           },
           panel: {
             title: "Run",
@@ -183,33 +196,33 @@ function taskRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-/** An approval row: the gate's ``decision`` port plus a stored preview. */
-function approvalRow(overrides: Record<string, unknown> = {}) {
+/** A review row: the fixed decision/feedback spec plus the review snapshot. */
+function reviewRow(overrides: Record<string, unknown> = {}) {
   return {
-    id: "ht-ap",
+    id: "ht-review",
     workflow_run_id: "run-1",
-    node_id: "write_file",
-    kind: "approval",
+    node_id: "review",
+    kind: "review",
     status: "pending",
-    description: "[approval] Overwrite hero.blend",
+    description: "Check the draft",
     output_spec: {
       ports: [
         { name: "decision", type: "bool", required: true, description: "" },
+        { name: "feedback", type: "data", required: false, description: "" },
       ],
     },
     validation_rules: { enum: { decision: { enum: [true, false] } } },
     inputs_snapshot: {
-      kind: "approval",
-      preview: {
-        action: "overwrite",
-        summary: "Overwrite hero.blend",
-        reversible: false,
-      },
+      kind: "review",
+      visit: 2,
+      previous_rejections: 1,
+      target_node_id: "ai_writer",
+      instructions: "Check the citations",
+      in: { draft: "hello" },
     },
     ...overrides,
   };
 }
-
 function readInit(init: unknown): Record<string, unknown> {
   return isRecord(init) ? init : {};
 }
@@ -494,27 +507,20 @@ describe("WorkflowRunPanel debug pauses", () => {
 });
 
 describe("WorkflowRunPanel human tasks", () => {
-  it("offers a form for a pending approval (the canvas is the only place that can resolve it)", async () => {
-    routeFetch({ tasks: [approvalRow()] });
+  it("offers the review card for a pending human review", async () => {
+    routeFetch({ tasks: [reviewRow()] });
     const container = await runCompletedOnce();
 
     const form = await waitFor(() => {
-      const found = container.querySelector(
-        '[data-testid="workflow-human-task"]',
-      );
+      const found = container.querySelector('[data-testid="workflow-review"]');
       expect(found).toBeTruthy();
       return found!;
     });
-    expect(form.getAttribute("data-task-kind")).toBe("approval");
-    expect(form.getAttribute("data-task-node")).toBe("write_file");
-    // The preview — the reason an approval exists at all — is rendered.
-    expect(form.textContent).toContain("Overwrite hero.blend");
-    expect(form.textContent).toContain("Irreversible");
-    expect(
-      form.querySelectorAll('[data-testid="workflow-human-task-bool"]'),
-    ).toHaveLength(2);
+    expect(form.getAttribute("data-task-node")).toBe("review");
+    expect(form.getAttribute("data-task-visit")).toBe("2");
+    expect(form.textContent).toContain("Reject retries: ai_writer");
+    expect(form.textContent).toContain("1 previous rejections");
   });
-
   it("does not route a debug pause into the submission form", async () => {
     routeFetch({ tasks: [taskRow()] });
     const container = await runCompletedOnce();

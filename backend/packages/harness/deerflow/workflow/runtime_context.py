@@ -3,8 +3,8 @@
 The workflow runtime used to assemble these two contexts ad hoc: the worker
 passed only ``build_context().executors`` into the compiler (dropping previewers
 and resource accessors), and built ``config["context"]`` key by key without a
-``user_id`` or a tool gateway.  That made approval nodes fail at compile time,
-disabled automatic locks, and produced HumanTasks with an empty owner.
+``user_id`` or a tool gateway.  That disabled automatic locks and produced
+HumanTasks with an empty owner.
 
 This module is the one place that knows how a workflow run is wired.  Both the
 HTTP entry point and the conversation-side dispatch layer reach it through
@@ -39,7 +39,7 @@ def build_workflow_compile_context(
     """Build a complete :class:`CompileContext` from an executor registry.
 
     The registry is the source of truth for the compile-time facts: executors,
-    previewers (approval gates), and resource accessors (automatic locks).
+    human-task identity and resource accessors (automatic locks).
     Callers must not reach into ``build_context().executors`` themselves.
     """
     built = registry.build_context()
@@ -104,7 +104,7 @@ def build_workflow_runtime_context(
     Contract:
 
     - ``user_id`` is always the run owner (never an empty string). Human tasks,
-      approvals, memory/knowledge scopes and per-user skill resolution all read
+      reviews, memory/knowledge scopes and per-user skill resolution all read
       it.
     - ``run_id`` is the *origin* run id on a resume, so human-task idempotency
       reuses the original row.

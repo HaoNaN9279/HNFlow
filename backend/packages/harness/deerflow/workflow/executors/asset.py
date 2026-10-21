@@ -380,9 +380,9 @@ async def _convert(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dic
 def _preview_host_ref(path: str, config: AssetsConfig, *, want_hash: bool) -> PreviewTarget:
     """Fingerprint a host path when it is accessible, otherwise merely declare it.
 
-    Host fingerprints are what makes the approval staleness check real — the
+    Host fingerprints are what makes the preview fingerprint check real — the
     realistic way a preview goes stale is a human editing the file in the
-    professional application while the approval is pending — so hashing is the
+    professional application while the review is pending — so hashing is the
     default (``params.hash is not False``) with a declared-only escape hatch for
     callers that would rather not hash a large file.
 

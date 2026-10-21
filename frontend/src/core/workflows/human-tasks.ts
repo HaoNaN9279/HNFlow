@@ -5,12 +5,10 @@ import { getBackendBaseURL } from "@/core/config";
  * Human-task client for the §25 debug controls (N14ae).
  *
  * A breakpoint and a single step both suspend a node as a `human_tasks` row of
- * the same family the approval gate uses, so the canvas resolves them by
+ * the same family the review node uses, so the canvas resolves them by
  * submitting (`acknowledge`) or skipping the row — it does not invent a second
- * suspension protocol. Only the two debug kinds are modelled here: the generic
- * `human:task`/`approval` form has arbitrary declared ports and stays with the
- * chat entry (`list_human_tasks` / `submit_human_task`) until it gets its own
- * renderer.
+ * suspension protocol.  The generic `human:task` form and the dedicated
+ * `human:review` form are the two submission renderers.
  */
 
 /** Task kinds the debug controls resolve as a simple continue/skip (§25). */
@@ -18,8 +16,8 @@ export const DEBUG_PAUSE_KINDS = ["breakpoint", "step"] as const;
 
 export type DebugPauseKind = (typeof DEBUG_PAUSE_KINDS)[number];
 
-/** The approval gate's task kind (N10) — a preview plus a yes/no decision. */
-export const APPROVAL_TASK_KIND = "approval";
+/** The human review node's task kind. */
+export const REVIEW_TASK_KIND = "review";
 
 /**
  * The resume payload a debug pause accepts. The `acknowledge` port is declared
@@ -40,8 +38,8 @@ export type HumanTaskRecord = {
   /** What the human must submit — the row's own declaration (never guessed). */
   outputSpec: HumanTaskPort[];
   validationRules: HumanTaskRules;
-  /** Approval gate preview (N10), when the row carries one. */
-  preview: ApprovalPreview | null;
+  /** Human review metadata, when the row carries one. */
+  review: ReviewSnapshot | null;
 };
 
 /** One declared submission port, as the backend's ``output_spec.ports`` states it. */
@@ -58,14 +56,13 @@ export type HumanTaskRules = {
   pattern: Record<string, string>;
 };
 
-/** What the human is approving (N10 ``ActionPreview``, defensively reduced). */
-export type ApprovalPreview = {
-  action: string;
-  summary: string;
-  reversible: boolean | null;
-  recovery: string | null;
-  targets: string[];
-  requiredConfirmations: string[];
+/** A human review task's frozen snapshot, defensively reduced. */
+export type ReviewSnapshot = {
+  visit: number;
+  previousRejections: number;
+  targetNodeId: string;
+  instructions: string;
+  input: unknown;
 };
 
 /** How a declared port is edited. */
@@ -105,6 +102,26 @@ function stringField(
 ): string | undefined {
   const value = record?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function positiveIntegerField(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function nonNegativeIntegerField(
+  record: Record<string, unknown> | null,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : undefined;
 }
 
 function isDebugPauseKind(value: unknown): value is DebugPauseKind {
@@ -160,43 +177,22 @@ function parseValidationRules(raw: unknown): HumanTaskRules {
   return { enum: enumRules, pattern: patternRules };
 }
 
-/** Reduce an approval task's stored preview (N10), or ``null`` when absent. */
-function parseApprovalPreview(raw: unknown): ApprovalPreview | null {
+/** Reduce a review task's stored snapshot, or ``null`` when absent. */
+function parseReviewSnapshot(raw: unknown): ReviewSnapshot | null {
   const snapshot = toRecord(raw);
-  if (snapshot?.kind !== APPROVAL_TASK_KIND) {
+  if (snapshot?.kind !== REVIEW_TASK_KIND) {
     return null;
   }
-  const preview = toRecord(snapshot.preview);
-  if (preview === null) {
-    return null;
-  }
-  const targets = Array.isArray(preview.targets)
-    ? preview.targets
-        .map((entry) => {
-          const target = toRecord(entry);
-          const ref = toRecord(target?.ref);
-          return (
-            stringField(ref, "uri") ??
-            stringField(ref, "path") ??
-            stringField(target, "path") ??
-            null
-          );
-        })
-        .filter((path): path is string => path !== null)
-    : [];
-  const confirmations = Array.isArray(preview.required_confirmations)
-    ? preview.required_confirmations.filter(
-        (entry): entry is string => typeof entry === "string",
-      )
-    : [];
+  const visit = positiveIntegerField(snapshot, "visit") ?? 1;
+  const previousRejections =
+    nonNegativeIntegerField(snapshot, "previous_rejections") ??
+    Math.max(visit - 1, 0);
   return {
-    action: stringField(preview, "action") ?? "",
-    summary: stringField(preview, "summary") ?? "",
-    reversible:
-      typeof preview.reversible === "boolean" ? preview.reversible : null,
-    recovery: stringField(preview, "recovery") ?? null,
-    targets,
-    requiredConfirmations: confirmations,
+    visit,
+    previousRejections,
+    targetNodeId: stringField(snapshot, "target_node_id") ?? "",
+    instructions: stringField(snapshot, "instructions") ?? "",
+    input: snapshot.in,
   };
 }
 
@@ -226,7 +222,7 @@ export function parseHumanTask(raw: unknown): HumanTaskRecord | null {
     description: stringField(record, "description") ?? "",
     outputSpec: parseOutputSpec(record?.output_spec),
     validationRules: parseValidationRules(record?.validation_rules),
-    preview: parseApprovalPreview(record?.inputs_snapshot),
+    review: parseReviewSnapshot(record?.inputs_snapshot),
   };
 }
 
@@ -257,7 +253,7 @@ function fieldKind(
   type: string,
   enumValues: unknown[] | null,
 ): HumanTaskFieldKind {
-  // A declared port type wins over a rule: an approval's ``decision`` is a
+  // A declared port type wins over a rule: a review's ``decision`` is a
   // boolean port, so its ``enum: [true, false]`` *constrains the choice* — it
   // does not turn the field into a free-select (whose label "true" would be a
   // string, not the boolean the backend validates).
@@ -323,7 +319,7 @@ export type HumanTaskDraft = string | boolean | null;
 /**
  * Starting drafts for every field.
  *
- * A boolean stays **unset** rather than defaulting to `false`: an approval's
+ * A boolean stays **unset** rather than defaulting to `false`: a review's
  * `false` is a rejection, and an unchecked checkbox would submit one without
  * the human ever choosing.  Everything else starts as empty text.
  */
@@ -426,7 +422,7 @@ export function serializeHumanTaskDrafts(
  * run silently unreachable after the first resume. The filter is also the task
  * row's own `status`/`kind` rather than the run status, because a suspended run
  * is `interrupted` on the server while the canvas stream simply ended, and a
- * pending `task`/`approval` row must not be claimed by this card.
+ * pending `task`/`review` row must not be claimed by this card.
  */
 export function pendingDebugPauses(
   tasks: readonly HumanTaskRecord[],
@@ -450,12 +446,13 @@ export function pendingDebugPauses(
 }
 
 /**
- * Every pending task that needs a *submission* — a ``human:task`` node or an
- * approval gate — newest first, with the open run's own pinned ahead.
+ * Every pending task that needs a *submission* — a ``human:task`` node or a
+ * ``human:review`` decision — newest first, with the open run's own pinned
+ * ahead.
  *
  * Same reasoning as :func:`pendingDebugPauses`: a resume admits a new run, so a
- * run-scoped list would hide the task a rewind or approval just created.  A
- * paused approval must stay reachable from the canvas no matter which run
+ * run-scoped list would hide the task a rewind or review just created.  A
+ * paused review must stay reachable from the canvas no matter which run
  * started it, because nothing else in the canvas can resolve it.
  */
 export function pendingHumanTasks(

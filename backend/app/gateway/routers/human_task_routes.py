@@ -20,6 +20,7 @@ from app.gateway.deps import get_human_task_repo, get_optional_user_from_request
 from app.gateway.permissions import require_permission
 from app.gateway.services import start_workflow_run
 from deerflow.workflow.human_task_state import HumanTaskStatus, validate_human_task_submission
+from deerflow.workflow.review import REVIEW_TASK_KIND
 from deerflow.workflow.run_snapshot import load_definition_snapshot
 from deerflow.workflow.schema import WorkflowDefinition
 
@@ -27,10 +28,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/human-tasks", tags=["human-tasks"])
 
-#: Accepted ``kind`` values for the list filter (N10).  ``approval`` tasks are
-#: created by an irreversible node's approval gate; everything else is a plain
-#: ``human:task``.
-HUMAN_TASK_KINDS: frozenset[str] = frozenset({"task", "approval"})
+#: Accepted ``kind`` values for the list filter.  ``review`` tasks are created
+#: by a ``human:review`` node; everything else is a plain ``human:task``.
+HUMAN_TASK_KINDS: frozenset[str] = frozenset({"task", REVIEW_TASK_KIND})
 
 
 # ── Request / Response models ─────────────────────────────────────────────────
@@ -187,6 +187,8 @@ async def skip_human_task(task_id: str, request: Request):
     task = await repo.get(task_id, user_id=str(user.id))
     if task is None:
         raise HTTPException(status_code=404, detail="Human task not found")
+    if _task_field(task, "kind") == REVIEW_TASK_KIND:
+        raise HTTPException(status_code=409, detail={"errors": ["Review tasks require an approve or reject decision"]})
 
     result = await repo.skip(task_id, user_id=str(user.id))
     if result is None:

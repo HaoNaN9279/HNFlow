@@ -593,13 +593,7 @@ export interface Translations {
       humanTask: {
         title: string;
         task: string;
-        approval: string;
         runHint: (runId: string) => string;
-        previewTitle: string;
-        reversible: string;
-        irreversible: string;
-        recovery: string;
-        confirmations: string;
         noFields: string;
         submit: string;
         skip: string;
@@ -609,6 +603,24 @@ export interface Translations {
         true: string;
         false: string;
         patternHint: string;
+      };
+      review: {
+        title: string;
+        runHint: (runId: string) => string;
+        attempt: (visit: number) => string;
+        previousRejections: (count: number) => string;
+        target: (nodeId: string) => string;
+        instructions: string;
+        input: string;
+        approve: string;
+        reject: string;
+        feedback: string;
+        feedbackHint: string;
+        submit: string;
+        submitting: string;
+        actionFailed: string;
+        loadFailed: string;
+        retry: string;
       };
       debugPause: {
         title: string;
