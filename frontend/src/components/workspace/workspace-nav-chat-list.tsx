@@ -2,6 +2,7 @@
 
 import {
   CalendarClock,
+  LayoutDashboardIcon,
   LayersIcon,
   MessagesSquare,
   WrenchIcon,
@@ -57,6 +58,20 @@ export function WorkspaceNavChatList() {
             >
               <CalendarClock />
               <span>{t.sidebar.scheduledTasks}</span>
+            </Link>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            isActive={pathname.startsWith("/workspace/workbenches")}
+            asChild
+          >
+            <Link
+              className="text-muted-foreground"
+              href="/workspace/workbenches"
+            >
+              <LayoutDashboardIcon />
+              <span>{t.workbenches.title}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

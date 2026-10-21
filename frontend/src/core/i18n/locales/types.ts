@@ -659,6 +659,82 @@ export interface Translations {
     };
   };
 
+  // Workbenches (saved project monitoring surfaces)
+  workbenches: {
+    title: string;
+    description: string;
+    empty: string;
+    create: string;
+    createTitle: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    descriptionLabel: string;
+    descriptionPlaceholder: string;
+    deleteConfirm: (name: string) => string;
+    loadFailed: string;
+    open: string;
+    members: (count: number) => string;
+    created: string;
+    createFailed: string;
+    saveFailed: string;
+    deleteFailed: string;
+    back: string;
+    addMember: string;
+    addMemberTitle: string;
+    addMemberHint: string;
+    noAvailableWorkflows: string;
+    removeMember: string;
+    removeConfirm: (name: string) => string;
+    run: string;
+    step: string;
+    cancel: string;
+    edit: string;
+    noMembers: string;
+    noMembersHint: string;
+    runStarted: string;
+    runFailed: string;
+    cancelFailed: string;
+    memberAdded: string;
+    memberAddFailed: string;
+    memberRemoved: string;
+    memberRemoveFailed: string;
+    activeRun: string;
+    noActiveRun: string;
+    pendingHuman: string;
+    currentNode: string;
+    elapsed: string;
+    completed: string;
+    unassignedWorkbench: string;
+  };
+
+  // Persistent global workflow monitor
+  runMonitor: {
+    title: string;
+    collapse: string;
+    expand: string;
+    resize: string;
+    loading: string;
+    empty: string;
+    loadFailed: string;
+    retry: string;
+    pendingTitle: string;
+    pendingEmpty: string;
+    pendingLoadFailed: string;
+    review: string;
+    task: string;
+    stepPause: string;
+    continue: string;
+    skip: string;
+    actionFailed: string;
+    openWorkbench: string;
+    active: string;
+    waitingHuman: string;
+    unassigned: string;
+    currentNode: string;
+    completed: string;
+    elapsed: string;
+  };
+
   // Agents
   agents: {
     title: string;

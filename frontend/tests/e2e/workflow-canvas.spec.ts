@@ -216,6 +216,22 @@ function mockWorkflowsAPI(
   let record = initialState ?? blankRecord();
   let savedPutBody: Record<string, unknown> | null = null;
 
+  void page.route("**/api/workflow-monitor/runs*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ runs: [] }),
+    }),
+  );
+
+  void page.route("**/api/human-tasks*", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([]),
+    }),
+  );
+
   void page.route("**/api/workflows", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
@@ -408,31 +424,6 @@ test.describe("Workflow canvas", () => {
     await expect.poll(readScale).toBeGreaterThan(before);
   });
 
-  test("resizes the run panel", async ({ page }) => {
-    mockWorkflowsAPI(page, anchorRecord());
-    await page.setViewportSize({ width: 1600, height: 900 });
-    await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
-    await expect(page.locator(".react-flow__node")).toHaveCount(2);
-
-    const runPanel = page.getByTestId("workflow-run-panel");
-    const runBefore = (await runPanel.boundingBox())!;
-    const runHandle = (await page
-      .getByTestId("workflow-run-resize")
-      .boundingBox())!;
-    await page.mouse.move(
-      runHandle.x + runHandle.width / 2,
-      runHandle.y + runHandle.height / 2,
-    );
-    await page.mouse.down();
-    await page.mouse.move(runHandle.x + runHandle.width / 2, runHandle.y - 60, {
-      steps: 8,
-    });
-    await page.mouse.up();
-    await expect
-      .poll(async () => (await runPanel.boundingBox())!.height)
-      .toBeGreaterThan(runBefore.height + 30);
-  });
-
   test("restores the workflow tab location and unsaved canvas draft", async ({
     page,
   }) => {
@@ -471,6 +462,13 @@ test.describe("Workflow canvas", () => {
 
     await page.goto(`/workspace/workflows/${WORKFLOW_ID}`);
     await expect(page.locator(".react-flow__node")).toHaveCount(2);
+    // The global execution monitor is a persistent right rail. Collapse it for
+    // this dense-coordinate canvas test so the original 1600px viewport keeps
+    // the same usable canvas width.
+    const monitorCollapse = page.getByTestId("workflow-monitor-collapse");
+    if (await monitorCollapse.isVisible().catch(() => false)) {
+      await monitorCollapse.click();
+    }
 
     // The two anchor nodes give `fitView` a real bounds box; wait for the
     // viewport to settle before dropping anything (empty-canvas fitView

@@ -24,6 +24,10 @@ from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
 from deerflow.persistence.workflow_definitions.revision_model import WorkflowDefinitionRevisionRow
 from deerflow.persistence.workflow_undo.model import WorkflowUndoRow
+from deerflow.persistence.workflow_workbenches.model import (
+    WorkflowWorkbenchMemberRow,
+    WorkflowWorkbenchRow,
+)
 
 __all__ = [
     "AgentRow",
@@ -38,4 +42,6 @@ __all__ = [
     "WorkflowDefinitionRow",
     "WorkflowDefinitionRevisionRow",
     "WorkflowUndoRow",
+    "WorkflowWorkbenchMemberRow",
+    "WorkflowWorkbenchRow",
 ]

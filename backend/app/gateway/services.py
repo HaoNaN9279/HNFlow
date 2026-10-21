@@ -1309,6 +1309,7 @@ async def start_workflow_run(
     origin_run_id: str | None = None,
     debug_step: bool = False,
     checkpoint_id: str | None = None,
+    workbench_id: str | None = None,
 ) -> RunRecord:
     """Create a RunRecord and launch the background workflow task.
 
@@ -1353,6 +1354,9 @@ async def start_workflow_run(
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
     run_ctx = get_run_context(request)
+    run_metadata = dict(metadata or {})
+    if workbench_id:
+        run_metadata["workbench_id"] = workbench_id
     # Human-task repo is optional (None on the memory backend); the worker
     # injects it into ``config["context"]`` so the ``human:task`` executor can
     # persist pending tasks.
@@ -1375,7 +1379,7 @@ async def start_workflow_run(
                     thread_id,
                     definition_id,
                     on_disconnect=disconnect,
-                    metadata=metadata or {},
+                    metadata=run_metadata,
                     # Pin the exact definition this run was admitted with.
                     # Resume/rewind/continue read this snapshot instead of the
                     # row's current (possibly edited) body.

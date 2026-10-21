@@ -87,7 +87,7 @@ async def test_upgrade_creates_table_and_index(tmp_path: Path) -> None:
 
         with sqlite3.connect(db_path) as raw:
             version_row = raw.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version_row[0] == "0020_workflow_definition_revisions", f"Expected head 0020_workflow_definition_revisions, got {version_row[0]}"
+        assert version_row[0] == "0021_workflow_workbenches", f"Expected head 0020_workflow_definition_revisions, got {version_row[0]}"
     finally:
         await close_engine()
 

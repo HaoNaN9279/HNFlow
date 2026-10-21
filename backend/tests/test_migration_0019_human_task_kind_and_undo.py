@@ -85,7 +85,7 @@ async def test_migration_adds_kind_column_and_undo_table(tmp_path: Path) -> None
         with sqlite3.connect(db_path) as raw:
             # The pre-existing row reads back as a plain task — additive default.
             assert raw.execute("SELECT kind FROM human_tasks WHERE id='ht-legacy'").fetchone()[0] == "task"
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0019_human_task_kind_and_undo"
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0021_workflow_workbenches"
             # An approval kind is accepted and distinguishable.
             raw.execute(
                 "INSERT INTO human_tasks (id, user_id, workflow_run_id, node_id, status, kind, description, inputs_snapshot, output_spec, validation_rules, checkpoint_ref, created_at, updated_at) "
@@ -117,7 +117,7 @@ async def test_migration_is_idempotent_when_the_objects_already_exist(tmp_path: 
     try:
         assert "workflow_undo_records" in _table_names(db_path)
         with sqlite3.connect(db_path) as raw:
-            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0019_human_task_kind_and_undo"
+            assert raw.execute("SELECT version_num FROM alembic_version").fetchone()[0] == "0021_workflow_workbenches"
     finally:
         await close_engine()
 

@@ -46,7 +46,7 @@ from deerflow.persistence.migrations._helpers import _normalize_default
 asyncio_test = pytest.mark.asyncio
 
 
-HEAD = "0020_workflow_definition_revisions"
+HEAD = "0021_workflow_workbenches"
 BASELINE = "0001_baseline"
 
 

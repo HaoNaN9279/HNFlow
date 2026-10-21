@@ -14,7 +14,6 @@ import {
 } from "@/components/workspace/workflows/workflow-editor-context";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
-import { streamWorkflowRun } from "@/core/workflows/runs";
 import type { WorkflowRecord } from "@/core/workflows/types";
 
 const apiMock = rs.hoisted(() => ({
@@ -34,14 +33,8 @@ const routerMock = rs.hoisted(() => ({ push: rs.fn() }));
 
 rs.mock("next/navigation", () => ({
   useRouter: () => ({ push: routerMock.push }),
+  useSearchParams: () => new URLSearchParams(),
 }));
-
-rs.mock("@/core/workflows/runs", () => ({
-  streamWorkflowRun: rs.fn(),
-  cancelWorkflowRun: rs.fn(),
-}));
-
-const mockedStream = rs.mocked(streamWorkflowRun);
 
 rs.mock("@/core/i18n/hooks", () => ({
   useI18n: () => ({
@@ -90,7 +83,6 @@ afterEach(() => {
   apiMock.updateWorkflow.mockReset();
   toastMock.success.mockReset();
   toastMock.error.mockReset();
-  mockedStream.mockReset();
   routerMock.push.mockReset();
   cleanup();
   window.sessionStorage.clear();
@@ -263,123 +255,6 @@ describe("WorkflowToolbar", () => {
     expect(screen.queryByText("Unsaved")).toBeNull();
   });
 
-  it("gates Run on a clean document and offers a run-disabled tooltip", () => {
-    renderToolbar();
-
-    // Clean document: runnable without a tooltip.
-    const runButton = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Run",
-    });
-    expect(runButton.disabled).toBe(false);
-    expect(runButton.title).toBe("");
-
-    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-
-    // Unsaved changes: the run is blocked until the document is saved.
-    const blockedRun = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Run",
-    });
-    expect(blockedRun.disabled).toBe(true);
-    expect(blockedRun.title).toBe("Save unsaved changes first");
-  });
-
-  it("swaps Run for Stop and disables Save while a run is active", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    mockedStream.mockImplementation(async function* () {
-      yield { type: "metadata", runId: "run-1", threadId: "t1" };
-      yield { type: "node-started", nodeId: "n_1", step: 1 };
-      await gate;
-      yield { type: "end" };
-    });
-
-    renderToolbar();
-    // Clean document: Save is disabled, Run is enabled.
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
-    ).toBe(true);
-
-    fireEvent.click(screen.getByRole("button", { name: "Run" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-    });
-    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
-    ).toBe(true);
-
-    // Editing while running must keep Save disabled (isRunning wins over
-    // dirty), and Run stays hidden for the whole run.
-    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Save" }).disabled,
-    ).toBe(true);
-    expect(screen.queryByRole("button", { name: "Run" })).toBeNull();
-
-    release();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Run" })).toBeTruthy();
-    });
-    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    // The run ended but the document is still dirty -> Run stays blocked.
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Run" }).disabled,
-    ).toBe(true);
-  });
-
-  it("keeps Run disabled in readonly mode", () => {
-    renderToolbar({ readonly: true });
-
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Run" }).disabled,
-    ).toBe(true);
-  });
-
-  it("starts a single-step run with the run-level debug flag", async () => {
-    mockedStream.mockImplementation(async function* () {
-      yield { type: "end" };
-    });
-    renderToolbar();
-
-    const stepButton = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Step run",
-    });
-    expect(stepButton.title).toBe("Pause before every node");
-    fireEvent.click(stepButton);
-
-    await waitFor(() => {
-      expect(mockedStream).toHaveBeenCalledWith("wf-1", { debug_step: true });
-    });
-  });
-
-  it("keeps the step control gated like Run", () => {
-    renderToolbar({ readonly: true });
-    expect(
-      screen.getByRole<HTMLButtonElement>("button", { name: "Step run" })
-        .disabled,
-    ).toBe(true);
-  });
-
-  it("gates the step control on a clean document", () => {
-    renderToolbar();
-
-    const clean = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Step run",
-    });
-    expect(clean.disabled).toBe(false);
-
-    fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
-
-    const dirty = screen.getByRole<HTMLButtonElement>("button", {
-      name: "Step run",
-    });
-    expect(dirty.disabled).toBe(true);
-    expect(dirty.title).toBe("Save unsaved changes first");
-  });
-
   it("marks the directory link and confirms before leaving a dirty workflow", async () => {
     renderToolbar();
     fireEvent.click(screen.getByRole("button", { name: "mark-dirty" }));
@@ -423,30 +298,5 @@ describe("WorkflowToolbar", () => {
     });
     expect(screen.getByTestId("workflow-leave-dialog")).toBeTruthy();
     expect(routerMock.push).not.toHaveBeenCalled();
-  });
-
-  it("hides the step control while a run is active", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    mockedStream.mockImplementation(async function* () {
-      yield { type: "metadata", runId: "run-1", threadId: "t1" };
-      await gate;
-      yield { type: "end" };
-    });
-
-    renderToolbar();
-    fireEvent.click(screen.getByRole("button", { name: "Step run" }));
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Stop" })).toBeTruthy();
-    });
-    expect(screen.queryByRole("button", { name: "Step run" })).toBeNull();
-
-    release();
-    await waitFor(() => {
-      expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
-    });
   });
 });

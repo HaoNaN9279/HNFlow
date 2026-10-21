@@ -17,6 +17,7 @@ import {
 type WorkflowBreadcrumbProps = {
   trail: WorkflowTrailEntry[];
   currentName: string;
+  workbenchId?: string | null;
 };
 
 /**
@@ -26,6 +27,7 @@ type WorkflowBreadcrumbProps = {
 export function WorkflowBreadcrumb({
   trail,
   currentName,
+  workbenchId,
 }: WorkflowBreadcrumbProps) {
   return (
     <>
@@ -34,7 +36,13 @@ export function WorkflowBreadcrumb({
           {index > 0 && <BreadcrumbSeparator className="hidden md:block" />}
           <BreadcrumbItem className="hidden md:block">
             <BreadcrumbLink asChild>
-              <Link href={hrefForTrailEntry(entry, trail.slice(0, index))}>
+              <Link
+                href={hrefForTrailEntry(
+                  entry,
+                  trail.slice(0, index),
+                  workbenchId,
+                )}
+              >
                 {entry.name}
               </Link>
             </BreadcrumbLink>

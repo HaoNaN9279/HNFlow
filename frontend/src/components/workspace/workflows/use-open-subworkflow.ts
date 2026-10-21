@@ -22,6 +22,7 @@ export function useOpenSubworkflow() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { workflowId, definition, embedded, flushDraft } = useWorkflowEditor();
+  const workbenchId = searchParams.get("workbench");
 
   return useCallback(
     (node: WorkflowNode) => {
@@ -42,18 +43,33 @@ export function useOpenSubworkflow() {
       ];
 
       if (source.kind === "template") {
-        router.push(workflowHref(source.templateId, nextTrail));
+        router.push(
+          workflowHref(source.templateId, nextTrail, undefined, workbenchId),
+        );
         return;
       }
 
       const localPath = embedded ? [...embedded.path, node.id] : [node.id];
       router.push(
-        workflowHref(source.definition.id, nextTrail, {
-          localRoot: embedded?.rootId ?? workflowId,
-          localPath,
-        }),
+        workflowHref(
+          source.definition.id,
+          nextTrail,
+          {
+            localRoot: embedded?.rootId ?? workflowId,
+            localPath,
+          },
+          workbenchId,
+        ),
       );
     },
-    [definition.name, embedded, flushDraft, router, searchParams, workflowId],
+    [
+      definition.name,
+      embedded,
+      flushDraft,
+      router,
+      searchParams,
+      workbenchId,
+      workflowId,
+    ],
   );
 }

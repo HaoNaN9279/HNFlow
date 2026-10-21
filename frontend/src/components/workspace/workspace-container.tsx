@@ -26,7 +26,10 @@ export function WorkspaceContainer({
   ...props
 }: React.ComponentProps<"div">) {
   return (
-    <div className={cn("flex h-screen w-full flex-col", className)} {...props}>
+    <div
+      className={cn("flex h-full min-h-0 w-full flex-col", className)}
+      {...props}
+    >
       {children}
     </div>
   );
@@ -134,6 +137,7 @@ function nameOfSegment(
   if (!segment) return t.common.home;
   if (segment === "workspace") return t.breadcrumb.workspace;
   if (segment === "chats") return t.breadcrumb.chats;
+  if (segment === "workbenches") return t.workbenches.title;
   if (segment === "workflows") return t.breadcrumb.workflows;
   if (segment === "tools") return t.breadcrumb.tools;
   return segment[0]?.toUpperCase() + segment.slice(1);

@@ -113,17 +113,23 @@ async def _resume_workflow(
         snapshot = _task_field(task, "inputs_snapshot")
         debug_step = isinstance(snapshot, dict) and snapshot.get("kind") == STEP_SNAPSHOT_KIND
 
+        # Preserve workbench provenance on the resume run.  A run started from
+        # a workbench must stay monitored there and must keep its background
+        # lifecycle instead of falling back to cancel-on-disconnect.
+        original_metadata = dict(getattr(record, "metadata", None) or {}) if record is not None else {}
+        workbench_id = original_metadata.get("workbench_id")
         await start_workflow_run(
             definition_id=definition_id,
             definition=definition,
             params={},
             thread_id=checkpoint_ref["thread_id"],
             request=request,
-            on_disconnect="cancel",
-            metadata={},
+            on_disconnect="continue" if isinstance(workbench_id, str) and workbench_id else "cancel",
+            metadata=original_metadata,
             resume=Command(resume=resume_value),
             origin_run_id=workflow_run_id,
             debug_step=debug_step,
+            workbench_id=workbench_id if isinstance(workbench_id, str) and workbench_id else None,
         )
     except Exception:
         logger.warning("Resume run for human task %s failed (non-fatal)", task_id, exc_info=True)

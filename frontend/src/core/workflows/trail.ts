@@ -77,6 +77,7 @@ export function workflowHref(
   id: string,
   ancestors: WorkflowTrailEntry[] = [],
   embedded?: EmbeddedTrailTarget,
+  workbenchId?: string | null,
 ): string {
   const params = new URLSearchParams();
   if (ancestors.length > 0) {
@@ -86,6 +87,9 @@ export function workflowHref(
     params.set("localRoot", embedded.localRoot);
     params.set("localPath", embedded.localPath.join(","));
   }
+  if (workbenchId) {
+    params.set("workbench", workbenchId);
+  }
   const query = params.toString();
   return `/workspace/workflows/${encodeURIComponent(id)}${query ? `?${query}` : ""}`;
 }
@@ -93,6 +97,7 @@ export function workflowHref(
 export function hrefForTrailEntry(
   entry: WorkflowTrailEntry,
   ancestors: WorkflowTrailEntry[],
+  workbenchId?: string | null,
 ): string {
   return workflowHref(
     entry.id,
@@ -100,6 +105,7 @@ export function hrefForTrailEntry(
     entry.localRoot && entry.localPath
       ? { localRoot: entry.localRoot, localPath: entry.localPath }
       : undefined,
+    workbenchId,
   );
 }
 

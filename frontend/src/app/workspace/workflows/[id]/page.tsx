@@ -9,7 +9,6 @@ import {
   WorkflowEditorProvider,
   useWorkflowEditor,
 } from "@/components/workspace/workflows/workflow-editor-context";
-import { WorkflowRunPanel } from "@/components/workspace/workflows/workflow-run-panel";
 import { WorkflowToolbar } from "@/components/workspace/workflows/workflow-toolbar";
 import {
   WorkspaceBody,
@@ -37,6 +36,7 @@ export default function WorkflowEditorPage() {
   );
   const localRoot = searchParams.get("localRoot");
   const localPathKey = searchParams.get("localPath") ?? "";
+  const workbenchId = searchParams.get("workbench");
   const isEmbedded = Boolean(localRoot && localPathKey);
   const workflowQuery = useWorkflow(isEmbedded ? localRoot : id);
 
@@ -78,7 +78,11 @@ export default function WorkflowEditorPage() {
     <WorkspaceContainer>
       <WorkspaceHeader>
         {currentName ? (
-          <WorkflowBreadcrumb trail={trail} currentName={currentName} />
+          <WorkflowBreadcrumb
+            trail={trail}
+            currentName={currentName}
+            workbenchId={workbenchId}
+          />
         ) : null}
       </WorkspaceHeader>
       <WorkspaceBody>
@@ -116,7 +120,7 @@ export default function WorkflowEditorPage() {
 
 /** Layout shell that wires the shared editor state into the panes. */
 function WorkflowEditor() {
-  const { clearRun, workflowId } = useWorkflowEditor();
+  const { workflowId } = useWorkflowEditor();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -132,19 +136,12 @@ function WorkflowEditor() {
     });
   }, [pathname, searchParams, workflowId]);
 
-  // T16: run state is editor-session state; leaving the page must not leave a
-  // stale run painted on the next visit.
-  useEffect(() => {
-    return () => clearRun();
-  }, [clearRun]);
-
   return (
     <div className="flex size-full flex-col overflow-hidden">
       <WorkflowToolbar />
       <div className="flex min-h-0 flex-1">
         <WorkflowCanvas />
       </div>
-      <WorkflowRunPanel />
     </div>
   );
 }

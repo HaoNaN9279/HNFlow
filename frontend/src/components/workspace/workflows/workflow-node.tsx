@@ -23,7 +23,6 @@ import {
   readSubworkflowSource,
 } from "@/core/workflows/canvas/subworkflow";
 import type { WorkflowNode as WorkflowNodeModel } from "@/core/workflows/canvas/types";
-import type { NodeRunState } from "@/core/workflows/run-state";
 import type { Port, PortType } from "@/core/workflows/types";
 import { cn } from "@/lib/utils";
 
@@ -43,23 +42,6 @@ const PORT_HANDLE_COLORS: Record<PortType, string> = {
   array: "#db2777",
   record: "#65a30d",
 };
-
-/** Border/ring tint per per-node runtime state (idle keeps the default). */
-function runStateClasses(
-  state: NodeRunState,
-  hasValidationError: boolean,
-): string | undefined {
-  if (hasValidationError || state === "failed") {
-    return "border-destructive/70";
-  }
-  if (state === "running") {
-    return "border-amber-400 ring-2 ring-amber-400/40";
-  }
-  if (state === "completed") {
-    return "border-emerald-600/70";
-  }
-  return undefined;
-}
 
 function formatParamValue(value: unknown): string {
   if (typeof value === "string") {
@@ -186,7 +168,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const subworkflowMode = readSubworkflowSaveMode(workflow.params);
   const {
     errors,
-    runState,
     readonly,
     updateNode,
     updateNodeParams,
@@ -223,15 +204,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
     (error) => error.type === "node" && error.id === id,
   );
   const hasBreakpoint = workflow.params.breakpoint === true;
-  const runStateOfNode = runState.nodeStates[id] ?? "idle";
-  const lastCompleted = [...runState.timeline]
-    .reverse()
-    .find((item) => item.nodeId === id && item.status === "completed");
-  const previewText =
-    workflow.type === "ai:prompt_preview" &&
-    typeof lastCompleted?.output?.prompt === "string"
-      ? lastCompleted.output.prompt
-      : null;
   const paramEntries = Object.entries(workflow.params);
 
   const toggleBreakpoint = () => {
@@ -258,7 +230,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
         handles={{ target: false, source: false }}
         data-node-type={workflow.type}
         data-error={hasError ? "true" : undefined}
-        data-run-state={runStateOfNode}
         data-subworkflow-mode={
           workflow.type === "nested:subworkflow" ? subworkflowMode : undefined
         }
@@ -269,7 +240,7 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
             (subworkflowMode === "local"
               ? "border-amber-200"
               : "border-zinc-400"),
-          runStateClasses(runStateOfNode, hasError),
+          hasError && "border-destructive/70",
         )}
       >
         <NodeHeader className="flex shrink-0 flex-row items-start justify-between gap-2">
@@ -402,17 +373,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-            {previewText !== null && (
-              <div className="flex flex-col gap-1 border-t pt-2">
-                <div className="text-muted-foreground text-[10px] font-medium uppercase">
-                  Prompt
-                </div>
-                <pre className="bg-muted/50 max-h-56 overflow-auto rounded p-2 font-mono text-[10px] break-words whitespace-pre-wrap">
-                  {previewText || "—"}
-                </pre>
-              </div>
-            )}
-
             {selected ? (
               <WorkflowNodeForm
                 node={{ id, data }}

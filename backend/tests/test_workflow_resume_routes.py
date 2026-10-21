@@ -101,10 +101,10 @@ def _make_task(**overrides) -> dict:
     return task
 
 
-def _make_run_manager_record(definition_id: str = "wf-1"):
+def _make_run_manager_record(definition_id: str = "wf-1", metadata: dict | None = None):
     """A mock run-manager whose ``get`` returns a record carrying ``definition_id``."""
     run_mgr = MagicMock()
-    record = SimpleNamespace(kwargs={"definition_id": definition_id})
+    record = SimpleNamespace(kwargs={"definition_id": definition_id}, metadata=metadata or {})
     run_mgr.get = AsyncMock(return_value=record)
     return run_mgr
 
@@ -144,6 +144,29 @@ def test_submit_success_triggers_resume():
     # T13-5: the resume run must override context.run_id with the original hung
     # run id so the (run_id, node_id) idempotency key reuses the existing todo.
     assert kwargs["origin_run_id"] == "r1"
+
+
+def test_workbench_resume_keeps_provenance_and_background_lifecycle():
+    mock_repo = MagicMock()
+    task = _make_task()
+    mock_repo.get = AsyncMock(return_value=task)
+    mock_repo.submit = AsyncMock(return_value={**task, "status": "submitted"})
+
+    app = _make_resume_app(
+        mock_repo,
+        run_mgr=_make_run_manager_record(metadata={"workbench_id": "wb-1"}),
+        def_repo=_make_definition_repo(),
+    )
+    client = TestClient(app)
+
+    with patch.object(human_task_routes, "start_workflow_run", new=AsyncMock()) as mock_start:
+        response = client.post("/api/human-tasks/ht-abc/submit", json={"values": {"approval": True}})
+
+    assert response.status_code == 200
+    kwargs = mock_start.await_args.kwargs
+    assert kwargs["on_disconnect"] == "continue"
+    assert kwargs["workbench_id"] == "wb-1"
+    assert kwargs["metadata"]["workbench_id"] == "wb-1"
 
 
 # ── 2. no checkpoint_ref → no resume, submit still 200 ────────────────────────

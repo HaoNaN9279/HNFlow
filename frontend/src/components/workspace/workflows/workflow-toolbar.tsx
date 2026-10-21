@@ -3,7 +3,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftIcon } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
@@ -26,7 +26,7 @@ import { flowToDefinition } from "@/core/workflows/canvas/mapping";
 import { setWorkflowLocation } from "@/core/workflows/editor-session";
 import { WorkflowValidationErrors } from "@/core/workflows/errors";
 
-import { useWorkflowEditor, useWorkflowRun } from "./workflow-editor-context";
+import { useWorkflowEditor } from "./workflow-editor-context";
 import { WorkflowErrorList } from "./workflow-error-list";
 
 /**
@@ -35,15 +35,16 @@ import { WorkflowErrorList } from "./workflow-error-list";
  * validation errors in the error strip (and highlights the offending canvas
  * nodes), any other failure is toasted.
  *
- * The Run/Stop control lives here too: Run is green and gated on a clean
- * document (dirty disables it with a tooltip), while a live run swaps it for a
- * destructive Stop. Saving is disabled during a run so the persisted
- * definition cannot drift from the instance being executed.
+ * Execution controls deliberately do not live here: every manual run is
+ * launched from a workbench. Saving stays available while a run is active —
+ * the run keeps its admission snapshot, so editing only affects later runs.
  */
 export function WorkflowToolbar() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const workbenchId = searchParams.get("workbench");
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const {
     workflowId,
@@ -61,8 +62,12 @@ export function WorkflowToolbar() {
     saveEmbedded,
     currentDefinition,
   } = useWorkflowEditor();
-  const { isRunning, startRun, cancelRun } = useWorkflowRun();
-  const runLabels = t.workflows.run;
+  const backHref = workbenchId
+    ? `/workspace/workbenches/${encodeURIComponent(workbenchId)}`
+    : "/workspace/workflows";
+  const backLabel = workbenchId
+    ? t.workbenches.back
+    : t.workflows.backToDirectory;
 
   const saveMutation = useMutation({
     mutationFn: (payload: UpdateWorkflowPayload) =>
@@ -135,9 +140,11 @@ export function WorkflowToolbar() {
   );
 
   const goToDirectory = useCallback(() => {
-    setWorkflowLocation({ kind: "directory" });
-    router.push("/workspace/workflows");
-  }, [router]);
+    if (!workbenchId) {
+      setWorkflowLocation({ kind: "directory" });
+    }
+    router.push(backHref);
+  }, [backHref, router, workbenchId]);
 
   const handleLeaveWithoutSaving = useCallback(() => {
     discardDraft();
@@ -159,14 +166,14 @@ export function WorkflowToolbar() {
     <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2">
       <Button asChild size="sm" variant="ghost" className="-ml-2">
         <Link
-          href="/workspace/workflows"
+          href={backHref}
           data-testid="workflow-directory-link"
           data-dirty={dirty && !readonly ? "true" : undefined}
           title={dirty && !readonly ? t.workflows.unsaved : undefined}
           onClick={handleDirectoryClick}
         >
           <ArrowLeftIcon className="size-4" />
-          {t.workflows.backToDirectory}
+          {backLabel}
           {dirty && !readonly && (
             <span
               className="size-1.5 shrink-0 rounded-full bg-amber-500"
@@ -184,53 +191,10 @@ export function WorkflowToolbar() {
         </span>
       )}
       {readonly && <Badge variant="outline">{t.workflows.readonly}</Badge>}
-      {isRunning ? (
-        <Button
-          size="sm"
-          variant="destructive"
-          onClick={() => void cancelRun()}
-        >
-          {runLabels.stop}
-        </Button>
-      ) : (
-        <>
-          <Button
-            size="sm"
-            className="bg-emerald-600 text-white hover:bg-emerald-600/90"
-            onClick={() => void startRun()}
-            disabled={readonly || dirty || Boolean(embedded)}
-            title={
-              embedded
-                ? t.workflows.properties.subworkflow.embeddedRunDisabled
-                : dirty
-                  ? runLabels.runDisabled
-                  : undefined
-            }
-          >
-            {runLabels.run}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void startRun({ debugStep: true })}
-            disabled={readonly || dirty || Boolean(embedded)}
-            title={
-              embedded
-                ? t.workflows.properties.subworkflow.embeddedRunDisabled
-                : dirty
-                  ? runLabels.runDisabled
-                  : runLabels.stepHint
-            }
-            data-testid="workflow-step-run"
-          >
-            {runLabels.step}
-          </Button>
-        </>
-      )}
       <Button
         size="sm"
         onClick={handleSave}
-        disabled={readonly || !dirty || saveMutation.isPending || isRunning}
+        disabled={readonly || !dirty || saveMutation.isPending}
       >
         {saveMutation.isPending ? t.workflows.saving : t.workflows.save}
       </Button>

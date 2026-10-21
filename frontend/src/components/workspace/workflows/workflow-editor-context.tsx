@@ -12,16 +12,13 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useReducer,
   useRef,
   useState,
   type Dispatch,
   type ReactNode,
   type SetStateAction,
 } from "react";
-import { toast } from "sonner";
 
-import { useI18n } from "@/core/i18n/hooks";
 import {
   definitionToFlow,
   flowToDefinition,
@@ -39,12 +36,6 @@ import {
 } from "@/core/workflows/editor-session";
 import { embeddedSessionKey } from "@/core/workflows/embedded-subworkflow";
 import type { WorkflowValidationError } from "@/core/workflows/errors";
-import {
-  createInitialRunState,
-  workflowRunReducer,
-  type WorkflowRunState,
-} from "@/core/workflows/run-state";
-import { cancelWorkflowRun, streamWorkflowRun } from "@/core/workflows/runs";
 import type {
   WorkflowDefinition,
   WorkflowRecord,
@@ -116,17 +107,6 @@ type WorkflowEditorContextValue = {
   /** Current canvas as a definition (unsaved edits included). */
   currentDefinition: () => WorkflowDefinition;
   deleteNode: (nodeId: string) => void;
-  /** Runtime run state for the current workflow (painted on the canvas). */
-  runState: WorkflowRunState;
-  isRunning: boolean;
-  /**
-   * Start a run of the saved definition. `debugStep` asks the engine to pause
-   * before **every** node (§25 single-step), so the operator advances one node
-   * per resume; the flag is run-level and never written into the definition.
-   */
-  startRun: (options?: { debugStep?: boolean }) => Promise<void>;
-  cancelRun: () => Promise<void>;
-  clearRun: () => void;
 };
 
 const WorkflowEditorContext = createContext<WorkflowEditorContextValue | null>(
@@ -141,19 +121,6 @@ export function useWorkflowEditor(): WorkflowEditorContextValue {
     );
   }
   return value;
-}
-
-/** Run-control slice of the editor context, exposed to run-aware consumers. */
-export function useWorkflowRun(): {
-  runState: WorkflowRunState;
-  isRunning: boolean;
-  startRun: (options?: { debugStep?: boolean }) => Promise<void>;
-  cancelRun: () => Promise<void>;
-  clearRun: () => void;
-} {
-  const { runState, isRunning, startRun, cancelRun, clearRun } =
-    useWorkflowEditor();
-  return { runState, isRunning, startRun, cancelRun, clearRun };
 }
 
 /** Node/edge changes that mutate the document (selection/dimensions do not). */
@@ -434,89 +401,7 @@ export function WorkflowEditorProvider({
     [markDirty, prunePositions, setEdges, setNodes],
   );
 
-  // --- Runtime run state ---------------------------------------------------
   const workflowId = record.id;
-  const { t } = useI18n();
-
-  const [runState, dispatchRun] = useReducer(
-    workflowRunReducer,
-    undefined,
-    createInitialRunState,
-  );
-  // runId must be readable synchronously from cancelRun (dispatch is async).
-  const runIdRef = useRef<string | null>(null);
-  // Guards against double-starts before the state update lands.
-  const runActiveRef = useRef(false);
-  // Set by a successful cancel; wins the terminal-status decision at stream end.
-  const cancelledRef = useRef(false);
-
-  const startRun = useCallback(
-    async (options?: { debugStep?: boolean }) => {
-      if (embedded || runActiveRef.current) {
-        return;
-      }
-      runActiveRef.current = true;
-      cancelledRef.current = false;
-      runIdRef.current = null;
-      // The run id is unknown until the stream's metadata frame arrives; the
-      // reducer treats the empty placeholder as unset and lets metadata fill it.
-      dispatchRun({ type: "run-started", runId: "" });
-      let sawFailure = false;
-      try {
-        // A plain run sends no body at all; only the step control adds the
-        // run-level debug flag.
-        const stream = options?.debugStep
-          ? streamWorkflowRun(workflowId, { debug_step: true })
-          : streamWorkflowRun(workflowId);
-        for await (const event of stream) {
-          if (event.type === "metadata") {
-            runIdRef.current = event.runId;
-          } else if (event.type === "node-failed" || event.type === "error") {
-            sawFailure = true;
-          }
-          dispatchRun({ type: "stream-event", event });
-        }
-        dispatchRun({
-          type: "run-ended",
-          finalStatus: cancelledRef.current
-            ? "interrupted"
-            : sawFailure
-              ? "error"
-              : "success",
-        });
-      } catch (error) {
-        dispatchRun({
-          type: "run-error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        runActiveRef.current = false;
-      }
-    },
-    [embedded, workflowId],
-  );
-
-  const cancelRun = useCallback(async () => {
-    const runId = runIdRef.current;
-    if (!runId) {
-      return;
-    }
-    try {
-      await cancelWorkflowRun(workflowId, runId);
-      cancelledRef.current = true;
-    } catch {
-      toast.error(t.workflows.run.cancelFailed);
-    }
-  }, [t, workflowId]);
-
-  const clearRun = useCallback(() => {
-    runIdRef.current = null;
-    cancelledRef.current = false;
-    runActiveRef.current = false;
-    dispatchRun({ type: "reset" });
-  }, []);
-
-  const isRunning = runState.status === "running";
 
   const saveEmbedded = useCallback(
     async (next: WorkflowDefinition) => {
@@ -565,11 +450,6 @@ export function WorkflowEditorProvider({
       updateNodeDisplayName,
       currentDefinition,
       deleteNode,
-      runState,
-      isRunning,
-      startRun,
-      cancelRun,
-      clearRun,
     }),
     [
       workflowId,
@@ -600,11 +480,6 @@ export function WorkflowEditorProvider({
       updateNodeDisplayName,
       currentDefinition,
       deleteNode,
-      runState,
-      isRunning,
-      startRun,
-      cancelRun,
-      clearRun,
     ],
   );
 

@@ -422,4 +422,12 @@ async def delete_workflow(definition_id: str, request: Request):
     deleted = await repo.delete(definition_id, user_id=str(user.id))
     if not deleted:
         raise HTTPException(status_code=404, detail="Workflow definition not found")
+    # Workbench membership is only a reference; remove dangling rows without
+    # touching the workbench itself or any historical run.
+    workbench_repo = getattr(request.app.state, "workflow_workbench_repo", None)
+    if workbench_repo is not None:
+        try:
+            await workbench_repo.delete_memberships_for_definition(definition_id)
+        except Exception:
+            logger.warning("Failed to remove workbench memberships for deleted workflow %s", definition_id, exc_info=True)
     return {"id": definition_id, "deleted": True}

@@ -113,10 +113,13 @@ class RunRepository(RunStore):
         now = datetime.now(UTC)
         created = datetime.fromisoformat(created_at) if created_at else now
         lease_dt = datetime.fromisoformat(lease_expires_at) if lease_expires_at else None
+        metadata_dict = self._safe_json(metadata) or {}
+        workbench_id = metadata_dict.get("workbench_id") if isinstance(metadata_dict, dict) else None
         values = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": resolved_user_id,
+            "workbench_id": workbench_id if isinstance(workbench_id, str) and workbench_id else None,
             "model_name": self._normalize_model_name(model_name),
             "status": status,
             "operation_kind": operation_kind,
@@ -582,11 +585,14 @@ class RunRepository(RunStore):
         created = datetime.fromisoformat(created_at) if created_at else now
         lease_dt = datetime.fromisoformat(lease_expires_at) if lease_expires_at else None
         cutoff = now - timedelta(seconds=grace_seconds)
+        metadata_dict = self._safe_json(metadata) or {}
+        workbench_id = metadata_dict.get("workbench_id") if isinstance(metadata_dict, dict) else None
 
         values = {
             "thread_id": thread_id,
             "assistant_id": assistant_id,
             "user_id": resolved_user_id,
+            "workbench_id": workbench_id if isinstance(workbench_id, str) and workbench_id else None,
             "model_name": self._normalize_model_name(model_name),
             "status": "pending",
             "operation_kind": operation_kind,

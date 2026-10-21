@@ -17,6 +17,9 @@ class RunRow(Base):
     thread_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     assistant_id: Mapped[str | None] = mapped_column(String(128))
     user_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    #: Launch provenance for workflow runs started from a saved workbench.
+    #: NULL for chat runs, scheduled runs, direct API calls and legacy rows.
+    workbench_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="pending")
     # "pending" | "running" | "success" | "error" | "timeout" | "interrupted"
     operation_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="run", server_default=text("'run'"))
