@@ -43,7 +43,7 @@ def extract_node_outputs(state: dict[str, Any]) -> dict[str, dict[str, Any]]:
     """Group a final workflow state's ``wf:<node>:<port>`` channels by node.
 
     Reserved channels are skipped: ``wf:shared:<name>`` (N14 shared workspace)
-    and ``wf:<node>:__<reserved>`` (token usage, retry count, …) are engine
+    and ``wf:<node>:__<reserved>`` (token usage, duration, …) are engine
     bookkeeping, not node output ports.
     """
     outputs: dict[str, dict[str, Any]] = {}

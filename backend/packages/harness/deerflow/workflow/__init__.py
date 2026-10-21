@@ -15,6 +15,7 @@ from .registry import (  # noqa: E402
     WorkflowExecutionError,
     crash_confirm_required,
 )
+from .resource_access import ResourceAccess, ResourceAccessor  # noqa: E402
 from .schema import (
     Edge,
     Node,
@@ -58,6 +59,8 @@ __all__ = [
     "ExecutorRegistration",
     "ExecutorRegistry",
     "WorkflowExecutionError",
+    "ResourceAccess",
+    "ResourceAccessor",
     "build_default_registry",
     "crash_confirm_required",
 ]

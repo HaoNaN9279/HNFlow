@@ -534,8 +534,6 @@ export const zhCN: Translations = {
           breakpoint: "断点",
           idempotency: "幂等键",
           merge: "合并策略",
-          resourceLock: "资源锁",
-          resourceLockTimeout: "锁超时（秒）",
           requireApproval: "需要审批",
           onReject: "拒绝时",
           detectConflicts: "检测冲突",

@@ -439,6 +439,28 @@ class TestCompileCache:
         g2 = compile_definition(d, context=ctx)
         assert g1 is not g2
 
+    def test_different_resource_accessor_returns_new_instance(self) -> None:
+        """A different resource accessor can derive a different lock set."""
+        d = _minimal_def()
+
+        def first(_runtime, _params, _inputs):
+            return ()
+
+        def second(_runtime, _params, _inputs):
+            return ()
+
+        ctx_a = CompileContext(
+            executors={NodeType.DATA_ASSIGN: _exec_identity()},
+            resource_accessors={NodeType.DATA_ASSIGN: first},
+        )
+        ctx_b = CompileContext(
+            executors={NodeType.DATA_ASSIGN: _exec_identity()},
+            resource_accessors={NodeType.DATA_ASSIGN: second},
+        )
+        g1 = compile_definition(d, context=ctx_a)
+        g2 = compile_definition(d, context=ctx_b)
+        assert g1 is not g2
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 4. Graph topology assertions

@@ -106,6 +106,8 @@ from deerflow.workflow.reliability import (
 from deerflow.workflow.replay import MODE_RECORD as REPLAY_MODE_RECORD
 from deerflow.workflow.replay import MODE_REPLAY as REPLAY_MODE_REPLAY
 from deerflow.workflow.replay import REPLAY_CONTEXT_KEY
+from deerflow.workflow.resource_access import ResourceAccessor
+from deerflow.workflow.resource_locking import ResourceLockError, hold_resource_locks
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
@@ -318,6 +320,10 @@ class CompileContext:
             plain callables (not registry objects) so the compiler never
             imports :mod:`deerflow.workflow.registry` — which imports this
             module — and no import cycle forms.
+        resource_accessors: ``NodeType`` → resource-access callable registry
+            (N13).  The compiler derives automatic locks from the accessor
+            after approval/breakpoint gates and holds them for the executor
+            call.  Missing entries mean the node type declares no resources.
         checkpointer: Optional LangGraph checkpointer for the top-level graph.
             Subgraphs are always compiled with ``checkpointer=None`` so their
             channels never pollute the parent thread checkpoint.
@@ -341,6 +347,7 @@ class CompileContext:
     definition_resolver: Callable[[str, str | None], WorkflowDefinition | None] | None = None
     max_nesting_depth: int = 10
     max_delegation_depth: int = 3
+    resource_accessors: dict[NodeType, ResourceAccessor] = field(default_factory=dict)
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -386,6 +393,12 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
         # previewers must not share a cache entry.
         preview_fp = "|".join(sorted(t.value for t in context.previews))
         digest.update(f"\0previews:{preview_fp}".encode())
+    if context is not None and context.resource_accessors:
+        # A different accessor for the same node type can derive a different
+        # lock set, so it must not reuse a compiled graph.  The cache is
+        # process-local, so callable identity is the right fingerprint here.
+        accessor_fp = "|".join(f"{t.value}:{id(fn)}" for t, fn in sorted(context.resource_accessors.items(), key=lambda item: item[0].value))
+        digest.update(f"\0resource_accessors:{accessor_fp}".encode())
     if context is not None and context.checkpointer is not None:
         digest.update(f"\0checkpointer:{id(context.checkpointer)}".encode())
     if context is not None and context.definition_resolver is not None:
@@ -553,6 +566,7 @@ def _make_node_fn(
     executor: Executor,
     incoming_edges: list[Edge],
     previewer: Previewer | None = None,
+    resource_accessor: ResourceAccessor | None = None,
     *,
     run_budget: RunBudget | None = None,
     capability_groups: list[str] | None = None,
@@ -578,6 +592,10 @@ def _make_node_fn(
     When the node requests an idempotency key (``params.idempotency``) it is
     injected into the executor params as ``__idempotency_key`` for the tool
     executors to forward.
+
+    When *resource_accessor* is supplied, it runs after approval/breakpoint
+    gates and its write accesses are held as cross-process locks around the
+    executor call only; read-only accesses do not lock.
     """
     from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
 
@@ -741,14 +759,22 @@ def _make_node_fn(
 
         duration_ms: float | None = None
         if result is None:
-            # N14x: node timing.  Measured around the *work* segment only — the
-            # approval gate above and any human wait are excluded, because a
-            # human's think time is not the node's execution cost.
-            _started = time.perf_counter()
-            result = await _resolve_executor(executor, runtime, executor_params, inputs)
-            duration_ms = round((time.perf_counter() - _started) * 1000, 3)
-            if replay_session is not None and replay_mode == REPLAY_MODE_RECORD:
-                replay_session.record(node_id=node.id, node_type=node.type.value, inputs=inputs, outputs=result)
+            # N13: the compiler, not the author, owns resource locking.  The
+            # accessor runs after approval/breakpoint gates (a pending human
+            # must not hold a file lock) and only write access participates.
+            accesses = tuple(resource_accessor(runtime, executor_params, inputs)) if resource_accessor is not None else ()
+            try:
+                async with hold_resource_locks(accesses):
+                    # N14x: node timing.  Measured around the *work* segment
+                    # only — approvals, human waits, and lock waits are
+                    # excluded, because none of them is node execution cost.
+                    _started = time.perf_counter()
+                    result = await _resolve_executor(executor, runtime, executor_params, inputs)
+                    duration_ms = round((time.perf_counter() - _started) * 1000, 3)
+                    if replay_session is not None and replay_mode == REPLAY_MODE_RECORD:
+                        replay_session.record(node_id=node.id, node_type=node.type.value, inputs=inputs, outputs=result)
+            except ResourceLockError as exc:
+                raise WorkflowExecutionError(f"node '{node.id}': {exc}") from exc
 
         outputs: dict[str, Any] = {}
         for p in node.outputs:
@@ -1564,6 +1590,7 @@ def _expand_subworkflow(
     child_ctx = CompileContext(
         executors=ctx.executors,
         previews=ctx.previews,
+        resource_accessors=ctx.resource_accessors,
         checkpointer=None,
         definition_resolver=ctx.definition_resolver,
         max_nesting_depth=ctx.max_nesting_depth,
@@ -1896,46 +1923,24 @@ def _validate_prompt_preview(def_: WorkflowDefinition) -> None:
 
 
 def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
-    """Compile-time validation for the N13 ``params.merge`` / ``params.resource_lock``.
+    """Compile-time validation for the N13 ``params.merge``.
 
-    Both are author-facing knobs on arbitrary nodes, so a typo'd port name,
-    an unknown merge policy, or a lock name that cannot become a filename is
-    reported here (definition compile) rather than silently ignored at runtime.
+    ``params.resource_lock`` / ``resource_lock_timeout`` are no longer
+    author-facing: resource locking is derived from executor resource access
+    declarations, so only the merge policy remains a node parameter.
     """
-    from deerflow.locks.file_lock import LOCK_NAME_PATTERN
-
     for node in def_.nodes:
-        params = node.params or {}
-
-        merge = params.get("merge")
-        if merge is not None:
-            if not isinstance(merge, dict):
-                raise WorkflowCompileError(f"node '{node.id}': params.merge must be an object mapping input ports to one of {sorted(_MERGE_POLICIES)}")
-            input_names = {p.name for p in node.inputs}
-            for port, policy in merge.items():
-                if port not in input_names:
-                    raise WorkflowCompileError(f"node '{node.id}': params.merge references unknown input port '{port}' (available: {sorted(input_names)})")
-                if policy not in _MERGE_POLICIES:
-                    raise WorkflowCompileError(f"node '{node.id}': params.merge['{port}'] must be one of {sorted(_MERGE_POLICIES)}, got {policy!r}")
-
-        lock_param = params.get("resource_lock")
-        if lock_param is not None:
-            if isinstance(lock_param, str):
-                lock_names: tuple[Any, ...] = (lock_param,)
-            elif isinstance(lock_param, (list, tuple)):
-                lock_names = tuple(lock_param)
-            else:
-                raise WorkflowCompileError(f"node '{node.id}': params.resource_lock must be a string or a list of strings")
-            for name in lock_names:
-                if not isinstance(name, str) or not LOCK_NAME_PATTERN.match(name):
-                    raise WorkflowCompileError(f"node '{node.id}': invalid resource_lock name {name!r}; expected {LOCK_NAME_PATTERN.pattern!r}")
-
-        timeout = params.get("resource_lock_timeout")
-        if timeout is not None:
-            try:
-                float(timeout)
-            except (TypeError, ValueError) as exc:
-                raise WorkflowCompileError(f"node '{node.id}': params.resource_lock_timeout must be a number, got {timeout!r}") from exc
+        merge = (node.params or {}).get("merge")
+        if merge is None:
+            continue
+        if not isinstance(merge, dict):
+            raise WorkflowCompileError(f"node '{node.id}': params.merge must be an object mapping input ports to one of {sorted(_MERGE_POLICIES)}")
+        input_names = {p.name for p in node.inputs}
+        for port, policy in merge.items():
+            if port not in input_names:
+                raise WorkflowCompileError(f"node '{node.id}': params.merge references unknown input port '{port}' (available: {sorted(input_names)})")
+            if policy not in _MERGE_POLICIES:
+                raise WorkflowCompileError(f"node '{node.id}': params.merge['{port}'] must be one of {sorted(_MERGE_POLICIES)}, got {policy!r}")
 
 
 def _validate_idempotency(def_: WorkflowDefinition) -> None:
@@ -1954,74 +1959,6 @@ def _validate_run_budget(def_: WorkflowDefinition) -> None:
         parse_run_budget(def_.metadata.model_dump())
     except _BudgetError as exc:
         raise WorkflowCompileError(f"metadata.budget: {exc}") from exc
-
-
-def _resource_lock_names(node: Node) -> tuple[str, ...]:
-    """Extract the (validated) ``params.resource_lock`` names for *node*."""
-    raw = node.params.get("resource_lock")
-    if raw is None:
-        return ()
-    if isinstance(raw, str):
-        return (raw,)
-    if isinstance(raw, (list, tuple)):
-        return tuple(str(x) for x in raw)
-    return ()
-
-
-def _maybe_wrap_resource_lock(node: Node, node_fn: Callable[..., Any]) -> Callable[..., Any]:
-    """Wrap *node_fn* to hold ``params.resource_lock`` around its whole execution (N13).
-
-    The N8 lock is reentrant via a ``threading.RLock`` whose acquire/release must
-    happen on the **same thread**, and a blocking acquire must not run on the
-    event loop (blocking-io gate).  So a dedicated holder thread takes the lock
-    (single ``resource_lock`` or ``acquire_many``) and holds it until the node
-    finishes; the event loop only waits on a handshake event.  A timeout surfaces
-    as a ``WorkflowExecutionError`` naming the lock; the lock is released in a
-    ``finally`` even when the node raises or is cancelled.
-    """
-    names = _resource_lock_names(node)
-    if not names:
-        return node_fn
-    timeout = float(node.params.get("resource_lock_timeout", 60.0))
-    node_id = node.id
-
-    async def _locked(state: dict[str, Any]) -> dict[str, Any]:
-        from deerflow.locks.file_lock import LockError, acquire_many, resource_lock
-
-        acquired = threading.Event()
-        release = threading.Event()
-        errors: list[BaseException] = []
-
-        def _holder() -> None:
-            try:
-                holder_ctx = resource_lock(names[0], timeout=timeout) if len(names) == 1 else acquire_many(names, timeout=timeout)
-                with holder_ctx:
-                    acquired.set()
-                    release.wait()
-            except BaseException as exc:  # noqa: BLE001 — surfaced to the awaiting node
-                errors.append(exc)
-                acquired.set()
-
-        holder = threading.Thread(target=_holder, name=f"wf-lock-{node_id}", daemon=True)
-        holder.start()
-        try:
-            await asyncio.to_thread(acquired.wait)
-            if errors:
-                from deerflow.workflow.registry import WorkflowExecutionError
-
-                failure = errors[0]
-                if isinstance(failure, LockError):
-                    raise WorkflowExecutionError(f"node '{node_id}': resource lock {list(names)} unavailable: {failure}") from failure
-                raise failure
-            return await node_fn(state)
-        finally:
-            # Releases the holder's ``with`` block; the daemon thread then exits
-            # on its own.  Deliberately not joined here: joining while the holder
-            # is still waiting to acquire could block, and the lock is released
-            # regardless as soon as the holder wakes.
-            release.set()
-
-    return _locked
 
 
 def _make_route_fn(
@@ -2163,13 +2100,10 @@ def _compile_impl(
         event depth is ``depth - 1`` (0 = top level) — the value the worker uses
         to filter out child-subgraph node events.
 
-        A node declaring ``params.resource_lock`` (N13) is additionally wrapped so
-        its whole execution holds the cross-process lock; the wrap is a no-op
-        otherwise.
+        Automatic resource locks (N13) are applied inside ``_make_node_fn``,
+        after approval/breakpoint gates, so they do not need a wrapper here.
         """
         node = node_map.get(node_id)
-        if node is not None:
-            node_fn = _maybe_wrap_resource_lock(node, node_fn)
         builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn, node.type if node is not None else None))
 
     # Build lookup maps
@@ -2209,6 +2143,7 @@ def _compile_impl(
             executor,
             incoming_edges.get(node.id, []),
             ctx.previews.get(node.type),
+            ctx.resource_accessors.get(node.type),
             run_budget=run_budget,
             capability_groups=capability_groups,
             prompt_preview_agent=prompt_preview_agent,

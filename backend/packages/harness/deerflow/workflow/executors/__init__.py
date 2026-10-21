@@ -21,13 +21,13 @@ from deerflow.workflow.schema import NodeType  # noqa: E402
 
 # ── Import public executor functions ─────────────────────────────────────────
 from .ai import exec_llm_agent, exec_prompt_preview  # noqa: E402
-from .asset import exec_asset, preview_asset  # noqa: E402
-from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex, exec_shared, preview_file  # noqa: E402
+from .asset import asset_resource_access, exec_asset, preview_asset  # noqa: E402
+from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex, exec_shared, file_resource_access, preview_file  # noqa: E402
 from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
-from .knowledge import exec_knowledge  # noqa: E402
-from .local_app import exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
-from .tool import exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke  # noqa: E402
+from .knowledge import exec_knowledge, knowledge_resource_access  # noqa: E402
+from .local_app import app_resource_access, exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
+from .tool import bash_resource_access, exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke, tool_invoke_resource_access  # noqa: E402
 
 # ── Default registry assembly ────────────────────────────────────────────────
 
@@ -60,10 +60,36 @@ def build_default_registry() -> ExecutorRegistry:
     # ── Data transformation ───────────────────────────────────────────────
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_ASSIGN, executor=exec_assign, idempotent=True, description="Static assignment or passthrough"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_CONVERT, executor=exec_convert, idempotent=True, description="Type conversion executor"))
-    reg.register(ExecutorRegistration(node_type=NodeType.DATA_FILE, executor=exec_file, idempotent=True, description="File read / write executor (sandboxed)", preview=preview_file))
-    reg.register(ExecutorRegistration(node_type=NodeType.DATA_ASSET, executor=exec_asset, idempotent=True, description="Asset inspect / import / export / convert executor (N9)", preview=preview_asset))
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.DATA_FILE,
+            executor=exec_file,
+            idempotent=True,
+            description="File read / write executor (sandboxed)",
+            preview=preview_file,
+            resource_access=file_resource_access,
+        )
+    )
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.DATA_ASSET,
+            executor=exec_asset,
+            idempotent=True,
+            description="Asset inspect / import / export / convert executor (N9)",
+            preview=preview_asset,
+            resource_access=asset_resource_access,
+        )
+    )
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_SHARED, executor=exec_shared, idempotent=True, description="Shared workspace read / write / append executor (N14)"))
-    reg.register(ExecutorRegistration(node_type=NodeType.DATA_KNOWLEDGE, executor=exec_knowledge, idempotent=True, description="Knowledge ingest / retrieve executor (N14)"))
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.DATA_KNOWLEDGE,
+            executor=exec_knowledge,
+            idempotent=True,
+            description="Knowledge ingest / retrieve executor (N14)",
+            resource_access=knowledge_resource_access,
+        )
+    )
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_JSON, executor=exec_json, idempotent=True, description="JSON stringify / parse executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_REGEX, executor=exec_regex, idempotent=True, description="Regex search executor"))
 
@@ -75,6 +101,7 @@ def build_default_registry() -> ExecutorRegistry:
             idempotent=False,
             requires_confirmation=True,
             description="Shell command executor (sandboxed)",
+            resource_access=bash_resource_access,
         )
     )
     reg.register(
@@ -99,6 +126,7 @@ def build_default_registry() -> ExecutorRegistry:
             idempotent=False,
             requires_confirmation=True,
             description="Direct gateway tool invocation executor (crash-confirm gated)",
+            resource_access=tool_invoke_resource_access,
         )
     )
 
@@ -137,10 +165,46 @@ def build_default_registry() -> ExecutorRegistry:
     # ── Local professional software (N5) ──────────────────────────────────
     # launch/script start a process / mutate in-app state → non-idempotent and
     # crash-confirm gated (host-side execution, deliberate sandbox exception).
-    reg.register(ExecutorRegistration(node_type=NodeType.APP_LAUNCH, executor=exec_app_launch, idempotent=False, requires_confirmation=True, description="Local application launch / attach executor", preview=preview_app_launch))
-    reg.register(ExecutorRegistration(node_type=NodeType.APP_SCRIPT, executor=exec_app_script, idempotent=False, requires_confirmation=True, description="Local application script executor", preview=preview_app_script))
-    reg.register(ExecutorRegistration(node_type=NodeType.APP_WAIT, executor=exec_app_wait, idempotent=True, description="Local application wait executor"))
-    reg.register(ExecutorRegistration(node_type=NodeType.APP_COLLECT, executor=exec_app_collect, idempotent=True, description="Local application artifact collect executor"))
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.APP_LAUNCH,
+            executor=exec_app_launch,
+            idempotent=False,
+            requires_confirmation=True,
+            description="Local application launch / attach executor",
+            preview=preview_app_launch,
+            resource_access=app_resource_access,
+        )
+    )
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.APP_SCRIPT,
+            executor=exec_app_script,
+            idempotent=False,
+            requires_confirmation=True,
+            description="Local application script executor",
+            preview=preview_app_script,
+            resource_access=app_resource_access,
+        )
+    )
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.APP_WAIT,
+            executor=exec_app_wait,
+            idempotent=True,
+            description="Local application wait executor",
+            resource_access=app_resource_access,
+        )
+    )
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.APP_COLLECT,
+            executor=exec_app_collect,
+            idempotent=True,
+            description="Local application artifact collect executor",
+            resource_access=app_resource_access,
+        )
+    )
 
     # ── Composition ───────────────────────────────────────────────────────
     reg.register(ExecutorRegistration(node_type=NodeType.NESTED_SUBWORKFLOW, executor=exec_nested_subworkflow, idempotent=False, description="Nested subworkflow executor (compile / delegate expansion)"))
@@ -161,10 +225,14 @@ __all__ = [
     "exec_json",
     "exec_regex",
     "exec_shared",
+    "exec_knowledge",
     "preview_file",
+    "file_resource_access",
+    "knowledge_resource_access",
     # Assets (N9)
     "exec_asset",
     "preview_asset",
+    "asset_resource_access",
     # Flow
     "exec_if",
     "exec_wait",
@@ -177,6 +245,8 @@ __all__ = [
     "exec_notify",
     "exec_tool_invoke",
     "exec_nested_subworkflow",
+    "bash_resource_access",
+    "tool_invoke_resource_access",
     # AI
     "exec_llm_agent",
     "exec_prompt_preview",
@@ -189,4 +259,5 @@ __all__ = [
     "exec_app_collect",
     "preview_app_launch",
     "preview_app_script",
+    "app_resource_access",
 ]

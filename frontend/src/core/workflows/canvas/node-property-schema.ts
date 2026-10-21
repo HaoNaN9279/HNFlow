@@ -97,10 +97,6 @@ const COMMON_FIELDS: readonly NodeParamField[] = [
   boolean("breakpoint", "breakpoint"),
   json("idempotency", "idempotency", { helperKey: "jsonHint" }),
   json("merge", "merge", { helperKey: "jsonHint" }),
-  json("resource_lock", "resourceLock", { helperKey: "jsonHint" }),
-  number("resource_lock_timeout", "resourceLockTimeout", {
-    defaultValue: 60,
-  }),
   boolean("require_approval", "requireApproval"),
   select("on_reject", "onReject", ["fail", "skip"], {
     defaultValue: "fail",

@@ -19,6 +19,7 @@ from typing import Any
 
 from deerflow.workflow.compiler import CompileContext, Executor, WorkflowRuntime
 from deerflow.workflow.preview import Previewer
+from deerflow.workflow.resource_access import ResourceAccessor
 from deerflow.workflow.schema import NodeType
 
 # ── Public types ───────────────────────────────────────────────────────────
@@ -55,6 +56,11 @@ class ExecutorRegistration:
             by this callable.  ``None`` means the type has nothing
             previewable (read-only or control-flow nodes), so
             ``require_approval`` on it is a configuration error.
+        resource_access: Optional N13 accessor declaring the external
+            resources this node type reads/writes.  The compiler derives the
+            automatic lock set from it after approval/breakpoint gates.
+            ``None`` means the executor declares no resource access (pure
+            nodes or executors whose side effects cannot be determined).
     """
 
     node_type: NodeType
@@ -63,6 +69,7 @@ class ExecutorRegistration:
     description: str | None = None
     requires_confirmation: bool = False
     preview: Previewer | None = None
+    resource_access: ResourceAccessor | None = None
 
 
 # ── Registry ──────────────────────────────────────────────────────────────
@@ -121,12 +128,14 @@ class ExecutorRegistry:
 
         The returned context is ready to pass to
         :func:`deerflow.workflow.compile_definition`.  Registered previewers
-        (N10) travel alongside the executors so the compiler can gate
-        ``params.require_approval`` nodes without importing this registry.
+        (N10) and resource accessors (N13) travel alongside the executors so
+        the compiler can gate approvals and derive automatic locks without
+        importing this registry.
         """
         executors: dict[NodeType, Executor] = {nt: reg.executor for nt, reg in self._registrations.items()}
         previews: dict[NodeType, Previewer] = {nt: reg.preview for nt, reg in self._registrations.items() if reg.preview is not None}
-        return CompileContext(executors=executors, previews=previews)
+        accessors: dict[NodeType, ResourceAccessor] = {nt: reg.resource_access for nt, reg in self._registrations.items() if reg.resource_access is not None}
+        return CompileContext(executors=executors, previews=previews, resource_accessors=accessors)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────

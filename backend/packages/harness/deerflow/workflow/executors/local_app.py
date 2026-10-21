@@ -42,6 +42,7 @@ from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.conflict import ConflictGuard, conflicts_requested
 from deerflow.workflow.executors import WorkflowExecutionError
 from deerflow.workflow.preview import RECOVERY_APP_UNDO, RECOVERY_NONE, ActionPreview, make_preview
+from deerflow.workflow.resource_access import ResourceAccess, app_write_access
 from deerflow.workflow.undo import UndoKind, UndoStatus
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,19 @@ def _require_app(params: dict[str, Any], node_label: str) -> str:
     if not isinstance(app, str) or not app:
         raise WorkflowExecutionError(f"{node_label}: missing required param 'app'")
     return app
+
+
+def app_resource_access(runtime: WorkflowRuntime, params: dict[str, Any], _inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """All app operations lock the application while the node runs.
+
+    ``app:wait`` / ``app:collect`` are read-like, but an application is a
+    stateful host resource: a concurrent script on the same app is exactly the
+    race this lock exists to prevent.
+    """
+    app = params.get("app")
+    if not isinstance(app, str) or not app:
+        return ()
+    return (app_write_access(app),)
 
 
 def _string_list(value: Any) -> list[str]:

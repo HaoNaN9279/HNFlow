@@ -25,6 +25,7 @@ def test_compile_context_carries_previews() -> None:
 
     assert ctx.executors
     assert ctx.previews, "approval previewers must travel with the executors"
+    assert ctx.resource_accessors, "automatic resource accessors must travel with the executors"
 
 
 def test_runtime_context_uses_run_owner_and_origin_run_id() -> None:

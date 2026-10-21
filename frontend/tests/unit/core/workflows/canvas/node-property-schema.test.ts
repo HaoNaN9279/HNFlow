@@ -14,7 +14,21 @@ describe("fixed node property schema", () => {
 
     expect(keys.has("ports")).toBe(true);
     expect(keys.has("breakpoint")).toBe(true);
-    expect(keys.has("resource_lock")).toBe(true);
+    expect(keys.has("resource_lock")).toBe(false);
+  });
+
+  test("legacy resource lock params are dropped", () => {
+    expect(
+      sanitizeNodeParams("data:file", {
+        operation: "write",
+        path: "/mnt/user-data/workspace/a.txt",
+        resource_lock: "old-lock",
+        resource_lock_timeout: 5,
+      }),
+    ).toEqual({
+      operation: "write",
+      path: "/mnt/user-data/workspace/a.txt",
+    });
   });
 
   test("start/end nodes do not expose breakpoint", () => {

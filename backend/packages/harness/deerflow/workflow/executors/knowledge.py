@@ -29,6 +29,7 @@ from deerflow.workflow.knowledge import (
     parse_retrieval_params,
     render_query,
 )
+from deerflow.workflow.resource_access import ResourceAccess, knowledge_write_access
 
 OP_RETRIEVE = "retrieve"
 OP_INGEST = "ingest"
@@ -43,6 +44,17 @@ def _require_collection(params: dict[str, Any]) -> str:
     if not isinstance(collection, str) or not collection.strip():
         raise WorkflowExecutionError("data:knowledge: missing required param 'collection'")
     return collection
+
+
+def knowledge_resource_access(runtime: WorkflowRuntime, params: dict[str, Any], _inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """Ingest locks the collection; retrieve does not block other readers."""
+    operation = params.get("operation", OP_RETRIEVE)
+    if operation != OP_INGEST:
+        return ()
+    collection = params.get("collection")
+    if not isinstance(collection, str) or not collection.strip():
+        return ()
+    return (knowledge_write_access(collection.strip()),)
 
 
 async def exec_knowledge(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:

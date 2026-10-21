@@ -162,7 +162,7 @@ async def run_workflow(
 
     # ── 5. Compile the workflow definition ─────────────────────────────
     # The compile context is assembled in one place so previewers (approval
-    # gates) and idempotency metadata (retry gates) always travel with the
+    # gates) and resource accessors (automatic locks) always travel with the
     # executors.  Reaching into ``build_context().executors`` here silently
     # disabled both features in production.
     registry = build_default_registry()

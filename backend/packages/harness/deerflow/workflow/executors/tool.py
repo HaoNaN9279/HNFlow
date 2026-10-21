@@ -23,6 +23,7 @@ from deerflow.sandbox import tools as sandbox_tools
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.executors import WorkflowExecutionError
 from deerflow.workflow.reliability import IDEMPOTENCY_ENV, IDEMPOTENCY_HEADER, IDEMPOTENCY_PARAM
+from deerflow.workflow.resource_access import ResourceAccess, app_write_access, sandbox_write_access
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,11 @@ def _require_crash_confirm(params: dict[str, Any], node_label: str) -> None:
 
 
 # ── tool:bash ────────────────────────────────────────────────────────────────
+
+
+def bash_resource_access(runtime: WorkflowRuntime, _params: dict[str, Any], _inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """A shell command can mutate any sandbox file, so lock the sandbox."""
+    return (sandbox_write_access(runtime),)
 
 
 def exec_bash(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:
@@ -307,6 +313,25 @@ async def _call_tool(tool: Any, arguments: dict[str, Any], *, tool_runtime: Any,
         return await fn(**kwargs)
     # A sync tool would block the event loop; offload it (repo convention).
     return await asyncio.to_thread(fn, **kwargs)
+
+
+def tool_invoke_resource_access(runtime: WorkflowRuntime, params: dict[str, Any], _inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """Declare a lock only when the provider makes the resource class knowable.
+
+    ``sandbox`` tools always run against the thread sandbox.  App provider tool
+    ids are ``app_<name>``, so the application name is recoverable.  Builtin,
+    MCP and ambiguous providers are deliberately left unlocked: pretending a
+    tool touches no resource would be worse than an honest gap.
+    """
+    provider = params.get("provider")
+    tool_name = params.get("tool")
+    if provider == "sandbox":
+        return (sandbox_write_access(runtime),)
+    if provider == "app" and isinstance(tool_name, str) and tool_name.startswith("app_"):
+        return (app_write_access(tool_name[len("app_") :]),)
+    if provider == "builtin" and isinstance(tool_name, str) and tool_name in {"write_file", "str_replace"}:
+        return (sandbox_write_access(runtime),)
+    return ()
 
 
 async def exec_tool_invoke(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:

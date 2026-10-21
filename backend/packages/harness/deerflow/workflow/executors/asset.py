@@ -55,6 +55,7 @@ from deerflow.workflow.compensation import Compensation, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.preview import RECOVERY_BACKUP, ActionPreview, PreviewTarget, declare, make_preview, observe
 from deerflow.workflow.registry import WorkflowExecutionError
+from deerflow.workflow.resource_access import ResourceAccess, host_write_access, sandbox_write_access
 
 logger = logging.getLogger(__name__)
 
@@ -495,7 +496,36 @@ def preview_asset(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict
     )
 
 
+# ── automatic resource access ─────────────────────────────────────────────────
+
+
+def asset_resource_access(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """Declare the write target of a mutating asset operation.
+
+    ``inspect`` is read-only.  Import/convert write inside the sandbox, while
+    export writes one validated host path.  Reads do not lock (write/write
+    serialization only).
+    """
+    operation = str(params.get("operation") or "inspect").strip().lower()
+    if operation in ("import", "convert"):
+        return (sandbox_write_access(runtime),)
+    if operation != "export":
+        return ()
+
+    node_label = "data:asset (export)"
+    config = _config()
+    source = _source_ref(params, inputs, node_label=node_label)
+    target = _resolve_host_destination(
+        params,
+        config,
+        source_name=PurePosixPath(source.path).name,
+        node_label=node_label,
+    )
+    return (host_write_access(str(target)),)
+
+
 # ── entry point ───────────────────────────────────────────────────────────────
+
 
 _OPERATIONS = {
     "inspect": _inspect,

@@ -25,6 +25,7 @@ from deerflow.workflow.compensation import Compensation, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
 from deerflow.workflow.preview import RECOVERY_BACKUP, ActionPreview, declare, make_preview
 from deerflow.workflow.registry import WorkflowExecutionError
+from deerflow.workflow.resource_access import ResourceAccess, sandbox_write_access
 
 logger = logging.getLogger(__name__)
 
@@ -149,6 +150,13 @@ def exec_regex(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[st
 
 
 # ── data:file ────────────────────────────────────────────────────────────────
+
+
+def file_resource_access(runtime: WorkflowRuntime, params: dict[str, Any], _inputs: dict[str, Any]) -> tuple[ResourceAccess, ...]:
+    """Write mode locks the sandbox; read mode does not block other nodes."""
+    if params.get("operation", "read") == "write":
+        return (sandbox_write_access(runtime),)
+    return ()
 
 
 async def exec_file(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any]:

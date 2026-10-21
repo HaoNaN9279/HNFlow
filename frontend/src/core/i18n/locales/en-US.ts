@@ -551,8 +551,6 @@ export const enUS: Translations = {
           breakpoint: "Breakpoint",
           idempotency: "Idempotency key",
           merge: "Merge policy",
-          resourceLock: "Resource locks",
-          resourceLockTimeout: "Lock timeout (s)",
           requireApproval: "Require approval",
           onReject: "On reject",
           detectConflicts: "Detect conflicts",

@@ -2,9 +2,9 @@
 
 The workflow runtime used to assemble these two contexts ad hoc: the worker
 passed only ``build_context().executors`` into the compiler (dropping previewers
-and idempotency metadata), and built ``config["context"]`` key by key without a
-``user_id`` or a tool gateway.  That made approval/retry nodes fail at compile
-time and produced HumanTasks with an empty owner.
+and resource accessors), and built ``config["context"]`` key by key without a
+``user_id`` or a tool gateway.  That made approval nodes fail at compile time,
+disabled automatic locks, and produced HumanTasks with an empty owner.
 
 This module is the one place that knows how a workflow run is wired.  Both the
 HTTP entry point and the conversation-side dispatch layer reach it through
@@ -38,14 +38,15 @@ def build_workflow_compile_context(
 ) -> CompileContext:
     """Build a complete :class:`CompileContext` from an executor registry.
 
-    The registry is the source of truth for both compile-time facts: executors
-    and previewers (approval gates). Callers must not reach into
-    ``build_context().executors`` themselves.
+    The registry is the source of truth for the compile-time facts: executors,
+    previewers (approval gates), and resource accessors (automatic locks).
+    Callers must not reach into ``build_context().executors`` themselves.
     """
     built = registry.build_context()
     return CompileContext(
         executors=dict(built.executors),
         previews=dict(built.previews),
+        resource_accessors=dict(built.resource_accessors),
         checkpointer=checkpointer,
         definition_resolver=definition_resolver,
         max_nesting_depth=max_nesting_depth,
