@@ -258,7 +258,7 @@ test.describe("Workflow node forms", () => {
     await page.setViewportSize({ width: 1600, height: 900 });
   });
 
-  test("AI node form: edit instruction/agent, save, and restore on reload", async ({
+  test("AI node form: edit agent, save, and restore on reload", async ({
     page,
   }) => {
     test.setTimeout(60_000);
@@ -280,14 +280,6 @@ test.describe("Workflow node forms", () => {
 
     const card = nodeWrapper(page, "ai:llm_agent");
     await expect(card).toContainText("AI Agent");
-    const instruction = card.locator('textarea[id$="-instruction"]');
-    await expect(instruction).toBeVisible();
-
-    // instruction — required field, fill it.
-    const instructionText = "Summarize the monthly report";
-    await instruction.fill(instructionText);
-    await instruction.blur();
-
     // agent — switch to Custom agent... and type a name.
     await card.getByRole("combobox", { name: "Agent" }).click();
     await page.getByRole("option", { name: "Custom agent..." }).click();
@@ -322,7 +314,6 @@ test.describe("Workflow node forms", () => {
     expect(putBody.definition.nodes).toHaveLength(1);
     const aiNode = putBody.definition.nodes[0]!;
     expect(aiNode.type).toBe("ai:llm_agent");
-    expect(aiNode.params.instruction).toBe(instructionText);
     expect(aiNode.agent_name).toBe("publisher");
 
     // Reload — the mocked GET now returns the saved definition; re-select the
@@ -332,9 +323,6 @@ test.describe("Workflow node forms", () => {
     await nodeWrapper(page, "ai:llm_agent").click();
     const restoredCard = nodeWrapper(page, "ai:llm_agent");
     await expect(restoredCard).toContainText("AI Agent");
-    await expect(
-      restoredCard.locator('textarea[id$="-instruction"]'),
-    ).toHaveValue(instructionText);
     await expect(page.getByLabel("Custom agent name")).toHaveValue("publisher");
   });
 
@@ -457,12 +445,7 @@ test.describe("Workflow node forms", () => {
     const card = nodeWrapper(page, "ai:llm_agent");
     await expect(card).toContainText("AI Agent");
 
-    // Empty instruction surfaces the inline (non-blocking) required error.
-    const instruction = card.locator('textarea[id$="-instruction"]');
-    await expect(instruction).toBeVisible();
-    await expect(card.getByText("Instruction is required")).toBeVisible();
-
-    // An invalid custom agent name surfaces the pattern error inline too.
+    // An invalid custom agent name surfaces the pattern error inline.
     await card.getByRole("combobox", { name: "Agent" }).click();
     await page.getByRole("option", { name: "Custom agent..." }).click();
     const agentInput = page.getByLabel("Custom agent name");
@@ -493,7 +476,6 @@ test.describe("Workflow node forms", () => {
     );
     expect(aiNode).toBeTruthy();
     expect(aiNode!.agent_name).toBe("bad_name");
-    expect(aiNode!.params.instruction).toBe("");
 
     // Error strip surfaces the parsed message with the validation prefix.
     const errorList = page.getByTestId("workflow-error-list");

@@ -63,6 +63,7 @@ def validate_definition(def_: WorkflowDefinition, known_agent_names: set[str] | 
     errors.extend(_find_cycles(node_ids, node_map, def_.edges))
     errors.extend(_check_single_start_end(node_map, def_.edges))
     errors.extend(_check_edge_references(node_map, def_.edges))
+    errors.extend(_check_single_inbound_ports(def_.edges, node_map))
     errors.extend(_check_port_types(node_map, def_.edges))
     errors.extend(_check_review_nodes(node_map, def_.edges))
     errors.extend(_check_params_json_compatible(def_.nodes))
@@ -227,7 +228,7 @@ def _reachable(
 
 
 _REVIEW_CONTINUE_PORT = "continue_prompt"
-_REVIEW_INCOMPATIBLE_AI_PARAMS = ("output_schema", "context_policy", "model_policy", "model_profile", "memory", "retrieval")
+_REVIEW_INCOMPATIBLE_AI_PARAMS = ("model_profile",)
 
 
 def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[str]:
@@ -288,6 +289,10 @@ def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[st
             incompatible = [key for key in _REVIEW_INCOMPATIBLE_AI_PARAMS if (target.params or {}).get(key) is not None]
             if incompatible:
                 errors.append(f"node '{node.id}': rejected target '{target.id}' uses {', '.join(incompatible)}, which is not supported with session continuation")
+            from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PORT
+
+            if any(item.target == target.id and item.target_port == OUTPUT_SCHEMA_PORT for item in edges):
+                errors.append(f"node '{node.id}': rejected target '{target.id}' has an '{OUTPUT_SCHEMA_PORT}' input, which is not supported with session continuation")
             if start_id is not None:
                 if not _reachable(start_id, target.id, edges, node_map):
                     errors.append(f"node '{node.id}': rejected target '{target.id}' is not reachable from flow:start")
@@ -370,6 +375,26 @@ def _check_edge_references(node_map: dict[str, Node], edges: list[Edge]) -> list
 
 
 # ── Private: port type compatibility checks ──────────────────────────────────────
+
+
+def _check_single_inbound_ports(edges: list[Edge], node_map: dict[str, Node]) -> list[str]:
+    """Reject more than one edge into the same target input port.
+
+    ``flow:end`` is the one deliberate exception: it is a terminal sink, not a
+    data-merging node, and every branch needs a legal path to the single end.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    errors: list[str] = []
+    for index, edge in enumerate(edges):
+        target = node_map.get(edge.target)
+        if target is not None and target.type in (NodeType.FLOW_END, NodeType.FLOW_LOOP):
+            continue
+        key = (edge.target, edge.target_port)
+        if key in seen:
+            errors.append(f"edge[{index}]: input port '{edge.target}.{edge.target_port}' already has an incoming edge (edge[{seen[key]}]); multiple edges into one input port are not allowed")
+        else:
+            seen[key] = index
+    return errors
 
 
 def _check_port_types(node_map: dict[str, Node], edges: list[Edge]) -> list[str]:

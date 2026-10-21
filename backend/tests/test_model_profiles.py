@@ -24,6 +24,8 @@ class _Model:
         self.display_name = name.upper()
         self.supports_thinking = True
         self.supports_reasoning_effort = False
+        self.context_window = 128000
+        self.max_tokens = 4096
 
 
 class _Config:

@@ -96,9 +96,7 @@ const CRASH_CONFIRM = boolean("crash_confirm", "crashConfirm", {
 const COMMON_FIELDS: readonly NodeParamField[] = [
   boolean("breakpoint", "breakpoint"),
   json("idempotency", "idempotency", { helperKey: "jsonHint" }),
-  json("merge", "merge", { helperKey: "jsonHint" }),
   boolean("detect_conflicts", "detectConflicts"),
-  boolean("rollback_on_failure", "rollbackOnFailure"),
 ];
 
 const NO_BREAKPOINT_FIELDS = COMMON_FIELDS.filter(
@@ -168,16 +166,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
     text("name", "name"),
     json("value", "value", { helperKey: "jsonHint" }),
   ],
-  "data:knowledge": [
-    select("operation", "knowledgeOperation", ["retrieve", "ingest"]),
-    text("collection", "collection"),
-    text("query", "query"),
-    text("text", "documentText"),
-    text("doc_id", "docId"),
-    text("source", "source"),
-    number("top_k", "topK", { defaultValue: 5, min: 1 }),
-    json("retrieval", "retrieval", { helperKey: "jsonHint" }),
-  ],
+  "data:schema": [json("schema", "outputSchema", { helperKey: "jsonHint" })],
   "data:file": [
     select("operation", "fileOperation", ["read", "write"]),
     text("path", "path"),
@@ -221,14 +210,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
     json("arguments", "arguments", { helperKey: "jsonHint" }),
     CRASH_CONFIRM,
   ],
-  "ai:llm_agent": [
-    json("autonomy", "autonomy", { helperKey: "jsonHint" }),
-    json("output_schema", "outputSchema", { helperKey: "jsonHint" }),
-    json("context_policy", "contextPolicy", { helperKey: "jsonHint" }),
-    json("memory", "memory", { helperKey: "jsonHint" }),
-    json("retrieval", "retrieval", { helperKey: "jsonHint" }),
-    json("model_policy", "modelPolicy", { helperKey: "jsonHint" }),
-  ],
+  "ai:llm_agent": [],
   "human:task": [
     textarea("description", "description"),
     json("output_spec", "outputSpec", { helperKey: "jsonHint" }),
@@ -266,12 +248,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
  * sanitization.
  */
 const DEDICATED_PARAM_KEYS: Partial<Record<NodeType, readonly string[]>> = {
-  "ai:llm_agent": [
-    "instruction",
-    "agent_name",
-    "model_profile",
-    "capability_groups",
-  ],
+  "ai:llm_agent": ["agent_name", "model_profile", "capability_groups"],
   "ai:capability_group": ["groups"],
   "ai:prompt_preview": ["agent_node"],
   "app:launch": ["app"],

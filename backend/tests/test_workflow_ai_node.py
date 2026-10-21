@@ -1,15 +1,9 @@
-"""Tests for ``ai:llm_agent`` node execution (T21).
+"""Tests for the current ``ai:llm_agent`` node contract.
 
-Covers:
-- End-to-end: an ``ai:llm_agent`` node compiles and runs through a (mocked)
-  ``SubagentExecutor._aexecute``; the assembled prompt carries all three layers
-  (identity agent name / capability-group name / task-layer interpolation) and
-  the sub-agent's final text is written back to the node output port.
-- ``instruction`` missing/empty raises ``WorkflowExecutionError``.
-- ``agent_name=None`` yields the default lead identity (no custom-agent marker).
-- Compiler injection: non-AI node ``params`` are never polluted; an AI node's
-  injected ``params`` reach the executor without mutating the original
-  ``Node.params`` definition (``model_dump()`` shows no extra keys).
+The AI node has no instruction/autonomy/context-policy/memory/retrieval/model-
+policy parameters.  Its task comes from ``template_prompt`` (or
+``continue_prompt``), its schema comes from a ``data:schema`` input node, and
+context compression is automatic.
 """
 
 from __future__ import annotations
@@ -20,71 +14,52 @@ from typing import Any
 import pytest
 
 from deerflow.config.agents_config import AgentConfig
-from deerflow.workflow.compiler import (
-    CompileContext,
-    WorkflowRuntime,
-    clear_compile_cache,
-    compile_definition,
-)
+from deerflow.workflow.compiler import WorkflowRuntime, clear_compile_cache, compile_definition
 from deerflow.workflow.executors import WorkflowExecutionError, build_default_registry, exec_llm_agent
-from deerflow.workflow.schema import (
-    Edge,
-    Node,
-    NodeType,
-    Port,
-    PortType,
-    WorkflowDefinition,
-)
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Helpers (minimal copies from sibling test files — test files do not share
-# imports to avoid coupling)
-# ═══════════════════════════════════════════════════════════════════════════════
+from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
 
 
-def _make_def(nodes: list[Node] | None = None, edges: list[Edge] | None = None, **kwargs: Any) -> WorkflowDefinition:
-    kwargs.setdefault("id", "test-wf")
-    kwargs.setdefault("name", "Test Workflow")
-    return WorkflowDefinition(nodes=nodes or [], edges=edges or [], **kwargs)
+def _start_node() -> Node:
+    return Node(id="start", type=NodeType.FLOW_START, outputs=[Port(name="input", type=PortType.DATA)])
 
 
-def _start_node(id_: str = "start") -> Node:
-    return Node(id=id_, type=NodeType.FLOW_START, inputs=[], outputs=[Port(name="input", type=PortType.DATA)])
+def _end_node() -> Node:
+    return Node(id="end", type=NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)])
 
 
-def _end_node(id_: str = "end") -> Node:
-    return Node(id=id_, type=NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)], outputs=[])
-
-
-def _ai_node(
-    id_: str = "ai_step",
-    *,
-    instruction: str = "请处理 {{in}}",
-    agent_name: str | None = None,
-    capability_groups: list[str] | None = None,
-) -> Node:
+def _ai_node(*, agent_name: str | None = None, capability_groups: list[str] | None = None) -> Node:
     return Node(
-        id=id_,
+        id="ai_step",
         type=NodeType.AI_LLM_AGENT,
-        params={"instruction": instruction},
+        params={},
         agent_name=agent_name,
         capability_groups=capability_groups or [],
-        inputs=[Port(name="in", type=PortType.DATA)],
+        inputs=[
+            Port(name="in", type=PortType.DATA),
+            Port(name="template_prompt", type=PortType.DATA),
+        ],
         outputs=[Port(name="out", type=PortType.DATA)],
     )
 
 
-def _completed_result(text: str) -> Any:
-    return SimpleNamespace(status=SimpleNamespace(value="completed"), result=text, error=None)
+def _task_node(value: str = "请总结：{{in}}") -> Node:
+    return Node(
+        id="task",
+        type=NodeType.DATA_ASSIGN,
+        inputs=[Port(name="in", type=PortType.DATA)],
+        outputs=[Port(name="out", type=PortType.DATA)],
+        params={"value": value},
+    )
 
 
-def _failed_result(error: str) -> Any:
-    return SimpleNamespace(status=SimpleNamespace(value="failed"), result=None, error=error)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Fixtures
-# ═══════════════════════════════════════════════════════════════════════════════
+def _graph_def() -> WorkflowDefinition:
+    nodes = [_start_node(), _ai_node(agent_name="publisher", capability_groups=["publish"]), _end_node()]
+    edges = [
+        Edge(source="start", source_port="input", target="ai_step", target_port="in"),
+        Edge(source="start", source_port="input", target="ai_step", target_port="template_prompt"),
+        Edge(source="ai_step", source_port="out", target="end", target_port="in"),
+    ]
+    return WorkflowDefinition(id="test-wf", name="Test Workflow", nodes=nodes, edges=edges)
 
 
 @pytest.fixture(autouse=True)
@@ -94,13 +69,7 @@ def _isolate_cache() -> Any:
 
 
 @pytest.fixture
-def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Replace ``SubagentExecutor`` with a fake returning a scripted result.
-
-    ``exec_llm_agent`` lazily imports ``SubagentExecutor`` from
-    ``deerflow.subagents``; patching the package attribute shadows that lazy
-    export without importing the real (heavy) executor module.
-    """
+def fake_executor(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     captured: dict[str, Any] = {}
 
     class FakeExecutor:
@@ -114,286 +83,74 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
     import deerflow.subagents as subagents_pkg
 
     monkeypatch.setattr(subagents_pkg, "SubagentExecutor", FakeExecutor)
-    # Keep these prompt/wiring tests hermetic: capability-group tool/content
-    # resolution is covered separately in test_workflow_tool_gateway.py and
-    # test_capability_group_runtime.py.
     monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: [])
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.prompts.load_agent_soul", lambda agent_name, user_id=None: None)
     yield captured
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# 1. End-to-end: compile + run through a mocked sub-agent
-# ═══════════════════════════════════════════════════════════════════════════════
+def _completed(text: str) -> Any:
+    return SimpleNamespace(status=SimpleNamespace(value="completed"), result=text, error=None)
 
 
-class TestAINodeE2E:
-    @pytest.mark.asyncio
-    async def test_ai_node_compiles_and_runs(self, fake_executor: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-        fake_executor["result"] = _completed_result("AI 完成")
+@pytest.mark.asyncio
+async def test_template_prompt_is_the_only_task_source(fake_executor: dict[str, Any]) -> None:
+    fake_executor["result"] = _completed("ok")
+    result = await exec_llm_agent(
+        WorkflowRuntime(context={"user_id": "u1", "thread_id": "t"}),
+        {"node_id": "ai_step"},
+        {"in": "value", "template_prompt": "Task {{in}}"},
+    )
 
-        # Avoid disk IO: the custom-agent config/SOUL loaders would hit the file
-        # store. Patch the seams ``exec_llm_agent`` and ``prompts`` use directly.
-        monkeypatch.setattr(
-            "deerflow.workflow.executors.ai.load_agent_config",
-            lambda name, user_id=None: AgentConfig(name=name, skills=["publish-skill"]),
-        )
-        monkeypatch.setattr("deerflow.workflow.prompts.load_agent_soul", lambda agent_name, user_id=None: None)
+    assert fake_executor["task"] == "Task value"
+    assert "value" not in (fake_executor["kwargs"]["config"].system_prompt or "")
+    assert result["out"] == "ok"
 
-        nodes = [
-            _start_node(),
-            _ai_node("ai_step", instruction="请总结：{{in}}", agent_name="publisher", capability_groups=["publish"]),
-            _end_node(),
-        ]
-        edges = [
-            Edge(source="start", source_port="input", target="ai_step", target_port="in"),
-            Edge(source="ai_step", source_port="out", target="end", target_port="in"),
-        ]
-        def_ = _make_def(nodes, edges)
-        ctx = build_default_registry().build_context()
-        graph = compile_definition(def_, context=ctx)
 
-        state = await graph.ainvoke(
-            {"wf:start:input": "hello"},
-            {"configurable": {"thread_id": "t"}, "context": {"thread_id": "t", "user_id": "u1"}},
-        )
-
-        # Result written back to the node's output port.
-        assert state.get("wf:ai_step:out") == "AI 完成"
-        # The full text prompt is published for ``ai:prompt_preview``.
-        full_prompt = state.get("wf:ai_step:__prompt")
-        assert isinstance(full_prompt, str)
-        assert "publisher" in full_prompt
-        assert "请总结：hello" in full_prompt
-
-        # System prompt carries identity + capability; the task turn carries only
-        # the task layer.  Sending the full prompt in both places duplicates every
-        # instruction and doubles token cost.
-        cfg = fake_executor["kwargs"]["config"]
-        system_prompt = cfg.system_prompt
-        task_prompt = fake_executor["task"]
-        assert "publisher" in system_prompt  # identity layer: agent name
-        assert "publish" in system_prompt  # capability layer: group name
-        assert "publish-skill" in system_prompt  # capability layer: agent skills whitelist
-        assert "请总结：hello" in task_prompt  # task layer: {{in}} interpolation
-        assert "publisher" not in task_prompt
-        assert "publish-skill" not in task_prompt
-
-        # The sub-agent was bound with the assembled prompt and the expected
-        # safety/checkpoint/recursion flags.
-        assert cfg.disallowed_tools == ["ask_clarification", "present_files"]
-        assert cfg.checkpointer is False
-        assert cfg.allow_recursion is False
-        assert cfg.name == "ai:ai_step"
-
-    @pytest.mark.asyncio
-    async def test_template_prompt_ends_the_task_turn(self, fake_executor: dict[str, Any]) -> None:
-        fake_executor["result"] = _completed_result("ok")
-        rt = WorkflowRuntime()
-
-        result = await exec_llm_agent(
-            rt,
-            {"instruction": "Task {{in}}"},
-            {"in": "value", "template_prompt": "User {{in}}"},
-        )
-
-        system_prompt = fake_executor["kwargs"]["config"].system_prompt
-        assert fake_executor["task"] == "Task value\n\nUser value"
-        assert "User value" not in system_prompt
-        assert result["__workflow_prompt"].endswith("Task value\n\nUser value")
-
-    @pytest.mark.asyncio
-    async def test_legacy_user_prompt_is_ignored(self, fake_executor: dict[str, Any]) -> None:
-        fake_executor["result"] = _completed_result("ok")
-        rt = WorkflowRuntime()
-
+@pytest.mark.asyncio
+async def test_missing_template_prompt_raises(fake_executor: dict[str, Any]) -> None:
+    fake_executor["result"] = _completed("ok")
+    with pytest.raises(WorkflowExecutionError, match="template_prompt"):
         await exec_llm_agent(
-            rt,
-            {"instruction": "Task", "user_prompt": "legacy"},
+            WorkflowRuntime(context={"user_id": "u1", "thread_id": "t"}),
+            {"node_id": "ai_step"},
             {"in": "value"},
         )
 
-        assert fake_executor["task"] == "Task"
 
-    @pytest.mark.asyncio
-    async def test_capability_rules_and_skill_descriptions_reach_prompt(
-        self,
-        fake_executor: dict[str, Any],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        fake_executor["result"] = _completed_result("ok")
-        rule = SimpleNamespace(
-            group_name="publish",
-            group_version="0.1.0",
-            path="rules/a.md",
-            content="RULE BODY",
-        )
-        skill = SimpleNamespace(name="publisher", description="SKILL DESC")
-        monkeypatch.setattr(
-            "deerflow.workflow.executors.ai.load_capability_rules",
-            lambda *args, **kwargs: [rule],
-        )
-        monkeypatch.setattr(
-            "deerflow.workflow.executors.ai.load_capability_skills",
-            lambda *args, **kwargs: [skill],
-        )
-        monkeypatch.setattr(
-            "deerflow.workflow.executors.ai.build_read_capability_skill_tool",
-            lambda skills: "skill-reader",
-        )
+@pytest.mark.asyncio
+async def test_compiled_graph_runs_and_exposes_prompt(fake_executor: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_executor["result"] = _completed("AI 完成")
+    monkeypatch.setattr(
+        "deerflow.workflow.executors.ai.load_agent_config",
+        lambda name, user_id=None: AgentConfig(name=name, skills=["publish-skill"]),
+    )
 
+    graph = compile_definition(_graph_def(), context=build_default_registry().build_context())
+    state = await graph.ainvoke(
+        {"wf:start:input": "hello"},
+        {"configurable": {"thread_id": "t"}, "context": {"thread_id": "t", "user_id": "u1"}},
+    )
+
+    assert state.get("wf:ai_step:out") == "AI 完成"
+    assert "hello" in state.get("wf:ai_step:__prompt", "")
+    cfg = fake_executor["kwargs"]["config"]
+    assert "publisher" in (cfg.system_prompt or "")
+    assert "publish-skill" in (cfg.system_prompt or "")
+    assert "task" in cfg.disallowed_tools
+    assert cfg.allow_recursion is False
+    assert cfg.max_turns == 50
+    assert getattr(cfg.token_budget, "enabled", None) is False
+    assert fake_executor["task"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_failed_subagent_propagates(fake_executor: dict[str, Any]) -> None:
+    fake_executor["result"] = SimpleNamespace(status=SimpleNamespace(value="failed"), result=None, error="boom")
+    with pytest.raises(WorkflowExecutionError, match="boom"):
         await exec_llm_agent(
-            WorkflowRuntime(),
-            {"instruction": "Task", "capability_groups": ["publish"]},
-            {"in": "value"},
+            WorkflowRuntime(context={"user_id": "u1", "thread_id": "t"}),
+            {"node_id": "ai_step"},
+            {"template_prompt": "Task"},
         )
-
-        system_prompt = fake_executor["kwargs"]["config"].system_prompt
-        assert "RULE BODY" in system_prompt
-        assert "publisher: SKILL DESC" in system_prompt
-        assert fake_executor["kwargs"]["tools"] == ["skill-reader"]
-
-    @pytest.mark.asyncio
-    async def test_ai_node_failure_propagates(self, fake_executor: dict[str, Any]) -> None:
-        fake_executor["result"] = _failed_result("boom")
-        nodes = [_start_node(), _ai_node("ai_step"), _end_node()]
-        edges = [
-            Edge(source="start", source_port="input", target="ai_step", target_port="in"),
-            Edge(source="ai_step", source_port="out", target="end", target_port="in"),
-        ]
-        def_ = _make_def(nodes, edges)
-        ctx = build_default_registry().build_context()
-        graph = compile_definition(def_, context=ctx)
-
-        with pytest.raises(WorkflowExecutionError, match="ai:llm_agent execution failed") as exc_info:
-            await graph.ainvoke({"wf:start:input": "x"})
-        assert "boom" in str(exc_info.value)
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 2. Error semantics
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestAINodeErrors:
-    @pytest.mark.asyncio
-    async def test_instruction_missing_raises(self) -> None:
-        rt = WorkflowRuntime()
-        with pytest.raises(WorkflowExecutionError, match="instruction"):
-            await exec_llm_agent(rt, {}, {"in": "x"})
-
-    @pytest.mark.asyncio
-    async def test_instruction_empty_raises(self) -> None:
-        rt = WorkflowRuntime()
-        with pytest.raises(WorkflowExecutionError, match="instruction"):
-            await exec_llm_agent(rt, {"instruction": ""}, {"in": "x"})
-
-    @pytest.mark.asyncio
-    async def test_non_string_template_prompt_raises(self) -> None:
-        rt = WorkflowRuntime()
-        with pytest.raises(WorkflowExecutionError, match="template_prompt"):
-            await exec_llm_agent(rt, {"instruction": "do"}, {"in": "x", "template_prompt": 7})
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 3. Identity layer
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestIdentityLayer:
-    @pytest.mark.asyncio
-    async def test_agent_name_none_uses_default_lead_identity(self, fake_executor: dict[str, Any]) -> None:
-        fake_executor["result"] = _completed_result("ok")
-        rt = WorkflowRuntime()
-
-        result = await exec_llm_agent(rt, {"instruction": "执行 {{in}}"}, {"in": "value"})
-
-        assert result["out"] == "ok"
-        assert result["__workflow_prompt"]
-        system_prompt = fake_executor["kwargs"]["config"].system_prompt
-        task_prompt = fake_executor["task"]
-        assert "通用 AI 助手" in system_prompt
-        assert "执行 value" in task_prompt
-        assert "通用 AI 助手" not in task_prompt
-        assert "自定义 agent" not in system_prompt
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# 4. Compiler injection
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-class TestCompilerInjection:
-    @pytest.mark.asyncio
-    async def test_non_ai_node_params_not_polluted(self) -> None:
-        captured: dict[str, Any] = {}
-
-        def recording(_rt: Any, params: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
-            captured["params"] = params
-            return {"out": params.get("value")}
-
-        assign = Node(
-            id="a",
-            type=NodeType.DATA_ASSIGN,
-            params={"value": 7},
-            inputs=[Port(name="in", type=PortType.DATA)],
-            outputs=[Port(name="out", type=PortType.DATA)],
-        )
-        nodes = [_start_node(), assign, _end_node()]
-        edges = [
-            Edge(source="start", source_port="input", target="a", target_port="in"),
-            Edge(source="a", source_port="out", target="end", target_port="in"),
-        ]
-        def_ = _make_def(nodes, edges)
-        ctx = CompileContext(executors={NodeType.DATA_ASSIGN: recording})
-        graph = compile_definition(def_, context=ctx)
-
-        await graph.ainvoke({"wf:start:input": "x"})
-
-        # Executor received the untouched params and the definition is unchanged.
-        assert captured["params"] == {"value": 7}
-        assert assign.params == {"value": 7}
-        assert "agent_name" not in assign.params
-        assert "capability_groups" not in assign.params
-        assert "node_id" not in assign.params
-
-    @pytest.mark.asyncio
-    async def test_ai_node_params_injected_without_mutating_definition(self) -> None:
-        captured: dict[str, Any] = {}
-
-        def recording(_rt: Any, params: dict[str, Any], _inputs: dict[str, Any]) -> dict[str, Any]:
-            captured["params"] = params
-            return {"out": "done"}
-
-        ai = Node(
-            id="ai_step",
-            type=NodeType.AI_LLM_AGENT,
-            params={"instruction": "do {{in}}"},
-            agent_name="publisher",
-            capability_groups=["publish"],
-            inputs=[Port(name="in", type=PortType.DATA)],
-            outputs=[Port(name="out", type=PortType.DATA)],
-        )
-        nodes = [_start_node(), ai, _end_node()]
-        edges = [
-            Edge(source="start", source_port="input", target="ai_step", target_port="in"),
-            Edge(source="ai_step", source_port="out", target="end", target_port="in"),
-        ]
-        def_ = _make_def(nodes, edges)
-        ctx = CompileContext(executors={NodeType.AI_LLM_AGENT: recording})
-        graph = compile_definition(def_, context=ctx)
-
-        await graph.ainvoke({"wf:start:input": "x"})
-
-        # The executor received the injected params...
-        assert captured["params"]["agent_name"] == "publisher"
-        assert captured["params"]["capability_groups"] == ["publish"]
-        assert captured["params"]["node_id"] == "ai_step"
-        assert captured["params"]["instruction"] == "do {{in}}"
-        # ...without mutating the original node definition.
-        assert ai.params == {"instruction": "do {{in}}"}
-        assert "agent_name" not in ai.params
-        assert "capability_groups" not in ai.params
-        assert "node_id" not in ai.params
-        assert ai.model_dump()["params"] == {"instruction": "do {{in}}"}

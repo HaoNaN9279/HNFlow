@@ -183,6 +183,8 @@ async def run_workflow(
         max_delegation_depth=ctx.app_config.subagents.max_delegation_depth if ctx.app_config is not None else 3,
         model_profiles=profiles,
         available_model_names=model_names(getattr(ctx.app_config, "models", None)),
+        model_context_windows={str(model.name): int(model.context_window) for model in (getattr(ctx.app_config, "models", None) or ()) if getattr(model, "context_window", None) is not None},
+        default_model_name=str(ctx.app_config.models[0].name) if ctx.app_config is not None and ctx.app_config.models else None,
     )
     graph = compile_definition(definition, context=compile_ctx)
 

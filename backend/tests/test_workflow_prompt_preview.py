@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from deerflow.workflow.context_policy import estimate_tokens
 from deerflow.workflow.prompt_preview import build_prompt_preview
-from deerflow.workflow.prompts import DEFAULT_LEAD_IDENTITY
 from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
 
 
@@ -40,7 +38,7 @@ def _definition(
         _node(
             "ai",
             NodeType.AI_LLM_AGENT,
-            params=ai_params or {"instruction": "Do {{in}}"},
+            params=ai_params or {},
             inputs=ai_inputs or [Port(name="in", type=PortType.DATA)],
             outputs=[Port(name="out", type=PortType.DATA)],
         ),
@@ -50,6 +48,8 @@ def _definition(
         Edge(source="start", source_port="out", target="ai", target_port="in"),
         Edge(source="ai", source_port="out", target="end", target_port="in"),
     ]
+    if any(port.name == "template_prompt" for port in (ai_inputs or [])):
+        edges.append(Edge(source="start", source_port="out", target="ai", target_port="template_prompt"))
     if selector:
         nodes.append(
             _node(
@@ -81,14 +81,11 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
         lambda groups, user_id=None: [],
     )
     definition = _definition(
-        ai_params={
-            "instruction": "Do {{in}}",
-            "context_policy": {
-                "examples": ["Example A"],
-                "include": ["in"],
-            },
-        },
         selector=True,
+        ai_inputs=[
+            Port(name="in", type=PortType.DATA),
+            Port(name="template_prompt", type=PortType.DATA),
+        ],
     )
 
     preview = build_prompt_preview(definition, "ai")
@@ -96,72 +93,31 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
     assert [component.key for component in preview.components] == [
         "identity",
         "capability",
-        "examples",
-        "context",
-        "task",
+        "template_prompt",
     ]
     assert preview.capability_groups == ["alpha", "beta"]
-
-    context = _by_key(preview, "context")
-    assert context.state == "runtime"
-    assert context.summary == "Ports: in \u2190 start.out"
-
-    task = _by_key(preview, "task")
-    assert task.content == "Do {{in}}"
-    assert task.source == "params.instruction"
-    assert "placeholders: in \u2190 start.out" in task.summary
-    assert preview.task_prompt == "Do {{in}}"
-    assert preview.prompt.endswith("Do {{in}}")
+    assert preview.task_prompt == ""
+    assert "template_prompt" in preview.omitted_runtime_blocks
 
 
-def test_runtime_blocks_are_listed_but_have_no_static_content() -> None:
+def test_runtime_task_has_no_static_content() -> None:
     definition = _definition(
-        ai_params={
-            "instruction": "Do it",
-            "memory": {"scopes": ["session"]},
-            "retrieval": {"collection": "docs", "top_k": 3},
-        }
+        ai_inputs=[
+            Port(name="in", type=PortType.DATA),
+            Port(name="template_prompt", type=PortType.DATA),
+        ]
     )
 
     preview = build_prompt_preview(definition, "ai")
 
-    assert [component.key for component in preview.components] == [
-        "retrieval",
-        "memory",
-        "identity",
-        "task",
-    ]
-    memory = _by_key(preview, "memory")
-    retrieval = _by_key(preview, "retrieval")
-    assert memory.state == "runtime"
-    assert retrieval.state == "runtime"
-    assert memory.content == ""
-    assert retrieval.content == ""
-    assert preview.omitted_runtime_blocks == ("memory", "retrieval")
-
-
-def test_budget_dropped_source_is_marked() -> None:
-    scaffold = estimate_tokens(DEFAULT_LEAD_IDENTITY) + estimate_tokens("Do it")
-    definition = _definition(
-        ai_params={
-            "instruction": "Do it",
-            "context_policy": {
-                "examples": ["x" * 1000],
-                "budget": {"total_tokens": scaffold + 1},
-            },
-        }
-    )
-
-    preview = build_prompt_preview(definition, "ai")
-
-    examples = _by_key(preview, "examples")
-    assert examples.state == "dropped"
-    assert examples.content == ""
+    template = _by_key(preview, "template_prompt")
+    assert template.state == "runtime"
+    assert template.content == ""
+    assert preview.omitted_runtime_blocks == ("template_prompt",)
 
 
 def test_template_prompt_port_is_a_runtime_source() -> None:
     definition = _definition(
-        ai_params={"instruction": "Do it"},
         ai_inputs=[
             Port(name="in", type=PortType.DATA),
             Port(name="template_prompt", type=PortType.DATA),
@@ -209,7 +165,6 @@ def test_rules_and_skill_descriptions_have_their_own_sources(monkeypatch) -> Non
         lambda groups, user_id=None: [skill],
     )
     definition = _definition(
-        ai_params={"instruction": "Do it"},
         selector=True,
     )
 

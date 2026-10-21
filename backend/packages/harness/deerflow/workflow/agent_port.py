@@ -72,6 +72,7 @@ class AgentTurnRequest:
     delegation_depth: int = 0
     user_id: str | None = None
     app_config: Any | None = None
+    context_compression: Any | None = None
     thread_id: str | None = None
     checkpoint_thread_id: str | None = None
     resume_checkpoint_id: str | None = None
@@ -134,6 +135,7 @@ class DeerFlowAgentAdapter:
             timeout_seconds=request.timeout_seconds,
             token_budget=request.token_budget,
             model=request.model,
+            context_compression=request.context_compression,
         )
         executor_kwargs: dict[str, Any] = {
             "config": config,

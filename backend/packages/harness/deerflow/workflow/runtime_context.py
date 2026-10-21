@@ -37,6 +37,8 @@ def build_workflow_compile_context(
     max_delegation_depth: int = 3,
     model_profiles: dict[str, dict[str, Any]] | None = None,
     available_model_names: frozenset[str] | None = None,
+    model_context_windows: dict[str, int] | None = None,
+    default_model_name: str | None = None,
 ) -> CompileContext:
     """Build a complete :class:`CompileContext` from an executor registry.
 
@@ -55,6 +57,8 @@ def build_workflow_compile_context(
         max_delegation_depth=max_delegation_depth,
         model_profiles=dict(model_profiles or {}),
         available_model_names=frozenset(available_model_names or ()),
+        model_context_windows=dict(model_context_windows or {}),
+        default_model_name=default_model_name,
     )
 
 
@@ -98,8 +102,6 @@ def build_workflow_runtime_context(
     debug_step: bool = False,
     tool_gateway: Any | None = None,
     agent_adapter: Any | None = None,
-    memory_store: Any | None = None,
-    knowledge_store: Any | None = None,
     notifier: Any | None = None,
     model_profiles: dict[str, dict[str, Any]] | None = None,
     extra: dict[str, Any] | None = None,
@@ -159,14 +161,6 @@ def build_workflow_runtime_context(
 
         context[AGENT_ADAPTER_CONTEXT_KEY] = agent_adapter
 
-    if memory_store is not None:
-        from deerflow.workflow.memory import MEMORY_STORE_CONTEXT_KEY
-
-        context[MEMORY_STORE_CONTEXT_KEY] = memory_store
-    if knowledge_store is not None:
-        from deerflow.workflow.knowledge import KNOWLEDGE_STORE_CONTEXT_KEY
-
-        context[KNOWLEDGE_STORE_CONTEXT_KEY] = knowledge_store
     if notifier is not None:
         context["notifier"] = notifier
     if model_profiles is not None:

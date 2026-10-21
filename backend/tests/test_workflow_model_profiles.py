@@ -44,8 +44,8 @@ def _ai(params: dict[str, Any] | None = None) -> Node:
     return Node(
         id="ai",
         type=NodeType.AI_LLM_AGENT,
-        params={"instruction": "do it", **(params or {})},
-        inputs=[Port(name="in", type=PortType.DATA)],
+        params={**(params or {})},
+        inputs=[Port(name="in", type=PortType.DATA), Port(name="template_prompt", type=PortType.DATA)],
         outputs=[Port(name="out", type=PortType.DATA)],
     )
 
@@ -57,6 +57,7 @@ def _def(params: dict[str, Any] | None = None) -> WorkflowDefinition:
         nodes=[_start(), _ai(params), _end()],
         edges=[
             Edge(source="start", source_port="input", target="ai", target_port="in"),
+            Edge(source="start", source_port="input", target="ai", target_port="template_prompt"),
             Edge(source="ai", source_port="out", target="end", target_port="in"),
         ],
     )
@@ -114,8 +115,8 @@ class TestCompileValidation:
                 context=_compile_context({"mp-fast": {**PROFILE, "enabled": False}}),
             )
 
-    def test_profile_and_policy_are_mutually_exclusive(self) -> None:
-        with pytest.raises(WorkflowCompileError, match="cannot be combined"):
+    def test_model_policy_is_removed(self) -> None:
+        with pytest.raises(WorkflowCompileError, match="model_policy"):
             compile_definition(
                 _def({"model_profile": "mp-fast", "model_policy": {"prefer": "default"}}),
                 context=_compile_context(),
@@ -171,7 +172,7 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
 
 
 def _runtime() -> WorkflowRuntime:
-    app_config = SimpleNamespace(models=[SimpleNamespace(name="cloud-fast"), SimpleNamespace(name="cloud-big")])
+    app_config = SimpleNamespace(models=[SimpleNamespace(name="cloud-fast", context_window=128000), SimpleNamespace(name="cloud-big", context_window=128000)])
     return WorkflowRuntime(
         context={
             "user_id": "u1",
@@ -187,7 +188,7 @@ class TestExecutorModelProfiles:
     async def test_profile_resolves_actual_model(self, fake_executor: dict[str, Any]) -> None:
         from deerflow.workflow.executors.ai import exec_llm_agent
 
-        await exec_llm_agent(_runtime(), {"instruction": "hi", "node_id": "n", "model_profile": "mp-fast"}, {})
+        await exec_llm_agent(_runtime(), {"node_id": "n", "model_profile": "mp-fast"}, {"template_prompt": "hi"})
         assert fake_executor["kwargs"]["config"].model == "cloud-fast"
 
     @pytest.mark.asyncio
@@ -195,7 +196,7 @@ class TestExecutorModelProfiles:
         from deerflow.workflow.executors.ai import exec_llm_agent
 
         with pytest.raises(WorkflowExecutionError, match="does not exist"):
-            await exec_llm_agent(_runtime(), {"instruction": "hi", "node_id": "n", "model_profile": "missing"}, {})
+            await exec_llm_agent(_runtime(), {"node_id": "n", "model_profile": "missing"}, {"template_prompt": "hi"})
 
     @pytest.mark.asyncio
     async def test_continue_mode_rejects_profile(self, fake_executor: dict[str, Any]) -> None:
@@ -204,6 +205,6 @@ class TestExecutorModelProfiles:
         with pytest.raises(WorkflowExecutionError, match="session continuation"):
             await exec_llm_agent(
                 _runtime(),
-                {"instruction": "hi", "node_id": "n", "model_profile": "mp-fast"},
-                {"continue_prompt": "more"},
+                {"node_id": "n", "model_profile": "mp-fast"},
+                {"template_prompt": "hi", "continue_prompt": "more"},
             )

@@ -919,6 +919,7 @@ export const enUS: Translations = {
       deleteFailed: "Failed to delete workflow",
       validationPrefix: "Validation failed: ",
       portTypeMismatch: "Port types do not match",
+      portAlreadyConnected: "This input port already has an incoming edge",
       selfConnection: "A node cannot connect to itself",
       missingPort: "Missing port",
     },

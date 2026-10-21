@@ -26,7 +26,6 @@ export type NodeFormMapping = {
 
 /** Editable values for the node form, keyed by the schema field keys. */
 export type NodeFormValues = {
-  instruction?: string;
   agent_name?: string;
   model_profile?: string;
   capability_groups?: string[];
@@ -136,10 +135,6 @@ function parseMapping(raw: unknown): NodeFormMapping {
  */
 export function parseNodeFormValues(node: WorkflowNode): NodeFormValues {
   const values: NodeFormValues = {
-    instruction:
-      typeof node.params.instruction === "string"
-        ? node.params.instruction
-        : "",
     agent_name: node.agent_name ?? "",
     capability_groups: node.capability_groups
       ? [...node.capability_groups]
@@ -198,7 +193,6 @@ export function applyNodeFormValues(
 ): WorkflowNode {
   const params: Record<string, unknown> = {
     ...node.params,
-    instruction: values.instruction ?? "",
   };
   // The old user-prompt param was removed from AI nodes; drop it from legacy
   // definitions on the next save so it cannot resurface in the generic editor.
@@ -285,9 +279,6 @@ export function validateNodeForm(
   node?: Pick<WorkflowNode, "outputs">,
 ): Record<string, string> {
   const errors: Record<string, string> = {};
-  if (!(values.instruction ?? "").trim()) {
-    errors.instruction = "required";
-  }
   if (!(values.template_id ?? "").trim()) {
     errors.template_id = "required";
   }

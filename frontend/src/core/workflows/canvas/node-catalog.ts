@@ -173,16 +173,14 @@ export const NODE_CATALOG = [
       "Read / write / append a workflow-level shared variable (blackboard).",
   },
   {
-    type: "data:knowledge",
-    label: "Knowledge",
+    type: "data:schema",
+    label: "Output Schema",
     category: "data",
-    defaultInputs: [{ name: "in", type: "data", required: false }],
-    defaultOutputs: [
-      { name: "out", type: "data", required: true },
-      { name: "records", type: "array", required: false },
-    ],
-    defaultParams: { operation: "retrieve", collection: "", top_k: 5 },
-    description: "Ingest or retrieve local knowledge with citations (RAG).",
+    defaultInputs: [],
+    defaultOutputs: [{ name: "schema", type: "record", required: true }],
+    defaultParams: { schema: { fields: {}, required: [], enum_values: {} } },
+    description:
+      "Declare an AI node's structured-output schema and wire it into output_schema.",
   },
   {
     type: "data:file",
@@ -261,7 +259,7 @@ export const NODE_CATALOG = [
     label: "LLM Agent",
     category: "ai",
     defaultInputs: [
-      { name: "in", type: "data", required: true },
+      { name: "in", type: "data", required: false },
       {
         name: "capability_groups",
         type: "array",
@@ -273,8 +271,7 @@ export const NODE_CATALOG = [
         name: "template_prompt",
         type: "data",
         required: false,
-        description:
-          "Template prompt (reset mode — full re-run from a template)",
+        description: "Task prompt for a fresh template turn",
       },
       {
         name: "continue_prompt",
@@ -282,10 +279,16 @@ export const NODE_CATALOG = [
         required: false,
         description: "Continue this node's session with a new prompt",
       },
+      {
+        name: "output_schema",
+        type: "record",
+        required: false,
+        description: "Structured-output schema from a data:schema node",
+      },
     ],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
-    defaultParams: { instruction: "" },
-    description: "Run a one-shot sub-agent from an instruction template.",
+    defaultParams: {},
+    description: "Run one LLM agent turn from a wired template prompt.",
   },
   {
     type: "ai:capability_group",

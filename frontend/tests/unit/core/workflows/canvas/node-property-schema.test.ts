@@ -59,7 +59,6 @@ describe("fixed node property schema", () => {
     });
 
     expect(params).toEqual({
-      instruction: "Do it",
       capability_groups: ["alpha"],
       breakpoint: true,
     });

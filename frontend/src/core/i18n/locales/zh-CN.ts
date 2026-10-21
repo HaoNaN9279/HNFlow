@@ -887,6 +887,7 @@ export const zhCN: Translations = {
       deleteFailed: "删除工作流失败",
       validationPrefix: "校验失败：",
       portTypeMismatch: "端口类型不匹配",
+      portAlreadyConnected: "该输入端口已连接，不能接入多条边",
       selfConnection: "节点不能连接到自身",
       missingPort: "缺少端口",
     },

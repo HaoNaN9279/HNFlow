@@ -93,21 +93,27 @@ describe("node catalog", () => {
       "capability_groups",
       "template_prompt",
       "continue_prompt",
+      "output_schema",
     ]);
     expect(ai.defaultInputs[0]).toMatchObject({
       name: "in",
       type: "data",
-      required: true,
+      required: false,
     });
     expect(ai.defaultInputs[1]).toMatchObject({
       name: "capability_groups",
       type: "array",
       required: false,
     });
-    for (const port of ai.defaultInputs.slice(2)) {
+    for (const port of ai.defaultInputs.slice(2, 4)) {
       expect(port).toMatchObject({ type: "data", required: false });
       expect(typeof port.description).toBe("string");
     }
+    expect(ai.defaultInputs[4]).toMatchObject({
+      name: "output_schema",
+      type: "record",
+      required: false,
+    });
   });
 
   test("key default params match the task spec", () => {
@@ -147,9 +153,7 @@ describe("node catalog", () => {
     expect(getNodeCatalogEntry("tool:log")!.defaultParams).toEqual({
       message: "",
     });
-    expect(getNodeCatalogEntry("ai:llm_agent")!.defaultParams).toEqual({
-      instruction: "",
-    });
+    expect(getNodeCatalogEntry("ai:llm_agent")!.defaultParams).toEqual({});
     expect(getNodeCatalogEntry("human:task")!.defaultParams).toEqual({
       description: "",
     });

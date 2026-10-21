@@ -26,7 +26,7 @@ const aiNode = (): WorkflowNode => ({
   type: "ai:llm_agent",
   inputs: [],
   outputs: [],
-  params: { instruction: "Summarize the input", extra: 1 },
+  params: { extra: 1 },
   capability_groups: ["research", "web"],
   agent_name: "lead",
 });
@@ -70,16 +70,13 @@ const mappingNode = (): WorkflowNode => ({
 });
 
 describe("node form schema", () => {
-  test("AI_NODE_FIELDS covers instruction/agent_name/capability_groups", () => {
+  test("AI_NODE_FIELDS covers agent_name/model_profile/capability_groups", () => {
     expect(AI_NODE_FIELDS.map((f) => f.key)).toEqual([
-      "instruction",
       "agent_name",
       "model_profile",
       "capability_groups",
     ]);
     const byKey = Object.fromEntries(AI_NODE_FIELDS.map((f) => [f.key, f]));
-    expect(byKey.instruction?.kind).toBe("textarea");
-    expect(byKey.instruction?.required).toBe(true);
     expect(byKey.agent_name?.kind).toBe("select");
     expect(byKey.agent_name?.pattern).toBe(AGENT_NAME_PATTERN);
     expect(byKey.agent_name?.options?.[0]?.value).toBe("None");
@@ -108,14 +105,13 @@ describe("node form schema", () => {
 });
 
 describe("parseNodeFormValues", () => {
-  test("reads instruction from params, top-level fields, and subworkflow spec", () => {
+  test("reads top-level fields and subworkflow spec", () => {
     const node = {
       ...subworkflowNode(),
       agent_name: "researcher-2",
       capability_groups: ["web"],
     };
     const values = parseNodeFormValues(node);
-    expect(values.instruction).toBe("");
     expect(values.agent_name).toBe("researcher-2");
     expect(values.capability_groups).toEqual(["web"]);
     expect(values.template_id).toBe("wf-001");
@@ -128,19 +124,13 @@ describe("parseNodeFormValues", () => {
       type: "ai:llm_agent",
       inputs: [],
       outputs: [],
-      params: { subworkflow: "not-a-dict", instruction: 42 },
+      params: { subworkflow: "not-a-dict" },
     };
     const values = parseNodeFormValues(missing);
-    expect(values.instruction).toBe("");
     expect(values.agent_name).toBe("");
     expect(values.capability_groups).toEqual([]);
     expect(values.template_id).toBeUndefined();
     expect(values.version).toBeUndefined();
-  });
-
-  test("coerces non-string instruction to an empty string", () => {
-    const node: WorkflowNode = { ...aiNode(), params: { instruction: 7 } };
-    expect(parseNodeFormValues(node).instruction).toBe("");
   });
 
   test("copies capability_groups so the caller cannot mutate the node", () => {
@@ -166,11 +156,11 @@ describe("applyNodeFormValues", () => {
       "capability_groups",
       "template_prompt",
       "continue_prompt",
+      "output_schema",
     ]);
     const applied = applyNodeFormValues(node, parseNodeFormValues(node));
     // Ports stay on the node (they are wired via canvas edges, not form values).
     expect(applied.inputs).toEqual(node.inputs);
-    expect(applied.params.instruction).toBe("");
     expect(applied.agent_name).toBeNull();
     expect(applied.capability_groups).toEqual([]);
   });
@@ -189,7 +179,6 @@ describe("applyNodeFormValues", () => {
     const node = aiNode();
     const before = structuredClone(node);
     const result = applyNodeFormValues(node, {
-      instruction: "Changed",
       agent_name: "researcher-2",
       capability_groups: ["web"],
       template_id: "",
@@ -197,11 +186,6 @@ describe("applyNodeFormValues", () => {
     expect(result).not.toBe(node);
     expect(result.params).not.toBe(node.params);
     expect(node).toEqual(before);
-  });
-
-  test("writes instruction to params and keeps unrelated params", () => {
-    const result = applyNodeFormValues(aiNode(), { instruction: "New" });
-    expect(result.params).toEqual({ instruction: "New", extra: 1 });
   });
 
   test("reads and writes the model profile reference", () => {
@@ -229,7 +213,7 @@ describe("applyNodeFormValues", () => {
     const legacy = aiNode();
     legacy.params = { ...legacy.params, user_prompt: "old value" };
 
-    const result = applyNodeFormValues(legacy, { instruction: "New" });
+    const result = applyNodeFormValues(legacy, {});
 
     expect("user_prompt" in result.params).toBe(false);
   });
@@ -254,7 +238,7 @@ describe("applyNodeFormValues", () => {
       version: "0.1.0",
     });
     expect(result.params).not.toHaveProperty("subworkflow");
-    expect(result.params).toEqual({ instruction: "" });
+    expect(result.params).toEqual({});
     expect(node.params).toHaveProperty("subworkflow");
   });
 
@@ -278,17 +262,15 @@ describe("applyNodeFormValues", () => {
 describe("validateNodeForm", () => {
   test("flags empty required fields with stable constants", () => {
     expect(validateNodeForm({})).toEqual({
-      instruction: "required",
       template_id: "required",
     });
-    expect(validateNodeForm({ instruction: "  ", template_id: " " })).toEqual({
-      instruction: "required",
+    expect(validateNodeForm({ template_id: " " })).toEqual({
       template_id: "required",
     });
   });
 
   test("rejects invalid agent names (underscore/dot/Chinese/space)", () => {
-    const base: NodeFormValues = { instruction: "Hi", template_id: "wf-1" };
+    const base: NodeFormValues = { template_id: "wf-1" };
     expect(validateNodeForm({ ...base, agent_name: "my_agent" })).toEqual({
       agent_name: "invalid",
     });
@@ -306,21 +288,18 @@ describe("validateNodeForm", () => {
   test("accepts legal values including None and empty agent_name", () => {
     expect(
       validateNodeForm({
-        instruction: "Hi",
         template_id: "wf-1",
         agent_name: "None",
       }),
     ).toEqual({});
     expect(
       validateNodeForm({
-        instruction: "Hi",
         template_id: "wf-1",
         agent_name: "",
       }),
     ).toEqual({});
     expect(
       validateNodeForm({
-        instruction: "Hi",
         template_id: "wf-1",
         agent_name: "researcher-2",
       }),
@@ -394,9 +373,7 @@ describe("F4 verification — mapping layer passes top-level fields through", ()
     expect(definition.nodes[1]!.agent_name).toBeNull();
     expect(definition.nodes[1]!.capability_groups).toEqual([]);
     // Custom params are deleted by the fixed schema on save.
-    expect(definition.nodes[0]!.params).toEqual({
-      instruction: "Summarize the input",
-    });
+    expect(definition.nodes[0]!.params).toEqual({});
     expect(definition.nodes[1]!.params).toEqual(subworkflowNode().params);
   });
 });
@@ -513,7 +490,7 @@ describe("applyNodeFormValues — params.mapping", () => {
 });
 
 describe("validateNodeForm — mapping", () => {
-  const base: NodeFormValues = { instruction: "Hi", template_id: "wf-1" };
+  const base: NodeFormValues = { template_id: "wf-1" };
 
   test("flags an empty mapping output parent port", () => {
     expect(

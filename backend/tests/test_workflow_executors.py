@@ -238,6 +238,7 @@ class TestExecFile:
     def test_write_mocked(self) -> None:
         """file:write with crash_confirm → calls sandbox.write_file."""
         mock_sandbox = MagicMock()
+        mock_sandbox.download_file.return_value = b"old"
 
         with patch("deerflow.workflow.executors.data.sandbox_tools.ensure_sandbox_initialized", return_value=mock_sandbox):
             rt = _dummy_runtime()
@@ -335,10 +336,9 @@ class TestIfRoutingOrder:
             ],
             edges=[
                 Edge(source="start", source_port="input", target="check", target_port="in"),
-                # Deliberately declare the false branch first.
-                Edge(source="check", source_port="false", target="no_node", target_port="in", condition="false"),
-                Edge(source="check", source_port="true", target="yes_node", target_port="in", condition="true"),
+                # Deliberately declare the false default before the true branch.
                 Edge(source="check", source_port="false", target="no_node", target_port="in"),
+                Edge(source="check", source_port="true", target="yes_node", target_port="in", condition="true"),
                 Edge(source="yes_node", source_port="out", target="end", target_port="in"),
                 Edge(source="no_node", source_port="out", target="end", target_port="in"),
             ],
@@ -519,7 +519,7 @@ class TestAINodeCompiled:
         ctx = build_default_registry().build_context()
         graph = compile_definition(def_, context=ctx)
 
-        with pytest.raises(WorkflowExecutionError, match="instruction"):
+        with pytest.raises(WorkflowExecutionError, match="template_prompt"):
             await _run(graph, {"wf:start:input": "query"})
 
 
@@ -543,7 +543,6 @@ class TestRegistry:
             NodeType.DATA_CONVERT,
             NodeType.DATA_ASSET,
             NodeType.DATA_SHARED,
-            NodeType.DATA_KNOWLEDGE,
             NodeType.DATA_FILE,
             NodeType.DATA_JSON,
             NodeType.DATA_REGEX,
@@ -570,9 +569,9 @@ class TestRegistry:
         registered = set(reg.keys())
         assert registered == self._EXPECTED_EXECUTOR_TYPES
 
-    def test_registry_length_is_26(self) -> None:
+    def test_registry_length_is_25(self) -> None:
         reg = build_default_registry()
-        assert len(reg) == 26
+        assert len(reg) == 25
 
     def test_duplicate_register_raises_valueerror(self) -> None:
         """Registering same NodeType twice → ValueError."""

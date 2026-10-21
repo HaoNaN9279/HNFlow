@@ -274,7 +274,7 @@ def test_successful_script_is_recorded_as_undoable(tmp_path: Path) -> None:
     assert repo.records[0]["app_steps"] == 1
 
 
-def test_successful_script_without_rollback_records_nothing(tmp_path: Path) -> None:
+def test_successful_script_records_undo_by_default(tmp_path: Path) -> None:
     manager = _manager(tmp_path)
     repo = _RecordingUndoRepo()
     runtime = _runtime(manager, workflow_undo_repo=repo, run_id="r1")
@@ -282,7 +282,7 @@ def test_successful_script_without_rollback_records_nothing(tmp_path: Path) -> N
 
     asyncio.run(exec_app_script(runtime, {"app": "demo", "script": "render", "crash_confirm": True}, {"session": launched["session"]}))
 
-    assert repo.records == []
+    assert len(repo.records) == 1
 
 
 def test_bad_undo_steps_is_rejected(tmp_path: Path) -> None:

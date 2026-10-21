@@ -20,15 +20,15 @@ def _definition() -> dict:
             {
                 "id": "ai",
                 "type": "ai:llm_agent",
-                "params": {"instruction": "Do {{in}}"},
                 "capability_groups": ["alpha"],
-                "inputs": [{"name": "in", "type": "data"}],
+                "inputs": [{"name": "in", "type": "data"}, {"name": "template_prompt", "type": "data"}],
                 "outputs": [{"name": "out", "type": "data"}],
             },
             {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
         ],
         "edges": [
             {"source": "start", "source_port": "out", "target": "ai", "target_port": "in"},
+            {"source": "start", "source_port": "out", "target": "ai", "target_port": "template_prompt"},
             {"source": "ai", "source_port": "out", "target": "end", "target_port": "in"},
         ],
     }
@@ -61,13 +61,13 @@ def test_prompt_preview_returns_assembled_prompt(monkeypatch) -> None:
     assert response.status_code == 200
     body = response.json()
     assert "alpha" in body["prompt"]
-    assert "Do {{in}}" in body["prompt"]
     assert body["capability_groups"] == ["alpha"]
     assert [component["key"] for component in body["components"]] == [
         "identity",
         "capability",
-        "task",
+        "template_prompt",
     ]
+    assert body["omitted_runtime_blocks"] == ["template_prompt"]
     assert all(component["editable"] is False for component in body["components"])
 
 

@@ -197,7 +197,7 @@ function makeNode(
 
 function makeAINode(workflow: Partial<WorkflowNode> = {}): RFNode {
   return makeNode("n_1", "ai:llm_agent", {
-    params: { instruction: "Do the thing" },
+    params: {},
     agent_name: "researcher",
     capability_groups: ["web-research"],
     ...workflow,
@@ -243,7 +243,7 @@ afterEach(() => {
 });
 
 describe("WorkflowNodeForm —ai:llm_agent", () => {
-  it("renders the instruction value and selected agent", () => {
+  it("renders the selected agent", () => {
     render(
       <WorkflowNodeForm
         node={makeAINode()}
@@ -252,34 +252,9 @@ describe("WorkflowNodeForm —ai:llm_agent", () => {
       />,
     );
 
-    expect(screen.getByDisplayValue("Do the thing")).toBeTruthy();
     expect(
       screen.getByRole("combobox", { name: "Agent" }).textContent,
     ).toContain("researcher");
-  });
-
-  it("commits an edited instruction on blur with top-level fields preserved", () => {
-    const onChange = rs.fn();
-    render(
-      <WorkflowNodeForm
-        node={makeAINode()}
-        readonly={false}
-        onChange={onChange}
-      />,
-    );
-
-    const textarea = screen.getByLabelText("Instruction");
-    fireEvent.change(textarea, { target: { value: "New instruction" } });
-    fireEvent.blur(textarea);
-
-    expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent_name: "researcher",
-        capability_groups: ["web-research"],
-        params: expect.objectContaining({ instruction: "New instruction" }),
-      }),
-    );
   });
 
   it("renders the continue-prompt wiring hint without an editable textarea", () => {
@@ -297,18 +272,6 @@ describe("WorkflowNodeForm —ai:llm_agent", () => {
     ).toBeTruthy();
     // No textarea —the value arrives via canvas edges, not the form.
     expect(screen.queryByLabelText("Continue prompt")).toBeNull();
-  });
-
-  it("shows the required error for an empty instruction", () => {
-    render(
-      <WorkflowNodeForm
-        node={makeAINode({ params: { instruction: "" } })}
-        readonly={false}
-        onChange={rs.fn()}
-      />,
-    );
-
-    expect(screen.getByText("Instruction is required")).toBeTruthy();
   });
 
   it("shows the invalid-agent-name error for a malformed name", () => {
@@ -705,21 +668,5 @@ describe("WorkflowNodeForm — fixed params", () => {
     );
 
     expect(screen.getByLabelText("Breakpoint")).toBeTruthy();
-  });
-
-  it("keeps typed instruction out of the raw params row", () => {
-    render(
-      <WorkflowNodeForm
-        node={makeAINode({
-          params: { instruction: "Do the thing", extra: 1 },
-        })}
-        readonly={false}
-        onChange={rs.fn()}
-      />,
-    );
-
-    expect(screen.getByDisplayValue("Do the thing")).toBeTruthy();
-    expect(screen.queryByDisplayValue("instruction")).toBeNull();
-    expect(screen.queryByDisplayValue("extra")).toBeNull();
   });
 });

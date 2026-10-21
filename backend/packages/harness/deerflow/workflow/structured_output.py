@@ -24,6 +24,12 @@ SCHEMA_FIELD_TYPES: frozenset[str] = frozenset({"data", "number", "array", "reco
 DEFAULT_MAX_REPAIRS = 1
 MAX_REPAIRS_LIMIT = 5
 
+#: AI-node input port carrying a static schema from a ``data:schema`` node.
+OUTPUT_SCHEMA_PORT = "output_schema"
+
+#: Compiler-injected executor param carrying the resolved schema.
+OUTPUT_SCHEMA_PARAM = "__output_schema"
+
 _FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
 
@@ -31,13 +37,16 @@ class StructuredOutputError(ValueError):
     """A model response (or the schema itself) is not valid structured output."""
 
 
-def parse_output_schema(params: dict[str, Any]) -> dict[str, Any] | None:
-    """Normalize ``params.output_schema``; ``None`` when absent.
+def parse_output_schema(raw: Any) -> dict[str, Any] | None:
+    """Normalize a schema payload; ``None`` when absent.
 
     Raises :class:`StructuredOutputError` for a structurally broken schema — the
     compiler turns that into a ``WorkflowCompileError``.
     """
-    raw = params.get("output_schema")
+    if raw is None:
+        return None
+    if isinstance(raw, dict) and "output_schema" in raw and "fields" not in raw:
+        raw = raw["output_schema"]
     if raw is None:
         return None
     if not isinstance(raw, dict):

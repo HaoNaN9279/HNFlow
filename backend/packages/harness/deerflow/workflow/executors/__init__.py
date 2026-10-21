@@ -25,7 +25,6 @@ from .asset import asset_resource_access, exec_asset, preview_asset  # noqa: E40
 from .data import exec_assign, exec_convert, exec_file, exec_json, exec_regex, exec_shared, file_resource_access, preview_file  # noqa: E402
 from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
-from .knowledge import exec_knowledge, knowledge_resource_access  # noqa: E402
 from .local_app import app_resource_access, exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
 from .review import exec_human_review  # noqa: E402
 from .tool import bash_resource_access, exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke, tool_invoke_resource_access  # noqa: E402
@@ -82,15 +81,6 @@ def build_default_registry() -> ExecutorRegistry:
         )
     )
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_SHARED, executor=exec_shared, idempotent=True, description="Shared workspace read / write / append executor (N14)"))
-    reg.register(
-        ExecutorRegistration(
-            node_type=NodeType.DATA_KNOWLEDGE,
-            executor=exec_knowledge,
-            idempotent=True,
-            description="Knowledge ingest / retrieve executor (N14)",
-            resource_access=knowledge_resource_access,
-        )
-    )
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_JSON, executor=exec_json, idempotent=True, description="JSON stringify / parse executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_REGEX, executor=exec_regex, idempotent=True, description="Regex search executor"))
 
@@ -230,10 +220,8 @@ __all__ = [
     "exec_json",
     "exec_regex",
     "exec_shared",
-    "exec_knowledge",
     "preview_file",
     "file_resource_access",
-    "knowledge_resource_access",
     # Assets (N9)
     "exec_asset",
     "preview_asset",

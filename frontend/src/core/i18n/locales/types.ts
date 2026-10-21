@@ -719,6 +719,7 @@ export interface Translations {
       deleteFailed: string;
       validationPrefix: string;
       portTypeMismatch: string;
+      portAlreadyConnected: string;
       selfConnection: string;
       missingPort: string;
     };

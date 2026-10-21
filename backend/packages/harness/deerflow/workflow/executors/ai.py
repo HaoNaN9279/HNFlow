@@ -16,29 +16,12 @@ from typing import Any
 from deerflow.capability_groups.discovery import CapabilityGroupError
 from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
 from deerflow.config.agents_config import load_agent_config
+from deerflow.config.token_budget_config import TokenBudgetConfig
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.agent_port import get_agent_adapter
 from deerflow.workflow.capability_skills import build_read_capability_skill_tool
 from deerflow.workflow.compiler import WorkflowRuntime
-from deerflow.workflow.context_policy import BUCKET_ORDER, CONTEXT_USAGE_RESULT_KEY, ContextPolicyError, apply_context_budget, parse_context_policy
-from deerflow.workflow.knowledge import (
-    KNOWLEDGE_STORE_CONTEXT_KEY,
-    KnowledgeError,
-    aquery,
-    format_retrieval_block,
-    parse_retrieval_params,
-)
-from deerflow.workflow.knowledge import render_query as render_retrieval_query
-from deerflow.workflow.memory import (
-    MEMORY_STORE_CONTEXT_KEY,
-    MemoryPolicyError,
-    acollect_memory,
-    awrite_memory,
-    format_memory_block,
-    output_text,
-    parse_memory_policy,
-    render_query,
-)
+from deerflow.workflow.context_compression import ContextCompressionError, estimate_tokens, resolve_context_compression
 from deerflow.workflow.model_profiles import (
     MODEL_PROFILES_CONTEXT_KEY,
     ModelProfileError,
@@ -46,14 +29,18 @@ from deerflow.workflow.model_profiles import (
     resolve_model_profile,
 )
 from deerflow.workflow.prompts import (
+    BUCKET_ORDER,
     TEMPLATE_PROMPT_PORT,
-    append_template_prompt,
     build_ai_node_buckets,
     build_task_layer,
-    build_template_prompt_layer,
 )
 from deerflow.workflow.registry import WorkflowExecutionError
-from deerflow.workflow.routing import RoutingError, model_infos, parse_routing_policy, select_model
+from deerflow.workflow.structured_output import (
+    OUTPUT_SCHEMA_PARAM,
+    StructuredOutputError,
+    parse_output_schema,
+    schema_instruction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,25 +62,6 @@ SCHEMA_REPAIRS_RESULT_KEY = "__schema_repairs"
 #: Reserved executor-result key carrying the full assembled prompt.  Lifted
 #: onto ``wf:<node_id>:__prompt`` for ``ai:prompt_preview``.
 PROMPT_RESULT_KEY = "__workflow_prompt"
-
-
-def _autonomy_settings(params: dict[str, Any]) -> tuple[int, Any]:
-    """Resolve ``(max_turns, token_budget)`` from ``params.autonomy`` (N14 §24.5).
-
-    ``template`` (or absent ``autonomy``) keeps the pre-§24.5 defaults:
-    ``(50, None)`` — the ``SubagentConfig`` defaults.  ``bounded`` reads
-    ``budgets.max_turns`` (default 50) and, when ``budgets.max_tokens`` is set, a
-    ``TokenBudgetConfig`` override for this node's run.
-    """
-    autonomy = params.get("autonomy") or {}
-    budgets = autonomy.get("budgets") or {}
-    max_turns = int(budgets.get("max_turns", 50))
-    token_budget = None
-    if budgets.get("max_tokens") is not None:
-        from deerflow.config.token_budget_config import TokenBudgetConfig
-
-        token_budget = TokenBudgetConfig(enabled=True, max_tokens=int(budgets["max_tokens"]))
-    return max_turns, token_budget
 
 
 def _check_subagent_completed(result: Any, node_id: Any) -> None:
@@ -197,56 +165,25 @@ async def exec_llm_agent(
     params: dict[str, Any],
     inputs: dict[str, Any],
 ) -> dict[str, Any]:
-    """Execute an ``ai:llm_agent`` node through a sub-agent.
+    """Execute one ``ai:llm_agent`` node.
 
-    Two modes, selected by ``inputs["continue_prompt"]``:
-
-    **Template mode** (no / empty ``continue_prompt``) — the one-shot path:
-    the system prompt is assembled from identity (``agent_name`` / default
-    lead), capability (``capability_groups``, their rules, skill descriptions,
-    and the custom agent's own skills), and task (the ``instruction`` template
-    plus an optional runtime ``template_prompt``) — and handed to a
-    ``SubagentExecutor`` (checkpointer disabled, recursion disabled).
-
-    **Continue mode** (non-empty ``continue_prompt``) — session continuation:
-    the same sub-agent runs under an independent checkpoint thread
-    (``f"{thread_id}:wfai:{node_id}"``), so LangGraph appends the new turn to
-    the session history.  Identity/capability layers live in the session's
-    first (template) turn, so only ``build_task_layer(continue_prompt, inputs)``
-    is executed as the new user input.  Requires a checkpointer in
-    ``runtime.context`` (memory backends fail closed).
-
-    In both modes the sub-agent's final text is returned on the ``out`` output
-    port.
+    The node has exactly one task source per mode: ``template_prompt`` for a
+    template turn, ``continue_prompt`` for a continued session.  Output schema
+    comes from a ``data:schema`` node through the compiler-injected
+    ``__output_schema`` param.  Context compression is automatic and derives its
+    budget from the effective model's configured ``context_window``.
     """
-    instruction = params.get("instruction")
     node_id = params.get("node_id")
-    if not instruction:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty 'instruction' param")
-
-    raw_template_prompt = inputs.get(TEMPLATE_PROMPT_PORT)
-    if raw_template_prompt is not None and not isinstance(raw_template_prompt, str):
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': '{TEMPLATE_PROMPT_PORT}' input must be a string")
-    template_prompt = raw_template_prompt or ""
-
-    agent_name = params.get("agent_name")
-    raw_groups = params.get("capability_groups") or []
-    capability_groups = list(dict.fromkeys(str(item) for item in raw_groups if isinstance(item, str) and item))
-
     context = runtime.context
     user_id = context.get("user_id")
     app_config = context.get("app_config")
     instance_repo = context.get(APP_INSTANCE_REPO_CONTEXT_KEY)
     thread_id = context.get("thread_id")
-    delegation_depth = context.get("delegation_depth", 0)
-    memory_store = context.get(MEMORY_STORE_CONTEXT_KEY)
-    knowledge_store = context.get(KNOWLEDGE_STORE_CONTEXT_KEY)
+
+    raw_groups = params.get("capability_groups") or []
+    capability_groups = list(dict.fromkeys(str(item) for item in raw_groups if isinstance(item, str) and item))
 
     continue_prompt = inputs.get("continue_prompt")
-    # W2B cross-run continuation: when no ``continue_prompt`` arrives on the
-    # input ports, the worker-injected ``__ai_continue`` mapping (node_id →
-    # prompt) may still route THIS node through continue mode.  This is how a
-    # fresh continue run reuses the original run's session checkpoint.
     if not continue_prompt:
         continue_nodes = context.get("__ai_continue")
         if isinstance(continue_nodes, dict):
@@ -254,12 +191,62 @@ async def exec_llm_agent(
             if isinstance(node_prompt, str) and node_prompt:
                 continue_prompt = node_prompt
     is_continue = bool(continue_prompt)
-    # A review retry target is compiled with a session even on its first
-    # template turn, so a later rejection can continue the exact conversation
-    # the reviewer saw.  Ordinary one-shot AI nodes keep checkpointer=False.
+
+    raw_template_prompt = inputs.get(TEMPLATE_PROMPT_PORT)
+    if not raw_template_prompt:
+        # Legacy definitions may still carry the removed ``params.instruction``.
+        # It is only a read-compatibility fallback; the editor no longer writes it.
+        raw_template_prompt = params.get("instruction")
+    if not is_continue:
+        if not isinstance(raw_template_prompt, str) or not raw_template_prompt.strip():
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty '{TEMPLATE_PROMPT_PORT}' input")
+
+    try:
+        output_schema = parse_output_schema(params.get(OUTPUT_SCHEMA_PARAM))
+    except StructuredOutputError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid output_schema: {exc}") from exc
+    if output_schema is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': output_schema is not supported with session continuation (continue mode)")
+
+    try:
+        model_profile_id = parse_model_profile_id(params)
+    except ModelProfileError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_profile: {exc}") from exc
+    if model_profile_id is not None and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_profile is not supported with session continuation (continue mode)")
+
+    model_names = list(getattr(app_config, "models", None) or ()) if app_config is not None else []
+    if model_profile_id is not None:
+        try:
+            model_name = resolve_model_profile(
+                model_profile_id,
+                context.get(MODEL_PROFILES_CONTEXT_KEY) or {},
+                model_names,
+            )
+        except ModelProfileError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+    elif model_names:
+        model_name = str(model_names[0].name)
+    else:
+        model_name = "inherit"
+
+    summary_model_name = None
+    if app_config is not None:
+        summary_model_name = getattr(getattr(app_config, "summarization", None), "model_name", None)
+    compression = None
+    if app_config is not None and model_name != "inherit":
+        try:
+            compression = resolve_context_compression(
+                model_name,
+                model_names,
+                summary_model_name=summary_model_name,
+            )
+        except ContextCompressionError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
     session_enabled = params.get("__review_session") is True
     checkpoint_enabled = is_continue or session_enabled
-    if is_continue and template_prompt:
+    if is_continue and raw_template_prompt:
         logger.warning(
             "ai:llm_agent node %r received both continue_prompt and template_prompt; continue mode wins",
             node_id,
@@ -270,81 +257,10 @@ async def exec_llm_agent(
     try:
         if not is_continue:
             capability_rules = load_capability_rules(capability_groups, user_id=user_id)
-        # Continue mode does not re-assemble the system prompt, but it must still
-        # expose the scoped reader so the model can load skill bodies on demand.
         capability_skills = load_capability_skills(capability_groups, user_id=user_id)
     except (CapabilityContentError, CapabilityGroupError) as exc:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
 
-    # N14 §24.4 structured output: normalize the node's output contract up front
-    # so a malformed schema fails loudly, and reject the unsupported combo with
-    # session continuation.
-    from deerflow.workflow.structured_output import (
-        StructuredOutputError,
-        parse_output_schema,
-        schema_instruction,
-    )
-
-    try:
-        output_schema = parse_output_schema(params)
-    except StructuredOutputError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid output_schema: {exc}") from exc
-    if output_schema is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': output_schema is not supported with session continuation (continue mode)")
-
-    # N14 §24.3 context policy: same fail-loud normalization as output_schema so a
-    # malformed policy never silently no-ops.  Rejected with session continuation
-    # for the same reason as output_schema — identity/capability/examples are
-    # frozen in the session's first turn, so mounting them again would duplicate
-    # them rather than augment the prompt.
-    try:
-        context_policy = parse_context_policy(params)
-    except ContextPolicyError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid context_policy: {exc}") from exc
-    if context_policy is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': context_policy is not supported with session continuation (continue mode)")
-    context_usage: dict[str, Any] | None = None
-
-    # N14 §24.10 model routing: a node can prefer a local / cheap / high-quality
-    # model.  Rejected with session continuation — the session was created under
-    # one model, and switching mid-session would not reproduce deterministically.
-    try:
-        routing_policy = parse_routing_policy(params)
-    except RoutingError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_policy: {exc}") from exc
-    try:
-        model_profile_id = parse_model_profile_id(params)
-    except ModelProfileError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid model_profile: {exc}") from exc
-    if model_profile_id is not None and routing_policy is not None:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_profile cannot be combined with model_policy")
-    if model_profile_id is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_profile is not supported with session continuation (continue mode)")
-    if routing_policy is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is not supported with session continuation (continue mode)")
-
-    # N14 §24.1 node-level memory: same fail-loud parse; rejected with session
-    # continuation (identity/capability/memory are frozen in the first turn).
-    try:
-        memory_policy = parse_memory_policy(params)
-    except MemoryPolicyError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid memory: {exc}") from exc
-    if memory_policy is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': memory is not supported with session continuation (continue mode)")
-
-    # N14 §24.2 knowledge retrieval: same fail-loud parse; rejected with continue.
-    try:
-        retrieval_policy = parse_retrieval_params(params)
-    except KnowledgeError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid retrieval: {exc}") from exc
-    if retrieval_policy is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': retrieval is not supported with session continuation (continue mode)")
-
-    # Continue mode: identity/capability are already in the session's first
-    # turn, so the executed task is only the new task layer.  A session-enabled
-    # first template turn persists the same session for a later review retry.
-    # A missing checkpointer (memory backend) or an unresolvable session key
-    # fails closed — a silent one-shot fallback would break continuation.
     checkpoint_thread_id: str | None = None
     if checkpoint_enabled:
         checkpointer = context.get("checkpointer")
@@ -354,121 +270,47 @@ async def exec_llm_agent(
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent continue requires a thread_id in runtime context")
         if not node_id:
             raise WorkflowExecutionError("node 'ai:llm_agent': ai:llm_agent continue requires a node_id to derive its session checkpoint thread")
-        # Cross-run continue: the new run's thread differs from the original
-        # run's, so the session checkpoint thread must be anchored on the
-        # ORIGINAL thread id (``ai_origin_thread_id``) when one is injected.
-        # Falls back to the current thread id (W1A in-loop behavior).
         checkpoint_thread_prefix = context.get("ai_origin_thread_id") or thread_id
         checkpoint_thread_id = f"{checkpoint_thread_prefix}:wfai:{node_id}"
 
     if is_continue:
         system_prompt: str | None = None
-        task_prompt = build_task_layer(continue_prompt, inputs)
+        task_prompt = build_task_layer(str(continue_prompt), inputs)
     else:
-        # Template mode: full three-layer prompt.  An ordinary one-shot node
-        # leaves checkpoint_thread_id=None; a review retry target keeps the
-        # session coordinates set above.
-        # Custom-agent skills whitelist feeds the capability layer (None = all
-        # enabled, [] = disabled, a list = exactly those skills).  A missing
-        # agent binding (agent_name=None) leaves the layer at "all enabled".
-        agent_config = load_agent_config(agent_name, user_id=user_id) if agent_name else None
+        agent_config = load_agent_config(params.get("agent_name"), user_id=user_id) if params.get("agent_name") else None
         agent_skills = agent_config.skills if agent_config is not None else None
-
-        # N14 §24.3: build the named buckets in the fixed order, then apply the
-        # node's context budget.  The structured-output schema instruction is the
-        # last bucket, so it is part of the non-truncatable scaffold.
         buckets = build_ai_node_buckets(
-            agent_name=agent_name,
+            agent_name=params.get("agent_name"),
             capability_groups=capability_groups,
-            instruction=instruction,
+            template_prompt=str(raw_template_prompt),
             inputs=inputs,
             user_id=user_id,
             agent_skills=agent_skills,
-            policy=context_policy,
             capability_rules=capability_rules,
             capability_skills=capability_skills,
         )
         if output_schema is not None:
             buckets["schema"] = schema_instruction(output_schema)
-        budget_result = apply_context_budget(buckets, context_policy.budget if context_policy else None)
-        # The task bucket is the *user turn*; everything else is system context.
-        # Sending the full assembled prompt as both the system message and the
-        # HumanMessage duplicated every instruction (and doubled token cost).
-        task_prompt = budget_result.buckets.get("task", "")
-        system_prompt = "\n\n".join(budget_result.buckets[name] for name in BUCKET_ORDER if name != "task" and budget_result.buckets.get(name))
-        if context_policy is not None:
-            context_usage = budget_result.to_payload()
+        task_prompt = buckets.get("task", "")
+        system_prompt = "\n\n".join(buckets[name] for name in BUCKET_ORDER if name != "task" and buckets.get(name))
 
-        # N14 §24.1: prepend the node's memory as a budgeted ``<memory>`` block.
-        # A read failure degrades to no memory rather than failing the node (the
-        # §24.1 "write/read failure does not block the main flow" rule).
-        if memory_policy is not None and memory_store is not None:
-            query = render_query(memory_policy.query, inputs, default=instruction)
-            try:
-                records = await acollect_memory(memory_store, memory_policy, query=query)
-            except Exception:
-                logger.warning("ai:llm_agent memory read failed; continuing without memory", exc_info=True)
-                records = []
-            block = format_memory_block(records, budget=memory_policy.inject_budget)
-            if block:
-                system_prompt = f"{block}\n\n{system_prompt}"
-
-        # N14 §24.2: prepend retrieved knowledge (with citations) as a budgeted
-        # ``<context>`` block.  A retrieval failure degrades to no context rather
-        # than failing the node.
-        if retrieval_policy is not None and knowledge_store is not None:
-            rquery = render_retrieval_query(retrieval_policy.query, inputs, default=instruction)
-            try:
-                records = await aquery(knowledge_store, retrieval_policy, query=rquery)
-            except Exception:
-                logger.warning("ai:llm_agent knowledge retrieval failed; continuing without retrieval", exc_info=True)
-                records = []
-            block = format_retrieval_block(records, budget=retrieval_policy.ctx_budget)
-            if block:
-                system_prompt = f"{block}\n\n{system_prompt}"
-
-    # Template mode may receive a runtime user turn from the dedicated
-    # ``template_prompt`` input port.  Continue mode owns the user turn via
-    # ``continue_prompt``; template_prompt is ignored there (continue wins).
-    if not is_continue:
-        task_prompt = append_template_prompt(task_prompt, build_template_prompt_layer(template_prompt, inputs))
-
-    # Full text prompt the node actually sends: every system bucket (identity /
-    # capability / examples / context / schema / memory / retrieval) plus the
-    # task turn.  ``ai:prompt_preview`` reads this from the reserved channel.
     preview_prompt = "\n\n".join(part for part in (system_prompt, task_prompt) if part)
+    if compression is not None:
+        estimated = estimate_tokens(system_prompt or "") + estimate_tokens(task_prompt)
+        if estimated > compression.input_budget:
+            raise WorkflowExecutionError(
+                f"node '{node_id or 'ai:llm_agent'}': static prompt is ~{estimated} tokens, exceeding model '{compression.model_name}' input budget {compression.input_budget}; reduce capability rules or template_prompt"
+            )
 
-    # C1: assemble the node's real tool set from its capability groups' union of
-    # ``allowed-tools`` (through the N1 tool gateway) instead of an empty list.
-    node_tools = _resolve_node_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo, node_id=node_id)
+    node_tools = _resolve_node_tools(
+        capability_groups,
+        user_id=user_id,
+        app_config=app_config,
+        instance_repo=instance_repo,
+        node_id=node_id,
+    )
     if capability_skills:
         node_tools.append(build_read_capability_skill_tool(capability_skills))
-
-    # N14 §24.5: an explicit autonomy budget pins this node's hard limits.
-    autonomy_max_turns, autonomy_token_budget = _autonomy_settings(params)
-
-    # N14 §24.10: resolve the node's model from its routing policy against the
-    # configured model metadata.  A privacy constraint that cannot be met (a
-    # required local model that is not configured) fails the node loudly; it must
-    # never silently fall back to a remote model.
-    model_name = "inherit"
-    if model_profile_id is not None:
-        try:
-            model_name = resolve_model_profile(
-                model_profile_id,
-                context.get(MODEL_PROFILES_CONTEXT_KEY) or {},
-                getattr(app_config, "models", None),
-            )
-        except ModelProfileError as exc:
-            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
-    elif routing_policy is not None:
-        try:
-            selected_model = select_model(model_infos(getattr(app_config, "models", None)), routing_policy)
-        except RoutingError as exc:
-            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
-        if selected_model is None:
-            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': model_policy is set but no models are configured")
-        model_name = selected_model.name
 
     adapter = get_agent_adapter(runtime)
     from deerflow.workflow.agent_port import CAP_TOOLS, AgentTurnRequest, check_agent_capabilities
@@ -485,20 +327,21 @@ async def exec_llm_agent(
         tools=node_tools,
         name=f"ai:{node_id}" if node_id else "ai:node",
         description=f"Execute AI workflow node '{node_id or '(unnamed)'}'",
-        disallowed_tools=["ask_clarification", "present_files"],
+        disallowed_tools=["task", "ask_clarification", "present_files"],
         checkpointer=checkpoint_enabled,
         checkpointer_instance=context.get("checkpointer") if checkpoint_enabled else None,
         allow_recursion=False,
-        max_turns=autonomy_max_turns,
-        token_budget=autonomy_token_budget,
+        max_turns=50,
+        token_budget=TokenBudgetConfig(enabled=False),
         model=model_name,
-        delegation_depth=delegation_depth,
+        delegation_depth=0,
         user_id=user_id,
         app_config=app_config,
         thread_id=thread_id,
         checkpoint_thread_id=checkpoint_thread_id,
         resume_checkpoint_id=None,
         required_capabilities=required_capabilities,
+        context_compression=compression,
     )
 
     if output_schema is None:
@@ -508,30 +351,12 @@ async def exec_llm_agent(
     else:
         result, output = await _run_structured_output(adapter, request, task_prompt, output_schema, node_id)
     output[PROMPT_RESULT_KEY] = preview_prompt
-    # Lift the sub-agent's aggregated token usage (input/output/total +
-    # prompt-cache cache_read tokens) onto the reserved result key so the
-    # compiler can expose it on a declared state channel.  Only present when
-    # usage records exist — absent provider usage stays absent, not zero.
     token_usage = _aggregate_subagent_token_usage(getattr(result, "token_usage_records", None))
     if token_usage is not None:
         output[TOKEN_USAGE_RESULT_KEY] = token_usage
-    # N14 §24.5: surface which guardrail cap (if any) ended the run so the node
-    # is observable as capped rather than silently "completed".
     stop_reason = getattr(result, "stop_reason", None)
     if stop_reason:
         output[STOP_REASON_RESULT_KEY] = stop_reason
-    # N14 §24.3: per-bucket context usage (estimates + what the budget dropped).
-    # Only present when the node declared a context_policy — an untouched node
-    # keeps the pre-§24.3 output shape (absent, never zero).
-    if context_usage is not None:
-        output[CONTEXT_USAGE_RESULT_KEY] = context_usage
-    # N14 §24.1: write the node's output back into memory when declared.  A write
-    # failure is logged and swallowed — it must never fail a successful node.
-    if memory_policy is not None and memory_policy.write and memory_store is not None:
-        try:
-            await awrite_memory(memory_store, scope=memory_policy.write_scope, text=output_text(output), key=node_id)
-        except Exception:
-            logger.warning("ai:llm_agent memory write failed", exc_info=True)
     return output
 
 

@@ -16,13 +16,15 @@
 
 import type { PortType, WorkflowDefinition } from "@/core/workflows/types";
 
-import type { RFNode } from "./mapping";
+import type { RFEdge, RFNode } from "./mapping";
 
 export { PORT_TYPES } from "@/core/workflows/types";
 
 export const REASON_SELF_CONNECTION = "workflows.errors.selfConnection";
 export const REASON_PORT_NOT_FOUND = "workflows.errors.portNotFound";
 export const REASON_PORT_TYPE_MISMATCH = "workflows.errors.portTypeMismatch";
+export const REASON_PORT_ALREADY_CONNECTED =
+  "workflows.errors.portAlreadyConnected";
 
 /** Strict same-type compatibility —mirrors the backend `ports_compatible`. */
 export function isPortCompatible(src: PortType, dst: PortType): boolean {
@@ -45,6 +47,7 @@ export type ConnectionValidationResult =
 export function validateConnection(
   connection: ConnectionCandidate,
   nodes: RFNode[],
+  edges: RFEdge[] = [],
 ): ConnectionValidationResult {
   const { source, sourceHandle, target, targetHandle } = connection;
 
@@ -70,6 +73,22 @@ export function validateConnection(
 
   if (!isPortCompatible(sourcePort.type, targetPort.type)) {
     return { ok: false, reason: REASON_PORT_TYPE_MISMATCH };
+  }
+
+  // flow:end is the terminal sink; every branch needs a legal path to it.
+  if (
+    targetWorkflow.type !== "flow:end" &&
+    targetWorkflow.type !== "flow:loop"
+  ) {
+    const occupied = edges.some(
+      (edge) =>
+        edge.target === target &&
+        edge.targetHandle === targetHandle &&
+        !(edge.source === source && edge.sourceHandle === sourceHandle),
+    );
+    if (occupied) {
+      return { ok: false, reason: REASON_PORT_ALREADY_CONNECTED };
+    }
   }
 
   return { ok: true };
@@ -167,6 +186,28 @@ export function validateWorkflow(
       ),
     );
   }
+
+  // ── One inbound edge per input port (flow:end is the terminal sink) ─────
+  const inbound = new Map<string, number>();
+  def.edges.forEach((edge, index) => {
+    const target = nodeMap.get(edge.target);
+    if (target?.type === "flow:end" || target?.type === "flow:loop") {
+      return;
+    }
+    const key = `${edge.target}:${edge.target_port}`;
+    const previous = inbound.get(key);
+    if (previous !== undefined) {
+      errors.push(
+        err(
+          "workflows.errors.portAlreadyConnected",
+          `Edge ${index} targets input port '${key}' which already has an incoming edge (edge ${previous}).`,
+          { edgeIndex: index, nodeId: edge.target },
+        ),
+      );
+    } else {
+      inbound.set(key, index);
+    }
+  });
 
   // ── Edge references and port type compatibility ─────────────────────────
   def.edges.forEach((edge, index) => {

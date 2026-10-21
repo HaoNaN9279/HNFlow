@@ -115,6 +115,8 @@ def build_generate_prompt(
             f"- 端口类型共四种：{port_type_list}。",
             "- 每个工作流必须且只能有一个 flow:start 节点和一个 flow:end 节点。",
             "- flow:if 节点必须提供一个 bool 类型输入端口作为分支条件。",
+            "- 同一输入端口只允许一条入边（flow:end 与 flow:loop 例外）。",
+            "- ai:llm_agent 的任务只来自 template_prompt 输入端口；输出 Schema 由 data:schema 节点接入 output_schema，不要写 instruction/output_schema 参数。",
             "",
             "## 命名约束",
             f"- 节点 id 必须匹配 {_ID_PATTERN.pattern!r}（1-64 个安全 ASCII 字符）。",

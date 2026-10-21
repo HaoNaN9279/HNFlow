@@ -34,7 +34,7 @@ describe("workflow type constants", () => {
       "data:convert",
       "data:asset",
       "data:shared",
-      "data:knowledge",
+      "data:schema",
       "data:file",
       "data:json",
       "data:regex",

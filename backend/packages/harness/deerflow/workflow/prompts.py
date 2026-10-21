@@ -26,13 +26,10 @@ from __future__ import annotations
 import html
 import re
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from deerflow.config.agents_config import load_agent_soul
 from deerflow.workflow.schema import Node
-
-if TYPE_CHECKING:
-    from deerflow.workflow.context_policy import ContextPolicy
 
 # 默认 lead 身份声明：agent_name 为 None（未绑定 custom agent）时使用。
 DEFAULT_LEAD_IDENTITY = "你是一个通用 AI 助手，负责执行当前工作流节点任务。"
@@ -96,36 +93,6 @@ def build_capability_layer(capability_groups: list[str], *, agent_skills: list[s
     else:
         lines.append(f"自定义 agent 自身 skills：指定启用 {'、'.join(agent_skills)}。")
     return "\n".join(lines)
-
-
-def build_examples_layer(examples: Sequence[str]) -> str:
-    """Build the declarative few-shot section (N14 §24.3).
-
-    Renders the node's declared ``context_policy.examples`` as a deterministic
-    ``<examples>`` block.  Empty input yields an empty string, so a node with no
-    examples assembles exactly as before.  The entries are already normalized to
-    strings by ``context_policy.parse_context_policy``.
-    """
-    items = [example for example in examples if example]
-    if not items:
-        return ""
-    return "<examples>\n" + "\n\n".join(items) + "\n</examples>"
-
-
-def build_context_layer(include: Sequence[str], inputs: dict[str, Any]) -> str:
-    """Build the declarative context-mounting section (N14 §24.3).
-
-    Mounts the values of the named input ports in the declared order, each under
-    a ``--- <port> ---`` header, into a deterministic ``<context>`` block.  This
-    is how a retrieval or upstream node's output reaches the AI node's window:
-    the node declares which ports to load instead of the assembler guessing.
-    Missing or ``None`` ports are skipped (no placeholder), so an unpopulated
-    input never injects an empty section.
-    """
-    parts = [f"--- {name} ---\n{inputs[name]}" for name in include if inputs.get(name) is not None]
-    if not parts:
-        return ""
-    return "<context>\n" + "\n\n".join(parts) + "\n</context>"
 
 
 def build_task_layer(instruction: str | None, inputs: dict[str, Any], *, preserve_placeholders: bool = False) -> str:
@@ -204,38 +171,41 @@ def build_capability_skills_layer(skills: Sequence[Any]) -> str:
     return "\n".join(lines)
 
 
+#: Prompt bucket order.  The task bucket is the user turn; everything else is
+#: system context.  The schema bucket is appended by the executor.
+BUCKET_ORDER: tuple[str, ...] = (
+    "identity",
+    "capability",
+    "capability_rules",
+    "capability_skills",
+    "task",
+    "schema",
+)
+
+
 def build_ai_node_buckets(
     *,
     agent_name: str | None,
     capability_groups: Sequence[str],
-    instruction: str | None,
+    template_prompt: str | None,
     inputs: dict[str, Any],
     user_id: str | None = None,
     agent_skills: list[str] | None = None,
-    policy: ContextPolicy | None = None,
     preserve_placeholders: bool = False,
     capability_rules: Sequence[Any] = (),
     capability_skills: Sequence[Any] = (),
 ) -> dict[str, str]:
-    """Build the named prompt buckets for an AI node, in the fixed N14 §24.3 order.
+    """Build the named prompt buckets for an AI node.
 
-    The single source of truth for the bucket set and order, shared by the
-    executor (``executors/ai.py``) and :func:`assemble_ai_node_prompt`.  Returns
-    a mapping keyed by :data:`deerflow.workflow.context_policy.BUCKET_ORDER` names.
-    The ``schema`` bucket is added by the executor (it needs the parsed
-    structured-output schema), and the budget is applied separately via
-    ``apply_context_budget`` — this function only *builds*.
+    ``template_prompt`` is the only task source.  It is interpolated with the
+    same ``{{port}}`` semantics as every other dynamic prompt input.
     """
-    from deerflow.workflow.context_policy import BUCKET_ORDER
-
     buckets = {
         "identity": build_identity_layer(agent_name, user_id=user_id),
         "capability": build_capability_layer(list(capability_groups), agent_skills=agent_skills),
         "capability_rules": build_capability_rules_layer(capability_rules),
         "capability_skills": build_capability_skills_layer(capability_skills),
-        "task": build_task_layer(instruction, inputs, preserve_placeholders=preserve_placeholders),
-        "examples": build_examples_layer(policy.examples if policy else ()),
-        "context": build_context_layer(policy.include if policy else (), inputs),
+        "task": build_task_layer(template_prompt, inputs, preserve_placeholders=preserve_placeholders),
     }
     return {name: buckets[name] for name in BUCKET_ORDER if name in buckets}
 
@@ -246,26 +216,17 @@ def assemble_ai_node_prompt(
     *,
     user_id: str | None = None,
     agent_skills: list[str] | None = None,
-    policy: ContextPolicy | None = None,
     capability_rules: Sequence[Any] = (),
     capability_skills: Sequence[Any] = (),
 ) -> str:
-    """Assemble the complete AI-node prompt (unbudgeted reference path).
-
-    Buckets are assembled in the fixed order and joined by blank lines; empty
-    buckets are omitted. The instruction template is read from
-    ``node.params.get("instruction")``. The executor applies the budget over
-    these buckets plus the structured-output schema; this helper is the pure,
-    budget-free assembler.
-    """
+    """Assemble the complete AI-node prompt (unbudgeted reference path)."""
     buckets = build_ai_node_buckets(
         agent_name=node.agent_name,
         capability_groups=node.capability_groups,
-        instruction=node.params.get("instruction"),
+        template_prompt=inputs.get(TEMPLATE_PROMPT_PORT) or node.params.get("instruction"),
         inputs=inputs,
         user_id=user_id,
         agent_skills=agent_skills,
-        policy=policy,
         capability_rules=capability_rules,
         capability_skills=capability_skills,
     )

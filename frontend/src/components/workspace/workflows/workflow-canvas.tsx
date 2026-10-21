@@ -140,7 +140,7 @@ function CanvasInner() {
 
   const handleConnect = useCallback(
     (connection: Connection) => {
-      const result = validateConnection(connection, nodes);
+      const result = validateConnection(connection, nodes, edges);
       if (!result.ok) {
         toast.error(reasonToMessage(result.reason, t));
         return;
@@ -161,7 +161,7 @@ function CanvasInner() {
       setEdges((current) => addEdge(edge, current));
       markDirty();
     },
-    [markDirty, nodes, setEdges, t],
+    [edges, markDirty, nodes, setEdges, t],
   );
 
   // D5: same-type port validation. React Flow consults this while dragging a
@@ -174,9 +174,9 @@ function CanvasInner() {
         target: edge.target,
         targetHandle: edge.targetHandle,
       };
-      return validateConnection(candidate, nodes).ok;
+      return validateConnection(candidate, nodes, edges).ok;
     },
-    [nodes],
+    [edges, nodes],
   );
 
   const handleCreateNode = useCallback(

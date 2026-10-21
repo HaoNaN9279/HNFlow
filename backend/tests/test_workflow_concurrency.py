@@ -20,7 +20,6 @@ import pytest
 
 from deerflow.locks.file_lock import reset_file_locks_for_tests, resource_lock
 from deerflow.workflow.compiler import (
-    WorkflowCompileError,
     WorkflowRuntime,
     clear_compile_cache,
     compile_definition,
@@ -28,7 +27,6 @@ from deerflow.workflow.compiler import (
 from deerflow.workflow.executors import WorkflowExecutionError, build_default_registry
 from deerflow.workflow.executors.asset import asset_resource_access
 from deerflow.workflow.executors.data import file_resource_access
-from deerflow.workflow.executors.knowledge import knowledge_resource_access
 from deerflow.workflow.executors.local_app import app_resource_access
 from deerflow.workflow.executors.tool import bash_resource_access, tool_invoke_resource_access
 from deerflow.workflow.resource_access import ResourceAccess, host_write_access, sandbox_write_access, write_locks
@@ -75,101 +73,6 @@ def _isolate() -> Any:
     reset_file_locks_for_tests()
     yield
     reset_file_locks_for_tests()
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# A1 — fan-in merge
-# ═══════════════════════════════════════════════════════════════════════════════
-
-
-def _fan_in_graph(policy: str | None, *, a_value: Any = "A", captured: list[Any]) -> Any:
-    sink_params = {} if policy is None else {"merge": {"in": policy}}
-    nodes = [
-        _start(),
-        _data_node("a", NodeType.DATA_JSON),
-        _data_node("b", NodeType.DATA_REGEX),
-        _data_node("sink", NodeType.DATA_CONVERT, params=sink_params, outputs=[Port(name="out", type=PortType.DATA)]),
-        _end(),
-    ]
-    edges = [
-        Edge(source="start", source_port="input", target="a", target_port="in"),
-        Edge(source="start", source_port="input", target="b", target_port="in"),
-        Edge(source="a", source_port="out", target="sink", target_port="in"),
-        Edge(source="b", source_port="out", target="sink", target_port="in"),
-        Edge(source="sink", source_port="out", target="end", target_port="in"),
-    ]
-
-    def _sink(_rt: Any, _p: dict, i: dict) -> dict[str, Any]:
-        captured.append(i.get("in"))
-        return {}
-
-    ctx = build_default_registry().build_context()
-    ctx.executors[NodeType.DATA_JSON] = lambda _rt, _p, _i: {} if a_value is None else {"out": a_value}
-    ctx.executors[NodeType.DATA_REGEX] = lambda _rt, _p, _i: {"out": "B"}
-    ctx.executors[NodeType.DATA_CONVERT] = _sink
-    return compile_definition(_def(nodes, edges), context=ctx)
-
-
-class TestFanInMerge:
-    @pytest.mark.asyncio
-    async def test_overwrite_is_the_default_last_edge_wins(self) -> None:
-        captured: list[Any] = []
-        graph = _fan_in_graph(None, captured=captured)
-        await graph.ainvoke({"wf:start:input": "seed"})
-        assert captured == ["B"]
-
-    @pytest.mark.asyncio
-    async def test_array_collects_all_upstream_values_in_edge_order(self) -> None:
-        captured: list[Any] = []
-        graph = _fan_in_graph("array", captured=captured)
-        await graph.ainvoke({"wf:start:input": "seed"})
-        assert captured == [["A", "B"]]
-
-    @pytest.mark.asyncio
-    async def test_array_skips_a_producer_that_wrote_nothing(self) -> None:
-        captured: list[Any] = []
-        graph = _fan_in_graph("array", a_value=None, captured=captured)
-        await graph.ainvoke({"wf:start:input": "seed"})
-        assert captured == [["B"]]
-
-    @pytest.mark.asyncio
-    async def test_error_policy_raises_on_conflicting_sources(self) -> None:
-        captured: list[Any] = []
-        graph = _fan_in_graph("error", captured=captured)
-        with pytest.raises(WorkflowExecutionError):
-            await graph.ainvoke({"wf:start:input": "seed"})
-
-    def test_merge_referencing_unknown_port_is_compile_error(self) -> None:
-        nodes = [
-            _start(),
-            _data_node("a", NodeType.DATA_JSON),
-            _data_node("sink", NodeType.DATA_CONVERT, params={"merge": {"nope": "array"}}, outputs=[Port(name="out", type=PortType.DATA)]),
-            _end(),
-        ]
-        edges = [
-            Edge(source="start", source_port="input", target="a", target_port="in"),
-            Edge(source="start", source_port="input", target="sink", target_port="in"),
-            Edge(source="a", source_port="out", target="sink", target_port="in"),
-            Edge(source="sink", source_port="out", target="end", target_port="in"),
-        ]
-        with pytest.raises(WorkflowCompileError):
-            compile_definition(_def(nodes, edges), context=build_default_registry().build_context())
-
-    def test_merge_with_unknown_policy_is_compile_error(self) -> None:
-        nodes = [
-            _start(),
-            _data_node("a", NodeType.DATA_JSON),
-            _data_node("sink", NodeType.DATA_CONVERT, params={"merge": {"in": "merge-lol"}}, outputs=[Port(name="out", type=PortType.DATA)]),
-            _end(),
-        ]
-        edges = [
-            Edge(source="start", source_port="input", target="a", target_port="in"),
-            Edge(source="start", source_port="input", target="sink", target_port="in"),
-            Edge(source="a", source_port="out", target="sink", target_port="in"),
-            Edge(source="sink", source_port="out", target="end", target_port="in"),
-        ]
-        with pytest.raises(WorkflowCompileError):
-            compile_definition(_def(nodes, edges), context=build_default_registry().build_context())
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -240,13 +143,6 @@ class TestResourceAccessDeclarations:
 
         assert file_resource_access(runtime, {"operation": "read"}, {}) == ()
         assert file_resource_access(runtime, {"operation": "write"}, {}) == (sandbox_write_access(runtime),)
-
-    def test_knowledge_accessor_only_locks_ingest(self) -> None:
-        runtime = _runtime()
-
-        assert knowledge_resource_access(runtime, {"operation": "retrieve", "collection": "docs"}, {}) == ()
-        accesses = knowledge_resource_access(runtime, {"operation": "ingest", "collection": "docs"}, {})
-        assert accesses[0].label == "knowledge:docs"
 
     def test_app_accessor_locks_every_app_operation(self) -> None:
         runtime = _runtime()

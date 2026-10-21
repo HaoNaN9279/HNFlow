@@ -187,11 +187,15 @@ async def _workflow_state_values(
     _, definition = await _resolve_definition(request, definition_id, user)
     resolver = await _build_workflow_template_resolver(definition, request, user_id=str(user.id))
     registry = build_default_registry()
+    app_config = get_app_config()
     compile_ctx = build_workflow_compile_context(
         registry,
         checkpointer=run_ctx.checkpointer,
         definition_resolver=resolver,
-        max_delegation_depth=get_app_config().subagents.max_delegation_depth,
+        max_delegation_depth=app_config.subagents.max_delegation_depth,
+        available_model_names=frozenset(str(model.name) for model in app_config.models),
+        model_context_windows={str(model.name): int(model.context_window) for model in app_config.models if getattr(model, "context_window", None) is not None},
+        default_model_name=str(app_config.models[0].name) if app_config.models else None,
     )
     graph = compile_definition(definition, context=compile_ctx)
     snapshot = await graph.aget_state({"configurable": {"thread_id": record.thread_id}})

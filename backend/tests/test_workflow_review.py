@@ -38,9 +38,8 @@ def _review_definition() -> WorkflowDefinition:
             Node(
                 id="ai",
                 type=NodeType.AI_LLM_AGENT,
-                inputs=[_port("in"), _port("continue_prompt")],
+                inputs=[_port("in"), _port("template_prompt"), _port("continue_prompt")],
                 outputs=[_port("out")],
-                params={"instruction": "make {{in}}"},
             ),
             Node(
                 id="review",
@@ -53,6 +52,7 @@ def _review_definition() -> WorkflowDefinition:
         ],
         edges=[
             Edge(source="start", source_port="out", target="ai", target_port="in"),
+            Edge(source="start", source_port="out", target="ai", target_port="template_prompt"),
             Edge(source="ai", source_port="out", target="review", target_port="in"),
             Edge(source="review", source_port=REVIEW_APPROVED_PORT, target="end", target_port="in"),
             Edge(source="review", source_port=REVIEW_REJECTED_PORT, target="ai", target_port="continue_prompt"),

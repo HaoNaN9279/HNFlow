@@ -36,11 +36,15 @@ def exec_assign(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[s
     """Static value assignment or input pass-through.
 
     If ``params.value`` is present it becomes the output; otherwise the
-    value arriving on the ``in`` input port is forwarded unchanged.
+    value arriving on the ``in`` input port is forwarded unchanged.  A
+    ``params.task`` string is additionally exposed on a ``task`` output port,
+    letting one upstream node feed both data and task inputs of an AI node.
     """
-    if "value" in params:
-        return {"out": params["value"]}
-    return {"out": inputs.get("in")}
+    out = params["value"] if "value" in params else inputs.get("in")
+    result: dict[str, Any] = {"out": out}
+    if isinstance(params.get("task"), str):
+        result["task"] = params["task"]
+    return result
 
 
 # ── data:shared ──────────────────────────────────────────────────────────────

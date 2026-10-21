@@ -66,7 +66,7 @@ HNFlow 是「图驱动的确定性编排引擎」，与「对话驱动的 super 
 - 侧边栏新增 `/workspace/model-profiles`：列出并管理模型档案；
 - 每个档案有稳定 `id`/`name`、展示名、描述、启停状态，并指向 `config.yaml -> models[]` 中的一个实际模型；
 - AI 节点通过 `params.model_profile` 引用档案，不再直接引用实际模型；运行时由档案解析出实际模型；
-- 档案目标缺失、停用，或同时设置 `model_policy` 时保存/运行会明确失败；被工作流引用的档案禁止删除，只能停用；
+- 档案目标缺失、停用时保存/运行会明确失败；被工作流引用的档案禁止删除，只能停用；AI 节点只通过模型档案选择模型；
 - `GET /api/models` 仍只读，实际模型与凭据继续由运维在 `config.yaml` 管理。
 
 ### 工作台与全局执行监视
@@ -84,12 +84,15 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 ```
 身份层：主 agent 的 SOUL（一次绑定，复用所有节点）
 能力层：关联功能组的 rules / 工具描述 / allowed-tools 并集
-任务层：节点 instruction 模板（工作流作者在画布上写，每节点一份）
+任务层：template_prompt 运行时输入（不再有节点 instruction）
 ```
 
 - 一个 AI 节点 = **一个主身份**（custom agent，`agent_name` 静态绑定）+ 若干功能组供给工具与规则（能力并集），避免人格冲突；
-- 任务层模板支持上游端口数据插值（`{{url_list}}`），模板必填，留空保存校验报错；
-- AI 节点 ≠ 自由 ReAct loop：节点内只能调用关联功能组声明的工具，LLM 只决策「调用哪个工具、按模板产出什么」。
+- 节点任务只来自 `template_prompt`，支持上游端口数据插值（`{{url_list}}`）；`continue_prompt` 有值时走会话续接；
+- 输出 Schema 由独立 `data:schema` 节点提供，经 `output_schema` 输入端口接入；
+- 上下文超限自动压缩：预算来自所选模型档案的 `context_window`，压缩使用内置压缩 skill，节点/用户无需配置；
+- AI 节点不做子 Agent 调用、不做 token 预算限制；工具集仍受能力组 allowed-tools 约束；
+- 旧定义可在 ackend/ 下用 PYTHONPATH=. python scripts/migrate_workflow_ai_contract.py --dry-run 预览迁移，--apply 写回。
 
 ### 功能组（Capability Group）
 
@@ -278,12 +281,12 @@ AI 节点通过两个输入端口控制执行模式：
 
 | 端口 | 有值行为 |
 | --- | --- |
-| `template_prompt` | **template 模式（默认）**：作为本轮运行时用户输入，插值后追加在 `instruction` 任务之后；节点不读取历史消息 |
+| `template_prompt` | **template 模式（默认）**：作为本轮唯一任务输入，支持 `{{port}}` 插值；节点不读取历史消息 |
 | `continue_prompt` | **continue 模式**：把新提示词追加到该节点既有会话消息历史，续接节点 checkpoint，适合迭代式任务 |
 
 - 优先级固定：`continue_prompt` 有值 → continue；否则 → template。两端口同时有值时 continue 优先，`template_prompt` 忽略并记录 warning；
 - 会话 key 稳定：`checkpoint_thread_id = {origin_thread_id}:wfai:{node_id}`，跨 run 经 context 注入 `ai_origin_thread_id` 定位旧会话；
-- 当前 template 分支不创建会话 checkpoint；真正的 `template → continue` 历史连续性是后续增量。现有 continue 适合 continue 会话之间续接；
+- template 分支不创建会话 checkpoint；`template_prompt` 缺失时节点执行前直接失败；
 - continue 不违反「AI 节点 ≠ 自由 ReAct」约束：仍限关联功能组工具，只是多轮受限对话；loop 迭代次数即硬上限；
 - 触发入口：画布运行面板「继续会话」表单、对话侧 `continue_node(run_id, node_id, prompt)` 工具、REST `POST /workflows/{definition_id}/runs/{run_id}/continue`；
 - 缓存观测：节点 `token_usage`（含稀疏 `cache_read_tokens`）经保留通道由 worker 聚合进 `run.end.content["token_usage"]`，无用量节点保持 absent，绝不补零。

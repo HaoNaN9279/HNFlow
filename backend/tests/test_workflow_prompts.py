@@ -167,9 +167,9 @@ class TestAssembleAiNodePrompt:
         node = _make_node(
             agent_name="publisher",
             capability_groups=["web", "publish"],
-            params={"instruction": "抓取 {{url_list}}"},
+            params={},
         )
-        prompt = assemble_ai_node_prompt(node, {"url_list": ["a", "b"]}, user_id="u1")
+        prompt = assemble_ai_node_prompt(node, {"template_prompt": "抓取 {{url_list}}", "url_list": ["a", "b"]}, user_id="u1")
         assert "publisher" in prompt  # identity layer
         assert "SOUL正文" in prompt
         assert "已启用能力组" in prompt  # capability layer
@@ -181,8 +181,8 @@ class TestAssembleAiNodePrompt:
             "deerflow.workflow.prompts.load_agent_soul",
             lambda agent_name, user_id=None: None,
         )
-        node = _make_node(agent_name="publisher", params={"instruction": "do {{x}}"})
-        prompt = assemble_ai_node_prompt(node, {"x": 1})
+        node = _make_node(agent_name="publisher")
+        prompt = assemble_ai_node_prompt(node, {"template_prompt": "do {{x}}", "x": 1})
         assert "已启用能力组" not in prompt
         assert "do 1" in prompt
 
@@ -204,7 +204,7 @@ class TestAssembleAiNodePrompt:
         node = _make_node(
             agent_name="publisher",
             capability_groups=["web"],
-            params={"instruction": "抓取 {{url_list}}"},
+            params={},
         )
         inputs = {"url_list": ["a", "b"]}
         first = assemble_ai_node_prompt(node, inputs, user_id="u1")

@@ -855,10 +855,10 @@ Dev plan §21 asks for irreversible operations (overwrite a file, delete a layer
 - **Preview is a pure function** (`workflow/preview.py`). `ActionPreview` — `node_id` / `node_type` / `action` / `summary` / `reversible` / `recovery` + `sources` and `targets` (each a `PreviewTarget{ref, observed}`) + `risks` + `required_confirmations`. It never mutates anything: the only I/O is fingerprinting. Previewers are registered next to their executor (`ExecutorRegistration.preview`) and reached through `CompileContext.previews`; the compiler itself does not run them. The read-only `POST /api/workflows/{definition_id}/preview` endpoint does.
 - **Human review is an explicit node** (`workflow/review.py` + `executors/review.py`). `human:review` declares `in`, `approved`, and `rejected` ports. It creates a `human_tasks` row with `kind="review"` and suspends through `interrupt()`; approval emits the reviewed value on `approved`, rejection emits the reviewer's continue prompt on `rejected`. The compiler routes `approved` forward and `rejected` back to the configured `ai:llm_agent` target's `continue_prompt`.
   - **Per-visit identity without a migration.** A review can be visited repeatedly. The task row stores `inputs_snapshot.visit` and the executor round-trips the visit through `wf:<node>:__review_visit`; a resume reuses its own row while a later rejection creates `visit + 1`. The rejected count shown in the UI is `visit - 1`; there is deliberately no maximum (LangGraph's recursion limit is the final hard stop).
-  - **One intentional back-edge.** `validate_definition` excludes a review's `rejected` edge from generic cycle detection, then validates that it targets an upstream `ai:llm_agent` through `continue_prompt`. Every other cycle is still rejected. A rejected target may not be `flow:start`/`flow:end`/the review itself, and may not use `output_schema`/`context_policy`/`model_policy`/`memory`/`retrieval` because continue mode does not support them.
+  - **One intentional back-edge.** `validate_definition` excludes a review's `rejected` edge from generic cycle detection, then validates that it targets an upstream `ai:llm_agent` through `continue_prompt`. Every other cycle is still rejected. A rejected target may not be `flow:start`/`flow:end`/the review itself, may not use `model_profile`, and may not have an `output_schema` input because continue mode does not support them.
   - **AI session first turn.** A review retry target is compiled with `__review_session=True`, which makes its first template turn use the checkpointer (same `{thread_id}:wfai:{node_id}` thread) so the rejection's `continue_prompt` genuinely continues the conversation instead of starting a fresh session.
   - **No action preview on review.** Per-node `require_approval` / `on_reject` and `workflow/approval.py` are removed; review approves the data on its input, not a downstream action's file fingerprints. `crash_confirm` remains an independent executor-level gate.
-- **Compensation** (`workflow/compensation.py`). With `params.rollback_on_failure = true` a mutating node snapshots the files it is about to touch (`{base_dir}/undo/<run_id>/<node_id>/` — engine-private recovery material, deliberately *outside* `assets.roots` so an empty allow-list cannot disable rollback) and restores them if it then fails. A backup that cannot be taken aborts the node **before** it mutates anything. Recording is best-effort: a successful mutation must never fail because its bookkeeping did.
+- **Compensation** (`workflow/compensation.py`). A mutating node that supports compensation snapshots the files it is about to touch (rollback is always enabled; there is no author switch) (`{base_dir}/undo/<run_id>/<node_id>/` — engine-private recovery material, deliberately *outside* `assets.roots` so an empty allow-list cannot disable rollback) and restores them if it then fails. A backup that cannot be taken aborts the node **before** it mutates anything. Recording is best-effort: a successful mutation must never fail because its bookkeeping did.
 - **Undo** (`workflow/undo.py` pure model + `undo_service.py` execution). `UndoRecord` (`kind` = `file_backup` | `app_undo`, `status` = `recorded` → `undone`/`skipped`/`failed`, `targets`, and `backup_paths` **aligned 1:1 with `targets`** where `None` means "did not exist before"). `plan_undo` returns the still-reversible records **newest first**; terminal records drop out so a repeated request cannot apply a compensation twice. `execute_run_undo` restores host files directly, resolves sandbox targets through a lazily acquired sandbox, and asks the application for `app_undo` steps — reporting `skipped` when the instance is gone instead of pretending it rolled back.
 - **Native app undo is opt-in and double-checked** (`apps/driver.py`): `driver_supports_undo` requires **both** a `supports_undo = True` declaration and a callable `undo`. `AppSessionManager.undo` goes through the same N8 admission choke point and requires a **live** session.
 - **Human task kinds**: `list_human_tasks` / `GET /api/human-tasks` accept `?kind=task|review`; review tasks cannot be skipped (the REST route and `skip_human_task` return 409). Existing historical rows are not migrated or special-cased.
@@ -1056,7 +1056,42 @@ Lets a caller pass per-request, short-lived end-user credentials (e.g. an ERP to
 
 ### Model Profiles (`packages/harness/deerflow/workflow/model_profiles.py`)
 
-`ai:llm_agent` nodes reference the middle layer through `params.model_profile` (a stable profile id). Each user-owned `model_profiles` row points at exactly one actual `config.yaml -> models[]` name; profiles never chain. `resolve_model_profile` is the pure fail-loud resolver shared by compiler and executor: unknown/disabled profiles and missing target models reject the definition at save/compile time and the run at execution time. `params.model_profile` and `params.model_policy` are mutually exclusive. Session continuation rejects `model_profile` (same reason as `model_policy`): an existing session must not silently switch models. The compiler folds referenced profile target/enabled/availability into its cache key, and `runtime_context.py` injects the user's profile map into every workflow run. Actual models remain operator config; Gateway exposes them read-only through `/api/models`.
+`ai:llm_agent` nodes reference the middle layer through `params.model_profile`
+(a stable profile id). Each user-owned `model_profiles` row points at exactly
+one actual `config.yaml -> models[]` name; profiles never chain.
+`resolve_model_profile` is the pure fail-loud resolver shared by compiler and
+executor: unknown/disabled profiles and missing target models reject the
+definition at save/compile time and the run at execution time. Model selection
+has no separate `model_policy`; the profile is the only selector. Session
+continuation rejects `model_profile` because an existing session must not
+silently switch models. The compiler folds referenced profile target/enabled/
+availability into its cache key, and `runtime_context.py` injects the user's
+profile map into every workflow run. Actual models remain operator config;
+Gateway exposes them read-only through `/api/models`.
+
+### Workflow AI Node Contract
+
+The current AI node contract is intentionally small:
+
+- `template_prompt` is the only task input for a fresh turn; `continue_prompt`
+  resumes the node's checkpointed session. The old `instruction` parameter is
+  removed from the editor and only read as a legacy compatibility fallback.
+- `output_schema` is a `record` input port fed by a compile-only `data:schema`
+  node. The compiler resolves the static schema and injects
+  `__output_schema`; `params.output_schema` is rejected.
+- `context_compression.py` derives a prompt budget from the effective model's
+  `context_window`. The executor installs the shared summarization middleware
+  with the built-in compression skill prompt; there is no node-level context
+  policy, no per-node enable flag, and no user-visible summary message.
+- AI nodes do not delegate to subagents (`task` is disallowed), do not receive a
+  token budget, and do not have node-level memory or knowledge retrieval.
+  Memory is the continue session history; knowledge is carried by capability
+  groups.
+- A target input port accepts one incoming edge. `flow:end` and `flow:loop`
+  are the deliberate exceptions (terminal sink and loop back-edge).
+- `rollback_on_failure` is no longer author-facing. Executors that support
+  compensation (`data:file`, `data:asset`, `app:script`) always prepare a
+  rollback snapshot and record undo metadata.
 
 ### Model Factory (`packages/harness/deerflow/models/factory.py`)
 

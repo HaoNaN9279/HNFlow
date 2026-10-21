@@ -65,8 +65,12 @@ class FileSnapshot(BaseModel):
 
 
 def rollback_requested(params: dict[str, Any]) -> bool:
-    """Whether *params* ask the node to roll back its own side effects on failure."""
-    return params.get("rollback_on_failure") is True
+    """Rollback is always enabled for supported mutating executors.
+
+    Kept as a small helper so existing executors retain one call site while the
+    user-facing ``rollback_on_failure`` switch is gone.
+    """
+    return True
 
 
 def backup_root() -> Path:

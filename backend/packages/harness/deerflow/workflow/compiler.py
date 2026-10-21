@@ -82,7 +82,7 @@ from deerflow.workflow.capability_group_nodes import (
     resolve_ai_capability_groups,
     validate_capability_group_wiring,
 )
-from deerflow.workflow.context_policy import CONTEXT_USAGE_RESULT_KEY
+from deerflow.workflow.context_compression import ContextCompressionError, resolve_context_compression
 from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.handoff import (
     DECISION_PORT as HANDOFF_DECISION_PORT,
@@ -124,6 +124,7 @@ from deerflow.workflow.review import (
     review_state_key,
 )
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
+from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PARAM, OUTPUT_SCHEMA_PORT
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -368,6 +369,8 @@ class CompileContext:
     resource_accessors: dict[NodeType, ResourceAccessor] = field(default_factory=dict)
     model_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
     available_model_names: frozenset[str] = frozenset()
+    model_context_windows: dict[str, int] = field(default_factory=dict)
+    default_model_name: str | None = None
 
 
 # ── Compile cache ──────────────────────────────────────────────────────────
@@ -430,6 +433,8 @@ def _cache_key(def_: WorkflowDefinition, context: CompileContext | None = None) 
                 available = isinstance(target, str) and target in context.available_model_names
                 parts.append(f"{profile_id}:{target}:{bool(profile.get('enabled', True))}:{available}")
             digest.update(f"\0model_profiles:{'|'.join(parts)}".encode())
+        windows = "|".join(f"{name}:{size}" for name, size in sorted(context.model_context_windows.items()))
+        digest.update(f"\0model_context_windows:{windows}\0default_model:{context.default_model_name or ''}".encode())
     return digest.hexdigest()
 
 
@@ -498,12 +503,8 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             # so a preview node works even when the AI node was authored before
             # this feature.
             fields[f"wf:{node.id}:__prompt"] = Any
-            if node.params.get("output_schema") is not None:
-                # N14 §24.4 structured-output repair count.
-                fields[f"wf:{node.id}:__schema_repairs"] = Any
-            if node.params.get("context_policy") is not None:
-                # N14 §24.3 per-bucket context usage (estimates + dropped buckets).
-                fields[f"wf:{node.id}:__context_usage"] = Any
+            # Reserved structured-output repair count (zero writes are omitted).
+            fields[f"wf:{node.id}:__schema_repairs"] = Any
     # Create the TypedDict dynamically — total=False so all fields are optional.
     schema: type = type("WorkflowState", (dict,), {"__annotations__": fields, "__total__": False})
     return schema
@@ -601,6 +602,7 @@ def _make_node_fn(
     *,
     run_budget: RunBudget | None = None,
     capability_groups: list[str] | None = None,
+    output_schema: dict[str, Any] | None = None,
     prompt_preview_agent: str | None = None,
     review_target: str | None = None,
     review_retry_target: bool = False,
@@ -631,32 +633,15 @@ def _make_node_fn(
     """
     from deerflow.workflow.registry import WorkflowExecutionError  # deferred import — avoids module-level cycle
 
-    # Build input-port → *ordered list* of upstream state keys from incoming
-    # edges.  A list-per-port (rather than a single key) is what lets a fan-in
-    # port fed by several parallel branches merge per ``params.merge`` (N13)
-    # instead of silently keeping only the last edge (pre-N13 behavior).
-    merge_raw = node.params.get("merge") or {}
-    merge_policies: dict[str, str] = dict(merge_raw) if isinstance(merge_raw, dict) else {}
-    port_keys: dict[str, list[str]] = {}
-    for edge in incoming_edges:
-        port_keys.setdefault(edge.target_port, []).append(f"wf:{edge.source}:{edge.source_port}")
+    # Every target input port has at most one incoming edge (validated at save
+    # and compile time), so input resolution is a single state-key lookup.
+    port_keys: dict[str, str] = {edge.target_port: f"wf:{edge.source}:{edge.source_port}" for edge in incoming_edges}
 
     def _resolve_input(state: dict[str, Any], port_name: str) -> Any:
-        keys = port_keys.get(port_name)
-        if not keys:
+        key = port_keys.get(port_name)
+        if key is None:
             return state.get(f"wf:{node.id}:{port_name}")
-        policy = merge_policies.get(port_name, "overwrite")
-        if policy == "array":
-            # Collect every upstream value that was actually produced, in edge
-            # order.  A producer that never ran is skipped; none → empty list.
-            return [state.get(k) for k in keys if k in state]
-        if policy == "error":
-            present = [k for k in keys if k in state and state.get(k) is not None]
-            if len(present) > 1:
-                raise WorkflowExecutionError(f"node '{node.id}': input port '{port_name}' received conflicting values from multiple branches {present} (merge policy 'error')")
-            return state.get(present[0]) if present else None
-        # ``overwrite`` (default): last edge wins, matching pre-N13 behavior.
-        return state.get(keys[-1])
+        return state.get(key)
 
     async def _node_fn(state: dict[str, Any]) -> dict[str, Any]:
         inputs: dict[str, Any] = {}
@@ -697,6 +682,8 @@ def _make_node_fn(
                 list(capability_groups) if capability_groups is not None else list(node.capability_groups),
             )
             executor_params.setdefault("node_id", node.id)
+            if output_schema is not None:
+                executor_params[OUTPUT_SCHEMA_PARAM] = output_schema
             if review_retry_target:
                 # The first template turn must persist its session so a later
                 # rejected review can continue the same conversation.
@@ -820,11 +807,6 @@ def _make_node_fn(
             schema_repairs = result.get("__schema_repairs")
             if isinstance(schema_repairs, int) and not isinstance(schema_repairs, bool):
                 outputs[f"wf:{node.id}:__schema_repairs"] = schema_repairs
-            # N14 §24.3: per-bucket context usage, present only for a node that
-            # declared a context_policy.
-            context_usage = result.get(CONTEXT_USAGE_RESULT_KEY)
-            if isinstance(context_usage, dict):
-                outputs[f"wf:{node.id}:__context_usage"] = context_usage
             # Full assembled prompt, consumed by an ``ai:prompt_preview`` node
             # rather than exposed as a declared output port.
             prompt = result.get("__workflow_prompt")
@@ -1612,6 +1594,8 @@ def _expand_subworkflow(
         max_delegation_depth=ctx.max_delegation_depth,
         model_profiles=ctx.model_profiles,
         available_model_names=ctx.available_model_names,
+        model_context_windows=ctx.model_context_windows,
+        default_model_name=ctx.default_model_name,
     )
     child_graph = _compile_impl(child, child_ctx, depth=depth + 1, visiting=child_visiting, chain_path=child_chain)
     return child_graph, child
@@ -1621,8 +1605,8 @@ def _validate_model_profiles(def_: WorkflowDefinition, ctx: CompileContext) -> N
     """Validate ``ai:llm_agent`` -> model-profile references at compile time.
 
     The profile is the middle layer and the target is the actual configured
-    model.  Unknown/disabled profiles, missing targets, and combining a profile
-    with dynamic ``model_policy`` all fail here rather than at execution.
+    model.  Unknown/disabled profiles and missing targets fail here rather than
+    at execution.
     """
     for node in def_.nodes:
         params = node.params or {}
@@ -1634,8 +1618,6 @@ def _validate_model_profiles(def_: WorkflowDefinition, ctx: CompileContext) -> N
             profile_id = parse_model_profile_id(params)
             if profile_id is None:  # pragma: no cover - guarded by the membership check
                 continue
-            if params.get("model_policy") is not None:
-                raise ModelProfileError("params.model_profile cannot be combined with params.model_policy")
             resolve_model_profile(profile_id, ctx.model_profiles, ctx.available_model_names)
         except ModelProfileError as exc:
             raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
@@ -1739,9 +1721,6 @@ def _validate_loop_bodies(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': flow:loop with a 'subworkflow' body has multiple exit edges {targets}; exactly one is allowed")
 
 
-#: Fan-in merge policies accepted by ``params.merge`` (N13).
-_MERGE_POLICIES: frozenset[str] = frozenset({"overwrite", "array", "error"})
-
 #: Shared-workspace (N14) vocabulary: variable-name grammar + write policies.
 SHARED_CHANNEL_PREFIX = "wf:shared:"
 _SHARED_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
@@ -1785,69 +1764,44 @@ def _validate_shared_nodes(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': data:shared requires a valid params.name; got {name!r}")
 
 
-#: Autonomy vocabulary for ``ai:llm_agent`` ``params.autonomy`` (N14 §24.5).
-_AUTONOMY_MODES: frozenset[str] = frozenset({"template", "bounded"})
-_AUTONOMY_BUDGET_KEYS: frozenset[str] = frozenset({"max_turns", "max_tokens", "max_tool_calls"})
+def _incoming_edges_for(node_id: str, edges: list[Edge]) -> list[Edge]:
+    return [edge for edge in edges if edge.target == node_id]
 
 
-def _validate_autonomy(def_: WorkflowDefinition) -> None:
-    """Compile-time validation for ``ai:llm_agent`` ``params.autonomy`` (N14 §24.5).
+def _resolve_ai_output_schema(
+    node: Node,
+    incoming_edges: list[Edge],
+    node_map: dict[str, Node],
+) -> dict[str, Any] | None:
+    """Resolve an AI node's schema from its single ``output_schema`` input."""
+    from deerflow.workflow.structured_output import StructuredOutputError, parse_output_schema
 
-    ``mode`` must be ``template``/``bounded``; ``budgets`` may carry only
-    ``max_turns``/``max_tokens`` (positive ints).  ``max_tool_calls`` has no
-    engine mechanism yet, so it fails loud here rather than being silently
-    ignored.
-    """
+    schema_edges = [edge for edge in incoming_edges if edge.target_port == OUTPUT_SCHEMA_PORT]
+    if not schema_edges:
+        return None
+    if len(schema_edges) > 1:  # validate_definition also rejects this
+        raise WorkflowCompileError(f"node '{node.id}': input port '{OUTPUT_SCHEMA_PORT}' has multiple incoming edges")
+    edge = schema_edges[0]
+    source = node_map.get(edge.source)
+    if source is None or source.type != NodeType.DATA_SCHEMA:
+        raise WorkflowCompileError(f"node '{node.id}': '{OUTPUT_SCHEMA_PORT}' must come from a data:schema node")
+    try:
+        return parse_output_schema((source.params or {}).get("schema"))
+    except StructuredOutputError as exc:
+        raise WorkflowCompileError(f"node '{source.id}': invalid schema: {exc}") from exc
+
+
+def _validate_output_schemas(def_: WorkflowDefinition) -> None:
+    """Validate every AI node's static schema against its declared output ports."""
+    from deerflow.workflow.structured_output import MAX_REPAIRS_LIMIT, SCHEMA_FIELD_TYPES
+
+    node_map = {node.id: node for node in def_.nodes}
     for node in def_.nodes:
-        autonomy = (node.params or {}).get("autonomy")
-        if autonomy is None:
-            continue
         if node.type != NodeType.AI_LLM_AGENT:
-            raise WorkflowCompileError(f"node '{node.id}': params.autonomy is only supported on 'ai:llm_agent' nodes")
-        if not isinstance(autonomy, dict):
-            raise WorkflowCompileError(f"node '{node.id}': params.autonomy must be an object")
-        mode = autonomy.get("mode", "template")
-        if mode not in _AUTONOMY_MODES:
-            raise WorkflowCompileError(f"node '{node.id}': autonomy.mode must be one of {sorted(_AUTONOMY_MODES)}, got {mode!r}")
-
-        budgets = autonomy.get("budgets")
-        if budgets is None:
             continue
-        if not isinstance(budgets, dict):
-            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets must be an object")
-        unknown = set(budgets) - _AUTONOMY_BUDGET_KEYS
-        if unknown:
-            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets has unknown keys {sorted(unknown)} (allowed: {sorted(_AUTONOMY_BUDGET_KEYS)})")
-        if "max_tool_calls" in budgets:
-            raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets.max_tool_calls is not supported yet")
-        for key in ("max_turns", "max_tokens"):
-            if key in budgets:
-                value = budgets[key]
-                if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
-                    raise WorkflowCompileError(f"node '{node.id}': autonomy.budgets.{key} must be a positive integer, got {value!r}")
-
-
-def _validate_output_schema(def_: WorkflowDefinition) -> None:
-    """Compile-time binding validation for ``ai:llm_agent`` ``params.output_schema`` (N14 §24.4).
-
-    The schema's fields must each map to a declared output port of the matching
-    type — turning the runtime "the model output did not match the graph"
-    surprise into a definition error at save/compile time.
-    """
-    from deerflow.workflow.structured_output import MAX_REPAIRS_LIMIT, SCHEMA_FIELD_TYPES, StructuredOutputError, parse_output_schema
-
-    for node in def_.nodes:
-        if (node.params or {}).get("output_schema") is None:
+        schema = _resolve_ai_output_schema(node, _incoming_edges_for(node.id, def_.edges), node_map)
+        if schema is None:
             continue
-        if node.type != NodeType.AI_LLM_AGENT:
-            raise WorkflowCompileError(f"node '{node.id}': params.output_schema is only supported on 'ai:llm_agent' nodes")
-        try:
-            schema = parse_output_schema(node.params)
-        except StructuredOutputError as exc:
-            raise WorkflowCompileError(f"node '{node.id}': invalid output_schema: {exc}") from exc
-        if schema is None:  # pragma: no cover - guarded by the None check above
-            continue
-
         ports = {p.name: p.type.value for p in node.outputs}
         for name, field_type in schema["fields"].items():
             if field_type not in SCHEMA_FIELD_TYPES:
@@ -1868,33 +1822,40 @@ def _validate_output_schema(def_: WorkflowDefinition) -> None:
             raise WorkflowCompileError(f"node '{node.id}': output_schema.max_repairs must be between 0 and {MAX_REPAIRS_LIMIT}")
 
 
-def _validate_context_policy(def_: WorkflowDefinition) -> None:
-    """Compile-time validation for ``ai:llm_agent`` ``params.context_policy`` (N14 §24.3).
+def _validate_ai_context_windows(def_: WorkflowDefinition, ctx: CompileContext) -> None:
+    """Fail save/compile when an AI node's selected model has no context_window."""
+    from deerflow.workflow.model_profiles import ModelProfileError, parse_model_profile_id, resolve_model_profile
 
-    Two things the runtime cannot check are checked here: the policy shape itself
-    (delegated to the pure parser, so compile and runtime agree), and the port
-    binding — every ``include`` name must be a declared **input** port of that
-    node, turning "the mounted context was silently empty" into a definition
-    error at save/compile time.
-    """
-    from deerflow.workflow.context_policy import ContextPolicyError, parse_context_policy
-
+    if ctx.default_model_name is None:
+        return
     for node in def_.nodes:
-        if (node.params or {}).get("context_policy") is None:
-            continue
         if node.type != NodeType.AI_LLM_AGENT:
-            raise WorkflowCompileError(f"node '{node.id}': params.context_policy is only supported on 'ai:llm_agent' nodes")
-        try:
-            policy = parse_context_policy(node.params)
-        except ContextPolicyError as exc:
-            raise WorkflowCompileError(f"node '{node.id}': invalid context_policy: {exc}") from exc
-        if policy is None:  # pragma: no cover - guarded by the None check above
             continue
+        try:
+            profile_id = parse_model_profile_id(node.params)
+            if profile_id is not None:
+                target = resolve_model_profile(profile_id, ctx.model_profiles, ctx.available_model_names)
+            else:
+                target = ctx.default_model_name
+        except ModelProfileError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
+        if not target:
+            raise WorkflowCompileError(f"node '{node.id}': no model is configured for this AI node")
+        if target not in ctx.model_context_windows:
+            raise WorkflowCompileError(f"node '{node.id}': model '{target}' has no context_window; set it in config.yaml models[]")
+        try:
+            resolve_context_compression(target, [type("_M", (), {"name": target, "context_window": ctx.model_context_windows[target]})()])
+        except ContextCompressionError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
 
-        input_ports = {port.name for port in node.inputs}
-        for name in policy.include:
-            if name not in input_ports:
-                raise WorkflowCompileError(f"node '{node.id}': context_policy.include names undeclared input port '{name}'")
+
+def _reject_removed_ai_params(def_: WorkflowDefinition) -> None:
+    """Reject legacy author-facing params removed from the AI node contract."""
+    removed = ("autonomy", "context_policy", "memory", "retrieval", "model_policy", "merge", "output_schema")
+    for node in def_.nodes:
+        for key in removed:
+            if (node.params or {}).get(key) is not None:
+                raise WorkflowCompileError(f"node '{node.id}': params.{key} is no longer supported; migrate the workflow to the current AI node contract")
 
 
 def _infer_prompt_preview_agent(
@@ -1942,27 +1903,6 @@ def _validate_prompt_preview(def_: WorkflowDefinition) -> None:
         if node.type != NodeType.AI_PROMPT_PREVIEW:
             continue
         _infer_prompt_preview_agent(node, node_map, def_.edges)
-
-
-def _validate_concurrency_params(def_: WorkflowDefinition) -> None:
-    """Compile-time validation for the N13 ``params.merge``.
-
-    ``params.resource_lock`` / ``resource_lock_timeout`` are no longer
-    author-facing: resource locking is derived from executor resource access
-    declarations, so only the merge policy remains a node parameter.
-    """
-    for node in def_.nodes:
-        merge = (node.params or {}).get("merge")
-        if merge is None:
-            continue
-        if not isinstance(merge, dict):
-            raise WorkflowCompileError(f"node '{node.id}': params.merge must be an object mapping input ports to one of {sorted(_MERGE_POLICIES)}")
-        input_names = {p.name for p in node.inputs}
-        for port, policy in merge.items():
-            if port not in input_names:
-                raise WorkflowCompileError(f"node '{node.id}': params.merge references unknown input port '{port}' (available: {sorted(input_names)})")
-            if policy not in _MERGE_POLICIES:
-                raise WorkflowCompileError(f"node '{node.id}': params.merge['{port}'] must be one of {sorted(_MERGE_POLICIES)}, got {policy!r}")
 
 
 def _validate_idempotency(def_: WorkflowDefinition) -> None:
@@ -2113,12 +2053,11 @@ def _compile_impl(
     _validate_breakpoints(def_)
     _validate_handoff(def_)
     _validate_loop_bodies(def_)
-    _validate_concurrency_params(def_)
     _validate_shared_nodes(def_)
-    _validate_autonomy(def_)
-    _validate_output_schema(def_)
-    _validate_context_policy(def_)
+    _reject_removed_ai_params(def_)
     _validate_model_profiles(def_, ctx)
+    _validate_output_schemas(def_)
+    _validate_ai_context_windows(def_, ctx)
     _validate_prompt_preview(def_)
     try:
         validate_capability_group_wiring(def_)
@@ -2156,7 +2095,7 @@ def _compile_impl(
     # resolved into the AI node's params and must not become runtime graph edges
     # (a selector would otherwise need scheduling, and the AI node would gain a
     # second incoming edge / fan-in).
-    config_node_ids = {node.id for node in def_.nodes if is_capability_group_node(node)}
+    config_node_ids = {node.id for node in def_.nodes if is_capability_group_node(node) or node.type == NodeType.DATA_SCHEMA}
     runtime_edges: list[Edge] = [edge for edge in def_.edges if edge.source not in config_node_ids and edge.target not in config_node_ids]
 
     # Build incoming-edges index for input resolution
@@ -2176,11 +2115,13 @@ def _compile_impl(
 
     def _make_standard_node_fn(node: Node, executor: Executor) -> Callable[..., Any]:
         capability_groups: list[str] | None = None
+        output_schema: dict[str, Any] | None = None
         if node.type == NodeType.AI_LLM_AGENT:
             try:
                 capability_groups = resolve_ai_capability_groups(def_, node)
             except CapabilityGroupWiringError as exc:
                 raise WorkflowCompileError(str(exc)) from exc
+            output_schema = _resolve_ai_output_schema(node, _incoming_edges_for(node.id, def_.edges), node_map)
         prompt_preview_agent: str | None = None
         if node.type == NodeType.AI_PROMPT_PREVIEW:
             prompt_preview_agent = _infer_prompt_preview_agent(node, node_map, def_.edges)
@@ -2194,6 +2135,7 @@ def _compile_impl(
             ctx.resource_accessors.get(node.type),
             run_budget=run_budget,
             capability_groups=capability_groups,
+            output_schema=output_schema,
             prompt_preview_agent=prompt_preview_agent,
             review_target=review_target,
             review_retry_target=node.id in review_targets,
@@ -2213,7 +2155,7 @@ def _compile_impl(
                 _register(node.id, end_fn)
             continue  # normal end node → LangGraph END, no add_node
 
-        if is_capability_group_node(node):
+        if is_capability_group_node(node) or node.type == NodeType.DATA_SCHEMA:
             # Authoring-only: resolved into AI params and stripped from edges.
             continue
 

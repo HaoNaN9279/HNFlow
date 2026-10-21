@@ -36,6 +36,17 @@ def _end() -> Node:
     return Node(id=_END_ID, type=NodeType.FLOW_END, inputs=[_port("in")], outputs=[])
 
 
+def _task_node(id_: str, value: str) -> Node:
+    """Pass data through and expose a static AI task on the same parent node."""
+    return Node(
+        id=id_,
+        type=NodeType.DATA_ASSIGN,
+        inputs=[_port("in")],
+        outputs=[_port("out"), _port("task")],
+        params={"task": value},
+    )
+
+
 def critic_review_loop(
     *,
     producer_instruction: str,
@@ -62,12 +73,18 @@ def critic_review_loop(
             inputs=[_port("in")],
             outputs=[_port("iteration"), _port("out")],
         ),
-        Node(id="producer", type=NodeType.AI_LLM_AGENT, params={"instruction": producer_instruction}, inputs=[_port("in")], outputs=[_port("out")]),
+        _task_node("producer_task", producer_instruction),
+        Node(
+            id="producer",
+            type=NodeType.AI_LLM_AGENT,
+            inputs=[_port("in"), _port("template_prompt")],
+            outputs=[_port("out")],
+        ),
+        _task_node("critic_task", critic_instruction),
         Node(
             id="critic",
             type=NodeType.AI_LLM_AGENT,
-            params={"instruction": critic_instruction},
-            inputs=[_port("in")],
+            inputs=[_port("in"), _port("template_prompt")],
             # Declared ``data`` (not ``bool``): the verdict flows back along the
             # loop's ``in`` port, and a port declaration must match the target.
             outputs=[_port("out"), _port("needs_revision")],
@@ -76,10 +93,15 @@ def critic_review_loop(
     ]
     edges = [
         Edge(source=_START_ID, source_port="input", target="review_loop", target_port="in"),
-        # Loop body (conditional) + exit (default).
-        Edge(source="review_loop", source_port="out", target="producer", target_port="in", condition="loop_body"),
+        # One parent feeds both data and task; splitting them across parents
+        # would trigger the AI node once per incoming edge.
+        Edge(source="review_loop", source_port="out", target="producer_task", target_port="in", condition="loop_body"),
+        Edge(source="producer_task", source_port="out", target="producer", target_port="in"),
+        Edge(source="producer_task", source_port="task", target="producer", target_port="template_prompt"),
+        Edge(source="producer", source_port="out", target="critic_task", target_port="in"),
+        Edge(source="critic_task", source_port="out", target="critic", target_port="in"),
+        Edge(source="critic_task", source_port="task", target="critic", target_port="template_prompt"),
         Edge(source="review_loop", source_port="out", target=_END_ID, target_port="in"),
-        Edge(source="producer", source_port="out", target="critic", target_port="in"),
         # Back-edge carrying the critic's verdict into the loop's continue check.
         Edge(source="critic", source_port="needs_revision", target="review_loop", target_port="in"),
     ]
@@ -113,11 +135,11 @@ def supervisor_topology(
     switch_outputs = [_port(f"pick_{expert_id}") for expert_id in expert_ids] + [_port("out")]
     nodes = [
         _start(),
+        _task_node("supervisor_task", supervisor_instruction),
         Node(
             id="supervisor",
             type=NodeType.AI_LLM_AGENT,
-            params={"instruction": supervisor_instruction},
-            inputs=[_port("in")],
+            inputs=[_port("in"), _port("template_prompt")],
             outputs=[_port("out"), _port("decision")],
         ),
         Node(
@@ -127,17 +149,22 @@ def supervisor_topology(
             inputs=[_port("in")],
             outputs=switch_outputs,
         ),
-        *[Node(id=expert_id, type=NodeType.AI_LLM_AGENT, params={"instruction": instruction}, inputs=[_port("in")], outputs=[_port("out")]) for expert_id, instruction in experts],
+        *[_task_node(f"{expert_id}_task", instruction) for expert_id, instruction in experts],
+        *[Node(id=expert_id, type=NodeType.AI_LLM_AGENT, inputs=[_port("in"), _port("template_prompt")], outputs=[_port("out")]) for expert_id, _instruction in experts],
         _end(),
     ]
     edges = [
-        Edge(source=_START_ID, source_port="input", target="supervisor", target_port="in"),
+        Edge(source=_START_ID, source_port="input", target="supervisor_task", target_port="in"),
+        Edge(source="supervisor_task", source_port="out", target="supervisor", target_port="in"),
+        Edge(source="supervisor_task", source_port="task", target="supervisor", target_port="template_prompt"),
         Edge(source="supervisor", source_port="decision", target="dispatch", target_port="in"),
         # Default: no expert matched → end.
         Edge(source="dispatch", source_port="out", target=_END_ID, target_port="in"),
     ]
     for expert_id in expert_ids:
-        edges.append(Edge(source="dispatch", source_port=f"pick_{expert_id}", target=expert_id, target_port="in", condition=f"pick_{expert_id}"))
+        edges.append(Edge(source="dispatch", source_port=f"pick_{expert_id}", target=f"{expert_id}_task", target_port="in", condition=f"pick_{expert_id}"))
+        edges.append(Edge(source=f"{expert_id}_task", source_port="out", target=expert_id, target_port="in"))
+        edges.append(Edge(source=f"{expert_id}_task", source_port="task", target=expert_id, target_port="template_prompt"))
         edges.append(Edge(source=expert_id, source_port="out", target=_END_ID, target_port="in"))
     return WorkflowDefinition(id=definition_id, name=name, nodes=nodes, edges=edges)
 

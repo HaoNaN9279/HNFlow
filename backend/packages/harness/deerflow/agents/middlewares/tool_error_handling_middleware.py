@@ -263,6 +263,8 @@ def build_subagent_runtime_middlewares(
     user_id: str | None = None,
     extensions=None,
     token_budget_override: TokenBudgetConfig | None = None,
+    include_summarization: bool = True,
+    summarization_override: AgentMiddleware | None = None,
 ) -> list[AgentMiddleware]:
     """Middlewares shared by subagent runtime before subagent-only middlewares.
 
@@ -450,18 +452,21 @@ def build_subagent_runtime_middlewares(
     # ``step_events.py``) or it drops steps captured after the compaction
     # point. It does not implement ``consume_stop_reason``, so it does not
     # interfere with the Phase 2 guard-cap stop-reason channel.
-    from deerflow.agents.middlewares.summarization_middleware import create_summarization_middleware
+    if include_summarization:
+        from deerflow.agents.middlewares.summarization_middleware import create_summarization_middleware
 
-    summarization_middleware = create_summarization_middleware(
-        app_config=app_config,
-        skip_memory_flush=True,
-        # The subagent's resolved model is the source of truth for null-model
-        # summarization: the subagent context/configurable does not carry the child
-        # model (it inherits the parent's), so passing it directly is what makes a
-        # distinct-model subagent summarize with its own model, not the parent's.
-        run_model_name=model_name,
-        extensions=resolved_extensions,
-    )
+        summarization_middleware = create_summarization_middleware(
+            app_config=app_config,
+            skip_memory_flush=True,
+            # The subagent's resolved model is the source of truth for null-model
+            # summarization: the subagent context/configurable does not carry the child
+            # model (it inherits the parent's), so passing it directly is what makes a
+            # distinct-model subagent summarize with its own model, not the parent's.
+            run_model_name=model_name,
+            extensions=resolved_extensions,
+        )
+    else:
+        summarization_middleware = summarization_override
     if summarization_middleware is not None:
         middlewares.append(summarization_middleware)
 

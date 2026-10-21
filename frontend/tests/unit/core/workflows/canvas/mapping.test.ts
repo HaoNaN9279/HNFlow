@@ -48,7 +48,7 @@ const sampleDefinition = (): WorkflowDefinition => ({
       type: "ai:llm_agent",
       inputs: [{ name: "in", type: "data", required: true }],
       outputs: [{ name: "out", type: "data", required: true }],
-      params: { instruction: "Summarize" },
+      params: {},
       capability_groups: ["research"],
       agent_name: "lead",
     },

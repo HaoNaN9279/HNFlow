@@ -1,11 +1,10 @@
 """Static prompt preview for ``ai:llm_agent`` nodes.
 
-The canvas can ask for the prompt an AI node *would* assemble without running
-the model.  Runtime-only blocks (node memory, knowledge retrieval and the
-``template_prompt`` input port) have no values before execution, so the
-response reports them as omitted instead of inventing content.  Everything else
-uses the same assemblers as the real executor, including the node's capability
-groups, rules and skill descriptions.
+The canvas asks for the prompt an AI node *would* assemble without running the
+model.  The only runtime-only block is ``template_prompt`` itself; the preview
+reports it as omitted instead of inventing a task.  Everything else uses the
+same assemblers as the real executor, including capability rules/skill
+descriptions and a schema supplied by a ``data:schema`` node.
 """
 
 from __future__ import annotations
@@ -18,12 +17,10 @@ from deerflow.capability_groups.discovery import CapabilityGroupError
 from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
 from deerflow.config.agents_config import load_agent_config
 from deerflow.workflow.capability_group_nodes import CapabilityGroupWiringError, resolve_ai_capability_groups, validate_capability_group_wiring
-from deerflow.workflow.context_policy import BUCKET_ORDER, ContextPolicyError, apply_context_budget, estimate_tokens, parse_context_policy
-from deerflow.workflow.knowledge import KnowledgeError, parse_retrieval_params
-from deerflow.workflow.memory import MemoryPolicyError, parse_memory_policy
-from deerflow.workflow.prompts import TEMPLATE_PROMPT_PORT, build_ai_node_buckets
+from deerflow.workflow.context_compression import estimate_tokens
+from deerflow.workflow.prompts import BUCKET_ORDER, TEMPLATE_PROMPT_PORT, build_ai_node_buckets
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
-from deerflow.workflow.structured_output import StructuredOutputError, parse_output_schema, schema_instruction
+from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PORT, StructuredOutputError, parse_output_schema, schema_instruction
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -34,8 +31,6 @@ class PromptPreviewError(ValueError):
 
 @dataclass(frozen=True)
 class PromptComponent:
-    """One source section in the assembled prompt."""
-
     key: str
     section: str
     source: str
@@ -109,16 +104,23 @@ def _describe_ports(definition: WorkflowDefinition, node_id: str, ports: list[st
     return "; ".join(parts)
 
 
-def _bucket_state(name: str, *, runtime: bool, dropped: set[str], truncated: set[str]) -> str:
-    if name in dropped:
-        return "dropped"
-    if name in truncated:
-        return "truncated"
-    return "runtime" if runtime else "active"
-
-
 def _summarize(text: str, fallback: str) -> str:
     return _first_line(text) if text.strip() else fallback
+
+
+def _schema_for_node(definition: WorkflowDefinition, node_id: str) -> dict[str, Any] | None:
+    node_map = {node.id: node for node in definition.nodes}
+    for edge in definition.edges:
+        if edge.target != node_id or edge.target_port != OUTPUT_SCHEMA_PORT:
+            continue
+        source = node_map.get(edge.source)
+        if source is None or source.type != NodeType.DATA_SCHEMA:
+            raise PromptPreviewError(f"'{OUTPUT_SCHEMA_PORT}' must come from a data:schema node")
+        try:
+            return parse_output_schema((source.params or {}).get("schema"))
+        except StructuredOutputError as exc:
+            raise PromptPreviewError(f"invalid schema: {exc}") from exc
+    return None
 
 
 def build_prompt_preview(
@@ -127,13 +129,7 @@ def build_prompt_preview(
     *,
     user_id: str | None = None,
 ) -> PromptPreview:
-    """Assemble the static text prompt for one AI node.
-
-    Unresolved ``{{port}}`` placeholders are preserved verbatim (there is no
-    runtime input to interpolate), so the preview shows the template the author
-    wrote rather than silently blanking it.  Memory/retrieval blocks are
-    reported in ``omitted_runtime_blocks``.
-    """
+    """Assemble the static text prompt for one AI node."""
     node = next((candidate for candidate in definition.nodes if candidate.id == node_id), None)
     if node is None:
         raise PromptPreviewError(f"node '{node_id}' not found")
@@ -146,23 +142,7 @@ def build_prompt_preview(
     except CapabilityGroupWiringError as exc:
         raise PromptPreviewError(str(exc)) from exc
 
-    try:
-        policy = parse_context_policy(node.params)
-    except ContextPolicyError as exc:
-        raise PromptPreviewError(f"invalid context_policy: {exc}") from exc
-    try:
-        output_schema = parse_output_schema(node.params)
-    except StructuredOutputError as exc:
-        raise PromptPreviewError(f"invalid output_schema: {exc}") from exc
-    try:
-        memory_policy = parse_memory_policy(node.params)
-    except MemoryPolicyError as exc:
-        raise PromptPreviewError(f"invalid memory: {exc}") from exc
-    try:
-        retrieval_policy = parse_retrieval_params(node.params)
-    except KnowledgeError as exc:
-        raise PromptPreviewError(f"invalid retrieval: {exc}") from exc
-
+    output_schema = _schema_for_node(definition, node.id)
     try:
         capability_rules = load_capability_rules(capability_groups, user_id=user_id)
         capability_skills = load_capability_skills(capability_groups, user_id=user_id)
@@ -175,38 +155,23 @@ def build_prompt_preview(
     buckets = build_ai_node_buckets(
         agent_name=node.agent_name,
         capability_groups=capability_groups,
-        instruction=node.params.get("instruction"),
+        template_prompt="",
         inputs={},
         user_id=user_id,
         agent_skills=agent_skills,
-        policy=policy,
         preserve_placeholders=True,
         capability_rules=capability_rules,
         capability_skills=capability_skills,
     )
     if output_schema is not None:
         buckets["schema"] = schema_instruction(output_schema)
-    budget_result = apply_context_budget(buckets, policy.budget if policy else None)
-    base_task_prompt = budget_result.buckets.get("task", "")
-    task_prompt = base_task_prompt
-    system_prompt = "\n\n".join(budget_result.buckets[name] for name in BUCKET_ORDER if name != "task" and budget_result.buckets.get(name))
-    prompt = "\n\n".join(part for part in (system_prompt, task_prompt) if part)
+    system_prompt = "\n\n".join(buckets[name] for name in BUCKET_ORDER if name != "task" and buckets.get(name))
+    task_prompt = ""
+    prompt = system_prompt
 
-    dropped = set(budget_result.dropped)
-    truncated = set(budget_result.truncated)
     components: list[PromptComponent] = []
 
-    def add(
-        key: str,
-        section: str,
-        source: str,
-        summary: str,
-        content: str,
-        *,
-        state: str = "active",
-        editable: bool = False,
-        label: str = "",
-    ) -> None:
+    def add(key: str, section: str, source: str, summary: str, content: str, *, state: str = "active", label: str = "") -> None:
         components.append(
             PromptComponent(
                 key=key,
@@ -216,37 +181,11 @@ def build_prompt_preview(
                 content=content,
                 estimated_tokens=estimate_tokens(content),
                 state=state,
-                editable=editable,
                 label=label,
             )
         )
 
-    # Match the executor's actual prepend order: memory is prepended first, then
-    # retrieval, so retrieval ends up at the very top of the system prompt.
-    if retrieval_policy is not None:
-        query_hint = f" · query: {_first_line(retrieval_policy.query or '', limit=60)}" if retrieval_policy.query else ""
-        add(
-            "retrieval",
-            "system",
-            "params.retrieval",
-            f"Collection: {retrieval_policy.collection} · top_k: {retrieval_policy.top_k}{query_hint}",
-            "",
-            state="runtime",
-        )
-
-    if memory_policy is not None:
-        write_hint = f" · write: {memory_policy.write_scope}" if memory_policy.write else ""
-        query_hint = f" · query: {_first_line(memory_policy.query or '', limit=60)}" if memory_policy.query else ""
-        add(
-            "memory",
-            "system",
-            "params.memory",
-            f"Runtime memory · scopes: {', '.join(memory_policy.scopes)}{query_hint}{write_hint}",
-            "",
-            state="runtime",
-        )
-
-    identity = budget_result.buckets.get("identity", "")
+    identity = buckets.get("identity", "")
     if identity:
         add(
             "identity",
@@ -254,10 +193,9 @@ def build_prompt_preview(
             f"agent:{node.agent_name}" if node.agent_name else "agent:lead (default)",
             f"Custom agent: {node.agent_name}" if node.agent_name else "Default lead agent",
             identity,
-            state=_bucket_state("identity", runtime=False, dropped=dropped, truncated=truncated),
         )
 
-    capability = budget_result.buckets.get("capability", "")
+    capability = buckets.get("capability", "")
     if capability:
         skill_hint = "all enabled" if agent_skills is None else ("disabled" if not agent_skills else ", ".join(agent_skills))
         add(
@@ -266,7 +204,6 @@ def build_prompt_preview(
             f"capability_groups:{','.join(capability_groups)}",
             f"Groups: {', '.join(capability_groups)} · agent skills: {skill_hint}",
             capability,
-            state=_bucket_state("capability", runtime=False, dropped=dropped, truncated=truncated),
         )
 
     for rule in capability_rules:
@@ -276,67 +213,28 @@ def build_prompt_preview(
             rule.source,
             f"{rule.group_name}@{rule.group_version} · {rule.path} · {_summarize(rule.content, 'Empty rule')}",
             rule.content,
-            state=_bucket_state("capability_rules", runtime=False, dropped=dropped, truncated=truncated),
             label=rule.label,
         )
 
     for skill in capability_skills:
-        description = f"- {skill.name}: {skill.description}"
         add(
             f"capability_skill:{skill.group_guid}@{skill.group_version}:{skill.name}",
             "system",
             skill.source,
             f"{skill.name}: {skill.description}",
-            description,
-            state=_bucket_state("capability_skills", runtime=False, dropped=dropped, truncated=truncated),
+            f"- {skill.name}: {skill.description}",
             label=skill.label,
         )
 
-    examples = budget_result.buckets.get("examples", "")
-    if policy is not None and policy.examples:
-        add(
-            "examples",
-            "system",
-            "params.context_policy.examples",
-            f"{len(policy.examples)} example(s) · {_summarize(examples, 'No rendered examples')}",
-            examples,
-            state=_bucket_state("examples", runtime=False, dropped=dropped, truncated=truncated),
-        )
-
-    if policy is not None and policy.include:
-        context = budget_result.buckets.get("context", "")
-        add(
-            "context",
-            "system",
-            f"params.context_policy.include:{','.join(policy.include)}",
-            f"Ports: {_describe_ports(definition, node.id, list(policy.include))}",
-            context,
-            state=_bucket_state("context", runtime=True, dropped=dropped, truncated=truncated),
-        )
-
     if output_schema is not None:
-        schema = budget_result.buckets.get("schema", "")
         required = ", ".join(output_schema["required"]) or "none"
         add(
             "schema",
             "system",
-            "params.output_schema",
+            f"data:schema → {OUTPUT_SCHEMA_PORT}",
             f"Fields: {', '.join(output_schema['fields'])} · required: {required}",
-            schema,
-            state=_bucket_state("schema", runtime=False, dropped=dropped, truncated=truncated),
+            buckets.get("schema", ""),
         )
-
-    instruction = node.params.get("instruction") or ""
-    placeholders = _placeholder_names(instruction)
-    placeholder_hint = f" · placeholders: {_describe_ports(definition, node.id, placeholders)}" if placeholders else ""
-    add(
-        "task",
-        "task",
-        "params.instruction",
-        f"Instruction: {_summarize(base_task_prompt, 'Empty instruction')}{placeholder_hint}",
-        base_task_prompt,
-        state=_bucket_state("task", runtime=False, dropped=dropped, truncated=truncated),
-    )
 
     has_template_prompt = any(port.name == TEMPLATE_PROMPT_PORT for port in node.inputs)
     if has_template_prompt:
@@ -349,15 +247,18 @@ def build_prompt_preview(
             state="runtime",
             label="Template prompt",
         )
+    placeholders = _placeholder_names(str(node.params.get("template_prompt") or ""))
+    if placeholders:
+        add(
+            "template_prompt_placeholders",
+            "task",
+            "inputs.template_prompt.placeholders",
+            _describe_ports(definition, node.id, placeholders),
+            "",
+            state="runtime",
+        )
 
-    omitted: list[str] = []
-    if memory_policy is not None:
-        omitted.append("memory")
-    if retrieval_policy is not None:
-        omitted.append("retrieval")
-    if has_template_prompt:
-        omitted.append("template_prompt")
-
+    omitted: list[str] = ["template_prompt"] if has_template_prompt else []
     return PromptPreview(
         node_id=node.id,
         prompt=prompt,

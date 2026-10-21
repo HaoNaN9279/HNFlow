@@ -26,18 +26,12 @@ export const AGENT_NAME_PATTERN = /^[A-Za-z0-9-]+$/;
 /**
  * Fields for the `ai:llm_agent` node form.
  *
- * `instruction` writes to `params.instruction`; `agent_name` and
- * `capability_groups` write to the node top level (the compiler forwards them
- * into the executor params via `setdefault`). The `"None"` select option is
- * the UI marker for the default lead-agent binding (`agent_name = null`).
+ * `agent_name` and `capability_groups` write to the node top level (the
+ * compiler forwards them into the executor params via `setdefault`). The
+ * `"None"` select option is the UI marker for the default lead-agent binding
+ * (`agent_name = null`).
  */
 export const AI_NODE_FIELDS: readonly NodeFormField[] = [
-  {
-    key: "instruction",
-    kind: "textarea",
-    labelKey: "workflow.nodeForm.instruction",
-    required: true,
-  },
   {
     key: "agent_name",
     kind: "select",

@@ -45,7 +45,7 @@ SCHEMA = {"fields": {"summary": "data", "score": "number"}, "required": ["summar
 
 class TestSchemaParsing:
     def test_absent_returns_none(self) -> None:
-        assert parse_output_schema({}) is None
+        assert parse_output_schema(None) is None
 
     def test_required_defaults_to_all_fields(self) -> None:
         schema = parse_output_schema({"output_schema": {"fields": {"a": "data", "b": "number"}}})
@@ -180,24 +180,29 @@ def _end() -> Node:
 
 
 def _ai(schema: dict[str, Any] | None, outputs: list[Port] | None = None) -> Node:
-    params: dict[str, Any] = {"instruction": "x"}
+    params: dict[str, Any] = {}
     if schema is not None:
-        params["output_schema"] = schema
+        params["__schema_payload"] = schema
     return Node(
         id="ai",
         type=NodeType.AI_LLM_AGENT,
         params=params,
-        inputs=[Port(name="in", type=PortType.DATA)],
+        inputs=[Port(name="in", type=PortType.DATA), Port(name="output_schema", type=PortType.RECORD)],
         outputs=outputs if outputs is not None else [Port(name="out", type=PortType.DATA), Port(name="summary", type=PortType.DATA), Port(name="score", type=PortType.NUMBER)],
     )
 
 
 def _def(ai: Node) -> WorkflowDefinition:
+    schema = ai.params.pop("__schema_payload", None)
+    nodes = [_start(), ai, _end()]
     edges = [
         Edge(source="start", source_port="input", target="ai", target_port="in"),
         Edge(source="ai", source_port="out", target="end", target_port="in"),
     ]
-    return WorkflowDefinition(id="test-wf", name="Test Workflow", nodes=[_start(), ai, _end()], edges=edges)
+    if schema is not None:
+        nodes.append(Node(id="schema", type=NodeType.DATA_SCHEMA, outputs=[Port(name="schema", type=PortType.RECORD)], params={"schema": schema}))
+        edges.append(Edge(source="schema", source_port="schema", target="ai", target_port="output_schema"))
+    return WorkflowDefinition(id="test-wf", name="Test Workflow", nodes=nodes, edges=edges)
 
 
 @pytest.fixture(autouse=True)

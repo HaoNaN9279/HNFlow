@@ -109,15 +109,19 @@ async def _validate_semantics(request: Request, definition: WorkflowDefinition, 
         repo = getattr(request.app.state, "model_profile_repo", None)
         if repo is not None:
             profiles = {str(row["id"]): row for row in await repo.list_by_user(str(user.id))}
-        from deerflow.config import get_app_config
+    from deerflow.config import get_app_config
 
-        available_models = model_names(get_app_config().models)
+    app_config = get_app_config()
+    available_models = model_names(app_config.models)
+    model_context_windows = {str(model.name): int(model.context_window) for model in app_config.models if getattr(model, "context_window", None) is not None}
     ctx = build_workflow_compile_context(
         build_default_registry(),
         checkpointer=None,
         definition_resolver=resolver,
         model_profiles=profiles,
         available_model_names=available_models,
+        model_context_windows=model_context_windows,
+        default_model_name=str(app_config.models[0].name) if app_config.models else None,
     )
     try:
         compile_definition(definition, context=ctx)

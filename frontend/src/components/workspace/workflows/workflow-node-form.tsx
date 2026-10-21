@@ -252,47 +252,12 @@ function AiAgentForm({
 
   return (
     <div className="flex flex-col gap-3">
-      <AiPromptComposition
-        nodeId={node.id}
-        active={active === true}
-        readonly={readonly}
-      />
-
       <details className="rounded border" open>
         <summary className="text-muted-foreground cursor-pointer px-2 py-1.5 text-xs font-medium">
           {labels.ai.configTitle}
         </summary>
         <div className="flex flex-col gap-3 p-2">
           <div className="text-xs font-medium">{labels.ai.title}</div>
-
-          <div className="flex flex-col gap-1">
-            <label
-              htmlFor={`${node.id}-instruction`}
-              className="text-xs font-medium"
-            >
-              {labels.ai.instructionLabel}
-            </label>
-            <Textarea
-              id={`${node.id}-instruction`}
-              value={values.instruction ?? ""}
-              disabled={readonly}
-              placeholder={labels.ai.instructionPlaceholder}
-              aria-invalid={errors.instruction ? true : undefined}
-              onChange={(event) =>
-                setValues((current) => ({
-                  ...current,
-                  instruction: event.target.value,
-                }))
-              }
-              onBlur={() => commit(values)}
-              className="min-h-20 text-xs"
-            />
-            {errors.instruction && (
-              <p className="text-destructive text-xs" role="alert">
-                {labels.validation.instructionRequired}
-              </p>
-            )}
-          </div>
 
           <div className="flex flex-col gap-1">
             <span className="text-xs font-medium">
@@ -417,6 +382,12 @@ function AiAgentForm({
           </div>
         </div>
       </details>
+
+      <AiPromptComposition
+        nodeId={node.id}
+        active={active === true}
+        readonly={readonly}
+      />
     </div>
   );
 }

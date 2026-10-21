@@ -54,6 +54,13 @@ class SubagentConfig:
     max_turns: int = 50
     timeout_seconds: int = 900
     token_budget: TokenBudgetConfig | None = None
+    context_compression: object | None = None
+    """Optional workflow-only context-compression runtime object.
+
+    ``None`` keeps the ordinary subagent summarization path.  Workflow AI nodes
+    pass an object with ``build_middleware(app_config=...)``; the executor adds
+    that middleware and skips the config-gated summarization middleware.
+    """
     """Optional per-subagent token budget override (N14 §24.5).
 
     When set, ``build_subagent_runtime_middlewares`` uses it verbatim instead of

@@ -67,11 +67,11 @@ def _run(coro: Any) -> Any:
 # ── the switch itself ─────────────────────────────────────────────────────────
 
 
-def test_rollback_requested_only_for_explicit_true() -> None:
+def test_rollback_is_always_enabled() -> None:
     assert rollback_requested({"rollback_on_failure": True}) is True
-    assert rollback_requested({"rollback_on_failure": False}) is False
-    assert rollback_requested({"rollback_on_failure": "yes"}) is False
-    assert rollback_requested({}) is False
+    assert rollback_requested({"rollback_on_failure": False}) is True
+    assert rollback_requested({"rollback_on_failure": "yes"}) is True
+    assert rollback_requested({}) is True
 
 
 # ── data:file write ───────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ def _sandbox_with_previous(content: bytes | None) -> MagicMock:
     return sandbox
 
 
-def test_write_without_rollback_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_defaults_to_recording_rollback(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _RecordingUndoRepo()
     sandbox = _sandbox_with_previous(b"old")
     monkeypatch.setattr("deerflow.workflow.executors.data.sandbox_tools.ensure_sandbox_initialized", lambda runtime=None: sandbox)
@@ -99,8 +99,8 @@ def test_write_without_rollback_records_nothing(monkeypatch: pytest.MonkeyPatch)
 
     assert result == {"out": "new"}
     sandbox.write_file.assert_called_once()
-    sandbox.download_file.assert_not_called()  # no snapshot was taken
-    assert repo.records == []
+    sandbox.download_file.assert_called_once()
+    assert len(repo.records) == 1
 
 
 def test_write_with_rollback_records_the_action(monkeypatch: pytest.MonkeyPatch) -> None:
