@@ -1074,8 +1074,7 @@ Gateway exposes them read-only through `/api/models`.
 The current AI node contract is intentionally small:
 
 - `template_prompt` is the only task input for a fresh turn; `continue_prompt`
-  resumes the node's checkpointed session. The old `instruction` parameter is
-  removed from the editor and only read as a legacy compatibility fallback.
+  resumes the node's checkpointed session. No other task parameter is accepted.
 - `output_schema` is a `record` input port fed by a compile-only `data:schema`
   node. The compiler resolves the static schema and injects
   `__output_schema`; `params.output_schema` is rejected.

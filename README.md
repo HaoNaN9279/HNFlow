@@ -84,7 +84,7 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 ```
 身份层：主 agent 的 SOUL（一次绑定，复用所有节点）
 能力层：关联功能组的 rules / 工具描述 / allowed-tools 并集
-任务层：template_prompt 运行时输入（不再有节点 instruction）
+任务层：template_prompt 运行时输入
 ```
 
 - 一个 AI 节点 = **一个主身份**（custom agent，`agent_name` 静态绑定）+ 若干功能组供给工具与规则（能力并集），避免人格冲突；
@@ -92,7 +92,6 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 - 输出 Schema 由独立 `data:schema` 节点提供，经 `output_schema` 输入端口接入；
 - 上下文超限自动压缩：预算来自所选模型档案的 `context_window`，压缩使用内置压缩 skill，节点/用户无需配置；
 - AI 节点不做子 Agent 调用、不做 token 预算限制；工具集仍受能力组 allowed-tools 约束；
-- 旧定义可在 ackend/ 下用 PYTHONPATH=. python scripts/migrate_workflow_ai_contract.py --dry-run 预览迁移，--apply 写回。
 
 ### 功能组（Capability Group）
 
@@ -299,7 +298,6 @@ AI 节点会读取当前激活能力组（含 `extends` 闭包）的运行时内
 - `skills/**/SKILL.md`：system prompt 只放 `name + description`，完整正文由只读工具 `read_capability_skill` 按需读取；
 - 能力组工具仍由 `allowed-tools` 并集装配；规则与 skill 名称会出现在 Prompt 来源列表，便于逐项审计。
 
-工作流 `params.user_prompt` 已移除；旧定义中的该参数在运行时忽略，并在下次保存时清理。
 
 ---
 

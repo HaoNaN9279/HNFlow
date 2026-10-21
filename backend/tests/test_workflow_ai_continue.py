@@ -69,13 +69,12 @@ def _end_node(id_: str = "end") -> Node:
 def _ai_node(
     id_: str = "ai_step",
     *,
-    instruction: str = "请处理 {{in}}",
     inputs: list[Port] | None = None,
 ) -> Node:
     return Node(
         id=id_,
         type=NodeType.AI_LLM_AGENT,
-        params={"instruction": instruction},
+        params={},
         inputs=inputs if inputs is not None else [Port(name="in", type=PortType.DATA)],
         outputs=[Port(name="out", type=PortType.DATA)],
     )
@@ -153,7 +152,7 @@ class TestContinueMode:
 
         result = await exec_llm_agent(
             rt,
-            {"instruction": "首轮 {{in}}", "node_id": "ai_step"},
+            {"node_id": "ai_step"},
             inputs,
         )
 
@@ -181,7 +180,7 @@ class TestContinueMode:
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
         await exec_llm_agent(
             rt,
-            {"instruction": "首轮", "node_id": "ai_step"},
+            {"node_id": "ai_step"},
             {"in": "x", "template_prompt": "reset text", "continue_prompt": "继续"},
         )
 
@@ -193,7 +192,7 @@ class TestContinueMode:
         """Continue mode still forwards user/app/thread identity kwargs."""
         saver = InMemorySaver()
         rt = _runtime(thread_id="t1", checkpointer=saver)
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
 
         kwargs = fake_executor[0]["kwargs"]
         assert kwargs["user_id"] == "u1"
@@ -211,9 +210,9 @@ class TestTemplateMode:
     async def test_empty_continue_prompt_uses_template_branch(self, fake_executor: list[dict[str, Any]]) -> None:
         """Missing/empty ``continue_prompt`` keeps the one-shot template path."""
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
-        inputs = {"in": "x"}
+        inputs = {"in": "x", "template_prompt": "请总结 {{in}}"}
 
-        result = await exec_llm_agent(rt, {"instruction": "请总结 {{in}}", "node_id": "ai_step"}, inputs)
+        result = await exec_llm_agent(rt, {"node_id": "ai_step"}, inputs)
 
         assert result["out"] == "ok"
         assert result["__workflow_prompt"]
@@ -235,7 +234,7 @@ class TestTemplateMode:
     async def test_blank_string_continue_prompt_uses_template_branch(self, fake_executor: list[dict[str, Any]]) -> None:
         """An empty-string ``continue_prompt`` input is falsy → template branch."""
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x", "continue_prompt": ""})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "template_prompt": "首轮", "continue_prompt": ""})
 
         assert fake_executor[0]["kwargs"]["config"].checkpointer is False
 
@@ -247,8 +246,8 @@ class TestTemplateMode:
 
         await exec_llm_agent(
             rt,
-            {"instruction": "first {{in}}", "node_id": "ai_step", "__review_session": True},
-            {"in": "x"},
+            {"node_id": "ai_step", "__review_session": True},
+            {"in": "x", "template_prompt": "first {{in}}"},
         )
 
         record = fake_executor[0]
@@ -272,7 +271,7 @@ class TestContinueFailClosed:
         rt = _runtime(thread_id="t1", checkpointer=None)  # context has no checkpointer
 
         with pytest.raises(WorkflowExecutionError, match="continue") as exc_info:
-            await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
+            await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
         assert "checkpointer" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -281,7 +280,7 @@ class TestContinueFailClosed:
         rt = _runtime(thread_id=None, checkpointer=InMemorySaver())
 
         with pytest.raises(WorkflowExecutionError, match="thread_id") as exc_info:
-            await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
+            await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "continue_prompt": "继续"})
         assert "continue" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -290,7 +289,7 @@ class TestContinueFailClosed:
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
 
         with pytest.raises(WorkflowExecutionError, match="node_id") as exc_info:
-            await exec_llm_agent(rt, {"instruction": "首轮"}, {"in": "x", "continue_prompt": "继续"})
+            await exec_llm_agent(rt, {}, {"in": "x", "continue_prompt": "继续"})
         assert "continue" in str(exc_info.value)
 
 
@@ -304,7 +303,7 @@ class TestSessionKeyStability:
     async def test_same_node_id_two_continues_same_checkpoint_thread(self, fake_executor: list[dict[str, Any]]) -> None:
         """A loop that continues the same node twice keeps one session thread."""
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
-        params = {"instruction": "首轮", "node_id": "ai_step"}
+        params = {"node_id": "ai_step"}
 
         await exec_llm_agent(rt, params, {"in": "x", "continue_prompt": "继续"})
         await exec_llm_agent(rt, params, {"in": "y", "continue_prompt": "再继续"})
@@ -320,8 +319,8 @@ class TestSessionKeyStability:
         """Different nodes never share a session checkpoint thread."""
         rt = _runtime(thread_id="t1", checkpointer=InMemorySaver())
 
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_a"}, {"in": "x", "continue_prompt": "继续"})
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_b"}, {"in": "x", "continue_prompt": "继续"})
+        await exec_llm_agent(rt, {"node_id": "ai_a"}, {"in": "x", "continue_prompt": "继续"})
+        await exec_llm_agent(rt, {"node_id": "ai_b"}, {"in": "x", "continue_prompt": "继续"})
 
         assert fake_executor[0]["kwargs"]["checkpoint_thread_id"] == "t1:wfai:ai_a"
         assert fake_executor[1]["kwargs"]["checkpoint_thread_id"] == "t1:wfai:ai_b"
@@ -341,7 +340,6 @@ class TestContinueIntegration:
         saver = InMemorySaver()
         ai = _ai_node(
             "ai_step",
-            instruction="首轮 {{in}}",
             inputs=[Port(name="continue_prompt", type=PortType.DATA)],
         )
         # continue_prompt arrives through a real edge (its value lives on an

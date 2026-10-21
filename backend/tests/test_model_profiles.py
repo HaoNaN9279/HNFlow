@@ -143,7 +143,7 @@ async def test_workflow_save_validates_model_profile(tmp_path, monkeypatch):
                     "type": "ai:llm_agent",
                     "inputs": [{"name": "in", "type": "data"}],
                     "outputs": [{"name": "out", "type": "data"}],
-                    "params": {"instruction": "do it", "model_profile": profile_id},
+                    "params": {"model_profile": profile_id},
                 },
                 {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}], "outputs": []},
             ],
@@ -185,7 +185,7 @@ async def test_referenced_profile_cannot_be_deleted(tmp_path):
                     "type": "ai:llm_agent",
                     "inputs": [],
                     "outputs": [],
-                    "params": {"instruction": "x", "model_profile": profile["id"]},
+                    "params": {"model_profile": profile["id"]},
                 }
             ],
             "edges": [],

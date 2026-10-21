@@ -49,8 +49,8 @@ def _task_node(id_: str, value: str) -> Node:
 
 def critic_review_loop(
     *,
-    producer_instruction: str,
-    critic_instruction: str,
+    producer_template_prompt: str,
+    critic_template_prompt: str,
     max_iterations: int = 3,
     definition_id: str = "critic-review-loop",
     name: str = "Critic Review Loop",
@@ -59,7 +59,7 @@ def critic_review_loop(
 
     The ``flow:loop`` node continues while the critic's ``needs_revision`` port
     is truthy and ``iterations`` is not exhausted; the producer and critic are
-    ``ai:llm_agent`` nodes carrying the supplied instructions.  The final draft
+    ``ai:llm_agent`` nodes carrying the supplied template prompts.  The final draft
     leaves on the loop's ``out`` port.
     """
     if max_iterations < 1:
@@ -73,14 +73,14 @@ def critic_review_loop(
             inputs=[_port("in")],
             outputs=[_port("iteration"), _port("out")],
         ),
-        _task_node("producer_task", producer_instruction),
+        _task_node("producer_task", producer_template_prompt),
         Node(
             id="producer",
             type=NodeType.AI_LLM_AGENT,
             inputs=[_port("in"), _port("template_prompt")],
             outputs=[_port("out")],
         ),
-        _task_node("critic_task", critic_instruction),
+        _task_node("critic_task", critic_template_prompt),
         Node(
             id="critic",
             type=NodeType.AI_LLM_AGENT,
@@ -110,14 +110,14 @@ def critic_review_loop(
 
 def supervisor_topology(
     *,
-    supervisor_instruction: str,
+    supervisor_template_prompt: str,
     experts: list[tuple[str, str]],
     definition_id: str = "supervisor-topology",
     name: str = "Supervisor Topology",
 ) -> WorkflowDefinition:
     """A supervisor dispatches to one of *experts* at runtime (§24.6b).
 
-    ``experts`` is a list of ``(expert_id, instruction)``.  The supervisor is an
+    ``experts`` is a list of ``(expert_id, template_prompt)``.  The supervisor is an
     ``ai:llm_agent`` that writes the chosen expert's id to its ``decision`` port;
     a ``flow:switch`` routes to that expert's node (default: straight to the end
     when no expert matches).
@@ -135,7 +135,7 @@ def supervisor_topology(
     switch_outputs = [_port(f"pick_{expert_id}") for expert_id in expert_ids] + [_port("out")]
     nodes = [
         _start(),
-        _task_node("supervisor_task", supervisor_instruction),
+        _task_node("supervisor_task", supervisor_template_prompt),
         Node(
             id="supervisor",
             type=NodeType.AI_LLM_AGENT,
@@ -149,8 +149,8 @@ def supervisor_topology(
             inputs=[_port("in")],
             outputs=switch_outputs,
         ),
-        *[_task_node(f"{expert_id}_task", instruction) for expert_id, instruction in experts],
-        *[Node(id=expert_id, type=NodeType.AI_LLM_AGENT, inputs=[_port("in"), _port("template_prompt")], outputs=[_port("out")]) for expert_id, _instruction in experts],
+        *[_task_node(f"{expert_id}_task", template_prompt) for expert_id, template_prompt in experts],
+        *[Node(id=expert_id, type=NodeType.AI_LLM_AGENT, inputs=[_port("in"), _port("template_prompt")], outputs=[_port("out")]) for expert_id, _template_prompt in experts],
         _end(),
     ]
     edges = [
@@ -183,20 +183,20 @@ TEMPLATE_DESCRIPTIONS: dict[str, str] = {
 
 
 def build_template(name: str) -> WorkflowDefinition:
-    """Build a ready-to-insert template definition (with placeholder instructions).
+    """Build a ready-to-insert template definition (with placeholder template prompts).
 
     The canvas inserts the returned skeleton and the author fills in the
-    instructions/experts; the graph shape (nodes, edges, loop cap) is already
+    template prompts/experts; the graph shape (nodes, edges, loop cap) is already
     valid and compiles.
     """
     if name == "critic_review_loop":
         return critic_review_loop(
-            producer_instruction="Produce a draft of the artifact.",
-            critic_instruction="Review the draft. Set needs_revision=true if it needs another pass, otherwise false.",
+            producer_template_prompt="Produce a draft of the artifact.",
+            critic_template_prompt="Review the draft. Set needs_revision=true if it needs another pass, otherwise false.",
         )
     if name == "supervisor_topology":
         return supervisor_topology(
-            supervisor_instruction="Decide which expert should handle the task and write its id to the 'decision' port.",
+            supervisor_template_prompt="Decide which expert should handle the task and write its id to the 'decision' port.",
             experts=[("expert_a", "Handle the task as expert A."), ("expert_b", "Handle the task as expert B.")],
         )
     raise KeyError(f"unknown template {name!r}; known: {sorted(TEMPLATES)}")

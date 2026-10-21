@@ -702,9 +702,6 @@ export const enUS: Translations = {
       },
       ai: {
         title: "AI Agent",
-        instructionLabel: "Instruction",
-        instructionPlaceholder:
-          "Task template — {inputs} interpolated at runtime",
         agentLabel: "Agent",
         agentNoneOption: "Lead agent (default)",
         agentHint: "^[A-Za-z0-9-]+$ — custom agent name or leave default",
@@ -733,16 +730,11 @@ export const enUS: Translations = {
             truncated: "Truncated",
           },
           sources: {
-            memory: "Memory",
-            retrieval: "Knowledge retrieval",
             identity: "Identity",
             capability: "Capability",
             capability_rules: "Capability rules",
             capability_skills: "Capability skills",
-            examples: "Examples",
-            context: "Context",
             schema: "Output schema",
-            task: "Task",
             template_prompt: "Template prompt",
           },
           runtimeUnavailable:
@@ -802,7 +794,6 @@ export const enUS: Translations = {
           "Command passed to the application's script interface (app:script only).",
       },
       validation: {
-        instructionRequired: "Instruction is required",
         templateRequired: "Workflow template is required",
         invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
         agentNotFoundWarning:

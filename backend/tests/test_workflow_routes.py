@@ -652,7 +652,7 @@ async def test_create_rejects_semantically_invalid_definition(tmp_path):
                 "type": "ai:llm_agent",
                 "inputs": [{"name": "in", "type": "data"}],
                 "outputs": [{"name": "out", "type": "data"}],
-                "params": {"instruction": "x", "context_policy": {"include": ["missing"]}},
+                "params": {"context_policy": {"include": ["missing"]}},
             },
             {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
         ],

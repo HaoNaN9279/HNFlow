@@ -45,7 +45,7 @@ from deerflow.workflow.schema import WorkflowDefinition
 #: ``WorkflowMetadata`` / metadata-dict key holding the suite.
 EVALS_METADATA_KEY = "evals"
 
-#: Migration/carry key so a serialized definition round-trips the block.
+#: Metadata key carrying the embedded eval block.
 ON_MISS_MODES = ("error", "live")
 
 

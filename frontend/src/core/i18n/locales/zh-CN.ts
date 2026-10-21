@@ -682,8 +682,6 @@ export const zhCN: Translations = {
       },
       ai: {
         title: "AI 智能体",
-        instructionLabel: "指令",
-        instructionPlaceholder: "任务模板 — {inputs} 运行时插值",
         agentLabel: "智能体",
         agentNoneOption: "主导智能体（默认）",
         agentHint: "^[A-Za-z0-9-]+$ — 自定义智能体名称，或留空使用默认",
@@ -711,16 +709,11 @@ export const zhCN: Translations = {
             truncated: "已截断",
           },
           sources: {
-            memory: "记忆",
-            retrieval: "知识检索",
             identity: "身份",
             capability: "能力",
             capability_rules: "能力规则",
             capability_skills: "能力技能",
-            examples: "示例",
-            context: "上下文",
             schema: "输出结构",
-            task: "任务",
             template_prompt: "模板输入",
           },
           runtimeUnavailable: "该来源在运行时生成，静态预览没有内容。",
@@ -775,7 +768,6 @@ export const zhCN: Translations = {
         scriptHint: "传给应用脚本接口的命令（仅 app:script 节点）。",
       },
       validation: {
-        instructionRequired: "指令为必填项",
         templateRequired: "工作流模板为必填项",
         invalidAgentName: "智能体名称必须匹配 ^[A-Za-z0-9-]+$",
         agentNotFoundWarning: "智能体尚不存在 — 可在创建前引用",

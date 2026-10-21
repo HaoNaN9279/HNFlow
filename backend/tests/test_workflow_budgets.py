@@ -94,7 +94,7 @@ class TestEvaluate:
 
 
 def _ai_node() -> Node:
-    return Node(id="ai", type=NodeType.AI_LLM_AGENT, params={"instruction": "hi"}, inputs=[Port(name="in", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)])
+    return Node(id="ai", type=NodeType.AI_LLM_AGENT, params={}, inputs=[Port(name="in", type=PortType.DATA), Port(name="template_prompt", type=PortType.DATA)], outputs=[Port(name="out", type=PortType.DATA)])
 
 
 def _def(metadata: WorkflowMetadata | None) -> WorkflowDefinition:
@@ -108,6 +108,7 @@ def _def(metadata: WorkflowMetadata | None) -> WorkflowDefinition:
         ],
         edges=[
             Edge(source="start", source_port="input", target="ai", target_port="in"),
+            Edge(source="start", source_port="input", target="ai", target_port="template_prompt"),
             Edge(source="ai", source_port="out", target="end", target_port="in"),
         ],
         metadata=metadata or WorkflowMetadata(),

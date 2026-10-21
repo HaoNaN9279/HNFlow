@@ -517,8 +517,6 @@ export interface Translations {
       };
       ai: {
         title: string;
-        instructionLabel: string;
-        instructionPlaceholder: string;
         agentLabel: string;
         agentNoneOption: string;
         agentHint: string;
@@ -545,16 +543,11 @@ export interface Translations {
             truncated: string;
           };
           sources: {
-            memory: string;
-            retrieval: string;
             identity: string;
             capability: string;
             capability_rules: string;
             capability_skills: string;
-            examples: string;
-            context: string;
             schema: string;
-            task: string;
             template_prompt: string;
           };
           runtimeUnavailable: string;
@@ -609,7 +602,6 @@ export interface Translations {
         scriptHint: string;
       };
       validation: {
-        instructionRequired: string;
         templateRequired: string;
         invalidAgentName: string;
         agentNotFoundWarning: string;

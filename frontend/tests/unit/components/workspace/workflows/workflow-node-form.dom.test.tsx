@@ -37,8 +37,6 @@ rs.mock("@/core/i18n/hooks", () => ({
           },
           ai: {
             title: "AI Agent",
-            instructionLabel: "Instruction",
-            instructionPlaceholder: "Task template...",
             agentLabel: "Agent",
             agentNoneOption: "Lead agent (default)",
             agentHint: "^[A-Za-z0-9-]+$",
@@ -99,7 +97,6 @@ rs.mock("@/core/i18n/hooks", () => ({
             localSnapshotLabel: "Local snapshot of",
           },
           validation: {
-            instructionRequired: "Instruction is required",
             templateRequired: "Workflow template is required",
             invalidAgentName: "Agent name must match ^[A-Za-z0-9-]+$",
             agentNotFoundWarning: "Agent does not exist yet",

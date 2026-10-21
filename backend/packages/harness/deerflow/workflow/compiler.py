@@ -180,7 +180,7 @@ def parse_subworkflow_spec(node: Node) -> dict[str, Any] | None:
     """Parse a ``nested:subworkflow`` node's ``params["subworkflow"]`` spec.
 
     Returns ``None`` when the node carries no ``subworkflow`` param — the node
-    then falls back to the legacy executor path.  Otherwise returns a
+    then uses the standard executor path.  Otherwise returns a
     normalized spec dict:
 
     - ``{"type": "inline", "definition": {...}}`` — an inline sub-workflow,
@@ -1851,11 +1851,11 @@ def _validate_ai_context_windows(def_: WorkflowDefinition, ctx: CompileContext) 
 
 def _reject_removed_ai_params(def_: WorkflowDefinition) -> None:
     """Reject legacy author-facing params removed from the AI node contract."""
-    removed = ("autonomy", "context_policy", "memory", "retrieval", "model_policy", "merge", "output_schema")
+    removed = ("instruction", "autonomy", "context_policy", "memory", "retrieval", "model_policy", "merge", "output_schema")
     for node in def_.nodes:
         for key in removed:
             if (node.params or {}).get(key) is not None:
-                raise WorkflowCompileError(f"node '{node.id}': params.{key} is no longer supported; migrate the workflow to the current AI node contract")
+                raise WorkflowCompileError(f"node '{node.id}': params.{key} is not supported by the current AI node contract")
 
 
 def _infer_prompt_preview_agent(
@@ -2322,7 +2322,7 @@ def _compile_impl(
                 node_fn = _make_subworkflow_node_fn(node, child_graph, child_start_id, child_end_id, incoming_edges.get(node.id, []))
                 _register(node.id, node_fn)
                 continue
-            # No subworkflow spec → fall through to the legacy executor path.
+            # No subworkflow spec → fall through to the standard executor path.
 
         # Bind executor (for non-control-flow nodes including FLOW_WAIT)
         executor = ctx.executors.get(node.type)

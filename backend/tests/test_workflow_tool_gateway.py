@@ -196,8 +196,8 @@ async def test_exec_llm_agent_fails_loud_when_declared_tool_is_missing(monkeypat
     with pytest.raises(WorkflowExecutionError, match="missing"):
         await exec_llm_agent(
             WorkflowRuntime(),
-            {"instruction": "x", "capability_groups": ["grp"]},
-            {"in": "y"},
+            {"capability_groups": ["grp"]},
+            {"in": "y", "template_prompt": "x"},
         )
 
 
@@ -223,8 +223,8 @@ async def test_exec_llm_agent_passes_resolved_tools(monkeypatch: pytest.MonkeyPa
 
     result = await exec_llm_agent(
         WorkflowRuntime(),
-        {"instruction": "x", "capability_groups": ["grp"]},
-        {"in": "y"},
+        {"capability_groups": ["grp"]},
+        {"in": "y", "template_prompt": "x"},
     )
 
     assert result["out"] == "ok"

@@ -4,7 +4,6 @@
  * validate the result.
  *
  * Field locations mirror the backend wire format:
- * - `instruction` → `params.instruction` (required non-empty for `ai:llm_agent`)
  * - `agent_name` / `capability_groups` → node top level (compiler forwards
  *   them into executor params via `setdefault`)
  * - `template_id` / `version` → `params.subworkflow` template spec
@@ -126,7 +125,7 @@ function parseMapping(raw: unknown): NodeFormMapping {
 
 /**
  * Parse a node into form values. Missing or malformed data degrades to
- * empty values rather than throwing: non-string `instruction` → `""`,
+ * empty values rather than throwing: missing fields yield "",
  * `agent_name: null` → `""` (the "None"/lead-agent marker), missing
  * `capability_groups` → `[]`, a non-dict `subworkflow` → no template fields,
  * and an absent `params.mapping` → no `mapping` field. When `params.mapping`
@@ -177,7 +176,6 @@ export function parseNodeFormValues(node: WorkflowNode): NodeFormValues {
 /**
  * Write form values back into a new node, leaving the original untouched.
  *
- * - `instruction` lands in `params` (other params preserved)
  * - `agent_name` writes the top level; empty/`undefined` → `null` (lead agent)
  * - `capability_groups` writes the top level as a fresh array
  * - `template_id` writes `params.subworkflow` as a compile-mode template spec;
@@ -194,11 +192,6 @@ export function applyNodeFormValues(
   const params: Record<string, unknown> = {
     ...node.params,
   };
-  // The old user-prompt param was removed from AI nodes; drop it from legacy
-  // definitions on the next save so it cannot resurface in the generic editor.
-  if (node.type === "ai:llm_agent") {
-    delete params.user_prompt;
-  }
   if (values.model_profile !== undefined) {
     if (values.model_profile) {
       params.model_profile = values.model_profile;

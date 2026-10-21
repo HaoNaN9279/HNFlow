@@ -64,8 +64,11 @@ def _ai_node(id_: str = "ai_step") -> Node:
     return Node(
         id=id_,
         type=NodeType.AI_LLM_AGENT,
-        params={"instruction": "do {{in}}"},
-        inputs=[Port(name="in", type=PortType.DATA)],
+        params={},
+        inputs=[
+            Port(name="in", type=PortType.DATA),
+            Port(name="template_prompt", type=PortType.DATA),
+        ],
         outputs=[Port(name="out", type=PortType.DATA)],
     )
 
@@ -130,7 +133,7 @@ class TestExecLlmAgentTokenUsage:
     async def test_aggregates_cache_read_tokens_from_records(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _patch_subagent_executor(monkeypatch, _FakeSubagentExecutor, _completed_result(records=_usage_records()))
 
-        result = await exec_llm_agent(WorkflowRuntime(), {"instruction": "do {{in}}"}, {"in": "x"})
+        result = await exec_llm_agent(WorkflowRuntime(), {}, {"in": "x", "template_prompt": "do {{in}}"})
 
         assert result["out"] == "AI done"
         usage = result["__workflow_token_usage"]
@@ -149,7 +152,7 @@ class TestExecLlmAgentTokenUsage:
             SimpleNamespace(status=SimpleNamespace(value="completed"), result="ok", error=None),
         )
 
-        result = await exec_llm_agent(WorkflowRuntime(), {"instruction": "do {{in}}"}, {"in": "x"})
+        result = await exec_llm_agent(WorkflowRuntime(), {}, {"in": "x", "template_prompt": "do {{in}}"})
 
         assert result["out"] == "ok"
         assert result["__workflow_prompt"]
@@ -164,7 +167,7 @@ class TestExecLlmAgentTokenUsage:
             _completed_result(records=[{"input_tokens": 5, "output_tokens": 3, "total_tokens": 8}]),
         )
 
-        result = await exec_llm_agent(WorkflowRuntime(), {"instruction": "do {{in}}"}, {"in": "x"})
+        result = await exec_llm_agent(WorkflowRuntime(), {}, {"in": "x", "template_prompt": "do {{in}}"})
 
         usage = result["__workflow_token_usage"]
         assert usage["cache_read_tokens"] == 0
@@ -187,6 +190,7 @@ class TestCompilerTokenUsageChannel:
         nodes = [_start_node(), _ai_node("ai_step"), _end_node()]
         edges = [
             Edge(source="start", source_port="input", target="ai_step", target_port="in"),
+            Edge(source="start", source_port="input", target="ai_step", target_port="template_prompt"),
             Edge(source="ai_step", source_port="out", target="end", target_port="in"),
         ]
         def_ = _make_def(nodes, edges)
@@ -254,6 +258,7 @@ class TestWorkerRunEndTokenUsage:
         nodes = [_start_node("start"), _ai_node("ai_step"), _end_node("end")]
         edges = [
             Edge(source="start", source_port="input", target="ai_step", target_port="in"),
+            Edge(source="start", source_port="input", target="ai_step", target_port="template_prompt"),
             Edge(source="ai_step", source_port="out", target="end", target_port="in"),
         ]
         definition = _make_def(nodes, edges, id="ai-wf", name="AI WF")

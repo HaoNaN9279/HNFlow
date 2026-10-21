@@ -10,9 +10,8 @@ independent layers, in order:
    allowed-tools union, their ``rules/**/*.md`` bodies, and the names +
    descriptions of their skills.  Full skill bodies load on demand through the
    scoped reader tool, not here.
-3. **Task layer** (:func:`build_task_layer`) — the node's instruction template
-   with ``{{port}}`` placeholders interpolated from runtime inputs; an optional
-   ``template_prompt`` input is appended as the runtime user turn.
+3. **Task layer** (:func:`build_task_layer`) — the node's template prompt
+   with ``{{port}}`` placeholders interpolated from runtime inputs.
 
 Every function is a pure transformation of its arguments. The only I/O — the
 custom-agent SOUL read — is delegated to
@@ -95,25 +94,24 @@ def build_capability_layer(capability_groups: list[str], *, agent_skills: list[s
     return "\n".join(lines)
 
 
-def build_task_layer(instruction: str | None, inputs: dict[str, Any], *, preserve_placeholders: bool = False) -> str:
+def build_task_layer(task_text: str | None, inputs: dict[str, Any], *, preserve_placeholders: bool = False) -> str:
     """Build the task-layer prompt section by interpolating ``{{port}}``.
 
     Each ``{{name}}`` placeholder is replaced with ``str(inputs[name])``;
     missing keys (and ``None`` values) become empty strings without raising.
-    An instruction with no placeholders is returned verbatim.
+    A task text with no placeholders is returned verbatim.
 
     Args:
-        instruction: The node's instruction template, or ``None``/empty.
+        task_text: The prompt text to interpolate, or ``None``/empty.
         inputs: Runtime input values keyed by port name.
         preserve_placeholders: Keep an unresolved ``{{name}}`` verbatim instead
             of replacing it with an empty string.  Used by the static prompt
             preview, where no runtime inputs exist yet.
 
     Returns:
-        The interpolated instruction, or an empty string for a falsy
-        ``instruction``.
+        The interpolated prompt, or an empty string for a falsy ``task_text``.
     """
-    if not instruction:
+    if not task_text:
         return ""
 
     def render(match: re.Match[str]) -> str:
@@ -122,7 +120,7 @@ def build_task_layer(instruction: str | None, inputs: dict[str, Any], *, preserv
             return match.group(0) if preserve_placeholders else ""
         return str(inputs[key])
 
-    return _PLACEHOLDER_PATTERN.sub(render, instruction)
+    return _PLACEHOLDER_PATTERN.sub(render, task_text)
 
 
 def build_template_prompt_layer(
@@ -223,7 +221,7 @@ def assemble_ai_node_prompt(
     buckets = build_ai_node_buckets(
         agent_name=node.agent_name,
         capability_groups=node.capability_groups,
-        template_prompt=inputs.get(TEMPLATE_PROMPT_PORT) or node.params.get("instruction"),
+        template_prompt=inputs.get(TEMPLATE_PROMPT_PORT),
         inputs=inputs,
         user_id=user_id,
         agent_skills=agent_skills,

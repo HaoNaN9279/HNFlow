@@ -38,7 +38,7 @@ async def test_ai_node_uses_injected_adapter() -> None:
     adapter = _FakeAdapter()
     runtime = WorkflowRuntime(context={AGENT_ADAPTER_CONTEXT_KEY: adapter, "user_id": "u"})
 
-    result = await exec_llm_agent(runtime, {"instruction": "do {{in}}", "node_id": "n"}, {"in": "x"})
+    result = await exec_llm_agent(runtime, {"node_id": "n"}, {"in": "x", "template_prompt": "do {{in}}"})
 
     assert result["out"] == "adapter result"
     assert result["__workflow_token_usage"]["total_tokens"] == 5

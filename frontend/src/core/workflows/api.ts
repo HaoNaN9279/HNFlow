@@ -82,8 +82,8 @@ export type WorkflowPromptPreview = {
  * Ask the backend to assemble an AI node's static text prompt.
  *
  * The current definition is sent so unsaved canvas edits are reflected.  No
- * model/tool call happens; runtime-only memory/retrieval blocks are omitted and
- * reported by the response.
+ * model/tool call happens; the runtime-only `template_prompt` block is omitted
+ * and reported by the response.
  */
 export async function previewWorkflowPrompt(
   workflowId: string,

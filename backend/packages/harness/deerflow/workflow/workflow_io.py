@@ -11,7 +11,7 @@ langgraph / langchain / app dependency.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 from deerflow.workflow.review import (
@@ -89,25 +89,13 @@ def serialize(def_: WorkflowDefinition) -> str:
 
 
 def deserialize(text: str) -> WorkflowDefinition:
-    """Deserialize a schema-versioned JSON string back to a WorkflowDefinition.
-
-    Raises:
-        ValueError: missing or unsupported schema_version.
-        NotImplementedError: schema_version < SCHEMA_VERSION with no migration.
-    """
+    """Deserialize a current-version, schema-tagged workflow JSON string."""
     raw: dict[str, Any] = json.loads(text)
-
-    while True:
-        if "schema_version" not in raw:
-            raise ValueError("missing schema_version in serialized workflow data")
-        version = raw["schema_version"]
-        if version == SCHEMA_VERSION:
-            break
-        if version > SCHEMA_VERSION:
-            raise ValueError(f"unsupported schema version {version} (max supported: {SCHEMA_VERSION})")
-        # version < SCHEMA_VERSION → attempt migration
-        raw = _migrate_schema(raw, version)
-
+    if "schema_version" not in raw:
+        raise ValueError("missing schema_version in serialized workflow data")
+    version = raw["schema_version"]
+    if version != SCHEMA_VERSION:
+        raise ValueError(f"unsupported schema version {version} (expected {SCHEMA_VERSION})")
     return WorkflowDefinition.model_validate(raw["workflow"])
 
 
@@ -513,53 +501,3 @@ def _check_agent_name_references(nodes: list[Node], known_agent_names: set[str])
             errors.append(f"node '{node.id}': agent_name '{node.agent_name}' does not exist")
 
     return errors
-
-
-# ── Private: schema migration hook ───────────────────────────────────────────────
-
-# Version-by-version upgrade chain: ``from_version`` → a callable that returns
-# the serialized dict upgraded to ``from_version + 1`` (and MUST set
-# ``schema_version`` to that value).  ``deserialize`` applies steps repeatedly
-# until the document reaches ``SCHEMA_VERSION``.  Empty today — with a single
-# schema version there is nothing to migrate; the registry exists so a future
-# v1 → v2 change is a one-line registration instead of a rewrite here.
-MigrationStep = Callable[[dict[str, Any]], dict[str, Any]]
-
-_MIGRATION_STEPS: dict[int, MigrationStep] = {}
-
-
-def register_migration(from_version: int, step: MigrationStep) -> None:
-    """Register a one-version upgrade step (``from_version`` → ``from_version + 1``).
-
-    Raises:
-        ValueError: a step for *from_version* is already registered, or the
-            version is not below ``SCHEMA_VERSION``.
-    """
-    if from_version >= SCHEMA_VERSION:
-        raise ValueError(f"cannot register a migration for version {from_version} (>= current SCHEMA_VERSION {SCHEMA_VERSION})")
-    if from_version in _MIGRATION_STEPS:
-        raise ValueError(f"a migration step for version {from_version} is already registered")
-    _MIGRATION_STEPS[from_version] = step
-
-
-def _migrate_schema(raw: dict[str, Any], from_version: int) -> dict[str, Any]:
-    """Migrate a serialized workflow from *from_version* up to ``SCHEMA_VERSION``.
-
-    Applies registered one-version steps in sequence.  A missing step for any
-    intermediate version raises :class:`NotImplementedError`; a step that fails
-    to advance ``schema_version`` by exactly one raises :class:`ValueError`
-    (which prevents an infinite migration loop).
-    """
-    version = from_version
-    document = raw
-    while version < SCHEMA_VERSION:
-        step = _MIGRATION_STEPS.get(version)
-        if step is None:
-            raise NotImplementedError(f"schema migration from version {version} to {version + 1} is not yet implemented")
-        document = step(document)
-        expected = version + 1
-        actual = document.get("schema_version")
-        if actual != expected:
-            raise ValueError(f"migration step for version {version} must advance schema_version to {expected}; got {actual!r}")
-        version = expected
-    return document

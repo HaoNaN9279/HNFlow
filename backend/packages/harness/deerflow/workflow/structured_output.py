@@ -1,7 +1,7 @@
 """Structured-output contract for ``ai:llm_agent`` nodes (N14 §24.4).
 
-An AI node can declare ``params.output_schema`` to bind its model output to a
-typed set of output ports.  This module is the dependency-free core shared by
+An AI node binds a static schema from a ``data:schema`` node through its
+``output_schema`` input port to map model output to typed ports.  This module is the dependency-free core shared by
 the compiler (compile-time binding validation) and the AI executor (parse /
 validate / repair): the schema is a **field → ``PortType`` map** rather than a
 full JSON Schema, which keeps it aligned with the workflow port vocabulary and
@@ -43,10 +43,6 @@ def parse_output_schema(raw: Any) -> dict[str, Any] | None:
     Raises :class:`StructuredOutputError` for a structurally broken schema — the
     compiler turns that into a ``WorkflowCompileError``.
     """
-    if raw is None:
-        return None
-    if isinstance(raw, dict) and "output_schema" in raw and "fields" not in raw:
-        raw = raw["output_schema"]
     if raw is None:
         return None
     if not isinstance(raw, dict):

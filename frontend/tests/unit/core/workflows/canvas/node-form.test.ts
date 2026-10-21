@@ -142,7 +142,7 @@ describe("parseNodeFormValues", () => {
 });
 
 describe("applyNodeFormValues", () => {
-  test("parse → apply round-trips an AI node (top-level fields + instruction)", () => {
+  test("parse to apply round-trips an AI node (top-level fields)", () => {
     const node = aiNode();
     const applied = applyNodeFormValues(node, parseNodeFormValues(node));
     expect(applied).toEqual(node);
@@ -207,15 +207,6 @@ describe("applyNodeFormValues", () => {
       model_profile: "",
     });
     expect("model_profile" in cleared.params).toBe(false);
-  });
-
-  test("drops the legacy user_prompt param on save", () => {
-    const legacy = aiNode();
-    legacy.params = { ...legacy.params, user_prompt: "old value" };
-
-    const result = applyNodeFormValues(legacy, {});
-
-    expect("user_prompt" in result.params).toBe(false);
   });
 
   test("writes template_id/version into params.subworkflow as a compile spec", () => {

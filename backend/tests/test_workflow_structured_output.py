@@ -48,14 +48,14 @@ class TestSchemaParsing:
         assert parse_output_schema(None) is None
 
     def test_required_defaults_to_all_fields(self) -> None:
-        schema = parse_output_schema({"output_schema": {"fields": {"a": "data", "b": "number"}}})
+        schema = parse_output_schema({"fields": {"a": "data", "b": "number"}})
         assert schema is not None
         assert schema["required"] == ["a", "b"]
         assert schema["max_repairs"] == 1
 
     def test_empty_fields_raises(self) -> None:
         with pytest.raises(StructuredOutputError):
-            parse_output_schema({"output_schema": {"fields": {}}})
+            parse_output_schema({"fields": {}})
 
 
 class TestExtractJson:

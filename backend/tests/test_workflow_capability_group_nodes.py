@@ -27,7 +27,7 @@ def _ai_node(groups: list[str] | None = None) -> Node:
         id="ai",
         type=NodeType.AI_LLM_AGENT,
         capability_groups=groups or [],
-        params={"instruction": "Do {{in}}"},
+        params={},
         inputs=[
             Port(name="in", type=PortType.DATA),
             Port(name="capability_groups", type=PortType.ARRAY),

@@ -51,10 +51,8 @@ describe("fixed node property schema", () => {
 
   test("dedicated and fixed params survive sanitization", () => {
     const params = sanitizeNodeParams("ai:llm_agent", {
-      instruction: "Do it",
       capability_groups: ["alpha"],
       breakpoint: true,
-      user_prompt: "legacy",
       arbitrary: "drop me",
     });
 

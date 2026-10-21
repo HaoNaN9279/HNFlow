@@ -83,7 +83,7 @@ class TestBuildTaskLayer:
     def test_no_placeholder_returns_verbatim(self):
         assert build_task_layer("原样文本", {"a": 1}) == "原样文本"
 
-    def test_empty_instruction_returns_empty(self):
+    def test_empty_task_text_returns_empty(self):
         assert build_task_layer("", {"a": 1}) == ""
         assert build_task_layer(None, {"a": 1}) == ""
 
@@ -95,7 +95,7 @@ class TestBuildTaskLayer:
 class TestTemplatePromptLayer:
     """Template prompt = runtime user turn appended after the task layer."""
 
-    def test_interpolates_like_instruction(self):
+    def test_template_prompt_interpolates(self):
         assert build_template_prompt_layer("Answer {{in}}", {"in": "x"}) == "Answer x"
 
     def test_empty_template_prompt(self):
@@ -114,7 +114,7 @@ class TestTemplatePromptLayer:
         )
         node = _make_node(
             capability_groups=["alpha"],
-            params={"instruction": "do {{x}}"},
+            params={},
         )
         rule = SimpleNamespace(
             group_name="alpha",
@@ -186,7 +186,7 @@ class TestAssembleAiNodePrompt:
         assert "已启用能力组" not in prompt
         assert "do 1" in prompt
 
-    def test_empty_instruction_omits_task_layer(self, monkeypatch):
+    def test_empty_template_prompt_omits_task_layer(self, monkeypatch):
         monkeypatch.setattr(
             "deerflow.workflow.prompts.load_agent_soul",
             lambda agent_name, user_id=None: None,

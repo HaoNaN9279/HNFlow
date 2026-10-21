@@ -80,7 +80,7 @@ def _ai_definition(*, wf_id: str = "wf-ai", node_id: str = "ai_step") -> Workflo
     ai = Node(
         id=node_id,
         type=NodeType.AI_LLM_AGENT,
-        params={"instruction": "首轮 {{in}}"},
+        params={},
         inputs=[Port(name="in", type=PortType.DATA)],
         outputs=[Port(name="out", type=PortType.DATA)],
     )
@@ -481,7 +481,7 @@ class TestExecutorContinueContext:
         mode even when ``inputs["continue_prompt"]`` is absent."""
         rt = _ai_runtime(origin_thread_id="orig-thread", continue_nodes={"ai_step": "请继续处理"})
 
-        result = await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x"})
+        result = await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x"})
 
         assert result["out"] == "ok"
         assert result["__workflow_prompt"]
@@ -496,7 +496,7 @@ class TestExecutorContinueContext:
     async def test_origin_thread_id_overrides_thread_prefix(self, fake_executor: list[dict[str, Any]]) -> None:
         rt = _ai_runtime(thread_id="new-thread", origin_thread_id="orig-thread", continue_nodes={"ai_step": "继续"})
 
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x"})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x"})
 
         assert fake_executor[0]["kwargs"]["checkpoint_thread_id"] == "orig-thread:wfai:ai_step"
 
@@ -505,7 +505,7 @@ class TestExecutorContinueContext:
         """No ``ai_origin_thread_id`` → the W1A behavior (current thread prefix)."""
         rt = _ai_runtime(thread_id="t1", continue_nodes={"ai_step": "继续"})
 
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x"})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x"})
 
         assert fake_executor[0]["kwargs"]["checkpoint_thread_id"] == "t1:wfai:ai_step"
 
@@ -515,7 +515,7 @@ class TestExecutorContinueContext:
         template (one-shot) mode."""
         rt = _ai_runtime(thread_id="t1", continue_nodes={"other_node": "继续"})
 
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x"})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "template_prompt": "首轮"})
 
         record = fake_executor[0]
         assert record["kwargs"]["config"].checkpointer is False
@@ -526,7 +526,7 @@ class TestExecutorContinueContext:
         """A non-empty ``continue_prompt`` input still wins over ``__ai_continue``."""
         rt = _ai_runtime(thread_id="t1", origin_thread_id="orig-thread", continue_nodes={"ai_step": "context prompt"})
 
-        await exec_llm_agent(rt, {"instruction": "首轮", "node_id": "ai_step"}, {"in": "x", "continue_prompt": "input prompt"})
+        await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x", "continue_prompt": "input prompt"})
 
         assert fake_executor[0]["task"] == "input prompt"
 

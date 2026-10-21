@@ -2,7 +2,7 @@
 
 ``exec_llm_agent`` executes an ``ai:llm_agent`` node by assembling its system
 prompt from identity, capability (group names, rules, skill descriptions),
-examples/context/schema and task layers, then running it through a one-shot
+schema and task layers, then running it through a one-shot
 :class:`deerflow.subagents.SubagentExecutor`.  It follows the ``Executor``
 contract — ``(runtime, params, inputs) -> Awaitable[dict]`` — so the compiler's
 ``_resolve_executor`` awaits it like any async executor.
@@ -138,9 +138,9 @@ def _resolve_node_tools(
     """Resolve the AI node's tool set from its capability groups (C1).
 
     Delegates to the tool gateway (N1), which maps the groups' ``allowed-tools``
-    union to concrete ``BaseTool`` objects.  Fail-open: a gateway/skill-storage
-    failure degrades to an empty tool set rather than failing the node (the
-    three-layer prompt still executes).  ``instance_repo`` (N6) is forwarded so
+    union to concrete ``BaseTool`` objects.  A gateway/skill-storage failure
+    fails the node instead of silently shrinking its declared tool set.
+    ``instance_repo`` (N6) is forwarded so
     the gateway's ``app`` provider writes instance records through.
     """
     if not capability_groups:
@@ -193,10 +193,6 @@ async def exec_llm_agent(
     is_continue = bool(continue_prompt)
 
     raw_template_prompt = inputs.get(TEMPLATE_PROMPT_PORT)
-    if not raw_template_prompt:
-        # Legacy definitions may still carry the removed ``params.instruction``.
-        # It is only a read-compatibility fallback; the editor no longer writes it.
-        raw_template_prompt = params.get("instruction")
     if not is_continue:
         if not isinstance(raw_template_prompt, str) or not raw_template_prompt.strip():
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty '{TEMPLATE_PROMPT_PORT}' input")
@@ -371,7 +367,7 @@ def exec_prompt_preview(
     ``wf:<ai_node>:__prompt`` channel.  This node reads it back after the AI
     node has run (the incoming edge is ordering, not content), so a preview
     shows the real runtime prompt — including selected capability groups and
-    injected memory/retrieval — rather than a stale template.
+    injected schema content, not a stale template.
     """
     agent_node = params.get("agent_node")
     if not isinstance(agent_node, str) or not agent_node:
