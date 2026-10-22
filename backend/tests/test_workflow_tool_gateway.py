@@ -227,6 +227,6 @@ async def test_exec_llm_agent_passes_resolved_tools(monkeypatch: pytest.MonkeyPa
         {"in": "y", "template_prompt": "x"},
     )
 
-    assert result["out"] == "ok"
+    assert result["out"]["content"] == "ok"
     assert result["__workflow_prompt"]
     assert captured["tools"] is sentinel

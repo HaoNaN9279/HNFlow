@@ -119,7 +119,7 @@ from deerflow.workflow.review import (
     review_state_key,
 )
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
-from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PARAM, OUTPUT_SCHEMA_PORT
+from deerflow.workflow.structured_output import INPUT_SCHEMA_PARAM, INPUT_SCHEMA_PORT, OUTPUT_SCHEMA_PARAM, OUTPUT_SCHEMA_PORT
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -597,6 +597,7 @@ def _make_node_fn(
     *,
     run_budget: RunBudget | None = None,
     capability_groups: list[str] | None = None,
+    input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, Any] | None = None,
     prompt_preview_agent: str | None = None,
     review_target: str | None = None,
@@ -677,6 +678,8 @@ def _make_node_fn(
                 list(capability_groups) if capability_groups is not None else list(node.capability_groups),
             )
             executor_params.setdefault("node_id", node.id)
+            if input_schema is not None:
+                executor_params[INPUT_SCHEMA_PARAM] = input_schema
             if output_schema is not None:
                 executor_params[OUTPUT_SCHEMA_PARAM] = output_schema
             if review_retry_target:
@@ -1735,58 +1738,95 @@ def _incoming_edges_for(node_id: str, edges: list[Edge]) -> list[Edge]:
     return [edge for edge in edges if edge.target == node_id]
 
 
+def _schema_edge_for(
+    node_id: str,
+    port: str,
+    incoming_edges: list[Edge],
+) -> Edge | None:
+    schema_edges = [edge for edge in incoming_edges if edge.target_port == port]
+    if not schema_edges:
+        return None
+    if len(schema_edges) > 1:  # validate_definition also rejects this
+        raise WorkflowCompileError(f"node '{node_id}': input port '{port}' has multiple incoming edges")
+    return schema_edges[0]
+
+
+def _resolve_ai_schema(
+    node: Node,
+    incoming_edges: list[Edge],
+    node_map: dict[str, Node],
+    port: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Resolve an AI node's schema and the source schema-node id for *port*."""
+    from deerflow.workflow.structured_output import StructuredOutputError, parse_schema
+
+    edge = _schema_edge_for(node.id, port, incoming_edges)
+    if edge is None:
+        return None, None
+    source = node_map.get(edge.source)
+    if source is None or source.type != NodeType.DATA_SCHEMA:
+        raise WorkflowCompileError(f"node '{node.id}': '{port}' must come from a data:schema node")
+    try:
+        return parse_schema((source.params or {}).get("schema")), source.id
+    except StructuredOutputError as exc:
+        raise WorkflowCompileError(f"node '{source.id}': invalid schema: {exc}") from exc
+
+
 def _resolve_ai_output_schema(
     node: Node,
     incoming_edges: list[Edge],
     node_map: dict[str, Node],
 ) -> dict[str, Any] | None:
-    """Resolve an AI node's schema from its single ``output_schema`` input."""
-    from deerflow.workflow.structured_output import StructuredOutputError, parse_output_schema
-
-    schema_edges = [edge for edge in incoming_edges if edge.target_port == OUTPUT_SCHEMA_PORT]
-    if not schema_edges:
-        return None
-    if len(schema_edges) > 1:  # validate_definition also rejects this
-        raise WorkflowCompileError(f"node '{node.id}': input port '{OUTPUT_SCHEMA_PORT}' has multiple incoming edges")
-    edge = schema_edges[0]
-    source = node_map.get(edge.source)
-    if source is None or source.type != NodeType.DATA_SCHEMA:
-        raise WorkflowCompileError(f"node '{node.id}': '{OUTPUT_SCHEMA_PORT}' must come from a data:schema node")
-    try:
-        return parse_output_schema((source.params or {}).get("schema"))
-    except StructuredOutputError as exc:
-        raise WorkflowCompileError(f"node '{source.id}': invalid schema: {exc}") from exc
+    """Resolve an AI node's output schema from its ``output_schema`` input."""
+    schema, _source_id = _resolve_ai_schema(node, incoming_edges, node_map, OUTPUT_SCHEMA_PORT)
+    return schema
 
 
-def _validate_output_schemas(def_: WorkflowDefinition) -> None:
-    """Validate every AI node's static schema against its declared output ports."""
-    from deerflow.workflow.structured_output import MAX_REPAIRS_LIMIT, SCHEMA_FIELD_TYPES
+def _validate_ai_schemas(def_: WorkflowDefinition) -> None:
+    """Validate AI schema bindings and AI-to-AI delivery consistency."""
+    from deerflow.workflow.structured_output import StructuredOutputError, parse_schema
 
     node_map = {node.id: node for node in def_.nodes}
+    incoming_by_node = {node.id: _incoming_edges_for(node.id, def_.edges) for node in def_.nodes}
+    schema_sources: dict[tuple[str, str], str | None] = {}
+
     for node in def_.nodes:
         if node.type != NodeType.AI_LLM_AGENT:
             continue
-        schema = _resolve_ai_output_schema(node, _incoming_edges_for(node.id, def_.edges), node_map)
-        if schema is None:
+        incoming = incoming_by_node[node.id]
+        for port in (INPUT_SCHEMA_PORT, OUTPUT_SCHEMA_PORT):
+            try:
+                _schema, source_id = _resolve_ai_schema(node, incoming, node_map, port)
+            except StructuredOutputError as exc:
+                raise WorkflowCompileError(f"node '{node.id}': invalid {port}: {exc}") from exc
+            schema_sources[(node.id, port)] = source_id
+        if schema_sources[(node.id, INPUT_SCHEMA_PORT)] is not None and not any(edge.target_port == "in" for edge in incoming):
+            raise WorkflowCompileError(f"node '{node.id}': '{INPUT_SCHEMA_PORT}' requires an incoming 'in' edge")
+
+    for edge in def_.edges:
+        source = node_map.get(edge.source)
+        target = node_map.get(edge.target)
+        if source is None or target is None:
             continue
-        ports = {p.name: p.type.value for p in node.outputs}
-        for name, field_type in schema["fields"].items():
-            if field_type not in SCHEMA_FIELD_TYPES:
-                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' has unknown type {field_type!r} (allowed: {sorted(SCHEMA_FIELD_TYPES)})")
-            if name not in ports:
-                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' has no matching output port")
-            if ports[name] != field_type:
-                raise WorkflowCompileError(f"node '{node.id}': output_schema field '{name}' is {field_type} but output port '{name}' is {ports[name]}")
-        for name in schema["required"]:
-            if name not in schema["fields"]:
-                raise WorkflowCompileError(f"node '{node.id}': output_schema.required names unknown field '{name}'")
-        for name in schema["enum_values"]:
-            if name not in schema["fields"]:
-                raise WorkflowCompileError(f"node '{node.id}': output_schema.enum_values names unknown field '{name}'")
-            if schema["fields"][name] != "enum":
-                raise WorkflowCompileError(f"node '{node.id}': output_schema.enum_values['{name}'] requires an 'enum' field")
-        if schema["max_repairs"] < 0 or schema["max_repairs"] > MAX_REPAIRS_LIMIT:
-            raise WorkflowCompileError(f"node '{node.id}': output_schema.max_repairs must be between 0 and {MAX_REPAIRS_LIMIT}")
+        if source.type != NodeType.AI_LLM_AGENT or target.type != NodeType.AI_LLM_AGENT:
+            continue
+        if edge.source_port != "out" or edge.target_port != "in":
+            continue
+        source_schema_id = schema_sources.get((source.id, OUTPUT_SCHEMA_PORT))
+        target_schema_id = schema_sources.get((target.id, INPUT_SCHEMA_PORT))
+        if source_schema_id is None or target_schema_id is None:
+            raise WorkflowCompileError(f"node '{source.id}' -> node '{target.id}': AI delivery requires both nodes to bind a data:schema node ('{OUTPUT_SCHEMA_PORT}' on the sender and '{INPUT_SCHEMA_PORT}' on the receiver)")
+        if source_schema_id != target_schema_id:
+            raise WorkflowCompileError(f"node '{source.id}' -> node '{target.id}': AI delivery requires the same data:schema node; got '{source_schema_id}' vs '{target_schema_id}'")
+
+    # Parse every schema eagerly so malformed schemas fail even when unconnected.
+    for node in def_.nodes:
+        if node.type != NodeType.DATA_SCHEMA:
+            continue
+        try:
+            parse_schema((node.params or {}).get("schema"))
+        except StructuredOutputError as exc:
+            raise WorkflowCompileError(f"node '{node.id}': invalid schema: {exc}") from exc
 
 
 def _validate_ai_context_windows(def_: WorkflowDefinition, ctx: CompileContext) -> None:
@@ -2012,7 +2052,7 @@ def _compile_impl(
     _validate_shared_nodes(def_)
     _reject_removed_ai_params(def_)
     _validate_model_profiles(def_, ctx)
-    _validate_output_schemas(def_)
+    _validate_ai_schemas(def_)
     _validate_ai_context_windows(def_, ctx)
     _validate_prompt_preview(def_)
     try:
@@ -2070,13 +2110,16 @@ def _compile_impl(
 
     def _make_standard_node_fn(node: Node, executor: Executor) -> Callable[..., Any]:
         capability_groups: list[str] | None = None
+        input_schema: dict[str, Any] | None = None
         output_schema: dict[str, Any] | None = None
         if node.type == NodeType.AI_LLM_AGENT:
             try:
                 capability_groups = resolve_ai_capability_groups(def_, node)
             except CapabilityGroupWiringError as exc:
                 raise WorkflowCompileError(str(exc)) from exc
-            output_schema = _resolve_ai_output_schema(node, _incoming_edges_for(node.id, def_.edges), node_map)
+            node_incoming = _incoming_edges_for(node.id, def_.edges)
+            input_schema, _input_source = _resolve_ai_schema(node, node_incoming, node_map, INPUT_SCHEMA_PORT)
+            output_schema, _output_source = _resolve_ai_schema(node, node_incoming, node_map, OUTPUT_SCHEMA_PORT)
         prompt_preview_agent: str | None = None
         if node.type == NodeType.AI_PROMPT_PREVIEW:
             prompt_preview_agent = _infer_prompt_preview_agent(node, node_map, def_.edges)
@@ -2090,6 +2133,7 @@ def _compile_impl(
             ctx.resource_accessors.get(node.type),
             run_budget=run_budget,
             capability_groups=capability_groups,
+            input_schema=input_schema,
             output_schema=output_schema,
             prompt_preview_agent=prompt_preview_agent,
             review_target=review_target,

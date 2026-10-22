@@ -64,6 +64,20 @@ describe("fixed node property schema", () => {
     });
   });
 
+  test("schema node owns its schema param through the dedicated form", () => {
+    const schema = { version: 1, max_repairs: 1, custom_fields: [] };
+    expect(
+      sanitizeNodeParams("data:schema", { schema, arbitrary: "drop me" }),
+    ).toEqual({ schema });
+    expect(getNodeParamKeys("data:schema").has("schema")).toBe(true);
+  });
+
+  test("assign exposes the template prompt field", () => {
+    expect(
+      getNodeParamFields("data:assign").map((field) => field.key),
+    ).toContain("task");
+  });
+
   test("unknown custom params are dropped for every node type", () => {
     expect(
       sanitizeNodeParams("tool:bash", {

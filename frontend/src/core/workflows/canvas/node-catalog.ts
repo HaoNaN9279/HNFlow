@@ -136,7 +136,7 @@ export const NODE_CATALOG = [
     category: "data",
     defaultInputs: [{ name: "in", type: "data", required: true }],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
-    defaultParams: { value: null },
+    defaultParams: { value: null, task: "" },
     description: "Static value assignment or input pass-through.",
   },
   {
@@ -178,9 +178,11 @@ export const NODE_CATALOG = [
     category: "data",
     defaultInputs: [],
     defaultOutputs: [{ name: "schema", type: "record", required: true }],
-    defaultParams: { schema: { fields: {}, required: [], enum_values: {} } },
+    defaultParams: {
+      schema: { version: 1, max_repairs: 1, custom_fields: [] },
+    },
     description:
-      "Declare an AI node's structured-output schema and wire it into output_schema.",
+      "Declare the shared AI Result Schema and wire it into input_schema / output_schema.",
   },
   {
     type: "data:file",
@@ -280,15 +282,21 @@ export const NODE_CATALOG = [
         description: "Continue this node's session with a new prompt",
       },
       {
+        name: "input_schema",
+        type: "record",
+        required: false,
+        description: "Input AI Result Schema from a data:schema node",
+      },
+      {
         name: "output_schema",
         type: "record",
         required: false,
-        description: "Structured-output schema from a data:schema node",
+        description: "Output AI Result Schema from a data:schema node",
       },
     ],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: {},
-    description: "Run one LLM agent turn from a wired template prompt.",
+    description: "Run one LLM agent turn and emit an AI Result Envelope.",
   },
   {
     type: "ai:capability_group",

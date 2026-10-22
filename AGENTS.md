@@ -69,15 +69,15 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 
 - `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`PortType` 含 `data/file/bool/enum/number/array/record`；`Node` 含 `agent_name` 主身份绑定与 `capability_groups`。节点类型含 `data:schema`（静态输出 Schema 提供者）；`data:knowledge` 已删除。
 - `workflow_io.py` — `validate_definition`：无环 DFS、单起点单终点、端口类型匹配、**同一输入端口只允许一条入边**（`flow:end` 与 `flow:loop` 除外）、Schema 节点边校验。`serialize`/`deserialize` 带 schema version 迁移链。
-- `compiler.py` — 定义 → LangGraph。端口绑定 `wf:<node_id>:<port>`；节点生命周期事件；loop/try/handoff 原生展开；共享工作区；自动资源锁；编译缓存。**已删除 fan-in `params.merge`**；AI 节点通过 `output_schema` 输入解析 `data:schema` 节点，编译期校验字段/端口类型。
+- `compiler.py` — 定义 → LangGraph。端口绑定 `wf:<node_id>:<port>`；节点生命周期事件；loop/try/handoff 原生展开；共享工作区；自动资源锁；编译缓存。**已删除 fan-in `params.merge`**；AI 节点通过 `input_schema` / `output_schema` 输入解析同一个 `data:schema` 节点，AI→AI 交付边两侧 Schema 节点必须一致。
 - `worker.py` — 编排入口，复用 RunRecord/checkpointer/run events；`runtime_context.py` 是唯一 compile/runtime context 装配点。
 - `model_profiles/` + `0023_model_profiles` — AI 节点只写 `params.model_profile`；profile 只指向 `config.yaml -> models[]` 实际模型；未知/停用/目标缺失 fail-loud；`/api/model-profiles` CRUD；`GET /api/models` 仍只读。
 - `context_compression.py` — 自动上下文压缩：预算来自所选模型 `context_window`，压缩阈值/尾部保留由内部常量计算；压缩提示词为内置 skill；复用 `DeerFlowSummarizationMiddleware`；所有 `ai:llm_agent` 默认启用，无节点参数、无前端可见消息。
-- `executors/ai.py` — AI 节点：身份 + 能力 + `template_prompt` 任务；无 `instruction`、`autonomy`、`context_policy`、`memory`、`retrieval`、`model_policy`；不做子 Agent 调用；不注入 token 预算；输出 Schema 来自 `__output_schema`；保留 token usage/stop_reason/prompt 观测通道。
+- `executors/ai.py` — AI 节点：身份 + 能力 + `template_prompt` 任务；无 `instruction`、`autonomy`、`context_policy`、`memory`、`retrieval`、`model_policy`；不做子 Agent 调用；不注入 token 预算；输入/输出 Schema 来自 `__input_schema` / `__output_schema`；`out` 为 AI Result Envelope；保留 token usage/stop_reason/prompt 观测通道。
 - `executors/` — `flow.py` / `data.py` / `asset.py` / `tool.py` / `local_app.py` / `human.py` / `review.py`。`data:file`、`data:asset`、`app:script` 默认启用失败回滚，无节点开关。
-- `prompts.py` — 提示词桶：identity / capability / capability_rules / capability_skills / task / schema。`task` 只来自 `template_prompt`。已删除 examples/context 桶。
-- `prompt_preview.py` — 静态预览同一套桶；`template_prompt` 是 runtime omitted；`output_schema` 来自 `data:schema` 节点。
-- `structured_output.py` — Schema 解析/校验/修复核心；`OUTPUT_SCHEMA_PORT="output_schema"`、`OUTPUT_SCHEMA_PARAM="__output_schema"`。
+- `prompts.py` — 提示词桶：identity / capability / capability_rules / capability_skills / schema_contract / task / schema。`task` 只来自 `template_prompt`；`schema_contract` 是 HNFlow 内置通用字段规则。已删除 examples/context 桶。
+- `prompt_preview.py` — 静态预览同一套桶；`template_prompt` 是 runtime omitted；`input_schema` / `output_schema` 均来自 `data:schema` 节点。
+- `structured_output.py` — AI Result Schema 解析/校验/修复核心：固定通用字段 + 自定义字段、AI Result Envelope、`[schema.*]` 引用；`INPUT_SCHEMA_PORT="input_schema"`、`OUTPUT_SCHEMA_PORT="output_schema"`。
 - `patterns.py` / `handoff.py` / `definition_evals.py` / `eval_runner.py` / `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `breakpoint.py` / `delegate.py` / `dispatch.py` / `human_task_state.py` — 模板、动态 handoff、评测、回放、运行级预算、成本、幂等、断点、委派与对话调度。运行级 `metadata.budget` 仍保留，AI 节点级 token 预算已删除。
 - `compensation.py` / `undo.py` / `undo_service.py` — 失败回滚与撤销。`rollback_on_failure` 不再暴露；支持的执行器默认备份/回滚。
 - `../apps/` — 本地应用接入层（N4/N5/N6/N8/N10b）。

@@ -483,7 +483,7 @@ class TestExecutorContinueContext:
 
         result = await exec_llm_agent(rt, {"node_id": "ai_step"}, {"in": "x"})
 
-        assert result["out"] == "ok"
+        assert result["out"]["content"] == "ok"
         assert result["__workflow_prompt"]
         record = fake_executor[0]
         assert record["kwargs"]["config"].checkpointer is True

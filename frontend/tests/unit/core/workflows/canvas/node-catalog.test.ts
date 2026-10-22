@@ -93,6 +93,7 @@ describe("node catalog", () => {
       "capability_groups",
       "template_prompt",
       "continue_prompt",
+      "input_schema",
       "output_schema",
     ]);
     expect(ai.defaultInputs[0]).toMatchObject({
@@ -110,6 +111,11 @@ describe("node catalog", () => {
       expect(typeof port.description).toBe("string");
     }
     expect(ai.defaultInputs[4]).toMatchObject({
+      name: "input_schema",
+      type: "record",
+      required: false,
+    });
+    expect(ai.defaultInputs[5]).toMatchObject({
       name: "output_schema",
       type: "record",
       required: false,
@@ -125,6 +131,7 @@ describe("node catalog", () => {
     });
     expect(getNodeCatalogEntry("data:assign")!.defaultParams).toEqual({
       value: null,
+      task: "",
     });
     expect(getNodeCatalogEntry("data:convert")!.defaultParams).toEqual({
       to: "str",
@@ -172,7 +179,7 @@ describe("node catalog", () => {
     expect(a.id).toMatch(/^n_[0-9a-f]{8}$/);
     expect(a.id).not.toBe(b.id);
     expect(a.type).toBe("data:assign");
-    expect(a.params).toEqual({ value: null });
+    expect(a.params).toEqual({ value: null, task: "" });
     expect(a.capability_groups).toEqual([]);
     expect(a.agent_name).toBeNull();
 
@@ -181,6 +188,7 @@ describe("node catalog", () => {
     a.inputs.push({ name: "extra", type: "data" });
     expect(getNodeCatalogEntry("data:assign")!.defaultParams).toEqual({
       value: null,
+      task: "",
     });
     expect(getDefaultNode("data:assign").inputs).toHaveLength(1);
   });

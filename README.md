@@ -89,7 +89,9 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 
 - 一个 AI 节点 = **一个主身份**（custom agent，`agent_name` 静态绑定）+ 若干功能组供给工具与规则（能力并集），避免人格冲突；
 - 节点任务只来自 `template_prompt`，支持上游端口数据插值（`{{url_list}}`）；`continue_prompt` 有值时走会话续接；
-- 输出 Schema 由独立 `data:schema` 节点提供，经 `output_schema` 输入端口接入；
+- 输入/输出 Schema 由同一个 `data:schema` 节点提供，分别接入 `input_schema` / `output_schema`；AI→AI 交付走 `sender.out → receiver.in`，两侧必须绑定同一 Schema 节点；
+- AI 输出统一为 **AI Result Envelope**：HNFlow 固定的通用字段 `summary/status/content/artifacts/metadata/error` + 用户 `custom` 字段；
+- Schema 模板用 `[schema.summary]` / `[schema.custom.<name>]` 引用输入值；通用字段读取规则由 HNFlow 内置提示词提供，自定义字段处理由节点 `template_prompt` 说明；
 - 上下文超限自动压缩：预算来自所选模型档案的 `context_window`，压缩使用内置压缩 skill，节点/用户无需配置；
 - AI 节点不做子 Agent 调用、不做 token 预算限制；工具集仍受能力组 allowed-tools 约束；
 

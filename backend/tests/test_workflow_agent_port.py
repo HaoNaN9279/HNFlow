@@ -40,7 +40,7 @@ async def test_ai_node_uses_injected_adapter() -> None:
 
     result = await exec_llm_agent(runtime, {"node_id": "n"}, {"in": "x", "template_prompt": "do {{in}}"})
 
-    assert result["out"] == "adapter result"
+    assert result["out"]["content"] == "adapter result"
     assert result["__workflow_token_usage"]["total_tokens"] == 5
     assert len(adapter.requests) == 1
     request = adapter.requests[0]

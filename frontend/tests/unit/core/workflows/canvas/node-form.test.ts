@@ -156,6 +156,7 @@ describe("applyNodeFormValues", () => {
       "capability_groups",
       "template_prompt",
       "continue_prompt",
+      "input_schema",
       "output_schema",
     ]);
     const applied = applyNodeFormValues(node, parseNodeFormValues(node));

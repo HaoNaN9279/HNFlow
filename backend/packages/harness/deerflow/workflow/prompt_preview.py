@@ -18,9 +18,15 @@ from deerflow.capability_groups.runtime import CapabilityContentError, load_capa
 from deerflow.config.agents_config import load_agent_config
 from deerflow.workflow.capability_group_nodes import CapabilityGroupWiringError, resolve_ai_capability_groups, validate_capability_group_wiring
 from deerflow.workflow.context_compression import estimate_tokens
-from deerflow.workflow.prompts import BUCKET_ORDER, TEMPLATE_PROMPT_PORT, build_ai_node_buckets
+from deerflow.workflow.prompts import BUCKET_ORDER, TEMPLATE_PROMPT_PORT, build_ai_node_buckets, build_schema_contract_layer
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
-from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PORT, StructuredOutputError, parse_output_schema, schema_instruction
+from deerflow.workflow.structured_output import (
+    INPUT_SCHEMA_PORT,
+    OUTPUT_SCHEMA_PORT,
+    StructuredOutputError,
+    parse_schema,
+    schema_instruction,
+)
 
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
@@ -108,19 +114,24 @@ def _summarize(text: str, fallback: str) -> str:
     return _first_line(text) if text.strip() else fallback
 
 
-def _schema_for_node(definition: WorkflowDefinition, node_id: str) -> dict[str, Any] | None:
+def _schema_for_node(definition: WorkflowDefinition, node_id: str, port: str) -> dict[str, Any] | None:
     node_map = {node.id: node for node in definition.nodes}
     for edge in definition.edges:
-        if edge.target != node_id or edge.target_port != OUTPUT_SCHEMA_PORT:
+        if edge.target != node_id or edge.target_port != port:
             continue
         source = node_map.get(edge.source)
         if source is None or source.type != NodeType.DATA_SCHEMA:
-            raise PromptPreviewError(f"'{OUTPUT_SCHEMA_PORT}' must come from a data:schema node")
+            raise PromptPreviewError(f"'{port}' must come from a data:schema node")
         try:
-            return parse_output_schema((source.params or {}).get("schema"))
+            return parse_schema((source.params or {}).get("schema"))
         except StructuredOutputError as exc:
             raise PromptPreviewError(f"invalid schema: {exc}") from exc
     return None
+
+
+def _schema_summary(schema: dict[str, Any]) -> str:
+    lines = [f"- {name}: {schema['fields'][name]['description']}" for name in schema["custom_fields"]]
+    return "\n".join(lines) if lines else "No custom fields."
 
 
 def build_prompt_preview(
@@ -142,7 +153,8 @@ def build_prompt_preview(
     except CapabilityGroupWiringError as exc:
         raise PromptPreviewError(str(exc)) from exc
 
-    output_schema = _schema_for_node(definition, node.id)
+    input_schema = _schema_for_node(definition, node.id, INPUT_SCHEMA_PORT)
+    output_schema = _schema_for_node(definition, node.id, OUTPUT_SCHEMA_PORT)
     try:
         capability_rules = load_capability_rules(capability_groups, user_id=user_id)
         capability_skills = load_capability_skills(capability_groups, user_id=user_id)
@@ -162,6 +174,7 @@ def build_prompt_preview(
         preserve_placeholders=True,
         capability_rules=capability_rules,
         capability_skills=capability_skills,
+        schema_contract=build_schema_contract_layer(input_schema, output_schema),
     )
     if output_schema is not None:
         buckets["schema"] = schema_instruction(output_schema)
@@ -224,6 +237,25 @@ def build_prompt_preview(
             f"{skill.name}: {skill.description}",
             f"- {skill.name}: {skill.description}",
             label=skill.label,
+        )
+
+    schema_contract = buckets.get("schema_contract", "")
+    if schema_contract:
+        add(
+            "schema_contract",
+            "system",
+            "HNFlow AI Result Schema",
+            "Common field rules and [schema.*] reference contract",
+            schema_contract,
+        )
+
+    if input_schema is not None:
+        add(
+            "input_schema",
+            "system",
+            f"data:schema → {INPUT_SCHEMA_PORT}",
+            f"Custom fields: {', '.join(input_schema['custom_fields']) or 'none'}",
+            _schema_summary(input_schema),
         )
 
     if output_schema is not None:

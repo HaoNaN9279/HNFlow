@@ -100,6 +100,65 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
     assert "template_prompt" in preview.omitted_runtime_blocks
 
 
+def test_schema_contract_and_both_schema_bindings_are_previewed(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deerflow.workflow.prompts.load_agent_soul",
+        lambda agent_name, user_id=None: None,
+    )
+    nodes = [
+        _node("start", NodeType.FLOW_START, outputs=[Port(name="out", type=PortType.DATA)]),
+        _node(
+            "schema",
+            NodeType.DATA_SCHEMA,
+            params={
+                "schema": {
+                    "version": 1,
+                    "max_repairs": 1,
+                    "custom_fields": [
+                        {
+                            "name": "decision",
+                            "type": "enum",
+                            "required": True,
+                            "description": "Decision",
+                            "enum_values": ["approve", "reject"],
+                        }
+                    ],
+                }
+            },
+            outputs=[Port(name="schema", type=PortType.RECORD)],
+        ),
+        _node(
+            "ai",
+            NodeType.AI_LLM_AGENT,
+            inputs=[
+                Port(name="in", type=PortType.DATA),
+                Port(name="template_prompt", type=PortType.DATA),
+                Port(name="input_schema", type=PortType.RECORD),
+                Port(name="output_schema", type=PortType.RECORD),
+            ],
+            outputs=[Port(name="out", type=PortType.DATA)],
+        ),
+        _node("end", NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)]),
+    ]
+    edges = [
+        Edge(source="start", source_port="out", target="ai", target_port="in"),
+        Edge(source="start", source_port="out", target="ai", target_port="template_prompt"),
+        Edge(source="schema", source_port="schema", target="ai", target_port="input_schema"),
+        Edge(source="schema", source_port="schema", target="ai", target_port="output_schema"),
+        Edge(source="ai", source_port="out", target="end", target_port="in"),
+    ]
+    definition = WorkflowDefinition(id="wf-schema", name="Schema", nodes=nodes, edges=edges)
+
+    preview = build_prompt_preview(definition, "ai")
+
+    keys = [component.key for component in preview.components]
+    assert "schema_contract" in keys
+    assert "input_schema" in keys
+    assert "schema" in keys
+    assert "Custom field semantics" in _by_key(preview, "schema_contract").content
+    assert "Decision" in _by_key(preview, "input_schema").content
+
+
 def test_runtime_task_has_no_static_content() -> None:
     definition = _definition(
         ai_inputs=[

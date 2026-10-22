@@ -277,10 +277,11 @@ def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[st
             incompatible = [key for key in _REVIEW_INCOMPATIBLE_AI_PARAMS if (target.params or {}).get(key) is not None]
             if incompatible:
                 errors.append(f"node '{node.id}': rejected target '{target.id}' uses {', '.join(incompatible)}, which is not supported with session continuation")
-            from deerflow.workflow.structured_output import OUTPUT_SCHEMA_PORT
+            from deerflow.workflow.structured_output import INPUT_SCHEMA_PORT, OUTPUT_SCHEMA_PORT
 
-            if any(item.target == target.id and item.target_port == OUTPUT_SCHEMA_PORT for item in edges):
-                errors.append(f"node '{node.id}': rejected target '{target.id}' has an '{OUTPUT_SCHEMA_PORT}' input, which is not supported with session continuation")
+            for schema_port in (INPUT_SCHEMA_PORT, OUTPUT_SCHEMA_PORT):
+                if any(item.target == target.id and item.target_port == schema_port for item in edges):
+                    errors.append(f"node '{node.id}': rejected target '{target.id}' has an '{schema_port}' input, which is not supported with session continuation")
             if start_id is not None:
                 if not _reachable(start_id, target.id, edges, node_map):
                     errors.append(f"node '{node.id}': rejected target '{target.id}' is not reachable from flow:start")

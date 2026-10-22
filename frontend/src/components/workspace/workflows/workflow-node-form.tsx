@@ -36,6 +36,7 @@ import { useOpenSubworkflow } from "./use-open-subworkflow";
 import { AiPromptComposition } from "./workflow-ai-prompt-composition";
 import { useWorkflowEditor } from "./workflow-editor-context";
 import { WorkflowNodeParams } from "./workflow-node-params";
+import { WorkflowSchemaForm } from "./workflow-schema-form";
 
 /** Sentinel select values for the agent picker (real names are used verbatim). */
 const AGENT_NONE_VALUE = "__none__";
@@ -76,6 +77,11 @@ export function WorkflowNodeForm({
   const workflow = node.data?.workflow;
   if (!workflow) {
     return null;
+  }
+  if (workflow.type === "data:schema") {
+    return (
+      <WorkflowSchemaForm node={node} readonly={readonly} onChange={onChange} />
+    );
   }
   if (workflow.type === "ai:llm_agent") {
     return (

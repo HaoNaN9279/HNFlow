@@ -17,6 +17,7 @@ from deerflow.config.agents_config import AgentConfig
 from deerflow.workflow.compiler import WorkflowRuntime, clear_compile_cache, compile_definition
 from deerflow.workflow.executors import WorkflowExecutionError, build_default_registry, exec_llm_agent
 from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
+from deerflow.workflow.structured_output import parse_schema
 
 
 def _start_node() -> Node:
@@ -104,8 +105,8 @@ async def test_template_prompt_is_the_only_task_source(fake_executor: dict[str, 
     )
 
     assert fake_executor["task"] == "Task value"
-    assert "value" not in (fake_executor["kwargs"]["config"].system_prompt or "")
-    assert result["out"] == "ok"
+    assert "Task value" not in (fake_executor["kwargs"]["config"].system_prompt or "")
+    assert result["out"]["content"] == "ok"
 
 
 @pytest.mark.asyncio
@@ -133,7 +134,7 @@ async def test_compiled_graph_runs_and_exposes_prompt(fake_executor: dict[str, A
         {"configurable": {"thread_id": "t"}, "context": {"thread_id": "t", "user_id": "u1"}},
     )
 
-    assert state.get("wf:ai_step:out") == "AI 完成"
+    assert state.get("wf:ai_step:out")["content"] == "AI 完成"
     assert "hello" in state.get("wf:ai_step:__prompt", "")
     cfg = fake_executor["kwargs"]["config"]
     assert "publisher" in (cfg.system_prompt or "")
@@ -154,3 +155,43 @@ async def test_failed_subagent_propagates(fake_executor: dict[str, Any]) -> None
             {"node_id": "ai_step"},
             {"template_prompt": "Task"},
         )
+
+
+_SCHEMA_RAW = {
+    "version": 1,
+    "max_repairs": 0,
+    "custom_fields": [{"name": "score", "type": "number", "required": True}],
+}
+
+
+@pytest.mark.asyncio
+async def test_schema_references_are_rendered_from_input_envelope(fake_executor: dict[str, Any]) -> None:
+    fake_executor["result"] = _completed('{"summary":"done","status":"ok","content":"ok","custom":{"score":9}}')
+    schema = parse_schema(_SCHEMA_RAW)
+    assert schema is not None
+    result = await exec_llm_agent(
+        WorkflowRuntime(context={"user_id": "u1", "thread_id": "t"}),
+        {"node_id": "ai_step", "__input_schema": schema, "__output_schema": schema},
+        {
+            "in": {"summary": "upstream", "status": "ok", "content": "body", "custom": {"score": 7}},
+            "template_prompt": "summary=[schema.summary] score=[schema.custom.score]",
+        },
+    )
+
+    assert fake_executor["task"] == "summary=upstream score=7"
+    assert result["out"]["custom"] == {"score": 9}
+    assert result["out"]["source_node"] == "ai_step"
+
+
+@pytest.mark.asyncio
+async def test_invalid_input_envelope_fails_before_model_call(fake_executor: dict[str, Any]) -> None:
+    fake_executor["result"] = _completed('{"summary":"done","status":"ok","content":"ok","custom":{"score":9}}')
+    schema = parse_schema(_SCHEMA_RAW)
+    assert schema is not None
+    with pytest.raises(WorkflowExecutionError, match="input envelope"):
+        await exec_llm_agent(
+            WorkflowRuntime(context={"user_id": "u1", "thread_id": "t"}),
+            {"node_id": "ai_step", "__input_schema": schema, "__output_schema": schema},
+            {"in": {"summary": "missing score"}, "template_prompt": "Task"},
+        )
+    assert "task" not in fake_executor

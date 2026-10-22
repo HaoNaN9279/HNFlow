@@ -32,14 +32,20 @@ from deerflow.workflow.prompts import (
     BUCKET_ORDER,
     TEMPLATE_PROMPT_PORT,
     build_ai_node_buckets,
+    build_schema_contract_layer,
     build_task_layer,
 )
 from deerflow.workflow.registry import WorkflowExecutionError
 from deerflow.workflow.structured_output import (
+    INPUT_SCHEMA_PARAM,
     OUTPUT_SCHEMA_PARAM,
     StructuredOutputError,
-    parse_output_schema,
+    build_envelope,
+    common_only_schema,
+    parse_schema,
+    render_schema_references,
     schema_instruction,
+    validate_envelope,
 )
 
 logger = logging.getLogger(__name__)
@@ -81,7 +87,7 @@ async def _run_structured_output(adapter: Any, request: Any, task_prompt: str, s
     """
     from dataclasses import replace
 
-    from deerflow.workflow.structured_output import StructuredOutputError, extract_json_object, validate_payload
+    from deerflow.workflow.structured_output import extract_json_object
 
     last_error: str | None = None
     for attempt in range(schema["max_repairs"] + 1):
@@ -91,14 +97,12 @@ async def _run_structured_output(adapter: Any, request: Any, task_prompt: str, s
         result = await adapter.execute(replace(request, task=prompt))
         _check_subagent_completed(result, node_id)
         try:
-            fields = validate_payload(extract_json_object(getattr(result, "result", None)), schema)
+            fields = validate_envelope(extract_json_object(getattr(result, "result", None)), schema)
         except StructuredOutputError as exc:
             last_error = str(exc)
             continue
-        output: dict[str, Any] = {"out": getattr(result, "result", None)}
-        output.update(fields)
-        output[SCHEMA_REPAIRS_RESULT_KEY] = attempt
-        return result, output
+        fields[SCHEMA_REPAIRS_RESULT_KEY] = attempt
+        return result, fields
     raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': structured output failed after {schema['max_repairs'] + 1} attempt(s): {last_error}")
 
 
@@ -168,10 +172,11 @@ async def exec_llm_agent(
     """Execute one ``ai:llm_agent`` node.
 
     The node has exactly one task source per mode: ``template_prompt`` for a
-    template turn, ``continue_prompt`` for a continued session.  Output schema
-    comes from a ``data:schema`` node through the compiler-injected
-    ``__output_schema`` param.  Context compression is automatic and derives its
-    budget from the effective model's configured ``context_window``.
+    template turn, ``continue_prompt`` for a continued session.  Input/output
+    schemas come from a ``data:schema`` node through compiler-injected
+    ``__input_schema`` / ``__output_schema`` params.  Context compression is
+    automatic and derives its budget from the effective model's configured
+    ``context_window``.
     """
     node_id = params.get("node_id")
     context = runtime.context
@@ -198,11 +203,21 @@ async def exec_llm_agent(
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': ai:llm_agent requires a non-empty '{TEMPLATE_PROMPT_PORT}' input")
 
     try:
-        output_schema = parse_output_schema(params.get(OUTPUT_SCHEMA_PARAM))
+        input_schema = parse_schema(params.get(INPUT_SCHEMA_PARAM))
+        output_schema = parse_schema(params.get(OUTPUT_SCHEMA_PARAM))
     except StructuredOutputError as exc:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid output_schema: {exc}") from exc
-    if output_schema is not None and is_continue:
-        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': output_schema is not supported with session continuation (continue mode)")
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid schema: {exc}") from exc
+    if (input_schema is not None or output_schema is not None) and is_continue:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': AI Result Schema is not supported with session continuation (continue mode)")
+
+    incoming_envelope: dict[str, Any] | None = None
+    if input_schema is not None:
+        raw_envelope = inputs.get("in")
+        try:
+            incoming_envelope = validate_envelope(raw_envelope, input_schema)
+        except StructuredOutputError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': invalid input envelope: {exc}") from exc
+    effective_output_schema = output_schema or common_only_schema()
 
     try:
         model_profile_id = parse_model_profile_id(params)
@@ -275,15 +290,21 @@ async def exec_llm_agent(
     else:
         agent_config = load_agent_config(params.get("agent_name"), user_id=user_id) if params.get("agent_name") else None
         agent_skills = agent_config.skills if agent_config is not None else None
+        try:
+            rendered_template = render_schema_references(str(raw_template_prompt), input_schema, incoming_envelope)
+        except StructuredOutputError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+        schema_contract = build_schema_contract_layer(input_schema, output_schema)
         buckets = build_ai_node_buckets(
             agent_name=params.get("agent_name"),
             capability_groups=capability_groups,
-            template_prompt=str(raw_template_prompt),
+            template_prompt=rendered_template,
             inputs=inputs,
             user_id=user_id,
             agent_skills=agent_skills,
             capability_rules=capability_rules,
             capability_skills=capability_skills,
+            schema_contract=schema_contract,
         )
         if output_schema is not None:
             buckets["schema"] = schema_instruction(output_schema)
@@ -340,12 +361,31 @@ async def exec_llm_agent(
         context_compression=compression,
     )
 
-    if output_schema is None:
+    if is_continue or output_schema is None:
         result = await adapter.execute(request)
         _check_subagent_completed(result, node_id)
-        output: dict[str, Any] = {"out": getattr(result, "result", None)}
+        text_result = getattr(result, "result", None)
+        text_content = text_result if isinstance(text_result, str) else ""
+        payload = {
+            "summary": text_content,
+            "status": "ok",
+            "content": text_result,
+            "custom": {},
+        }
+        schema_repairs = None
     else:
-        result, output = await _run_structured_output(adapter, request, task_prompt, output_schema, node_id)
+        result, payload = await _run_structured_output(adapter, request, task_prompt, output_schema, node_id)
+        schema_repairs = payload.pop(SCHEMA_REPAIRS_RESULT_KEY, None)
+
+    envelope = build_envelope(
+        payload,
+        effective_output_schema,
+        source_node=str(node_id or "ai:llm_agent"),
+        run_id=context.get("run_id") if isinstance(context.get("run_id"), str) else None,
+    )
+    output: dict[str, Any] = {"out": envelope}
+    if isinstance(schema_repairs, int) and not isinstance(schema_repairs, bool):
+        output[SCHEMA_REPAIRS_RESULT_KEY] = schema_repairs
     output[PROMPT_RESULT_KEY] = preview_prompt
     token_usage = _aggregate_subagent_token_usage(getattr(result, "token_usage_records", None))
     if token_usage is not None:

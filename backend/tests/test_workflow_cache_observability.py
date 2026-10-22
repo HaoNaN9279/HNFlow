@@ -135,7 +135,7 @@ class TestExecLlmAgentTokenUsage:
 
         result = await exec_llm_agent(WorkflowRuntime(), {}, {"in": "x", "template_prompt": "do {{in}}"})
 
-        assert result["out"] == "AI done"
+        assert result["out"]["content"] == "AI done"
         usage = result["__workflow_token_usage"]
         assert usage["input_tokens"] == 300
         assert usage["output_tokens"] == 150
@@ -154,7 +154,7 @@ class TestExecLlmAgentTokenUsage:
 
         result = await exec_llm_agent(WorkflowRuntime(), {}, {"in": "x", "template_prompt": "do {{in}}"})
 
-        assert result["out"] == "ok"
+        assert result["out"]["content"] == "ok"
         assert result["__workflow_prompt"]
 
     @pytest.mark.asyncio
@@ -278,7 +278,7 @@ class TestWorkerRunEndTokenUsage:
         content = events[0]["content"]
 
         # Existing per-node output key is preserved untouched.
-        assert content.get("wf:ai_step:out") == "AI done"
+        assert content.get("wf:ai_step:out")["content"] == "AI done"
 
         # Additive aggregate key.
         token_usage = content["token_usage"]

@@ -1079,9 +1079,23 @@ The current AI node contract is intentionally small:
 
 - `template_prompt` is the only task input for a fresh turn; `continue_prompt`
   resumes the node's checkpointed session. No other task parameter is accepted.
-- `output_schema` is a `record` input port fed by a compile-only `data:schema`
-  node. The compiler resolves the static schema and injects
-  `__output_schema`; `params.output_schema` is rejected.
+- `input_schema` and `output_schema` are `record` input ports fed by the same
+  compile-only `data:schema` node. The compiler resolves both and injects
+  `__input_schema` / `__output_schema`; `params.output_schema` is rejected.
+- AI nodes emit an **AI Result Envelope** on `out`:
+  `protocol/source_node/run_id + summary/status/content/artifacts/metadata/error + custom`.
+  AI-to-AI delivery is `sender.out → receiver.in`; both sides must bind the
+  identical `data:schema` node. No subagent or return edge is involved.
+- The schema payload is `{"version": 1, "max_repairs": 1, "custom_fields": [...]}`.
+  Common fields are fixed by HNFlow; custom fields are user-defined. The old
+  `fields: {name: type}` payload is not supported.
+- `template_prompt` references input values with `[schema.summary]` /
+  `[schema.custom.<name>]`. The engine resolves them before the model call;
+  unknown references fail loudly. Custom-field business handling belongs to the
+  user-authored template, while HNFlow injects the fixed common-field rules.
+- When no `output_schema` is bound, the raw text result is wrapped in a
+  common-only envelope; schema-bound nodes require/repair JSON output. Schema
+  mode is rejected for `continue_prompt` sessions.
 - `context_compression.py` derives a prompt budget from the effective model's
   `context_window`. The executor installs the shared summarization middleware
   with the built-in compression skill prompt; there is no node-level context

@@ -156,7 +156,7 @@ class TestContinueMode:
             inputs,
         )
 
-        assert result["out"] == "ok"
+        assert result["out"]["content"] == "ok"
         assert result["__workflow_prompt"]
         assert len(fake_executor) == 1
         record = fake_executor[0]
@@ -214,7 +214,7 @@ class TestTemplateMode:
 
         result = await exec_llm_agent(rt, {"node_id": "ai_step"}, inputs)
 
-        assert result["out"] == "ok"
+        assert result["out"]["content"] == "ok"
         assert result["__workflow_prompt"]
         record = fake_executor[0]
         cfg = record["kwargs"]["config"]
@@ -374,7 +374,7 @@ class TestContinueIntegration:
             },
         )
 
-        assert state.get("wf:ai_step:out") == "ok"
+        assert state.get("wf:ai_step:out")["content"] == "ok"
 
         # The compiler injected node_id; the executor derived the session key
         # from runtime context and executed only the new task layer.

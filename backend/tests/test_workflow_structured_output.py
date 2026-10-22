@@ -1,9 +1,4 @@
-"""Tests for N14 section 24.4 structured output on ``ai:llm_agent``.
-
-``params.output_schema`` binds a model's JSON output to typed output ports, with
-a bounded repair loop; ``__schema_repairs`` is surfaced on
-``wf:<node_id>:__schema_repairs``.
-"""
+"""Tests for the AI Result Schema contract on ``ai:llm_agent``."""
 
 from __future__ import annotations
 
@@ -28,14 +23,27 @@ from deerflow.workflow.schema import (
     WorkflowDefinition,
 )
 from deerflow.workflow.structured_output import (
+    AI_RESULT_PROTOCOL,
     StructuredOutputError,
+    build_envelope,
+    common_only_schema,
     extract_json_object,
-    parse_output_schema,
+    parse_schema,
+    render_schema_references,
     schema_instruction,
-    validate_payload,
+    validate_envelope,
+    validate_schema_references,
 )
 
-SCHEMA = {"fields": {"summary": "data", "score": "number"}, "required": ["summary", "score"], "enum_values": {}, "max_repairs": 1}
+SCHEMA_RAW = {
+    "version": 1,
+    "max_repairs": 1,
+    "custom_fields": [
+        {"name": "score", "type": "number", "required": True, "description": "Score"},
+    ],
+}
+SCHEMA = parse_schema(SCHEMA_RAW)
+assert SCHEMA is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -45,17 +53,36 @@ SCHEMA = {"fields": {"summary": "data", "score": "number"}, "required": ["summar
 
 class TestSchemaParsing:
     def test_absent_returns_none(self) -> None:
-        assert parse_output_schema(None) is None
+        assert parse_schema(None) is None
 
-    def test_required_defaults_to_all_fields(self) -> None:
-        schema = parse_output_schema({"fields": {"a": "data", "b": "number"}})
+    def test_common_fields_are_injected(self) -> None:
+        assert SCHEMA["common_fields"] == ["summary", "status", "content", "artifacts", "metadata", "error"]
+        assert SCHEMA["required"] == ["summary", "status", "content", "score"]
+
+    def test_old_fields_map_is_rejected(self) -> None:
+        with pytest.raises(StructuredOutputError, match="version"):
+            parse_schema({"fields": {"summary": "data"}})
+
+    def test_empty_custom_fields_is_valid(self) -> None:
+        schema = parse_schema({"version": 1, "custom_fields": []})
         assert schema is not None
-        assert schema["required"] == ["a", "b"]
-        assert schema["max_repairs"] == 1
+        assert schema["custom_fields"] == []
 
-    def test_empty_fields_raises(self) -> None:
-        with pytest.raises(StructuredOutputError):
-            parse_output_schema({"fields": {}})
+    def test_reserved_custom_name_is_rejected(self) -> None:
+        with pytest.raises(StructuredOutputError, match="reserved"):
+            parse_schema({"version": 1, "custom_fields": [{"name": "summary", "type": "data"}]})
+
+    def test_enum_requires_values(self) -> None:
+        with pytest.raises(StructuredOutputError, match="enum"):
+            parse_schema({"version": 1, "custom_fields": [{"name": "kind", "type": "enum"}]})
+
+    def test_unknown_type_is_rejected(self) -> None:
+        with pytest.raises(StructuredOutputError, match="unknown type"):
+            parse_schema({"version": 1, "custom_fields": [{"name": "blob", "type": "file"}]})
+
+    def test_max_repairs_range(self) -> None:
+        with pytest.raises(StructuredOutputError, match="max_repairs"):
+            parse_schema({"version": 1, "max_repairs": 9, "custom_fields": []})
 
 
 class TestExtractJson:
@@ -73,31 +100,88 @@ class TestExtractJson:
             extract_json_object("no json here")
 
 
-class TestValidatePayload:
+class TestValidateEnvelope:
     def test_ok(self) -> None:
-        assert validate_payload({"summary": "s", "score": 3}, SCHEMA) == {"summary": "s", "score": 3}
+        assert validate_envelope(
+            {"summary": "s", "status": "ok", "content": "c", "custom": {"score": 3}},
+            SCHEMA,
+        ) == {"summary": "s", "status": "ok", "content": "c", "custom": {"score": 3}}
 
     def test_missing_required(self) -> None:
         with pytest.raises(StructuredOutputError, match="summary"):
-            validate_payload({"score": 3}, SCHEMA)
+            validate_envelope({"status": "ok", "content": "c", "custom": {"score": 3}}, SCHEMA)
 
-    def test_wrong_type(self) -> None:
+    def test_wrong_custom_type(self) -> None:
         with pytest.raises(StructuredOutputError, match="score"):
-            validate_payload({"summary": "s", "score": "high"}, SCHEMA)
+            validate_envelope({"summary": "s", "status": "ok", "content": "c", "custom": {"score": "high"}}, SCHEMA)
 
     def test_bool_is_not_a_number(self) -> None:
         with pytest.raises(StructuredOutputError):
-            validate_payload({"summary": "s", "score": True}, SCHEMA)
+            validate_envelope({"summary": "s", "status": "ok", "content": "c", "custom": {"score": True}}, SCHEMA)
 
-    def test_enum_out_of_range(self) -> None:
-        schema = {"fields": {"kind": "enum"}, "required": ["kind"], "enum_values": {"kind": ["a", "b"]}, "max_repairs": 1}
-        with pytest.raises(StructuredOutputError):
-            validate_payload({"kind": "c"}, schema)
-        assert validate_payload({"kind": "a"}, schema) == {"kind": "a"}
+    def test_failed_requires_error(self) -> None:
+        with pytest.raises(StructuredOutputError, match="error"):
+            validate_envelope({"summary": "s", "status": "failed", "content": "c", "custom": {"score": 1}}, SCHEMA)
+
+    def test_custom_must_be_an_object(self) -> None:
+        with pytest.raises(StructuredOutputError, match="custom"):
+            validate_envelope({"summary": "s", "status": "ok", "content": "c", "custom": []}, SCHEMA)
+
+    def test_optional_null_is_treated_as_absent(self) -> None:
+        assert validate_envelope(
+            {"summary": "s", "status": "ok", "content": "c", "error": None, "custom": {"score": 1}},
+            SCHEMA,
+        ) == {"summary": "s", "status": "ok", "content": "c", "custom": {"score": 1}}
+
+    def test_build_envelope(self) -> None:
+        envelope = build_envelope(
+            {"summary": "s", "status": "ok", "content": "c", "custom": {"score": 3}},
+            SCHEMA,
+            source_node="writer",
+            run_id="run-1",
+        )
+        assert envelope["protocol"] == AI_RESULT_PROTOCOL
+        assert envelope["source_node"] == "writer"
+        assert envelope["run_id"] == "run-1"
+        assert envelope["custom"] == {"score": 3}
+
+    def test_common_only_schema(self) -> None:
+        assert common_only_schema()["custom_fields"] == []
+
+
+class TestSchemaReferences:
+    def test_renders_common_and_custom(self) -> None:
+        text = "S=[schema.summary] C=[schema.custom.score]"
+        assert (
+            render_schema_references(
+                text,
+                SCHEMA,
+                {"summary": "ok", "custom": {"score": 3}},
+            )
+            == "S=ok C=3"
+        )
+
+    def test_unknown_reference_fails(self) -> None:
+        with pytest.raises(StructuredOutputError, match="unknown schema field"):
+            validate_schema_references("[schema.nope]", SCHEMA)
+
+    def test_reference_without_input_schema_fails(self) -> None:
+        with pytest.raises(StructuredOutputError, match="no input_schema"):
+            validate_schema_references("[schema.summary]", None)
+
+    def test_escaped_reference_is_literal(self) -> None:
+        assert render_schema_references("[[schema.summary]]", SCHEMA, {}) == "[schema.summary]"
+
+    def test_json_value_is_pretty_printed(self) -> None:
+        assert '"a": 1' in render_schema_references(
+            "[schema.metadata]",
+            SCHEMA,
+            {"metadata": {"a": 1}},
+        )
 
     def test_instruction_lists_fields(self) -> None:
         text = schema_instruction(SCHEMA)
-        assert "summary" in text and "score" in text
+        assert "summary" in text and "score" in text and "custom" in text
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -143,20 +227,19 @@ def _request(task: str) -> Any:
 class TestRepairLoop:
     @pytest.mark.asyncio
     async def test_valid_first_try_zero_repairs(self) -> None:
-        executor = _FakeExecutor(['{"summary": "ok", "score": 5}'])
+        executor = _FakeExecutor(['{"summary": "ok", "status": "ok", "content": "done", "custom": {"score": 5}}'])
         _result, output = await _run_structured_output(_FakeAdapter(executor), _request("PROMPT"), "PROMPT", SCHEMA, "ai")
         assert output["summary"] == "ok"
-        assert output["score"] == 5
+        assert output["custom"] == {"score": 5}
         assert output["__schema_repairs"] == 0
         assert len(executor.prompts) == 1
 
     @pytest.mark.asyncio
     async def test_invalid_then_valid_one_repair(self) -> None:
-        executor = _FakeExecutor(["not json", '{"summary": "ok", "score": 5}'])
+        executor = _FakeExecutor(["not json", '{"summary": "ok", "status": "ok", "content": "done", "custom": {"score": 5}}'])
         _result, output = await _run_structured_output(_FakeAdapter(executor), _request("PROMPT"), "PROMPT", SCHEMA, "ai")
         assert output["__schema_repairs"] == 1
         assert len(executor.prompts) == 2
-        # The repair prompt carries the validation error.
         assert "invalid" in executor.prompts[1].lower()
 
     @pytest.mark.asyncio
@@ -167,41 +250,60 @@ class TestRepairLoop:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Compile-time binding validation + channel lift
+# Compile-time binding validation
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 def _start() -> Node:
-    return Node(id="start", type=NodeType.FLOW_START, inputs=[], outputs=[Port(name="input", type=PortType.DATA)])
+    return Node(id="start", type=NodeType.FLOW_START, outputs=[Port(name="input", type=PortType.DATA)])
 
 
 def _end() -> Node:
     return Node(id="end", type=NodeType.FLOW_END, inputs=[Port(name="in", type=PortType.DATA)], outputs=[])
 
 
-def _ai(schema: dict[str, Any] | None, outputs: list[Port] | None = None) -> Node:
-    params: dict[str, Any] = {}
-    if schema is not None:
-        params["__schema_payload"] = schema
+def _schema_node(node_id: str, raw: dict[str, Any] | None = None) -> Node:
     return Node(
-        id="ai",
-        type=NodeType.AI_LLM_AGENT,
-        params=params,
-        inputs=[Port(name="in", type=PortType.DATA), Port(name="output_schema", type=PortType.RECORD)],
-        outputs=outputs if outputs is not None else [Port(name="out", type=PortType.DATA), Port(name="summary", type=PortType.DATA), Port(name="score", type=PortType.NUMBER)],
+        id=node_id,
+        type=NodeType.DATA_SCHEMA,
+        outputs=[Port(name="schema", type=PortType.RECORD)],
+        params={"schema": raw or SCHEMA_RAW},
     )
 
 
-def _def(ai: Node) -> WorkflowDefinition:
-    schema = ai.params.pop("__schema_payload", None)
-    nodes = [_start(), ai, _end()]
-    edges = [
-        Edge(source="start", source_port="input", target="ai", target_port="in"),
-        Edge(source="ai", source_port="out", target="end", target_port="in"),
+def _ai(node_id: str, *, input_schema: bool = False, output_schema: bool = True) -> Node:
+    inputs = [Port(name="in", type=PortType.DATA), Port(name="template_prompt", type=PortType.DATA)]
+    if input_schema:
+        inputs.append(Port(name="input_schema", type=PortType.RECORD))
+    if output_schema:
+        inputs.append(Port(name="output_schema", type=PortType.RECORD))
+    return Node(id=node_id, type=NodeType.AI_LLM_AGENT, inputs=inputs, outputs=[Port(name="out", type=PortType.DATA)])
+
+
+def _definition(*, writer_input: bool = False, reviewer_output: bool = True, source_schema: str = "schema", target_schema: str | None = None) -> WorkflowDefinition:
+    target_schema = target_schema or source_schema
+    nodes = [
+        _start(),
+        _ai("writer", input_schema=writer_input, output_schema=True),
+        _ai("reviewer", input_schema=True, output_schema=reviewer_output),
+        _end(),
+        _schema_node("schema"),
     ]
-    if schema is not None:
-        nodes.append(Node(id="schema", type=NodeType.DATA_SCHEMA, outputs=[Port(name="schema", type=PortType.RECORD)], params={"schema": schema}))
-        edges.append(Edge(source="schema", source_port="schema", target="ai", target_port="output_schema"))
+    if target_schema != "schema":
+        nodes.append(_schema_node(target_schema))
+    edges = [
+        Edge(source="start", source_port="input", target="writer", target_port="in"),
+        Edge(source="start", source_port="input", target="writer", target_port="template_prompt"),
+        Edge(source="schema", source_port="schema", target="writer", target_port="output_schema"),
+        Edge(source="writer", source_port="out", target="reviewer", target_port="in"),
+        Edge(source="start", source_port="input", target="reviewer", target_port="template_prompt"),
+        Edge(source=target_schema, source_port="schema", target="reviewer", target_port="input_schema"),
+        Edge(source="reviewer", source_port="out", target="end", target_port="in"),
+    ]
+    if reviewer_output:
+        edges.append(Edge(source="schema", source_port="schema", target="reviewer", target_port="output_schema"))
+    if writer_input:
+        edges.append(Edge(source="schema", source_port="schema", target="writer", target_port="input_schema"))
     return WorkflowDefinition(id="test-wf", name="Test Workflow", nodes=nodes, edges=edges)
 
 
@@ -212,45 +314,43 @@ def _isolate() -> Any:
 
 
 class TestSchemaBindingValidation:
-    def _compile(self, ai: Node) -> Any:
-        return compile_definition(_def(ai), context=build_default_registry().build_context())
+    def _compile(self, definition: WorkflowDefinition) -> Any:
+        return compile_definition(definition, context=build_default_registry().build_context())
 
-    def test_valid_schema_compiles(self) -> None:
-        self._compile(_ai({"fields": {"summary": "data", "score": "number"}}))
+    def test_valid_same_schema_compiles(self) -> None:
+        self._compile(_definition())
 
-    def test_field_without_port_is_compile_error(self) -> None:
-        node = _ai({"fields": {"summary": "data", "missing": "data"}})
-        with pytest.raises(WorkflowCompileError):
-            self._compile(node)
+    def test_input_schema_requires_in_edge(self) -> None:
+        definition = _definition(writer_input=True)
+        definition.edges = [edge for edge in definition.edges if not (edge.target == "writer" and edge.target_port == "in")]
+        with pytest.raises(WorkflowCompileError, match="incoming 'in'"):
+            self._compile(definition)
 
-    def test_port_type_mismatch_is_compile_error(self) -> None:
-        node = _ai({"fields": {"summary": "data", "score": "data"}})  # score port is number
-        with pytest.raises(WorkflowCompileError):
-            self._compile(node)
+    def test_cross_schema_delivery_is_compile_error(self) -> None:
+        with pytest.raises(WorkflowCompileError, match="same data:schema node"):
+            self._compile(_definition(target_schema="schema2"))
 
-    def test_unknown_type_is_compile_error(self) -> None:
-        node = _ai({"fields": {"summary": "blob"}})
-        with pytest.raises(WorkflowCompileError):
-            self._compile(node)
+    def test_missing_receiver_schema_is_compile_error(self) -> None:
+        definition = _definition()
+        definition.edges = [edge for edge in definition.edges if not (edge.target == "reviewer" and edge.target_port == "input_schema")]
+        with pytest.raises(WorkflowCompileError, match="both nodes to bind"):
+            self._compile(definition)
 
-    def test_max_repairs_out_of_range_is_compile_error(self) -> None:
-        node = _ai({"fields": {"summary": "data", "score": "number"}, "max_repairs": 9})
-        with pytest.raises(WorkflowCompileError):
-            self._compile(node)
-
-    def test_required_unknown_field_is_compile_error(self) -> None:
-        node = _ai({"fields": {"summary": "data", "score": "number"}, "required": ["nope"]})
-        with pytest.raises(WorkflowCompileError):
-            self._compile(node)
+    def test_old_schema_is_compile_error(self) -> None:
+        definition = _definition()
+        schema_node = next(node for node in definition.nodes if node.id == "schema")
+        schema_node.params = {"schema": {"fields": {"summary": "data"}}}
+        with pytest.raises(WorkflowCompileError, match="invalid schema"):
+            self._compile(definition)
 
     @pytest.mark.asyncio
     async def test_schema_repairs_lands_on_reserved_channel(self) -> None:
         def _fake(_rt: Any, _p: dict, _i: dict) -> dict[str, Any]:
-            return {"out": "{}", "summary": "s", "score": 1, "__schema_repairs": 2}
+            return {"out": {}, "__schema_repairs": 2}
 
         ctx = build_default_registry().build_context()
         ctx.executors[NodeType.AI_LLM_AGENT] = _fake
-        graph = compile_definition(_def(_ai({"fields": {"summary": "data", "score": "number"}})), context=ctx)
+        graph = compile_definition(_definition(), context=ctx)
         state = await graph.ainvoke({"wf:start:input": "seed"})
 
-        assert state.get("wf:ai:__schema_repairs") == 2
+        assert state.get("wf:writer:__schema_repairs") == 2

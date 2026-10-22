@@ -124,7 +124,10 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
       max: 50,
     }),
   ],
-  "data:assign": [json("value", "value", { helperKey: "jsonHint" })],
+  "data:assign": [
+    json("value", "value", { helperKey: "jsonHint" }),
+    textarea("task", "taskPrompt", { helperKey: "taskPromptHint" }),
+  ],
   "data:convert": [
     select("to", "convertTo", ["str", "bool", "int", "float"], {
       defaultValue: "str",
@@ -152,7 +155,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
     text("name", "name"),
     json("value", "value", { helperKey: "jsonHint" }),
   ],
-  "data:schema": [json("schema", "outputSchema", { helperKey: "jsonHint" })],
+  "data:schema": [],
   "data:file": [
     select("operation", "fileOperation", ["read", "write"]),
     text("path", "path"),
@@ -233,6 +236,7 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
  * sanitization.
  */
 const DEDICATED_PARAM_KEYS: Partial<Record<NodeType, readonly string[]>> = {
+  "data:schema": ["schema"],
   "ai:llm_agent": ["agent_name", "model_profile", "capability_groups"],
   "ai:capability_group": ["groups"],
   "ai:prompt_preview": ["agent_node"],
