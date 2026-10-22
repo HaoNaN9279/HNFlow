@@ -698,7 +698,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
             enabled=skill_search_enabled,
             container_base_path=container_base_path,
         )
-        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, app_config=resolved_app_config) + [setup_agent]
+        raw_tools = get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_workspace_tools=True, app_config=resolved_app_config) + [setup_agent]
         configured_tools = raw_tools
         if non_interactive:
             configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]
@@ -774,7 +774,7 @@ def _make_lead_agent(config: RunnableConfig, *, app_config: AppConfig):
     is_webhook_channel = channel_name in _WEBHOOK_CHANNELS
     extra_tools = [update_agent] if agent_name and not is_webhook_channel else []
     # Default lead agent (unchanged behavior)
-    raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, app_config=resolved_app_config)
+    raw_tools = get_available_tools(model_name=model_name, groups=agent_config.tool_groups if agent_config else None, subagent_enabled=subagent_enabled, include_workspace_tools=True, app_config=resolved_app_config)
     configured_tools = raw_tools + extra_tools
     if non_interactive:
         configured_tools = [tool for tool in configured_tools if tool.name not in _NON_INTERACTIVE_DISABLED_TOOL_NAMES]

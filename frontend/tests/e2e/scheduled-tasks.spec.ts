@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import { MOCK_THREAD_ID, mockLangGraphAPI } from "./utils/mock-api";
 
 test.describe.configure({ mode: "serial" });
@@ -28,7 +29,7 @@ test("scheduled tasks page is reachable from sidebar", async ({ page }) => {
     ],
   });
 
-  await page.goto("/workspace/chats/new");
+  await openLeadAgent(page);
   await page.getByRole("link", { name: /scheduled tasks/i }).click();
   await page.waitForURL("**/workspace/scheduled-tasks");
   await expect(page).toHaveURL(/workspace\/scheduled-tasks/);
@@ -68,7 +69,7 @@ test("thread page links to filtered scheduled tasks", async ({ page }) => {
     ],
   });
 
-  await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+  await openLeadAgent(page, MOCK_THREAD_ID);
   await page
     .locator("header")
     .getByRole("link", { name: /scheduled tasks/i })

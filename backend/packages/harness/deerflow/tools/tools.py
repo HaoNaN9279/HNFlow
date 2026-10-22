@@ -8,6 +8,7 @@ from deerflow.config.app_config import AppConfig
 from deerflow.reflection import resolve_variable
 from deerflow.sandbox.security import is_host_bash_allowed
 from deerflow.tools.builtins import (
+    WORKSPACE_TOOLS,
     ask_clarification_tool,
     cancel_workflow,
     edit_workflow,
@@ -106,6 +107,7 @@ def get_available_tools(
     subagent_enabled: bool = False,
     *,
     include_upload_tool: bool = True,
+    include_workspace_tools: bool = False,
     app_config: AppConfig | None = None,
 ) -> list[BaseTool]:
     """Get all available tools from config.
@@ -119,7 +121,7 @@ def get_available_tools(
         model_name: Optional model name to determine if vision tools should be included.
         subagent_enabled: Whether to include subagent tools (task, task_status).
         include_upload_tool: Whether to include ``list_uploaded_files`` (default: True).
-            Set to False for subagent tool assembly — subagents have independent
+            Set to False for subagent tool assembly �?subagents have independent
             ThreadState and cannot exclude current-run files.
 
     Returns:
@@ -135,7 +137,7 @@ def get_available_tools(
     loaded_tools_raw = [(cfg, resolve_variable(cfg.use, BaseTool)) for cfg in tool_configs]
 
     # Warn when the config ``name`` field and the tool object's ``.name``
-    # attribute diverge — this mismatch is the root cause of issue #1803 where
+    # attribute diverge �?this mismatch is the root cause of issue #1803 where
     # the LLM receives one name in its tool schema but the runtime router
     # recognises a different name, producing "not a valid tool" errors.
     for cfg, loaded in loaded_tools_raw:
@@ -151,6 +153,8 @@ def get_available_tools(
 
     # Conditionally add tools based on config
     builtin_tools = BUILTIN_TOOLS.copy()
+    if include_workspace_tools:
+        builtin_tools.extend(WORKSPACE_TOOLS)
     if include_upload_tool:
         builtin_tools.append(list_uploaded_files)
     skill_evolution_config = getattr(config, "skill_evolution", None)
@@ -242,7 +246,7 @@ def get_available_tools(
     except Exception as e:
         logger.warning("Failed to build skill tools: %s", e)
 
-    # Deduplicate by tool name — config-loaded tools take priority, followed by
+    # Deduplicate by tool name �?config-loaded tools take priority, followed by
     # built-ins, MCP tools, and ACP tools.  Duplicate names cause the LLM to
     # receive ambiguous or concatenated function schemas (issue #1803).
     all_tools = [_ensure_sync_invocable_tool(t) for t in loaded_tools + builtin_tools + mcp_tools + acp_tools + skill_tools]
@@ -254,7 +258,7 @@ def get_available_tools(
             seen_names.add(t.name)
         else:
             logger.warning(
-                "Duplicate tool name %r detected and skipped — check your config.yaml and MCP server registrations (issue #1803).",
+                "Duplicate tool name %r detected and skipped �?check your config.yaml and MCP server registrations (issue #1803).",
                 t.name,
             )
     return unique_tools

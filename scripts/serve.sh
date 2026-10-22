@@ -552,10 +552,10 @@ run_service "Frontend" \
     3000 120
 
 # A listening port is not readiness: Next dev opens 3000 before compiling the
-# first route.  Warm /workspace/chats/new so nginx is only started once the
+# first route.  Warm /workspace/workflows so nginx is only started once the
 # browser's first request can actually be served.
 "$DEERFLOW_PNPM_PYTHON" "$REPO_ROOT/scripts/wait-for-http.py" \
-    "http://127.0.0.1:3000/workspace/chats/new" 300 "Frontend" || {
+    "http://127.0.0.1:3000/workspace/workflows" 300 "Frontend" || {
     echo "Frontend did not become ready; see logs/frontend.log"
     cleanup 1
 }
@@ -569,7 +569,7 @@ run_service "Nginx" \
 # nginx while upstream is still warming is exactly the "page keeps loading"
 # failure this launcher must not report as ready.
 "$DEERFLOW_PNPM_PYTHON" "$REPO_ROOT/scripts/wait-for-http.py" \
-    "http://127.0.0.1:2026/workspace/chats/new" 30 "Nginx" || {
+    "http://127.0.0.1:2026/workspace/workflows" 30 "Nginx" || {
     echo "Nginx is up but the first page is not being served; see logs/nginx-error.log and logs/frontend.log"
     cleanup 1
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  ExternalLinkIcon,
   FileDiffIcon,
   FileMinusIcon,
   FilePenLineIcon,
@@ -19,7 +18,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { resolveArtifactURL } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
 import { useWorkspaceChanges } from "@/core/workspace-changes/hooks";
 import {
@@ -98,7 +96,6 @@ export function WorkspaceChangePanel({
             <WorkspaceChangeFile
               key={`${file.status}:${file.path}`}
               file={file}
-              threadId={threadId}
             />
           ))}
         </div>
@@ -107,17 +104,9 @@ export function WorkspaceChangePanel({
   );
 }
 
-function WorkspaceChangeFile({
-  file,
-  threadId,
-}: {
-  file: WorkspaceFileChange;
-  threadId: string;
-}) {
+function WorkspaceChangeFile({ file }: { file: WorkspaceFileChange }) {
   const { t } = useI18n();
   const hasDiff = file.diff.length > 0;
-  const openUrl = resolveArtifactURL(file.path, threadId);
-  const canOpenFile = file.status !== "deleted" && !file.sensitive;
 
   return (
     <Collapsible defaultOpen={hasDiff}>
@@ -140,18 +129,6 @@ function WorkspaceChangeFile({
               </div>
             </div>
           </div>
-          {canOpenFile && (
-            <a
-              href={openUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-muted-foreground hover:text-foreground rounded-md p-1 transition-colors"
-              title={t.workspaceChanges.openFile}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <ExternalLinkIcon className="size-3.5" />
-            </a>
-          )}
         </CollapsibleTrigger>
         <CollapsibleContent>
           {hasDiff ? (

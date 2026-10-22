@@ -108,7 +108,7 @@ async def _resume_workflow(
         # operator advances one node per resume instead of the run falling back
         # to normal execution. The task row is the only place that knows which
         # kind of pause this was.
-        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND
+        from deerflow.workflow.debug_step import STEP_SNAPSHOT_KIND
 
         snapshot = _task_field(task, "inputs_snapshot")
         debug_step = isinstance(snapshot, dict) and snapshot.get("kind") == STEP_SNAPSHOT_KIND

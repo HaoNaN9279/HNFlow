@@ -352,7 +352,7 @@ class DeerFlowClient:
         """Lazy import to avoid circular dependency at module level."""
         from deerflow.tools import get_available_tools
 
-        return get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled)
+        return get_available_tools(model_name=model_name, subagent_enabled=subagent_enabled, include_workspace_tools=True)
 
     @staticmethod
     def _serialize_tool_calls(tool_calls) -> list[dict]:

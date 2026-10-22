@@ -17,8 +17,8 @@ test.describe("Root entry", () => {
 
     await page.goto("/");
 
-    await page.waitForURL("**/workspace/chats/new");
-    await expect(page).toHaveURL(/\/workspace\/chats\/new/);
+    await page.waitForURL("**/workspace/workflows");
+    await expect(page).toHaveURL(/\/workspace\/workflows/);
   });
 });
 
@@ -65,8 +65,8 @@ test.describe("Landing page", () => {
     const getStarted = page.getByRole("link", { name: /get started/i });
     await getStarted.click();
 
-    // Should redirect to /workspace/chats/new
-    await page.waitForURL("**/workspace/chats/new");
-    await expect(page).toHaveURL(/\/workspace\/chats\/new/);
+    // Should redirect to /workspace/workflows
+    await page.waitForURL("**/workspace/workflows");
+    await expect(page).toHaveURL(/\/workspace\/workflows/);
   });
 });

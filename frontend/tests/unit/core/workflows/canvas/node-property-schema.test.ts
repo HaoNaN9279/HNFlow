@@ -7,13 +7,12 @@ import {
 } from "@/core/workflows/canvas/node-property-schema";
 
 describe("fixed node property schema", () => {
-  test("flow nodes expose their fixed fields plus common execution options", () => {
+  test("flow nodes expose their fixed fields", () => {
     const keys = new Set(
       getNodeParamFields("flow:if").map((field) => field.key),
     );
 
     expect(keys.has("ports")).toBe(true);
-    expect(keys.has("breakpoint")).toBe(true);
     expect(keys.has("resource_lock")).toBe(false);
     expect(keys.has("require_approval")).toBe(false);
     expect(keys.has("on_reject")).toBe(false);
@@ -25,6 +24,19 @@ describe("fixed node property schema", () => {
     );
     expect(keys.has("instructions")).toBe(true);
     expect(keys.has("require_approval")).toBe(false);
+  });
+
+  test("stale execution knobs are dropped", () => {
+    expect(
+      sanitizeNodeParams("app:script", {
+        app: "blender",
+        script: "render",
+        breakpoint: true,
+        idempotency: true,
+        detect_conflicts: true,
+        conflict_globs: ["*.png"],
+      }),
+    ).toEqual({ app: "blender", script: "render" });
   });
 
   test("legacy resource lock params are dropped", () => {
@@ -41,24 +53,14 @@ describe("fixed node property schema", () => {
     });
   });
 
-  test("start/end nodes do not expose breakpoint", () => {
-    const keys = new Set(
-      getNodeParamFields("flow:start").map((field) => field.key),
-    );
-
-    expect(keys.has("breakpoint")).toBe(false);
-  });
-
   test("dedicated and fixed params survive sanitization", () => {
     const params = sanitizeNodeParams("ai:llm_agent", {
       capability_groups: ["alpha"],
-      breakpoint: true,
       arbitrary: "drop me",
     });
 
     expect(params).toEqual({
       capability_groups: ["alpha"],
-      breakpoint: true,
     });
   });
 

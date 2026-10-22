@@ -1,14 +1,3 @@
-import {
-  CompassIcon,
-  GraduationCapIcon,
-  ImageIcon,
-  MicroscopeIcon,
-  PenLineIcon,
-  ShapesIcon,
-  SparklesIcon,
-  VideoIcon,
-} from "lucide-react";
-
 import type { Translations } from "./types";
 
 export const enUS: Translations = {
@@ -33,7 +22,6 @@ export const enUS: Translations = {
     loadMore: "Load more",
     download: "Download",
     thinking: "Thinking",
-    artifacts: "Artifacts",
     public: "Public",
     custom: "Custom",
     notAvailableInDemoMode: "Not available in demo mode",
@@ -58,9 +46,6 @@ export const enUS: Translations = {
     editRerunWarning:
       "Rerunning restores conversation state only. Files, memory, and external actions are not undone.",
     branch: "Branch conversation",
-    showArtifacts: "Show artifacts of this conversation",
-    browser: "Browser",
-    showBrowser: "Open browser panel",
   },
 
   runDuration: {
@@ -82,17 +67,6 @@ export const enUS: Translations = {
   },
 
   // Welcome
-  welcome: {
-    greeting: "Hello, again!",
-    description:
-      "Welcome to 🦌 DeerFlow, an open source super agent. With built-in and custom skills, DeerFlow helps you search on the web, analyze data, and generate artifacts like slides, web pages and do almost anything.",
-
-    createYourOwnSkill: "Create Your Own Skill",
-    createYourOwnSkillDescription:
-      "Create your own skill to release the power of DeerFlow. With customized skills,\nDeerFlow can help you search on the web, analyze data, and generate\n artifacts like slides, web pages and do almost anything.",
-  },
-
-  // Clipboard
   clipboard: {
     copyToClipboard: "Copy to clipboard",
     copiedToClipboard: "Copied to clipboard",
@@ -181,32 +155,7 @@ export const enUS: Translations = {
       "Voice input could not reach the browser speech service.",
     voiceInputNoSpeech: "No speech was detected. Please try again.",
     voiceInputFailed: "Voice input failed. Please try again.",
-    mode: "Mode",
-    flashMode: "Flash",
-    flashModeDescription: "Fast and efficient, but may not be accurate",
-    reasoningMode: "Reasoning",
-    reasoningModeDescription:
-      "Reasoning before action, balance between time and accuracy",
-    proMode: "Pro",
-    proModeDescription:
-      "Reasoning, planning and executing, get more accurate results, may take more time",
-    ultraMode: "Ultra",
-    ultraModeDescription:
-      "Pro mode with subagents to divide work; best for complex multi-step tasks",
-    reasoningEffort: "Reasoning Effort",
-    reasoningEffortMinimal: "Minimal",
-    reasoningEffortMinimalDescription: "Retrieval + Direct Output",
-    reasoningEffortLow: "Low",
-    reasoningEffortLowDescription: "Simple Logic Check + Shallow Deduction",
-    reasoningEffortMedium: "Medium",
-    reasoningEffortMediumDescription:
-      "Multi-layer Logic Analysis + Basic Verification",
-    reasoningEffortHigh: "High",
-    reasoningEffortHighDescription:
-      "Full-dimensional Logic Deduction + Multi-path Verification + Backward Check",
     searchModels: "Search models...",
-    surpriseMe: "Surprise",
-    surpriseMePrompt: "Surprise me",
     suggestionPlaceholderRequired:
       "Replace the suggestion placeholder before sending.",
     goalCommandDescription: "Set, show, or clear an active goal",
@@ -227,64 +176,12 @@ export const enUS: Translations = {
       "Earlier context compacted. The full chat remains visible; future model calls will use the summary and recent messages.",
     compactSkipped: "The current context does not need compaction yet.",
     compactFailed: "Context compaction failed.",
-    suggestions: [
-      {
-        suggestion: "Write",
-        prompt: "Write a blog post about the latest trends on [topic]",
-        icon: PenLineIcon,
-      },
-      {
-        suggestion: "Research",
-        prompt:
-          "Conduct a deep dive research on [topic], and summarize the findings.",
-        icon: MicroscopeIcon,
-      },
-      {
-        suggestion: "Collect",
-        prompt: "Collect data from [source] and create a report.",
-        icon: ShapesIcon,
-      },
-      {
-        suggestion: "Learn",
-        prompt: "Learn about [topic] and create a tutorial.",
-        icon: GraduationCapIcon,
-      },
-    ],
-    suggestionsCreate: [
-      {
-        suggestion: "Webpage",
-        prompt: "Create a webpage about [topic]",
-        icon: CompassIcon,
-      },
-      {
-        suggestion: "Image",
-        prompt: "Create an image about [topic]",
-        icon: ImageIcon,
-      },
-      {
-        suggestion: "Video",
-        prompt: "Create a video about [topic]",
-        icon: VideoIcon,
-      },
-      {
-        type: "separator",
-      },
-      {
-        suggestion: "Skill",
-        prompt:
-          "We're going to build a new skill step by step with `skill-creator`. To start, what do you want this skill to do?",
-        icon: SparklesIcon,
-      },
-    ],
     pleaseWaitStreaming: "Please wait for the current response to finish.",
   },
 
   // Sidebar
   sidebar: {
     newChat: "New chat",
-    chats: "Chats",
-    recentChats: "Recent chats",
-    demoChats: "Demo chats",
     scheduledTasks: "Scheduled tasks",
     capabilityGroups: "Capability groups",
     tools: "Toolset",
@@ -600,9 +497,6 @@ export const enUS: Translations = {
       inputs: "Inputs",
       outputs: "Outputs",
       deleteNode: "Delete node",
-      breakpointLabel: "Pause before this node (breakpoint)",
-      breakpointHint:
-        "Suspends the run as a human task before the node executes; resume to continue or skip to leave its outputs unset.",
       paramKey: "Parameter name",
       paramValue: "Parameter value",
       addParam: "Add parameter",
@@ -614,10 +508,7 @@ export const enUS: Translations = {
         invalidValue: "Invalid value",
         jsonHint: "Enter a JSON value.",
         fields: {
-          breakpoint: "Breakpoint",
-          idempotency: "Idempotency key",
           merge: "Merge policy",
-          detectConflicts: "Detect conflicts",
           rollbackOnFailure: "Rollback on failure",
           crashConfirm: "Confirm side effects",
           crashConfirmHint: "Required for non-idempotent operations.",
@@ -692,7 +583,6 @@ export const enUS: Translations = {
           validationRules: "Validation rules",
           appLaunchMode: "Launch mode",
           args: "Arguments",
-          conflictGlobs: "Conflict globs",
           checkPresence: "Check human presence",
           undoSteps: "Undo steps",
           waitFor: "Wait for",
@@ -880,9 +770,8 @@ export const enUS: Translations = {
       },
       debugPause: {
         title: "Debug pause",
-        hint: "A node is waiting on a breakpoint or in step mode. Continue executes it; skip leaves its outputs unset. A resume runs as a new run.",
+        hint: "A node is waiting in step mode. Continue executes it; skip leaves its outputs unset. A resume runs as a new run.",
         step: "Step",
-        breakpoint: "Breakpoint",
         runHint: (runId: string) => `run ${runId}`,
         continue: "Continue",
         skip: "Skip",
@@ -965,6 +854,37 @@ export const enUS: Translations = {
     unassignedWorkbench: "Unassigned workbench",
   },
 
+  // Persistent Lead Agent panel
+  leadAgent: {
+    title: "Lead Agent",
+    history: "Conversation history",
+    newChat: "New conversation",
+    collapse: "Collapse Lead Agent",
+    expand: "Expand Lead Agent",
+    resize: "Resize Lead Agent",
+    emptyHistory: "No conversations yet",
+    skillMenu: "Choose a skill",
+    skillMenuEmpty: "No enabled skills",
+    skillActive: "Active skill",
+    clearSkill: "Clear active skill",
+    undo: "Undo resource changes",
+    undoUnavailable: "No resource changes to undo",
+    undoConfirmTitle: "Undo the last resource changes?",
+    undoConfirmDescription: (count) =>
+      `This will revert ${count} resource ${count === 1 ? "change" : "changes"} made by the Lead Agent in its last turn. Nothing is reverted if any resource changed outside the agent.`,
+    undoAction: "Undo changes",
+    undoSuccess: (count) =>
+      `Reverted ${count} resource ${count === 1 ? "change" : "changes"}`,
+    undoConflict:
+      "Some resources changed outside the Lead Agent. Nothing was reverted.",
+    changeHistory: "Resource change history",
+    changeHistoryEmpty: "No resource changes in this conversation",
+    changeHistoryDescription:
+      "Every workflow, folder, workbench, and member change made by the Lead Agent is recorded here.",
+    changeApplied: "Applied",
+    changeUndone: "Undone",
+  },
+
   // Global workflow monitor
   runMonitor: {
     title: "Execution monitor",
@@ -993,82 +913,8 @@ export const enUS: Translations = {
     elapsed: "Elapsed",
   },
 
-  // Agents
-  agents: {
-    title: "Agents",
-    description:
-      "Create and manage custom agents with specialized prompts and capabilities.",
-    newAgent: "New Agent",
-    emptyTitle: "No custom agents yet",
-    emptyDescription:
-      "Create your first custom agent with a specialized system prompt.",
-    featureDisabledTitle: "Agents feature is not enabled",
-    featureDisabledDescription:
-      "This feature is not enabled on this server. Please contact your administrator.",
-    chat: "Chat",
-    delete: "Delete",
-    deleteConfirm:
-      "Are you sure you want to delete this agent? This action cannot be undone.",
-    deleteSuccess: "Agent deleted",
-    newChat: "New chat",
-    createPageTitle: "Design your Agent",
-    createPageSubtitle:
-      "Describe the agent you want — I'll help you create it through conversation.",
-    nameStepTitle: "Name your new Agent",
-    nameStepHint:
-      "Letters, digits, and hyphens only — stored lowercase (e.g. code-reviewer)",
-    nameStepPlaceholder: "e.g. code-reviewer",
-    nameStepContinue: "Continue",
-    nameStepInvalidError:
-      "Invalid name — use only letters, digits, and hyphens",
-    nameStepAlreadyExistsError: "An agent with this name already exists",
-    nameStepNetworkError:
-      "Network request failed — check your network or backend connection",
-    nameStepCheckError: "Could not verify name availability — please try again",
-    nameStepCheckErrorWithDetail: "Name check failed: {detail}",
-    nameStepApiDisabledError:
-      "Custom agent management is not enabled on this server. Please contact your administrator.",
-    nameStepBootstrapMessage:
-      "The new custom agent name is {name}. Help me design its purpose, behavior, and SOUL.md before saving it.",
-    save: "Save agent",
-    saving: "Saving agent...",
-    saveRequested:
-      "Save requested. DeerFlow is generating and saving an initial version now.",
-    saveHint:
-      "You can save this agent at any time from the top-right menu, even if this is only a first draft.",
-    saveCommandMessage:
-      "Please save this custom agent now based on everything we have discussed so far. Treat this as my explicit confirmation to save. If some details are still missing, make reasonable assumptions, generate a concise first SOUL.md in English, and call setup_agent immediately without asking me for more confirmation.",
-    agentCreatedPendingRefresh:
-      "The agent was created, but DeerFlow could not load it yet. Please refresh this page in a moment.",
-    more: "More actions",
-    agentCreated: "Agent created!",
-    startChatting: "Start chatting",
-    backToGallery: "Back to Gallery",
-    settings: "Model settings",
-    settingsTitle: "Model settings",
-    settingsDescription:
-      "Choose the default model and generation parameters for this agent. Changes take effect on the next message.",
-    settingsModel: "Default model",
-    settingsModelDefault: "Use global default",
-    settingsTemperature: "Temperature",
-    settingsTemperatureHint: "0 = deterministic, higher = more creative (0–2).",
-    settingsMaxTokens: "Max output tokens",
-    settingsMaxTokensPlaceholder: "Inherit from model",
-    settingsThinking: "Thinking mode",
-    settingsThinkingOn: "On",
-    settingsThinkingOff: "Off",
-    settingsReasoningEffort: "Reasoning effort",
-    settingsInherit: "Inherit",
-    settingsSaved: "Model settings saved",
-    settingsInvalidTemperature: "Temperature must be between 0 and 2",
-    settingsInvalidMaxTokens:
-      "Max output tokens must be a positive integer up to 200,000",
-  },
-
-  // Breadcrumb
   breadcrumb: {
     workspace: "Workspace",
-    chats: "Chats",
     workflows: "Workflows",
     tools: "Toolset",
   },
@@ -1100,37 +946,8 @@ export const enUS: Translations = {
     pinChatFailed: "Failed to update pinned chat",
   },
 
-  // Sidecar
-  sidecar: {
-    title: "Side chat",
-    open: "Open side chat",
-    close: "Close side chat",
-    delete: "Delete side chat",
-    deleteConfirm:
-      "Are you sure you want to delete this side chat? This action cannot be undone. To simply hide it, use the side chat toggle in the header instead.",
-    deleteSuccess: "Side chat deleted",
-    deleteFailed: "Failed to delete side chat.",
-    addToConversation: "Add to conversation",
-    askInSideChat: "Ask in side chat",
-    reference: "Reference",
-    selectedTextFragment: "{count} selected text fragment",
-    selectedTextFragments: "{count} selected text fragments",
-    clearReferences: "Clear selected references",
-    emptyTitle: "Ask a follow-up",
-    emptyDescription: "Ask a follow-up grounded in the referenced text.",
-    placeholder: "Ask a deeper follow-up...",
-    send: "Send",
-    sendFailed: "Failed to send side chat message.",
-    noContext: "No context selected",
-    continuing: "Continue in this side chat",
-    selectionCrossesMessages:
-      "Selection spans multiple messages. Select text within a single reply to quote it.",
-  },
-
-  // Page titles (document title)
   pages: {
     appName: "DeerFlow",
-    chats: "Chats",
     newChat: "New chat",
     untitled: "Untitled",
   },

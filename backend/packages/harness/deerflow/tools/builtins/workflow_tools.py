@@ -89,6 +89,23 @@ def _edit_definition(definition_id: str, instruction: str, runtime: Runtime) -> 
     return _run_async(_edit_definition_async(definition_id, instruction, runtime))
 
 
+async def _workspace_service_if_available(runtime: Runtime):
+    """Use the journaled workspace service when a SQL engine is already live.
+
+    The legacy generator path historically owned persistence directly. The
+    Gateway now initializes the SQL engine before any tool runs, so production
+    writes go through the journaled service. Lightweight unit/integration
+    callers that never initialized the engine keep the old helper path.
+    """
+    from deerflow.persistence.engine import get_session_factory
+
+    if get_session_factory() is None:
+        return None
+    from deerflow.workspace.runtime import service_for_runtime
+
+    return await service_for_runtime(runtime)
+
+
 # ── Async generators ─────────────────────────────────────────────────────────
 
 
@@ -111,11 +128,23 @@ async def _generate_definition_async(prompt: str, runtime: Runtime) -> dict:
         return {"ok": False, "errors": [_generation_error(message) for message in feedback]}
 
     definition = _with_pending_review(deps, definition)
-    saved = await deps["save_workflow_definition"](definition=definition, user_id=user_id, version=definition.version)
+    service = await _workspace_service_if_available(runtime)
+    if service is None:
+        saved = await deps["save_workflow_definition"](definition=definition, user_id=user_id, version=definition.version)
+    else:
+        from deerflow.workspace.runtime import change_context_for_runtime
+
+        saved = await service.create_workflow(
+            name=definition.name,
+            definition=definition.model_dump(mode="json"),
+            metadata=definition.metadata.model_dump(exclude_none=True),
+            version=definition.version,
+            change=change_context_for_runtime(runtime),
+        )
     return {
         "ok": True,
         "definition_id": saved["id"],
-        "definition": definition.model_dump(mode="json"),
+        "definition": saved.get("definition", definition.model_dump(mode="json")),
         "pending_review": deps["collect_pending_review_nodes"](definition),
     }
 
@@ -149,11 +178,27 @@ async def _edit_definition_async(definition_id: str, instruction: str, runtime: 
         return {"ok": False, "errors": [_generation_error(message) for message in feedback]}
 
     definition = _with_pending_review(deps, definition)
-    await deps["update_workflow_definition"](definition_id=definition_id, definition=definition, user_id=user_id, version=definition.version)
+    service = await _workspace_service_if_available(runtime)
+    if service is None:
+        await deps["update_workflow_definition"](definition_id=definition_id, definition=definition, user_id=user_id, version=definition.version)
+        saved_definition = definition.model_dump(mode="json")
+    else:
+        from deerflow.workspace.runtime import change_context_for_runtime
+
+        existing_row = await service.get(kind="workflow", resource_id=definition_id)
+        saved = await service.update_workflow(
+            definition_id=definition_id,
+            definition=definition.model_dump(mode="json"),
+            metadata=definition.metadata.model_dump(exclude_none=True),
+            version=definition.version,
+            expected_updated_at=existing_row["resource"].get("updated_at"),
+            change=change_context_for_runtime(runtime),
+        )
+        saved_definition = saved["definition"]
     return {
         "ok": True,
         "definition_id": definition_id,
-        "definition": definition.model_dump(mode="json"),
+        "definition": saved_definition,
         "pending_review": deps["collect_pending_review_nodes"](definition),
     }
 

@@ -63,7 +63,7 @@ def exec_bash(runtime: WorkflowRuntime, params: dict[str, Any], inputs: dict[str
     timeout: float | None = params.get("timeout")
 
     # N14 §24.7: forward the stable idempotency key (injected by the compiler
-    # when the node declares ``params.idempotency``) as an env var so a retried
+    # for every node) as an env var so a retried
     # script can recognise a repeat.  An explicitly configured value wins.
     idempotency_key = params.get(IDEMPOTENCY_PARAM)
     if idempotency_key:
@@ -118,7 +118,7 @@ async def exec_http(runtime: WorkflowRuntime, params: dict[str, Any], inputs: di
     timeout: float = float(params.get("timeout", 30))
 
     # N14 §24.7: forward the stable idempotency key (injected by the compiler
-    # when the node declares ``params.idempotency``) as an ``Idempotency-Key``
+    # for every node) as an ``Idempotency-Key``
     # request header so a retried request can be deduped by the server.  An
     # explicitly configured header wins.
     idempotency_key = params.get(IDEMPOTENCY_PARAM)

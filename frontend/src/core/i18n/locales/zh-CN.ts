@@ -1,14 +1,3 @@
-import {
-  CompassIcon,
-  GraduationCapIcon,
-  ImageIcon,
-  MicroscopeIcon,
-  PenLineIcon,
-  ShapesIcon,
-  SparklesIcon,
-  VideoIcon,
-} from "lucide-react";
-
 import type { Translations } from "./types";
 
 export const zhCN: Translations = {
@@ -33,7 +22,6 @@ export const zhCN: Translations = {
     loadMore: "加载更多",
     download: "下载",
     thinking: "思考",
-    artifacts: "文件",
     public: "公共",
     custom: "自定义",
     notAvailableInDemoMode: "在演示模式下不可用",
@@ -58,9 +46,6 @@ export const zhCN: Translations = {
     editRerunWarning:
       "重新运行只恢复对话状态，不会撤销文件、Memory 或外部操作。",
     branch: "分叉",
-    showArtifacts: "查看此对话的文件",
-    browser: "浏览器",
-    showBrowser: "打开浏览器面板",
   },
 
   runDuration: {
@@ -81,17 +66,6 @@ export const zhCN: Translations = {
   },
 
   // Welcome
-  welcome: {
-    greeting: "你好，欢迎回来！",
-    description:
-      "欢迎使用 🦌 DeerFlow，一个完全开源的超级智能体。通过内置和自定义的 Skills，\nDeerFlow 可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n图片、视频、播客及网页等，几乎可以做任何事情。",
-
-    createYourOwnSkill: "创建你自己的 Agent SKill",
-    createYourOwnSkillDescription:
-      "创建你的 Agent Skill 来释放 DeerFlow 的潜力。通过自定义技能，DeerFlow\n可以帮你搜索网络、分析数据，还能为你生成幻灯片、\n网页等作品，几乎可以做任何事情。",
-  },
-
-  // Clipboard
   clipboard: {
     copyToClipboard: "复制到剪贴板",
     copiedToClipboard: "已复制到剪贴板",
@@ -173,28 +147,7 @@ export const zhCN: Translations = {
     voiceInputNetworkError: "无法连接浏览器语音识别服务。",
     voiceInputNoSpeech: "没有检测到语音，请重试。",
     voiceInputFailed: "语音输入失败，请重试。",
-    mode: "模式",
-    flashMode: "闪速",
-    flashModeDescription: "快速且高效的完成任务，但可能不够精准",
-    reasoningMode: "思考",
-    reasoningModeDescription: "思考后再行动，在时间与准确性之间取得平衡",
-    proMode: "Pro",
-    proModeDescription: "思考、计划再执行，获得更精准的结果，可能需要更多时间",
-    ultraMode: "Ultra",
-    ultraModeDescription:
-      "继承自 Pro 模式，可调用子代理分工协作，适合复杂多步骤任务，能力最强",
-    reasoningEffort: "推理深度",
-    reasoningEffortMinimal: "最低",
-    reasoningEffortMinimalDescription: "检索 + 直接输出",
-    reasoningEffortLow: "低",
-    reasoningEffortLowDescription: "简单逻辑校验 + 浅层推演",
-    reasoningEffortMedium: "中",
-    reasoningEffortMediumDescription: "多层逻辑分析 + 基础验证",
-    reasoningEffortHigh: "高",
-    reasoningEffortHighDescription: "全维度逻辑推演 + 多路径验证 + 反推校验",
     searchModels: "搜索模型...",
-    surpriseMe: "小惊喜",
-    surpriseMePrompt: "给我一个小惊喜吧",
     suggestionPlaceholderRequired: "发送前请先填写建议模板中的占位内容。",
     goalCommandDescription: "设置、查看或清除当前目标",
     compactCommandDescription: "压缩早期上下文，保留完整聊天记录",
@@ -213,63 +166,12 @@ export const zhCN: Translations = {
       "已压缩早期上下文。完整聊天记录仍保留，后续模型将基于摘要和最近消息继续。",
     compactSkipped: "当前上下文还不需要压缩。",
     compactFailed: "上下文压缩失败。",
-    suggestions: [
-      {
-        suggestion: "写作",
-        prompt: "撰写一篇关于[主题]的博客文章",
-        icon: PenLineIcon,
-      },
-      {
-        suggestion: "研究",
-        prompt: "深入浅出的研究一下[主题]，并总结发现。",
-        icon: MicroscopeIcon,
-      },
-      {
-        suggestion: "收集",
-        prompt: "从[来源]收集数据并创建报告。",
-        icon: ShapesIcon,
-      },
-      {
-        suggestion: "学习",
-        prompt: "学习关于[主题]并创建教程。",
-        icon: GraduationCapIcon,
-      },
-    ],
-    suggestionsCreate: [
-      {
-        suggestion: "网页",
-        prompt: "生成一个关于[主题]的网页",
-        icon: CompassIcon,
-      },
-      {
-        suggestion: "图片",
-        prompt: "生成一个关于[主题]的图片",
-        icon: ImageIcon,
-      },
-      {
-        suggestion: "视频",
-        prompt: "生成一个关于[主题]的视频",
-        icon: VideoIcon,
-      },
-      {
-        type: "separator",
-      },
-      {
-        suggestion: "技能",
-        prompt:
-          "我们一起用 skill-creator 技能来创建一个技能吧。先问问我希望这个技能能做什么。",
-        icon: SparklesIcon,
-      },
-    ],
     pleaseWaitStreaming: "请等待当前响应完成。",
   },
 
   // Sidebar
   sidebar: {
     newChat: "新对话",
-    chats: "对话",
-    recentChats: "最近的对话",
-    demoChats: "演示对话",
     scheduledTasks: "定时任务",
     capabilityGroups: "能力组",
     tools: "工具集",
@@ -581,9 +483,6 @@ export const zhCN: Translations = {
       inputs: "输入",
       outputs: "输出",
       deleteNode: "删除节点",
-      breakpointLabel: "在此节点前暂停（断点）",
-      breakpointHint:
-        "节点执行前以人工任务挂起；恢复即继续，跳过则该节点输出不写入。",
       paramKey: "参数名",
       paramValue: "参数值",
       addParam: "添加参数",
@@ -595,10 +494,7 @@ export const zhCN: Translations = {
         invalidValue: "值无效",
         jsonHint: "请输入 JSON 值。",
         fields: {
-          breakpoint: "断点",
-          idempotency: "幂等键",
           merge: "合并策略",
-          detectConflicts: "检测冲突",
           rollbackOnFailure: "失败回滚",
           crashConfirm: "确认副作用",
           crashConfirmHint: "非幂等操作必须确认。",
@@ -672,7 +568,6 @@ export const zhCN: Translations = {
           validationRules: "校验规则",
           appLaunchMode: "启动模式",
           args: "参数列表",
-          conflictGlobs: "冲突文件匹配",
           checkPresence: "检查人工占用",
           undoSteps: "撤销步数",
           waitFor: "等待目标",
@@ -849,9 +744,8 @@ export const zhCN: Translations = {
       },
       debugPause: {
         title: "调试暂停",
-        hint: "节点在断点或单步模式下等待处理。继续即执行该节点，跳过则该节点的输出不写入；恢复会以一次新运行执行。",
+        hint: "节点在单步模式下等待处理。继续即执行该节点，跳过则该节点的输出不写入；恢复会以一次新运行执行。",
         step: "单步",
-        breakpoint: "断点",
         runHint: (runId: string) => `运行 ${runId}`,
         continue: "继续",
         skip: "跳过",
@@ -934,6 +828,35 @@ export const zhCN: Translations = {
     unassignedWorkbench: "未归属工作台",
   },
 
+  // Persistent Lead Agent panel
+  leadAgent: {
+    title: "Lead Agent",
+    history: "会话历史",
+    newChat: "新建会话",
+    collapse: "折叠 Lead Agent",
+    expand: "展开 Lead Agent",
+    resize: "调整 Lead Agent 高度",
+    emptyHistory: "暂无会话",
+    skillMenu: "选择技能",
+    skillMenuEmpty: "暂无已启用技能",
+    skillActive: "已激活技能",
+    clearSkill: "取消激活技能",
+    undo: "撤销资源修改",
+    undoUnavailable: "没有可撤销的资源修改",
+    undoConfirmTitle: "撤销最近的资源修改？",
+    undoConfirmDescription: (count) =>
+      `将撤销 Lead Agent 上一轮对 ${count} 个资源的修改。若资源已被外部修改，则本次不会撤销任何内容。`,
+    undoAction: "撤销修改",
+    undoSuccess: (count) => `已撤销 ${count} 个资源修改`,
+    undoConflict: "部分资源已被外部修改，本次未撤销任何内容。",
+    changeHistory: "资源修改历史",
+    changeHistoryEmpty: "本会话暂无资源修改",
+    changeHistoryDescription:
+      "Lead Agent 对工作流、文件夹、工作台及成员的所有修改都会记录在这里。",
+    changeApplied: "已应用",
+    changeUndone: "已撤销",
+  },
+
   // Global workflow monitor
   runMonitor: {
     title: "执行监视",
@@ -962,74 +885,8 @@ export const zhCN: Translations = {
     elapsed: "耗时",
   },
 
-  // Agents
-  agents: {
-    title: "智能体",
-    description: "创建和管理具有专属 Prompt 与能力的自定义智能体。",
-    newAgent: "新建智能体",
-    emptyTitle: "还没有自定义智能体",
-    emptyDescription: "创建你的第一个自定义智能体，设置专属系统提示词。",
-    featureDisabledTitle: "智能体功能未启用",
-    featureDisabledDescription: "该功能未在此服务器上启用，请联系管理员。",
-    chat: "对话",
-    delete: "删除",
-    deleteConfirm: "确定要删除该智能体吗？此操作不可撤销。",
-    deleteSuccess: "智能体已删除",
-    newChat: "新对话",
-    createPageTitle: "设计你的智能体",
-    createPageSubtitle: "描述你想要的智能体，我来帮你通过对话创建。",
-    nameStepTitle: "给新智能体起个名字",
-    nameStepHint:
-      "只允许字母、数字和连字符，存储时自动转为小写（例如 code-reviewer）",
-    nameStepPlaceholder: "例如 code-reviewer",
-    nameStepContinue: "继续",
-    nameStepInvalidError: "名称无效，只允许字母、数字和连字符",
-    nameStepAlreadyExistsError: "已存在同名智能体",
-    nameStepNetworkError: "网络请求失败，请检查网络或后端连接",
-    nameStepCheckError: "无法验证名称可用性，请稍后重试",
-    nameStepCheckErrorWithDetail: "名称校验失败：{detail}",
-    nameStepApiDisabledError:
-      "服务器未开启自定义智能体管理功能，请联系管理员。",
-    nameStepBootstrapMessage:
-      "新智能体的名称是 {name}。请先帮我设计它的用途、行为方式和 SOUL.md，再保存它。",
-    save: "保存智能体",
-    saving: "正在保存智能体...",
-    saveRequested:
-      "已提交保存请求，DeerFlow 正在根据当前对话生成并保存初版智能体。",
-    saveHint:
-      "你可以在右上角的菜单里随时保存这个智能体，就算目前还只是初稿也可以。",
-    saveCommandMessage:
-      "请现在根据我们目前已经讨论的全部内容保存这个自定义智能体。这就是我明确的保存确认。如果仍有少量细节缺失，请根据上下文做出合理假设，生成一份简洁的英文初始 SOUL.md，并直接调用 setup_agent，不要再向我索要额外确认。",
-    agentCreatedPendingRefresh:
-      "智能体已创建，但 DeerFlow 暂时还无法读取到它。请稍后刷新当前页面。",
-    more: "更多操作",
-    agentCreated: "智能体已创建！",
-    startChatting: "开始对话",
-    backToGallery: "返回 Gallery",
-    settings: "模型设置",
-    settingsTitle: "模型设置",
-    settingsDescription:
-      "为该智能体选择默认模型和生成参数，修改在下一条消息生效。",
-    settingsModel: "默认模型",
-    settingsModelDefault: "使用全局默认",
-    settingsTemperature: "温度",
-    settingsTemperatureHint: "0 = 确定性输出，越高越发散（0–2）。",
-    settingsMaxTokens: "最大输出 token",
-    settingsMaxTokensPlaceholder: "继承模型配置",
-    settingsThinking: "思考模式",
-    settingsThinkingOn: "开启",
-    settingsThinkingOff: "关闭",
-    settingsReasoningEffort: "推理强度",
-    settingsInherit: "继承",
-    settingsSaved: "模型设置已保存",
-    settingsInvalidTemperature: "温度必须在 0 到 2 之间",
-    settingsInvalidMaxTokens: "最大输出 token 必须为不超过 200,000 的正整数",
-  },
-
-  // Breadcrumb
   breadcrumb: {
     workspace: "工作区",
-    chats: "对话",
     workflows: "工作流",
     tools: "工具集",
   },
@@ -1060,37 +917,8 @@ export const zhCN: Translations = {
     pinChatFailed: "更新对话置顶状态失败",
   },
 
-  // Sidecar
-  sidecar: {
-    title: "侧边对话",
-    open: "打开侧边对话",
-    close: "关闭侧边对话",
-    delete: "删除侧边对话",
-    deleteConfirm:
-      "确定要删除该侧边对话吗？此操作不可撤销。如果只是想隐藏，请使用顶部的侧边对话开关。",
-    deleteSuccess: "侧边对话已删除",
-    deleteFailed: "删除侧边对话失败。",
-    addToConversation: "添加到对话",
-    askInSideChat: "在侧边聊天中提问",
-    reference: "引用",
-    selectedTextFragment: "{count} 个已选文本片段",
-    selectedTextFragments: "{count} 个已选文本片段",
-    clearReferences: "清除已选引用",
-    emptyTitle: "继续深入追问",
-    emptyDescription: "基于引用内容单独追问。",
-    placeholder: "继续深入追问...",
-    send: "发送",
-    sendFailed: "侧边对话发送失败。",
-    noContext: "未选择上下文",
-    continuing: "继续当前侧边对话",
-    selectionCrossesMessages:
-      "选区跨越了多条消息，请在同一条回复内选择要引用的文本。",
-  },
-
-  // Page titles (document title)
   pages: {
     appName: "DeerFlow",
-    chats: "对话",
     newChat: "新对话",
     untitled: "未命名",
   },

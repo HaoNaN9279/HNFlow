@@ -26,7 +26,6 @@ import {
 } from "../messages/utils";
 import type { FileInMessage } from "../messages/utils";
 import type { LocalSettings } from "../settings";
-import { isSidecarThread, SIDECAR_METADATA_KEY } from "../sidecar/thread";
 import { useSubtaskContext, useUpdateSubtask } from "../tasks/context";
 import { taskEventToSubtaskUpdate } from "../tasks/lifecycle";
 import { messageToStep } from "../tasks/steps";
@@ -82,12 +81,6 @@ type SendMessageOptions = {
 type ThreadDeleteClient = {
   threads: {
     delete: (threadId: string) => Promise<unknown>;
-    search: (query: Record<string, unknown>) => Promise<AgentThread[]>;
-  };
-};
-
-type ThreadSidecarSearchClient = {
-  threads: {
     search: (query: Record<string, unknown>) => Promise<AgentThread[]>;
   };
 };
@@ -3080,99 +3073,6 @@ async function deleteLocalThreadData(threadId: string) {
   }
 }
 
-async function deleteThreadEverywhere(
-  apiClient: ThreadDeleteClient,
-  threadId: string,
-) {
-  await apiClient.threads.delete(threadId);
-  await deleteLocalThreadData(threadId);
-}
-
-export async function findSidecarThreadIdsForParent(
-  apiClient: ThreadSidecarSearchClient,
-  parentThreadId: string,
-) {
-  const threadIds: string[] = [];
-  const limit = 100;
-  let offset = 0;
-
-  while (true) {
-    const response = await apiClient.threads.search({
-      metadata: {
-        [SIDECAR_METADATA_KEY]: true,
-        parent_thread_id: parentThreadId,
-      },
-      limit,
-      offset,
-      sortBy: "updated_at",
-      sortOrder: "desc",
-      select: ["thread_id", "metadata"],
-    });
-
-    for (const thread of response) {
-      if (
-        isSidecarThread(thread) &&
-        thread.metadata?.parent_thread_id === parentThreadId
-      ) {
-        threadIds.push(thread.thread_id);
-      }
-    }
-
-    if (response.length < limit) {
-      break;
-    }
-    offset += response.length;
-  }
-
-  return threadIds;
-}
-
-async function deleteSidecarThreadsForParent(
-  apiClient: ThreadDeleteClient,
-  parentThreadId: string,
-) {
-  let sidecarThreadIds: string[];
-  try {
-    sidecarThreadIds = await findSidecarThreadIdsForParent(
-      apiClient,
-      parentThreadId,
-    );
-  } catch (err) {
-    console.warn(
-      `Failed to look up sidecar threads for parent ${parentThreadId}; skipping cascade cleanup. Orphaned sidecar threads may remain.`,
-      err,
-    );
-    return [];
-  }
-
-  const results = await Promise.allSettled(
-    sidecarThreadIds.map((threadId) =>
-      deleteThreadEverywhere(apiClient, threadId),
-    ),
-  );
-
-  const failedDeletions = results
-    .map((result, index) =>
-      result.status === "rejected"
-        ? { threadId: sidecarThreadIds[index], reason: result.reason }
-        : null,
-    )
-    .filter((entry): entry is { threadId: string; reason: unknown } =>
-      Boolean(entry),
-    );
-
-  if (failedDeletions.length > 0) {
-    console.warn(
-      `Failed to delete ${failedDeletions.length} sidecar thread(s) for parent ${parentThreadId}; orphaned sidecar threads may remain.`,
-      failedDeletions,
-    );
-  }
-
-  return sidecarThreadIds.filter((_, index) => {
-    return results[index]?.status === "fulfilled";
-  });
-}
-
 export function useDeleteThread() {
   const queryClient = useQueryClient();
   const apiClient = getAPIClient() as ThreadDeleteClient;
@@ -3184,17 +3084,11 @@ export function useDeleteThread() {
       threadId: string;
       onRemoteDeleted?: () => void;
     }) => {
-      const deletedSidecarThreadIds = await deleteSidecarThreadsForParent(
-        apiClient,
-        threadId,
-      );
       await apiClient.threads.delete(threadId);
       onRemoteDeleted?.();
       await deleteLocalThreadData(threadId);
-      return deletedSidecarThreadIds;
     },
-    onSuccess(deletedSidecarThreadIds, { threadId }) {
-      const deletedThreadIds = new Set([threadId, ...deletedSidecarThreadIds]);
+    onSuccess(_result, { threadId }) {
       queryClient.setQueriesData(
         {
           queryKey: ["threads", "search"],
@@ -3204,7 +3098,7 @@ export function useDeleteThread() {
           if (oldData == null) {
             return oldData;
           }
-          return oldData.filter((t) => !deletedThreadIds.has(t.thread_id));
+          return oldData.filter((t) => t.thread_id !== threadId);
         },
       );
       queryClient.setQueriesData(
@@ -3213,10 +3107,7 @@ export function useDeleteThread() {
           exact: false,
         },
         (oldData: InfiniteData<AgentThread[]> | undefined) =>
-          filterInfiniteThreadsCache(
-            oldData,
-            (t) => !deletedThreadIds.has(t.thread_id),
-          ),
+          filterInfiniteThreadsCache(oldData, (t) => t.thread_id !== threadId),
       );
     },
 

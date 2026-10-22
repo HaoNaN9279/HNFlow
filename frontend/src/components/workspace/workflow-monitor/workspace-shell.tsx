@@ -2,18 +2,21 @@
 
 import type { ReactNode } from "react";
 
+import { LeadAgentPanel } from "@/components/workspace/lead-agent/lead-agent-panel";
+
 import { GlobalWorkflowMonitor } from "./global-workflow-monitor";
 
 /**
- * Workspace chrome that keeps the execution monitor mounted across route
- * changes.  ``children`` is the active page; the monitor is a sibling of the
- * page, not part of it.
+ * Workspace chrome that keeps the execution monitor and Lead Agent panel
+ * mounted across route changes. ``children`` is the active page; both chat and
+ * monitor are siblings of the page, not part of it.
  */
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   return (
     <div className="flex h-full min-h-0 w-full overflow-hidden">
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        {children}
+        <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
+        <LeadAgentPanel />
       </div>
       <GlobalWorkflowMonitor />
     </div>

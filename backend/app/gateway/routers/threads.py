@@ -650,6 +650,28 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
     except Exception:
         logger.debug("Could not delete thread_meta for %s (not critical)", sanitize_log_param(thread_id))
 
+    # Drop the conversation's resource-change journal. The journal is scoped to
+    # the conversation, so keeping it after the thread is gone would be orphaned
+    # history and would leak resource snapshots.
+    try:
+        from sqlalchemy import delete
+
+        from deerflow.persistence.engine import get_session_factory
+        from deerflow.persistence.workspace_changes.model import WorkspaceChangeRow
+
+        session_factory = get_session_factory()
+        if session_factory is not None:
+            async with session_factory() as session:
+                await session.execute(
+                    delete(WorkspaceChangeRow).where(
+                        WorkspaceChangeRow.thread_id == thread_id,
+                        WorkspaceChangeRow.user_id == get_effective_user_id(),
+                    )
+                )
+                await session.commit()
+    except Exception:
+        logger.debug("Could not delete resource-change history for %s (not critical)", sanitize_log_param(thread_id))
+
     # Tear down any live browser session (best-effort). Sessions are keyed only
     # by thread_id, so leaving one alive after the owner deletes the thread lets
     # a later caller who guesses the id reuse the retained page/cookies.

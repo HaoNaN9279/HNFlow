@@ -1,7 +1,6 @@
 "use client";
 
 import { SparklesIcon } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -22,6 +21,7 @@ import {
 } from "@/components/ui/item";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useLeadAgent } from "@/components/workspace/lead-agent/lead-agent-context";
 import { useAuth } from "@/core/auth/AuthProvider";
 import { useI18n } from "@/core/i18n/hooks";
 import { SkillRequestError } from "@/core/skills/api";
@@ -64,7 +64,7 @@ function SkillSettingsList({
   onClose?: () => void;
 }) {
   const { t } = useI18n();
-  const router = useRouter();
+  const { newConversation } = useLeadAgent();
   const { user } = useAuth();
   const isAdmin = user?.system_role === "admin";
   const [filter, setFilter] = useState<string>("public");
@@ -75,7 +75,7 @@ function SkillSettingsList({
   );
   const handleCreateSkill = () => {
     onClose?.();
-    router.push("/workspace/chats/new?mode=skill");
+    newConversation();
   };
   return (
     <div className="flex w-full flex-col gap-4">

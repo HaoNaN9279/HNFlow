@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import { mockLangGraphAPI } from "./utils/mock-api";
 
 declare global {
@@ -47,7 +48,7 @@ async function installNotificationMock(
 }
 
 async function openNotificationSettings(page: Page) {
-  await page.goto("/workspace/chats/new");
+  await openLeadAgent(page);
   const sidebar = page.locator("[data-sidebar='sidebar']");
   await sidebar.getByRole("button", { name: /^Settings$/ }).click();
   await page.getByRole("menuitem", { name: "Settings" }).click();
@@ -96,7 +97,7 @@ test.describe("Notification settings", () => {
       Document.prototype.hasFocus = () => false;
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });

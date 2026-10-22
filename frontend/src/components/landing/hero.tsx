@@ -90,7 +90,7 @@ export function Hero({ className }: { className?: string }) {
           With the help of sandboxes, memories, tools, skills and subagents, it
           handles different levels of tasks that could take minutes to hours.
         </p>
-        <Link href="/workspace/chats/new">
+        <Link href="/workspace/workflows">
           <Button className="mt-8 h-11 px-5" size="lg">
             <span className="text-md">Get Started with 2.0</span>
             <ChevronRightIcon className="size-4" />

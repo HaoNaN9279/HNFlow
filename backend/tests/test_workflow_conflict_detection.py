@@ -23,7 +23,7 @@ from deerflow.assets.ref import make_ref
 from deerflow.config.apps_config import AppDefinition
 from deerflow.runtime.context_keys import APP_RUNTIME_CONTEXT_KEY
 from deerflow.workflow.compiler import WorkflowRuntime
-from deerflow.workflow.conflict import CONFLICT_PARAM, ConflictGuard, WorkflowConflictError, conflicts_requested, observe_refs
+from deerflow.workflow.conflict import ConflictGuard, WorkflowConflictError, observe_refs
 from deerflow.workflow.executors import WorkflowExecutionError
 from deerflow.workflow.executors.local_app import exec_app_launch, exec_app_script
 
@@ -32,16 +32,6 @@ from deerflow.workflow.executors.local_app import exec_app_launch, exec_app_scri
 def _cleanup():
     yield
     reset_session_manager()
-
-
-class TestOptIn:
-    def test_only_a_literal_true_arms_the_guard(self) -> None:
-        assert conflicts_requested({CONFLICT_PARAM: True}) is True
-        for value in (False, None, "true", 1):
-            assert conflicts_requested({CONFLICT_PARAM: value}) is False
-
-    def test_absent_param_is_off(self) -> None:
-        assert conflicts_requested({}) is False
 
 
 class TestObserveRefs:
@@ -178,40 +168,10 @@ class TestAppScriptIntegration:
         thread = threading.Thread(target=_work_then_leave, daemon=True)
         thread.start()
 
-        params = {"app": "demo", "script": "render", "crash_confirm": True, "check_presence": True, CONFLICT_PARAM: True}
+        params = {"app": "demo", "script": "render", "crash_confirm": True, "check_presence": True}
         with pytest.raises(WorkflowConflictError) as exc:
             asyncio.run(exec_app_script(runtime, params, {"session": launched["session"]}))
         assert "render.txt" in str(exc.value)
-
-    def test_explicit_conflict_globs_override_the_declared_artifacts(self, tmp_path: Path) -> None:
-        """A node can watch a narrower (or different) set than the app declares."""
-        declared = tmp_path / "unrelated.txt"
-        watched = tmp_path / "watched.txt"
-        declared.write_text("v1", encoding="utf-8")
-        watched.write_text("v1", encoding="utf-8")
-
-        manager = _manager(tmp_path, policy="wait", budget=10.0, artifact_glob="unrelated.txt")
-        runtime = _runtime(manager)
-        launched = asyncio.run(exec_app_launch(runtime, {"app": "demo", "crash_confirm": True}, {}))
-
-        # Both files change while the node waits for the application.
-        (tmp_path / MOCK_PRESENCE_NAME).write_text("human", encoding="utf-8")
-
-        def _both_change_then_leave() -> None:
-            time.sleep(0.2)
-            declared.write_text("v2", encoding="utf-8")
-            watched.write_text("v2", encoding="utf-8")
-            (tmp_path / MOCK_PRESENCE_NAME).write_text("idle", encoding="utf-8")
-
-        threading.Thread(target=_both_change_then_leave, daemon=True).start()
-
-        params = {"app": "demo", "script": "render", "crash_confirm": True, "check_presence": True, CONFLICT_PARAM: True, "conflict_globs": ["watched.txt"]}
-        with pytest.raises(WorkflowConflictError) as exc:
-            asyncio.run(exec_app_script(runtime, params, {"session": launched["session"]}))
-
-        message = str(exc.value)
-        assert "watched.txt" in message
-        assert "unrelated.txt" not in message  # the declared set was replaced, not unioned
 
     def test_unchanged_artifacts_let_the_node_run(self, tmp_path: Path) -> None:
         artifact = tmp_path / "render.txt"
@@ -220,6 +180,6 @@ class TestAppScriptIntegration:
         runtime = _runtime(manager)
         launched = asyncio.run(exec_app_launch(runtime, {"app": "demo", "crash_confirm": True}, {}))
 
-        params = {"app": "demo", "script": "render", "crash_confirm": True, CONFLICT_PARAM: True}
+        params = {"app": "demo", "script": "render", "crash_confirm": True}
         outcome = asyncio.run(exec_app_script(runtime, params, {"session": launched["session"]}))
         assert outcome["out"]["status"] == "completed"

@@ -30,6 +30,7 @@ from deerflow.persistence.workflow_workbenches.model import (
     WorkflowWorkbenchMemberRow,
     WorkflowWorkbenchRow,
 )
+from deerflow.persistence.workspace_changes.model import WorkspaceChangeRow
 
 __all__ = [
     "AgentRow",
@@ -46,6 +47,7 @@ __all__ = [
     "WorkflowDefinitionRevisionRow",
     "WorkflowFolderRow",
     "WorkflowUndoRow",
+    "WorkspaceChangeRow",
     "WorkflowWorkbenchMemberRow",
     "WorkflowWorkbenchRow",
 ]

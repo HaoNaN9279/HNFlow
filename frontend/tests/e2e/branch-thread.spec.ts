@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import {
   MOCK_THREAD_ID,
   MOCK_THREAD_ID_2,
@@ -65,7 +66,7 @@ test.describe("Branch from turn", () => {
       ],
     });
 
-    await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+    await openLeadAgent(page, MOCK_THREAD_ID);
 
     const historicalTurn = page
       .locator("[data-assistant-turn]")
@@ -96,14 +97,13 @@ test.describe("Branch from turn", () => {
       .getByRole("button", { name: /branch conversation/i })
       .click();
 
-    await expect(page).toHaveURL(
-      new RegExp(`/workspace/chats/${MOCK_THREAD_ID_2}$`),
-    );
     await expect(page.getByText("Final answer")).toBeVisible();
-    const branchThreadLink = page.locator(
-      `a[href="/workspace/chats/${MOCK_THREAD_ID_2}"]`,
-    );
-    await expect(branchThreadLink).toContainText("Original chat");
-    await expect(branchThreadLink).not.toContainText("Branch:");
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          localStorage.getItem("deerflow.lead-agent.thread-id"),
+        ),
+      )
+      .toBe(MOCK_THREAD_ID_2);
   });
 });

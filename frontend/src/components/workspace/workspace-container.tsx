@@ -136,7 +136,6 @@ function nameOfSegment(
 ) {
   if (!segment) return t.common.home;
   if (segment === "workspace") return t.breadcrumb.workspace;
-  if (segment === "chats") return t.breadcrumb.chats;
   if (segment === "workbenches") return t.workbenches.title;
   if (segment === "workflows") return t.breadcrumb.workflows;
   if (segment === "tools") return t.breadcrumb.tools;

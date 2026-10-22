@@ -1,6 +1,6 @@
 """Rewind & re-run for workflow runs (§25's third debugging capability).
 
-A breakpoint (``breakpoint.py``) and single-step mode (N14ad) pause a run; this
+Single-step mode (``debug_step.py``, N14ad) pauses a run; this
 is the other half of debugging: after a run failed — or produced a wrong result —
 re-execute it **from a chosen node** without re-running the nodes before it.
 

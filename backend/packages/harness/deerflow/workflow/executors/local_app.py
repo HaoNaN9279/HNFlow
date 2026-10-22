@@ -39,7 +39,7 @@ from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY, APP_RUN
 from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.workflow.compensation import record_undo, rollback_requested
 from deerflow.workflow.compiler import WorkflowRuntime
-from deerflow.workflow.conflict import ConflictGuard, conflicts_requested
+from deerflow.workflow.conflict import ConflictGuard
 from deerflow.workflow.executors import WorkflowExecutionError
 from deerflow.workflow.preview import RECOVERY_APP_UNDO, RECOVERY_NONE, ActionPreview, make_preview
 from deerflow.workflow.resource_access import ResourceAccess, app_write_access
@@ -90,23 +90,17 @@ def _allow_preempt(manager: AppSessionManager, app_name: str) -> bool:
     return bool(getattr(definition, "allow_preempt", False))
 
 
-def _conflict_targets(manager: AppSessionManager, app_name: str, params: dict[str, Any]) -> list[str]:
+def _conflict_targets(manager: AppSessionManager, app_name: str) -> list[str]:
     """Host paths whose change counts as a conflict for this node (N10b).
 
-    ``params.conflict_globs`` overrides the application's declared
-    ``artifact_globs``; either way, patterns resolve like the drivers resolve
-    them (relative to the definition's ``working_dir``), and only paths that
-    exist are returned — the guard asserts "what I saw is unchanged", and a file
-    that does not exist yet says nothing a re-check could compare against.
+    The application's declared ``artifact_globs`` are the engine default:
+    patterns resolve like the drivers resolve them (relative to the definition's
+    ``working_dir``), and only paths that exist are returned �?the guard asserts
+    "what I saw is unchanged", and a file that does not exist yet says nothing a
+    re-check could compare against.
     """
-    override = params.get("conflict_globs")
-    if override is None:
-        definition = manager.registry.get(app_name)
-        patterns = list(getattr(definition, "artifact_globs", []) or [])
-    else:
-        patterns = _string_list(override)
-
     definition = manager.registry.get(app_name)
+    patterns = list(getattr(definition, "artifact_globs", []) or [])
     working_dir = getattr(definition, "working_dir", None)
     base = os.path.expandvars(str(working_dir)) if working_dir else None
     return _expand_globs(patterns, base=base)
@@ -247,11 +241,11 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
 
     # N10b (§21): snapshot the declared artifacts *before* the node waits, so a
     # person regenerating them while we queue is detected instead of clobbered.
-    guard: ConflictGuard | None = None
-    if conflicts_requested(params):
-        paths = await asyncio.to_thread(_conflict_targets, manager, app, params)
-        refs = [make_ref(path, scope="host") for path in paths]
-        guard = await asyncio.to_thread(lambda: ConflictGuard.snapshot(refs, label="app:script"))
+    # The guard is always on; an application with no artifact_globs resolves to
+    # an empty snapshot, which is a no-op.
+    paths = await asyncio.to_thread(_conflict_targets, manager, app)
+    refs = [make_ref(path, scope="host") for path in paths]
+    guard = await asyncio.to_thread(lambda: ConflictGuard.snapshot(refs, label="app:script"))
 
     # N10b (§17): opt-in per-operation presence check.  Off by default because a
     # presence probe cannot attribute in-flight work — an application whose probe
@@ -262,8 +256,7 @@ async def exec_app_script(runtime: WorkflowRuntime, params: dict[str, Any], inpu
             raise _human_conflict_error("app:script", app, decision)
         _note_takeover(session, decision)
 
-    if guard is not None:
-        await asyncio.to_thread(guard.check)
+    await asyncio.to_thread(guard.check)
 
     try:
         started = time.monotonic()

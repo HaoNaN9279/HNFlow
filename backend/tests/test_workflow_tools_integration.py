@@ -282,7 +282,7 @@ def test_edit_updates_saved_row_preserving_definition_id(tmp_path):
     assert row is not None
     stored = WorkflowDefinition.model_validate(row["definition"])
     assert stored.name == "Edited Publish Workflow"
-    assert stored.id == "wf-publish"
+    assert stored.id == definition_id
 
 
 # ── Failure paths ─────────────────────────────────────────────────────────────

@@ -4,8 +4,6 @@ import {
   ChevronUpIcon,
   GitBranchPlusIcon,
   Loader2Icon,
-  MessageCircleIcon,
-  MessageSquarePlusIcon,
   RefreshCcwIcon,
 } from "lucide-react";
 import {
@@ -14,7 +12,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type MouseEvent,
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
@@ -25,7 +22,6 @@ import {
   type ConversationProps,
 } from "@/components/ai-elements/conversation";
 import { Button } from "@/components/ui/button";
-import { extractArtifactsFromThread } from "@/core/artifacts/utils";
 import { useI18n } from "@/core/i18n/hooks";
 import {
   deriveAssistantTurnUsageState,
@@ -47,24 +43,18 @@ import {
 } from "@/core/messages/usage-model";
 import {
   extractContentFromMessage,
-  extractPresentFilesFromMessage,
   extractTextFromMessage,
   getAssistantTurnCopyData,
   getBranchableAssistantGroupIds,
   getLatestEditableTurn,
   getStreamingMessageLookup,
   hasContent,
-  hasPresentFiles,
   hasReasoning,
   isAssistantMessageGroupStreaming,
   isHiddenFromUIMessage,
   type MessageGroup as ThreadMessageGroup,
 } from "@/core/messages/utils";
 import { getWorkspaceChangeAnchorGroupIndices } from "@/core/messages/workspace-change-anchor";
-import {
-  buildMessageSidecarContext,
-  type SidecarContext,
-} from "@/core/sidecar";
 import type { Subtask } from "@/core/tasks";
 import { useUpdateSubtask } from "@/core/tasks/context";
 import {
@@ -74,10 +64,7 @@ import {
 import type { AgentThreadState } from "@/core/threads";
 import { cn } from "@/lib/utils";
 
-import { ArtifactFileList } from "../artifacts/artifact-file-list";
-import { useMaybeBrowserView } from "../browser-view";
 import { CopyButton } from "../copy-button";
-import { useMaybeSidecar } from "../sidecar/context";
 import { Tooltip } from "../tooltip";
 
 import {
@@ -97,28 +84,6 @@ import { SubtaskCard } from "./subtask-card";
 import { VirtualMessageList } from "./virtual-message-list";
 
 const EMPTY_TOKEN_DEBUG_STEPS: TokenDebugStep[] = [];
-const EMPTY_ARTIFACT_PATHS: readonly string[] = [];
-
-function sameStrings(previous: readonly string[], next: readonly string[]) {
-  return (
-    previous.length === next.length &&
-    previous.every((value, index) => value === next[index])
-  );
-}
-
-function useStableArtifactPaths(paths: readonly string[] | undefined) {
-  const previousPathsRef = useRef<readonly string[]>(EMPTY_ARTIFACT_PATHS);
-  return useMemo(() => {
-    const nextPaths = paths ?? EMPTY_ARTIFACT_PATHS;
-    const previousPaths = previousPathsRef.current;
-    if (sameStrings(previousPaths, nextPaths)) {
-      return previousPaths;
-    }
-    previousPathsRef.current = nextPaths;
-    return nextPaths;
-  }, [paths]);
-}
-
 function useStableMessageGroups(
   messages: Message[],
   isLoading: boolean,
@@ -142,19 +107,6 @@ function useStableMessageGroups(
 export const MESSAGE_LIST_DEFAULT_PADDING_BOTTOM = 24;
 
 const LOAD_MORE_HISTORY_THROTTLE_MS = 1200;
-
-const SELECTION_TOOLBAR_MARGIN = 8;
-// Approximate rendered height of the pill (p-1 padding + h-8 button). Used only
-// to decide whether the toolbar fits above the selection; exact height isn't
-// needed because we flip below when space is tight.
-const SELECTION_TOOLBAR_ESTIMATED_HEIGHT = 48;
-
-type SelectionToolbarState = {
-  context: SidecarContext;
-  x: number;
-  y: number;
-  placement: "top" | "bottom";
-};
 
 function LoadMoreHistoryIndicator({
   isLoading,
@@ -278,8 +230,6 @@ export function MessageList({
   canRegenerate = false,
   canEdit = false,
   canBranch = false,
-  enableSidecarActions = true,
-  sidecarSurface = false,
   initialScroll = "smooth",
   resizeScroll = "smooth",
 }: {
@@ -311,20 +261,12 @@ export function MessageList({
   canRegenerate?: boolean;
   canEdit?: boolean;
   canBranch?: boolean;
-  enableSidecarActions?: boolean;
-  sidecarSurface?: boolean;
   initialScroll?: ConversationProps["initial"];
   resizeScroll?: ConversationProps["resize"];
 }) {
   const { t } = useI18n();
-  const sidecar = useMaybeSidecar();
-  const [selectionToolbar, setSelectionToolbar] =
-    useState<SelectionToolbarState | null>(null);
   const messages = thread.messages;
   const groupedMessages = useStableMessageGroups(messages, thread.isLoading);
-  const browserView = useMaybeBrowserView();
-  const pushBrowserFrame = browserView?.pushFrame;
-  const messageCount = messages.length;
   // The backend exposes no live start timestamp, so a mid-run mount measures
   // from mount until authoritative persisted turn_duration replaces it.
   const [turnStartTime, setTurnStartTime] = useState<number | null>(() =>
@@ -364,43 +306,6 @@ export function MessageList({
     prevIsLoading.current = thread.isLoading;
   }, [groupedMessages, thread.error, thread.isLoading, threadId]);
 
-  useEffect(() => {
-    // Only the primary chat surface drives the shared browser panel. The
-    // sidecar renders a different thread's messages against the same
-    // BrowserViewProvider; pushing its frames would make the panel resolve
-    // another thread's screenshot with the primary threadId (404 / wrong page).
-    if (sidecarSurface || !pushBrowserFrame) {
-      return;
-    }
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (message?.type !== "tool") {
-        continue;
-      }
-      const meta = (
-        message.additional_kwargs as
-          | {
-              browser_view?: {
-                screenshot?: string;
-                url?: string;
-                title?: string;
-              };
-            }
-          | undefined
-      )?.browser_view;
-      if (meta && typeof meta.screenshot === "string") {
-        pushBrowserFrame({
-          screenshot: meta.screenshot,
-          url: meta.url,
-          title: meta.title,
-        });
-        return;
-      }
-    }
-    // messages is intentionally read (not a dep) so token updates do not
-    // repeatedly scan long history looking for the last browser frame.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageCount, pushBrowserFrame, sidecarSurface]);
   const [regeneratingMessageId, setRegeneratingMessageId] = useState<
     string | null
   >(null);
@@ -620,141 +525,6 @@ export function MessageList({
     branchingMessageId != null ||
     editingMessageId != null;
 
-  const clearSelectionToolbar = useCallback(() => {
-    setSelectionToolbar(null);
-  }, []);
-
-  useEffect(() => {
-    if (!selectionToolbar) {
-      return;
-    }
-
-    const hideOnScroll = () => {
-      setSelectionToolbar(null);
-    };
-    const hideOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectionToolbar(null);
-      }
-    };
-
-    window.addEventListener("scroll", hideOnScroll, true);
-    document.addEventListener("keydown", hideOnEscape);
-    return () => {
-      window.removeEventListener("scroll", hideOnScroll, true);
-      document.removeEventListener("keydown", hideOnEscape);
-    };
-  }, [selectionToolbar]);
-
-  const handleAssistantTextSelection = useCallback(
-    (
-      event: MouseEvent<HTMLDivElement>,
-      message: Message,
-      displayIndex: number,
-    ) => {
-      if (
-        !enableSidecarActions ||
-        thread.isLoading ||
-        !sidecar ||
-        message.type !== "ai"
-      ) {
-        return;
-      }
-
-      const selection = window.getSelection();
-      const selectedText = selection?.toString().trim();
-      if (
-        !selection ||
-        selection.isCollapsed ||
-        !selectedText ||
-        selection.rangeCount === 0
-      ) {
-        setSelectionToolbar(null);
-        return;
-      }
-
-      if (!selection.anchorNode || !selection.focusNode) {
-        return;
-      }
-
-      // Widen containment to the shared assistant-turn container so a selection
-      // that spans multiple AI messages within the same turn still yields a
-      // toolbar (#3553). Fall back to the per-message wrapper if the turn
-      // container can't be found.
-      const turnContainer =
-        event.currentTarget.closest<HTMLElement>("[data-assistant-turn]") ??
-        event.currentTarget;
-      if (!turnContainer.contains(selection.anchorNode)) {
-        return;
-      }
-      if (!turnContainer.contains(selection.focusNode)) {
-        // The selection leaked into another turn/message; the quote would be
-        // ambiguous, so surface a hint instead of failing silently.
-        toast.info(t.sidecar.selectionCrossesMessages);
-        setSelectionToolbar(null);
-        return;
-      }
-
-      const nextContext = buildMessageSidecarContext(message, displayIndex, {
-        selectedText,
-      });
-      if (!nextContext) {
-        return;
-      }
-
-      // The pill is rendered with `-translate-y-full`, so anchoring it at
-      // `rect.top` moves it up by its own height. When the selection sits near
-      // the viewport top there isn't room above, so flip it below the selection
-      // to keep both actions reachable (#3551).
-      const rect = selection.getRangeAt(0).getBoundingClientRect();
-      const fitsAbove =
-        rect.top -
-          SELECTION_TOOLBAR_MARGIN -
-          SELECTION_TOOLBAR_ESTIMATED_HEIGHT >=
-        0;
-      setSelectionToolbar({
-        context: nextContext,
-        x: rect.left + rect.width / 2,
-        y: fitsAbove
-          ? rect.top - SELECTION_TOOLBAR_MARGIN
-          : rect.bottom + SELECTION_TOOLBAR_MARGIN,
-        placement: fitsAbove ? "top" : "bottom",
-      });
-    },
-    [
-      enableSidecarActions,
-      sidecar,
-      t.sidecar.selectionCrossesMessages,
-      thread.isLoading,
-    ],
-  );
-
-  const handleAddSelectionToConversation = useCallback(() => {
-    if (!selectionToolbar) {
-      return;
-    }
-    // On the sidecar surface, "add to conversation" targets the side chat's
-    // own composer (activeReferences) rather than the main composer's quotes,
-    // so the selected snippet is attached to the conversation the user is
-    // actually reading.
-    if (sidecarSurface) {
-      sidecar?.openContext(selectionToolbar.context);
-    } else {
-      sidecar?.addContextToConversation(selectionToolbar.context);
-    }
-    window.getSelection()?.removeAllRanges();
-    setSelectionToolbar(null);
-  }, [selectionToolbar, sidecar, sidecarSurface]);
-
-  const handleAskSelectionInSidecar = useCallback(() => {
-    if (!selectionToolbar) {
-      return;
-    }
-    sidecar?.openContext(selectionToolbar.context);
-    window.getSelection()?.removeAllRanges();
-    setSelectionToolbar(null);
-  }, [selectionToolbar, sidecar]);
-
   const renderAssistantActions = useCallback(
     (
       messages: Message[],
@@ -918,10 +688,6 @@ export function MessageList({
     ],
   );
 
-  const artifactPaths = useStableArtifactPaths(
-    extractArtifactsFromThread(thread),
-  );
-
   if (thread.isThreadLoading && messages.length === 0) {
     return <MessageListSkeleton />;
   }
@@ -1012,7 +778,6 @@ export function MessageList({
                             groupIndex === groupedMessages.length - 1
                           }
                           threadId={threadId}
-                          artifactPaths={artifactPaths}
                           runId={
                             group.type === "assistant"
                               ? (msg as { run_id?: string }).run_id
@@ -1055,28 +820,7 @@ export function MessageList({
                         />
                       );
 
-                      if (
-                        group.type !== "assistant" ||
-                        !enableSidecarActions ||
-                        msg.type !== "ai"
-                      ) {
-                        return <div key={`${group.id}/${msg.id}`}>{item}</div>;
-                      }
-
-                      return (
-                        <div
-                          key={`${group.id}/${msg.id}`}
-                          onMouseUp={(event) =>
-                            handleAssistantTextSelection(
-                              event,
-                              msg,
-                              groupIndex + 1,
-                            )
-                          }
-                        >
-                          {item}
-                        </div>
-                      );
+                      return <div key={`${group.id}/${msg.id}`}>{item}</div>;
                     })}
                     {renderTokenUsage({
                       messages: group.messages,
@@ -1162,31 +906,22 @@ export function MessageList({
                 }
                 return withRunDuration(group, groupIndex, null);
               } else if (group.type === "assistant:present-files") {
-                const files: string[] = [];
-                for (const message of group.messages) {
-                  if (hasPresentFiles(message)) {
-                    const presentFiles =
-                      extractPresentFilesFromMessage(message);
-                    files.push(...presentFiles);
-                  }
-                }
                 return withRunDuration(
                   group,
                   groupIndex,
-                  <div className="w-full">
-                    {group.messages[0] && hasContent(group.messages[0]) && (
+                  group.messages[0] && hasContent(group.messages[0]) ? (
+                    <div className="w-full">
                       <MarkdownContent
                         content={extractContentFromMessage(group.messages[0])}
                         isLoading={thread.isLoading}
                         className="mb-4"
                       />
-                    )}
-                    <ArtifactFileList files={files} threadId={threadId} />
-                    {renderTokenUsage({
-                      messages: group.messages,
-                      turnUsageMessages,
-                    })}
-                  </div>,
+                      {renderTokenUsage({
+                        messages: group.messages,
+                        turnUsageMessages,
+                      })}
+                    </div>
+                  ) : null,
                 );
               } else if (group.type === "assistant:subagent") {
                 const tasks = new Set<Subtask>();
@@ -1250,7 +985,6 @@ export function MessageList({
                         key={"thinking-group-" + message.id}
                         messages={[message]}
                         isLoading={groupIsLoading}
-                        deferBrowserPreviews={thread.isLoading}
                         tokenDebugSteps={getTokenDebugStepsForMessages([
                           message,
                         ])}
@@ -1297,8 +1031,6 @@ export function MessageList({
                   <MessageGroup
                     messages={group.messages}
                     isLoading={groupIsLoading}
-                    deferBrowserPreviews={thread.isLoading}
-                    threadId={threadId}
                     tokenDebugSteps={getTokenDebugStepsForMessages(
                       group.messages,
                     )}
@@ -1321,54 +1053,6 @@ export function MessageList({
           <div style={{ height: `${paddingBottom}px` }} />
         </ConversationContent>
       </Conversation>
-      {selectionToolbar && sidecar && (
-        <div
-          className={cn(
-            "bg-popover text-popover-foreground border-border fixed z-50 flex -translate-x-1/2 items-center gap-1 rounded-full border p-1 shadow-lg",
-            selectionToolbar.placement === "bottom"
-              ? "translate-y-0"
-              : "-translate-y-full",
-          )}
-          data-sidecar-selection-toolbar
-          style={{ left: selectionToolbar.x, top: selectionToolbar.y }}
-        >
-          <Button
-            className="h-8 rounded-full px-2.5 text-xs"
-            size="sm"
-            type="button"
-            variant="ghost"
-            onClick={handleAddSelectionToConversation}
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            <MessageCircleIcon className="size-3.5" />
-            {t.sidecar.addToConversation}
-          </Button>
-          {!sidecarSurface && (
-            <Button
-              className="h-8 rounded-full px-2.5 text-xs"
-              size="sm"
-              type="button"
-              variant="ghost"
-              onClick={handleAskSelectionInSidecar}
-              onMouseDown={(event) => event.preventDefault()}
-            >
-              <MessageSquarePlusIcon className="size-3.5" />
-              {t.sidecar.askInSideChat}
-            </Button>
-          )}
-          <Button
-            aria-label={t.common.close}
-            className="size-8 rounded-full"
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-            onClick={clearSelectionToolbar}
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            <span aria-hidden="true">×</span>
-          </Button>
-        </div>
-      )}
     </>
   );
 }

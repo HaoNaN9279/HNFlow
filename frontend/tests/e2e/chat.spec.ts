@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import { handleRunStream, mockLangGraphAPI } from "./utils/mock-api";
 
 function textFromMessageContent(content: unknown) {
@@ -27,7 +28,7 @@ test.describe("Chat workspace", () => {
   });
 
   test("new chat page loads with input box", async ({ page }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -35,7 +36,7 @@ test.describe("Chat workspace", () => {
   });
 
   test("shows the localized AI disclaimer", async ({ page }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
     await page.evaluate(() => {
       document.cookie = "locale=zh-CN; path=/; SameSite=Lax";
     });
@@ -47,7 +48,7 @@ test.describe("Chat workspace", () => {
   });
 
   test("can type a message in the input box", async ({ page }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -59,7 +60,7 @@ test.describe("Chat workspace", () => {
   test("restores a draft after reload and clears it after sending", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -83,7 +84,7 @@ test.describe("Chat workspace", () => {
   test("restores a repeated draft that matches the last sent prompt", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -110,7 +111,7 @@ test.describe("Chat workspace", () => {
   test("restores a selected slash skill draft after reload", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -164,7 +165,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -221,7 +222,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -278,7 +279,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -321,7 +322,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -400,7 +401,7 @@ test.describe("Chat workspace", () => {
       }),
     );
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -439,7 +440,7 @@ test.describe("Chat workspace", () => {
 
   test("goal command sets a goal and starts an agent run", async ({ page }) => {
     let streamCalls = 0;
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
     await page.route("**/runs/stream", (route) => {
       streamCalls += 1;
       return route.fallback();
@@ -464,7 +465,7 @@ test.describe("Chat workspace", () => {
   test("goal command keeps the welcome header clear of the goal status", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -507,7 +508,7 @@ test.describe("Chat workspace", () => {
   test("uses arrow keys to navigate skill suggestions before prompt history", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -548,7 +549,7 @@ test.describe("Chat workspace", () => {
   test("keeps Shift+Enter as newline while skill suggestions are visible", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -569,7 +570,7 @@ test.describe("Chat workspace", () => {
   test("does not suggest skills for slash text away from the prompt start", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -590,7 +591,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -604,77 +605,6 @@ test.describe("Chat workspace", () => {
     await expect(page.getByText("Hello from DeerFlow!")).toBeVisible({
       timeout: 10_000,
     });
-  });
-
-  test("blocks suggestion template placeholders until replaced", async ({
-    page,
-  }) => {
-    let streamCalled = false;
-    let submittedText: string | undefined;
-    await page.route("**/runs/stream", (route) => {
-      streamCalled = true;
-      const body = route.request().postDataJSON() as {
-        input?: { messages?: Array<{ content?: unknown }> };
-      };
-      const content = body.input?.messages?.at(-1)?.content;
-      if (typeof content === "string") {
-        submittedText = content;
-      } else if (Array.isArray(content)) {
-        submittedText = content
-          .map((block) =>
-            typeof block === "object" &&
-            block !== null &&
-            "text" in block &&
-            typeof block.text === "string"
-              ? block.text
-              : "",
-          )
-          .join("");
-      }
-      return handleRunStream(route);
-    });
-
-    await page.goto("/workspace/chats/new");
-
-    const textarea = page.getByPlaceholder(/how can i assist you/i);
-    await expect(textarea).toBeVisible({ timeout: 15_000 });
-
-    await page.getByRole("button", { name: /research/i }).click();
-    await expect(textarea).toHaveValue(
-      "Conduct a deep dive research on [topic], and summarize the findings.",
-    );
-
-    await textarea.press("Enter");
-    await page.waitForTimeout(500);
-
-    expect(streamCalled).toBe(false);
-    await expect(textarea).toHaveValue(
-      "Conduct a deep dive research on [topic], and summarize the findings.",
-    );
-    await expect
-      .poll(
-        () =>
-          textarea.evaluate((element) => {
-            const input = element as HTMLTextAreaElement;
-            return input.value.slice(input.selectionStart, input.selectionEnd);
-          }),
-        { timeout: 5_000 },
-      )
-      .toBe("[topic]");
-
-    await textarea.pressSequentially("AI agents");
-    await expect(textarea).toHaveValue(
-      "Conduct a deep dive research on AI agents, and summarize the findings.",
-    );
-
-    await textarea.press("Enter");
-
-    await expect.poll(() => streamCalled, { timeout: 10_000 }).toBeTruthy();
-    await expect
-      .poll(() => submittedText, { timeout: 10_000 })
-      .toBe(
-        "Conduct a deep dive research on AI agents, and summarize the findings.",
-      );
   });
 
   test("slash skill command is submitted as normal chat text", async ({
@@ -704,7 +634,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -787,7 +717,7 @@ test.describe("Chat workspace", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });
@@ -824,7 +754,7 @@ test.describe("Chat workspace", () => {
   test("shows gateway upload limits on the attachment entry point", async ({
     page,
   }) => {
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const addAttachments = page.getByTestId("add-attachments-button");
     await expect(addAttachments).toBeVisible({ timeout: 15_000 });
@@ -854,7 +784,7 @@ test.describe("Chat workspace", () => {
       }),
     );
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
     const addAttachments = page.getByTestId("add-attachments-button");
     await addAttachments.hover();
     await expect(page.getByRole("tooltip")).toContainText("5 B");
@@ -894,7 +824,7 @@ test.describe("Chat workspace", () => {
       }),
     );
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
     const addAttachments = page.getByTestId("add-attachments-button");
     await addAttachments.hover();
     await expect(page.getByRole("tooltip")).toContainText("5 B");
@@ -963,7 +893,7 @@ test.describe("Chat workspace", () => {
       });
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });

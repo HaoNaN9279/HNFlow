@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import { mockLangGraphAPI, MOCK_THREAD_ID } from "./utils/mock-api";
 
 const STOPPED_TASK_DESCRIPTION = "Research stopped reload regression";
@@ -54,7 +55,7 @@ test.describe("Subtask card", () => {
       ],
     });
 
-    await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+    await openLeadAgent(page, MOCK_THREAD_ID);
     await page.reload();
 
     await expect(page.getByText(STOPPED_TASK_DESCRIPTION)).toBeVisible({

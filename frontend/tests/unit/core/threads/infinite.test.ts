@@ -92,62 +92,35 @@ describe("getInfiniteThreadsNextPageParam", () => {
 });
 
 describe("fetchInfiniteThreadsPage", () => {
-  test("fills a visible page while advancing offsets by raw backend rows", async () => {
+  test("fills a visible page and advances offsets by raw backend rows", async () => {
     const search = rs
       .fn()
       .mockResolvedValueOnce([
-        makeThread("sidecar-1", "Sidecar", { deerflow_sidecar: true }),
         makeThread("primary-1"),
-      ])
-      .mockResolvedValueOnce([makeThread("primary-2")]);
+        makeThread("primary-2"),
+        makeThread("primary-3"),
+      ]);
 
     const page = await fetchInfiniteThreadsPage(
       { threads: { search } },
       { sortBy: "updated_at", sortOrder: "desc" },
       0,
-      2,
+      3,
     );
 
     expect(page.map((thread) => thread.thread_id)).toEqual([
       "primary-1",
       "primary-2",
+      "primary-3",
     ]);
-    expect(search).toHaveBeenNthCalledWith(1, {
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(search).toHaveBeenCalledWith({
       sortBy: "updated_at",
       sortOrder: "desc",
-      limit: 2,
+      limit: 3,
       offset: 0,
     });
-    expect(search).toHaveBeenNthCalledWith(2, {
-      sortBy: "updated_at",
-      sortOrder: "desc",
-      limit: 1,
-      offset: 2,
-    });
-    expect(getInfiniteThreadsNextPageParam(page, [page], 2)).toBe(3);
-  });
-
-  test("keeps sidecar rows when the caller explicitly searches for sidecars", async () => {
-    const search = rs.fn().mockResolvedValueOnce([
-      makeThread("sidecar-1", "Sidecar", {
-        deerflow_sidecar: true,
-        parent_thread_id: "parent-1",
-      }),
-    ]);
-
-    const page = await fetchInfiniteThreadsPage(
-      { threads: { search } },
-      {
-        sortBy: "updated_at",
-        sortOrder: "desc",
-        metadata: { deerflow_sidecar: true, parent_thread_id: "parent-1" },
-      },
-      0,
-      2,
-    );
-
-    expect(page.map((thread) => thread.thread_id)).toEqual(["sidecar-1"]);
-    expect(getInfiniteThreadsNextPageParam(page, [page], 2)).toBeUndefined();
+    expect(getInfiniteThreadsNextPageParam(page, [page], 3)).toBe(3);
   });
 });
 

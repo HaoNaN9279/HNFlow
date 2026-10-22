@@ -5,7 +5,6 @@ import {
   MessageSquarePlusIcon,
   SettingsIcon,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -27,20 +26,21 @@ import {
 import { useI18n } from "@/core/i18n/hooks";
 import { useGlobalShortcuts } from "@/hooks/use-global-shortcuts";
 
+import { useLeadAgent } from "./lead-agent/lead-agent-context";
 import { useSettingsDialog } from "./settings";
 
 export function CommandPalette() {
   const { t } = useI18n();
-  const router = useRouter();
+  const { newConversation } = useLeadAgent();
   const { openSettings } = useSettingsDialog();
   const [open, setOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [isMac, setIsMac] = useState(false);
 
   const handleNewChat = useCallback(() => {
-    router.push("/workspace/chats/new");
+    newConversation();
     setOpen(false);
-  }, [router]);
+  }, [newConversation]);
 
   const handleOpenSettings = useCallback(() => {
     setOpen(false);

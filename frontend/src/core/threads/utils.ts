@@ -1,44 +1,11 @@
 import type { Message } from "@langchain/langgraph-sdk";
 
-import type { AgentThread, AgentThreadContext } from "./types";
+import type { AgentThread } from "./types";
 
-// Namespaced to match other internal metadata keys (``deerflow_sidecar``,
-// ``deerflow_branch``) so it cannot collide with a future feature or a
-// client-supplied key. Keep in sync with the backend thread_meta constant and
-// the E2E mock-api constant.
+// Namespaced to match other internal metadata keys (``deerflow_branch``) so it
+// cannot collide with a future feature or a client-supplied key. Keep in sync
+// with the backend thread_meta constant and the E2E mock-api constant.
 export const THREAD_PINNED_METADATA_KEY = "deerflow_pinned";
-
-type ThreadRouteTarget =
-  | string
-  | {
-      thread_id: string;
-      context?: Pick<AgentThreadContext, "agent_name"> | null;
-      metadata?: Record<string, unknown> | null;
-    };
-
-export function pathOfThread(
-  thread: ThreadRouteTarget,
-  context?: Pick<AgentThreadContext, "agent_name"> | null,
-) {
-  const threadId = typeof thread === "string" ? thread : thread.thread_id;
-  const encodedThreadId = encodeURIComponent(threadId);
-  let agentName: string | undefined;
-  if (typeof thread === "string") {
-    agentName = context?.agent_name;
-  } else {
-    agentName = thread.context?.agent_name;
-    if (!agentName) {
-      const metaAgent = thread.metadata?.agent_name;
-      if (typeof metaAgent === "string") {
-        agentName = metaAgent;
-      }
-    }
-  }
-
-  return agentName
-    ? `/workspace/agents/${encodeURIComponent(agentName)}/chats/${encodedThreadId}`
-    : `/workspace/chats/${encodedThreadId}`;
-}
 
 export function textOfMessage(message: Message) {
   if (typeof message.content === "string") {

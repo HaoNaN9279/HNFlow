@@ -54,7 +54,7 @@ class ExecutorRegistration:
             execution; ``None`` means the type has nothing previewable.
         resource_access: Optional N13 accessor declaring the external
             resources this node type reads/writes.  The compiler derives the
-            automatic lock set from it after the breakpoint gate.
+            automatic lock set from it after any step pause.
             ``None`` means the executor declares no resource access (pure
             nodes or executors whose side effects cannot be determined).
     """

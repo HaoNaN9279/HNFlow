@@ -28,13 +28,4 @@ describe("interaction-only bundle boundaries", () => {
       /import \{ \w+SettingsPage \} from "@\/components\/workspace\/settings\//,
     );
   });
-
-  it("keeps right-panel implementations behind dynamic imports", () => {
-    const chatBox = read("src/components/workspace/chats/chat-box.tsx");
-    expect(chatBox).toContain('import dynamic from "next/dynamic"');
-    expect(chatBox).not.toMatch(
-      /import \{ (?:ArtifactFileDetail|ArtifactFileList|BrowserViewPanel|SidecarPanel)/,
-    );
-    expect(chatBox.match(/dynamic\(/g)?.length).toBeGreaterThanOrEqual(4);
-  });
 });

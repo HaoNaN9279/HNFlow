@@ -513,7 +513,7 @@ def test_make_lead_agent_reads_runtime_options_from_context(monkeypatch):
         "reasoning_effort": "high",
         "app_config": app_config,
     }
-    get_available_tools.assert_called_once_with(model_name="context-model", groups=None, subagent_enabled=True, app_config=app_config)
+    get_available_tools.assert_called_once_with(model_name="context-model", groups=None, subagent_enabled=True, include_workspace_tools=True, app_config=app_config)
     assert result["model"] is not None
 
 

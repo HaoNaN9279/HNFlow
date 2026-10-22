@@ -776,3 +776,86 @@ def test_skill_activation_middleware_reports_invalid_utf8_skill_file_safely(monk
 
     assert isinstance(result, AIMessage)
     assert "could not be loaded safely" in result.content
+
+
+def test_skill_activation_middleware_injects_menu_selected_skill(monkeypatch, tmp_path):
+    skill = _make_skill(tmp_path, "workspace-manager", content="# Workspace manager\nUse the catalog first.")
+    monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
+
+    middleware = SkillActivationMiddleware(slash_source_owner_token=_SLASH_SOURCE_OWNER_TOKEN)
+    original = HumanMessage(content="List my workflows", id="msg-menu")
+    runtime = SimpleNamespace(context={"active_skills": ["workspace-manager"]})
+    request = _make_model_request([original], runtime=runtime)
+    captured = {}
+
+    def handler(model_request: ModelRequest):
+        captured["messages"] = model_request.messages
+        return AIMessage(content="ok")
+
+    result = middleware.wrap_model_call(request, handler)
+
+    assert isinstance(result, AIMessage)
+    activation_msg, user_msg = captured["messages"]
+    assert is_slash_skill_activation_reminder(activation_msg)
+    assert "Use the catalog first." in activation_msg.content
+    assert "<user_request>\nList my workflows\n</user_request>" in activation_msg.content
+    assert user_msg.content == original.content
+    assert runtime.context["active_skill_activation_run_key"].startswith("active:workspace-manager:")
+
+
+def test_skill_activation_middleware_menu_skill_is_activated_once_per_run(monkeypatch, tmp_path):
+    skill = _make_skill(tmp_path, "workspace-manager", content="# Workspace manager")
+    monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
+
+    middleware = SkillActivationMiddleware(slash_source_owner_token=_SLASH_SOURCE_OWNER_TOKEN)
+    original = HumanMessage(content="List my workflows", id="msg-menu-once")
+    runtime = SimpleNamespace(context={"active_skills": ["workspace-manager"]})
+    request = _make_model_request([original], runtime=runtime)
+    calls = []
+
+    def handler(model_request: ModelRequest):
+        calls.append(model_request.messages)
+        return AIMessage(content="ok")
+
+    middleware.wrap_model_call(request, handler)
+    middleware.wrap_model_call(request, handler)
+
+    assert len(calls[0]) == 2
+    assert len(calls[1]) == 1
+
+
+def test_skill_activation_middleware_rejects_disabled_menu_skill(monkeypatch, tmp_path):
+    import dataclasses
+
+    skill = dataclasses.replace(_make_skill(tmp_path, "workspace-manager"), enabled=False)
+    monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
+
+    middleware = SkillActivationMiddleware(slash_source_owner_token=_SLASH_SOURCE_OWNER_TOKEN)
+    runtime = SimpleNamespace(context={"active_skills": ["workspace-manager"]})
+    request = _make_model_request([HumanMessage(content="Do it", id="msg-disabled")], runtime=runtime)
+
+    result = middleware.wrap_model_call(request, lambda model_request: AIMessage(content="ok"))
+
+    assert isinstance(result, AIMessage)
+    assert "disabled" in str(result.content)
+
+
+def test_skill_activation_middleware_menu_activation_can_be_disabled_for_subagents(monkeypatch, tmp_path):
+    skill = _make_skill(tmp_path, "workspace-manager", content="# Workspace manager")
+    monkeypatch.setattr(middleware_module, "get_or_new_skill_storage", lambda **kwargs: _make_storage(tmp_path, [skill]))
+
+    middleware = SkillActivationMiddleware(
+        slash_source_owner_token=_SLASH_SOURCE_OWNER_TOKEN,
+        active_skills_enabled=False,
+    )
+    runtime = SimpleNamespace(context={"active_skills": ["workspace-manager"]})
+    request = _make_model_request([HumanMessage(content="Do it", id="msg-subagent")], runtime=runtime)
+    captured = {}
+
+    def handler(model_request: ModelRequest):
+        captured["messages"] = model_request.messages
+        return AIMessage(content="ok")
+
+    middleware.wrap_model_call(request, handler)
+
+    assert captured["messages"] == request.messages

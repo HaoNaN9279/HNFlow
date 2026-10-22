@@ -1,5 +1,3 @@
-import type { LucideIcon } from "lucide-react";
-
 export interface Translations {
   // Locale meta
   locale: {
@@ -22,7 +20,6 @@ export interface Translations {
     loadMore: string;
     download: string;
     thinking: string;
-    artifacts: string;
     public: string;
     custom: string;
     notAvailableInDemoMode: string;
@@ -46,9 +43,6 @@ export interface Translations {
     updateAndRerun: string;
     editRerunWarning: string;
     branch: string;
-    showArtifacts: string;
-    browser: string;
-    showBrowser: string;
   };
 
   runDuration: {
@@ -68,14 +62,6 @@ export interface Translations {
   };
 
   // Welcome
-  welcome: {
-    greeting: string;
-    description: string;
-    createYourOwnSkill: string;
-    createYourOwnSkillDescription: string;
-  };
-
-  // Clipboard
   clipboard: {
     copyToClipboard: string;
     copiedToClipboard: string;
@@ -150,27 +136,7 @@ export interface Translations {
     voiceInputNetworkError: string;
     voiceInputNoSpeech: string;
     voiceInputFailed: string;
-    mode: string;
-    flashMode: string;
-    flashModeDescription: string;
-    reasoningMode: string;
-    reasoningModeDescription: string;
-    proMode: string;
-    proModeDescription: string;
-    ultraMode: string;
-    ultraModeDescription: string;
-    reasoningEffort: string;
-    reasoningEffortMinimal: string;
-    reasoningEffortMinimalDescription: string;
-    reasoningEffortLow: string;
-    reasoningEffortLowDescription: string;
-    reasoningEffortMedium: string;
-    reasoningEffortMediumDescription: string;
-    reasoningEffortHigh: string;
-    reasoningEffortHighDescription: string;
     searchModels: string;
-    surpriseMe: string;
-    surpriseMePrompt: string;
     suggestionPlaceholderRequired: string;
     goalCommandDescription: string;
     compactCommandDescription: string;
@@ -187,30 +153,12 @@ export interface Translations {
     compactSuccess: string;
     compactSkipped: string;
     compactFailed: string;
-    suggestions: {
-      suggestion: string;
-      prompt: string;
-      icon: LucideIcon;
-    }[];
-    suggestionsCreate: (
-      | {
-          suggestion: string;
-          prompt: string;
-          icon: LucideIcon;
-        }
-      | {
-          type: "separator";
-        }
-    )[];
     pleaseWaitStreaming: string;
   };
 
   // Sidebar
   sidebar: {
-    recentChats: string;
     newChat: string;
-    chats: string;
-    demoChats: string;
     scheduledTasks: string;
     capabilityGroups: string;
     tools: string;
@@ -501,8 +449,6 @@ export interface Translations {
       inputs: string;
       outputs: string;
       deleteNode: string;
-      breakpointLabel: string;
-      breakpointHint: string;
       paramKey: string;
       paramValue: string;
       addParam: string;
@@ -683,7 +629,6 @@ export interface Translations {
         title: string;
         hint: string;
         step: string;
-        breakpoint: string;
         runHint: (runId: string) => string;
         continue: string;
         skip: string;
@@ -765,6 +710,33 @@ export interface Translations {
     unassignedWorkbench: string;
   };
 
+  // Persistent Lead Agent panel
+  leadAgent: {
+    title: string;
+    history: string;
+    newChat: string;
+    collapse: string;
+    expand: string;
+    resize: string;
+    emptyHistory: string;
+    skillMenu: string;
+    skillMenuEmpty: string;
+    skillActive: string;
+    clearSkill: string;
+    undo: string;
+    undoUnavailable: string;
+    undoConfirmTitle: string;
+    undoConfirmDescription: (count: number) => string;
+    undoAction: string;
+    undoSuccess: (count: number) => string;
+    undoConflict: string;
+    changeHistory: string;
+    changeHistoryEmpty: string;
+    changeHistoryDescription: string;
+    changeApplied: string;
+    changeUndone: string;
+  };
+
   // Persistent global workflow monitor
   runMonitor: {
     title: string;
@@ -793,66 +765,8 @@ export interface Translations {
     elapsed: string;
   };
 
-  // Agents
-  agents: {
-    title: string;
-    description: string;
-    newAgent: string;
-    emptyTitle: string;
-    emptyDescription: string;
-    featureDisabledTitle: string;
-    featureDisabledDescription: string;
-    chat: string;
-    delete: string;
-    deleteConfirm: string;
-    deleteSuccess: string;
-    newChat: string;
-    createPageTitle: string;
-    createPageSubtitle: string;
-    nameStepTitle: string;
-    nameStepHint: string;
-    nameStepPlaceholder: string;
-    nameStepContinue: string;
-    nameStepInvalidError: string;
-    nameStepAlreadyExistsError: string;
-    nameStepNetworkError: string;
-    nameStepCheckError: string;
-    nameStepCheckErrorWithDetail: string;
-    nameStepApiDisabledError: string;
-    nameStepBootstrapMessage: string;
-    save: string;
-    saving: string;
-    saveRequested: string;
-    saveHint: string;
-    saveCommandMessage: string;
-    agentCreatedPendingRefresh: string;
-    more: string;
-    agentCreated: string;
-    startChatting: string;
-    backToGallery: string;
-    settings: string;
-    settingsTitle: string;
-    settingsDescription: string;
-    settingsModel: string;
-    settingsModelDefault: string;
-    settingsTemperature: string;
-    settingsTemperatureHint: string;
-    settingsMaxTokens: string;
-    settingsMaxTokensPlaceholder: string;
-    settingsThinking: string;
-    settingsThinkingOn: string;
-    settingsThinkingOff: string;
-    settingsReasoningEffort: string;
-    settingsInherit: string;
-    settingsSaved: string;
-    settingsInvalidTemperature: string;
-    settingsInvalidMaxTokens: string;
-  };
-
-  // Breadcrumb
   breadcrumb: {
     workspace: string;
-    chats: string;
     workflows: string;
     tools: string;
   };
@@ -883,35 +797,8 @@ export interface Translations {
     pinChatFailed: string;
   };
 
-  // Sidecar
-  sidecar: {
-    title: string;
-    open: string;
-    close: string;
-    delete: string;
-    deleteConfirm: string;
-    deleteSuccess: string;
-    deleteFailed: string;
-    addToConversation: string;
-    askInSideChat: string;
-    reference: string;
-    selectedTextFragment: string;
-    selectedTextFragments: string;
-    clearReferences: string;
-    emptyTitle: string;
-    emptyDescription: string;
-    placeholder: string;
-    send: string;
-    sendFailed: string;
-    noContext: string;
-    continuing: string;
-    selectionCrossesMessages: string;
-  };
-
-  // Page titles (document title)
   pages: {
     appName: string;
-    chats: string;
     newChat: string;
     untitled: string;
   };

@@ -1,10 +1,5 @@
 import type { ThreadsClient } from "@langchain/langgraph-sdk/client";
 
-import {
-  SIDECAR_METADATA_KEY,
-  shouldShowInPrimaryThreadLists,
-} from "@/core/sidecar/thread";
-
 import type { AgentThread, AgentThreadState } from "./types";
 
 type ThreadsSearchClient = {
@@ -26,26 +21,11 @@ export const DEFAULT_THREAD_SEARCH_PARAMS: ThreadSearchParams = {
 
 export const THREAD_SEARCH_REFETCH_INTERVAL_MS = 5000;
 
-type ThreadSearchFilterParams = Pick<ThreadSearchParams, "metadata">;
-
-export function shouldIncludeSidecarThreads(params: ThreadSearchFilterParams) {
-  const metadata = params.metadata;
-  return (
-    typeof metadata === "object" &&
-    metadata !== null &&
-    !Array.isArray(metadata) &&
-    Reflect.get(metadata, SIDECAR_METADATA_KEY) === true
-  );
-}
-
 export function filterThreadSearchResults(
   threads: AgentThread[],
-  params: ThreadSearchFilterParams,
+  _params: ThreadSearchParams,
 ) {
-  if (shouldIncludeSidecarThreads(params)) {
-    return threads;
-  }
-  return threads.filter(shouldShowInPrimaryThreadLists);
+  return threads;
 }
 
 export function buildThreadsSearchQueryOptions(

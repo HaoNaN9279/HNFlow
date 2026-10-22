@@ -282,7 +282,7 @@ async def resume_workflow_run(task: Any, *, runtime: Any) -> None:
         # §25 single-step: a resume of a *step* task keeps stepping (mirrors the
         # app-layer resume path). The task row is the only place that knows
         # which kind of pause this was.
-        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND
+        from deerflow.workflow.debug_step import STEP_SNAPSHOT_KIND
 
         snapshot = _task_field(task, "inputs_snapshot")
         debug_step = isinstance(snapshot, Mapping) and snapshot.get("kind") == STEP_SNAPSHOT_KIND

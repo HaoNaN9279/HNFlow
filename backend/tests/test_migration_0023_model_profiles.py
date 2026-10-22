@@ -42,7 +42,7 @@ async def test_model_profile_table_is_created_and_idempotent(tmp_path: Path) -> 
             table_sql = raw.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='model_profiles'").fetchone()[0]
         assert "model_profiles" in tables
         assert {"id", "user_id", "name", "display_name", "description", "target_model", "enabled", "created_at", "updated_at"} <= columns
-        assert version == "0023_model_profiles"
+        assert version == "0024_workspace_resource_changes"
         assert "ix_model_profiles_user_id" in indexes
         assert "uq_model_profiles_user_name" in table_sql
     finally:

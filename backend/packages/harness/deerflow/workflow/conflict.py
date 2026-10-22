@@ -9,7 +9,6 @@ under it.
 
 This module is that second, cheaper guard:
 
-- :func:`conflicts_requested` reads the opt-in (``params.detect_conflicts``);
 - :func:`observe_refs` takes the snapshot at the top of the node;
 - :meth:`ConflictGuard.verify` re-inspects and :meth:`ConflictGuard.check` refuses
   the node with a precise list of what changed.
@@ -18,7 +17,7 @@ Deliberate boundaries:
 
 - **Host refs only.**  A sandbox file's other writer would be the engine itself,
   and observing sandbox content means downloading the whole file on every
-  opted-in node — the same call N10 made when it chose to *declare* rather than
+  guarded node — the same call N10 made when it chose to *declare* rather than
   fingerprint sandbox targets.  Sandbox refs are reported as unverifiable, never
   silently treated as unchanged.
 - **A guard, not a lock.**  One snapshot, one re-check immediately before the
@@ -41,14 +40,6 @@ from deerflow.workflow.preview import PreviewTarget, build_target_resolver, diff
 from deerflow.workflow.registry import WorkflowExecutionError
 
 logger = logging.getLogger(__name__)
-
-#: Node param that arms the guard.
-CONFLICT_PARAM = "detect_conflicts"
-
-
-def conflicts_requested(params: dict[str, Any]) -> bool:
-    """Whether this node asked for a conflict re-check (opt-in, literal ``True``)."""
-    return params.get(CONFLICT_PARAM) is True
 
 
 class WorkflowConflictError(WorkflowExecutionError):
@@ -140,21 +131,18 @@ class ConflictGuard:
         if notes:
             raise WorkflowConflictError(self.label, notes, unverifiable=self.unverifiable)
         if not self.verified and self.unverifiable:
-            # The opt-in did nothing: say so, so an operator does not read "the
-            # node succeeded" as "the check passed".
+            # The guard could not observe anything: say so, so an operator does
+            # not read "the node succeeded" as "the check passed".
             logger.warning(
-                "%s: %s requested but no target could be observed (sandbox paths are not re-inspectable): %s",
+                "%s: no target could be observed for conflict detection (sandbox paths are not re-inspectable): %s",
                 self.label or "node",
-                CONFLICT_PARAM,
                 ", ".join(self.unverifiable),
             )
 
 
 __all__ = [
-    "CONFLICT_PARAM",
     "ConflictGuard",
     "WorkflowConflictError",
-    "conflicts_requested",
     "observe_host_ref",
     "observe_refs",
 ]

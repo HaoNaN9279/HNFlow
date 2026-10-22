@@ -4,6 +4,7 @@ import { Toaster } from "sonner";
 import { QueryClientProvider } from "@/components/query-client-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { CommandPalette } from "@/components/workspace/command-palette";
+import { LeadAgentProvider } from "@/components/workspace/lead-agent/lead-agent-context";
 import { SettingsDialogHost } from "@/components/workspace/settings";
 import { WorkspaceShell } from "@/components/workspace/workflow-monitor/workspace-shell";
 import { WorkspaceSettingsDeepLink } from "@/components/workspace/workspace-settings-deep-link";
@@ -29,16 +30,18 @@ export async function WorkspaceContent({
 
   return (
     <QueryClientProvider>
-      <SidebarProvider className="h-screen" defaultOpen={initialSidebarOpen}>
-        <WorkspaceSidebar />
-        <SidebarInset className="min-w-0 overflow-hidden">
-          <WorkspaceShell>{children}</WorkspaceShell>
-        </SidebarInset>
-      </SidebarProvider>
-      <CommandPalette />
-      <SettingsDialogHost />
-      <WorkspaceSettingsDeepLink />
-      <Toaster position="top-center" />
+      <LeadAgentProvider>
+        <SidebarProvider className="h-screen" defaultOpen={initialSidebarOpen}>
+          <WorkspaceSidebar />
+          <SidebarInset className="min-w-0 overflow-hidden">
+            <WorkspaceShell>{children}</WorkspaceShell>
+          </SidebarInset>
+        </SidebarProvider>
+        <CommandPalette />
+        <SettingsDialogHost />
+        <WorkspaceSettingsDeepLink />
+        <Toaster position="top-center" />
+      </LeadAgentProvider>
     </QueryClientProvider>
   );
 }

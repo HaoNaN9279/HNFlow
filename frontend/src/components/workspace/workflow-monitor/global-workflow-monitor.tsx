@@ -120,7 +120,7 @@ export function GlobalWorkflowMonitor() {
   if (collapsed) {
     return (
       <aside
-        className="bg-background flex h-full w-12 shrink-0 flex-col items-center border-l py-3"
+        className="bg-background hidden h-full w-12 shrink-0 flex-col items-center border-l py-3 md:flex"
         data-testid="global-workflow-monitor-collapsed"
       >
         <Button
@@ -153,7 +153,7 @@ export function GlobalWorkflowMonitor() {
 
   return (
     <aside
-      className="bg-background relative flex h-full shrink-0 flex-col border-l"
+      className="bg-background relative hidden h-full shrink-0 flex-col border-l md:flex"
       style={{ width: size }}
       data-testid="global-workflow-monitor"
     >

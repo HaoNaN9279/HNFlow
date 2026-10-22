@@ -86,7 +86,6 @@ describe("parseHumanTask", () => {
 describe("pendingDebugPauses", () => {
   const tasks = [
     parseHumanTask(stepTask())!,
-    parseHumanTask(stepTask({ id: "ht-2", node_id: "b", kind: "breakpoint" }))!,
     parseHumanTask(stepTask({ id: "ht-3", node_id: "c", kind: "task" }))!,
     parseHumanTask(
       stepTask({ id: "ht-4", node_id: "d", status: "submitted" }),
@@ -101,13 +100,6 @@ describe("pendingDebugPauses", () => {
         runId: "run-1",
         nodeId: "a",
         kind: "step",
-        description: "[step] 节点 a 在单步调试中暂停",
-      },
-      {
-        id: "ht-2",
-        runId: "run-1",
-        nodeId: "b",
-        kind: "breakpoint",
         description: "[step] 节点 a 在单步调试中暂停",
       },
       {
@@ -132,16 +124,12 @@ describe("pendingDebugPauses", () => {
     // A resume admits a new run id, so the follow-up pause of a stepped run is
     // never scoped to the canvas's own run — it must still be listed.
     const pauses = pendingDebugPauses(tasks, { preferredRunId: "run-canvas" });
-    expect(pauses.map((pause) => pause.runId)).toEqual([
-      "run-1",
-      "run-1",
-      "run-2",
-    ]);
+    expect(pauses.map((pause) => pause.runId)).toEqual(["run-1", "run-2"]);
   });
 
   it("pins the preferred run's pauses first without dropping the rest", () => {
     const pauses = pendingDebugPauses(tasks, { preferredRunId: "run-2" });
-    expect(pauses.map((pause) => pause.id)).toEqual(["ht-5", "ht-1", "ht-2"]);
+    expect(pauses.map((pause) => pause.id)).toEqual(["ht-5", "ht-1"]);
   });
 
   it("returns nothing for a list with no pending debug work", () => {
@@ -534,12 +522,12 @@ describe("serializeHumanTaskDrafts", () => {
   });
 
   it("narrows a boolean port to the booleans its enum rule allows", () => {
-    // A breakpoint's `acknowledge` allows only `true`: offering `false` would
+    // A step pause's `acknowledge` allows only `true`: offering `false` would
     // render a button the backend rejects.
     const fields = humanTaskFields(
       parsed({
         ...taskRow([{ name: "acknowledge", type: "bool", required: true }]),
-        kind: "breakpoint",
+        kind: "step",
         validation_rules: { enum: { acknowledge: { enum: [true] } } },
       }),
     );

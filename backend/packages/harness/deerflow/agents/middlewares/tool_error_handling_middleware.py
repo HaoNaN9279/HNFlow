@@ -168,9 +168,9 @@ def _build_runtime_middlewares(
     from deerflow.agents.middlewares.tool_result_sanitization_middleware import ToolResultSanitizationMiddleware
     from deerflow.sandbox.middleware import SandboxMiddleware
 
-    # Layer 1 — outermost wrap_model_call wrappers (listed outer→inner).
+    # Layer 1 �?outermost wrap_model_call wrappers (listed outer→inner).
     # InputSanitizationMiddleware is first so it becomes the outermost
-    # wrapper — sanitised messages are what every inner middleware sees.
+    # wrapper �?sanitised messages are what every inner middleware sees.
     # ToolResultSanitizationMiddleware mirrors that guardrail for the other
     # untrusted-content entry point: remote tool results (web_fetch /
     # web_search) get the same framework/injection-tag neutralization. It sits
@@ -183,7 +183,7 @@ def _build_runtime_middlewares(
         ToolResultSanitizationMiddleware(),
     ]
 
-    # Layer 2 — before_agent hooks that read/annotate thread-scoped data.
+    # Layer 2 �?before_agent hooks that read/annotate thread-scoped data.
     thread_hooks: list[AgentMiddleware] = [
         ThreadDataMiddleware(lazy_init=lazy_init),
     ]
@@ -193,7 +193,7 @@ def _build_runtime_middlewares(
         thread_hooks.append(UploadsMiddleware())
     thread_hooks.append(SandboxMiddleware(lazy_init=lazy_init))
 
-    # Layer 3 — post-processing append-only middlewares.
+    # Layer 3 �?post-processing append-only middlewares.
     tail: list[AgentMiddleware] = []
     if include_dangling_tool_call_patch:
         from deerflow.agents.middlewares.dangling_tool_call_middleware import DanglingToolCallMiddleware
@@ -231,7 +231,7 @@ def _build_runtime_middlewares(
 
     # Ordering invariants are declared in deerflow.extensions.ordering and
     # validated once at the end of the composing builder, after extension
-    # contributions are merged in — otherwise a contribution could silently
+    # contributions are merged in �?otherwise a contribution could silently
     # reverse an invariant this builder had already checked.
     return middlewares
 
@@ -302,6 +302,7 @@ def build_subagent_runtime_middlewares(
             app_config=app_config,
             user_id=user_id,
             slash_source_owner_token=slash_source_owner_token,
+            active_skills_enabled=False,
         )
     )
     middlewares.append(
@@ -338,12 +339,12 @@ def build_subagent_runtime_middlewares(
 
         assert_mcp_routing_before_deferred_filter(middlewares)
 
-    # LoopDetectionMiddleware — subagents inherit none of the lead's runaway
+    # LoopDetectionMiddleware �?subagents inherit none of the lead's runaway
     # guards today (see #3875): with no loop detection a degenerate subagent tool
     # loop runs unchecked until ``max_turns``, re-sending a growing context each
     # turn (the reported 4.4M-token burn). Mirror the lead chain so the loop is
     # detected and broken. Subagents disallow ``task``, so only the tool-loop
-    # heuristic can fire here — no recursive-delegation path to false-positive on.
+    # heuristic can fire here �?no recursive-delegation path to false-positive on.
     # Registered before SafetyFinishReasonMiddleware (earlier in the list).
     # LangChain dispatches after_model hooks in REVERSE registration order, so
     # SafetyFinishReasonMiddleware (appended below) executes first and strips
@@ -358,13 +359,12 @@ def build_subagent_runtime_middlewares(
 
         middlewares.append(LoopDetectionMiddleware.from_config(loop_detection_config))
 
-    # TokenBudgetMiddleware — subagents inherit none of the lead's cost backstops
+    # TokenBudgetMiddleware �?subagents inherit none of the lead's cost backstops
     # today (#3875 Phase 2): a degenerate subagent can burn pathological token
     # volume (the reported 4.4M run) before max_turns/timeout engage. Mirror the
     # lead chain so the per-run budget hard-stop engages. ``subagents.token_budget``
     # is enabled by default; per-agent override via
-    # ``subagents.agents.<name>.token_budget``. The hard-stop does not raise —
-    # it strips tool_calls so the run completes with a final answer — and the
+    # ``subagents.agents.<name>.token_budget``. The hard-stop does not raise �?    # it strips tool_calls so the run completes with a final answer �?and the
     # executor reads ``consume_stop_reason`` to mark the completed result
     # ``token_capped`` for the lead. State is keyed by run_id and each task run
     # builds a fresh middleware instance (see ``executor._create_agent``), so
@@ -372,7 +372,7 @@ def build_subagent_runtime_middlewares(
     # parent thread_id/run_id in context.
     #
     # Default-ceiling coupling (#3875 Phase 3 review): the default ``max_tokens``
-    # is re-coupled to ``summarization.enabled`` — 1M when compaction is on, 2M
+    # is re-coupled to ``summarization.enabled`` �?1M when compaction is on, 2M
     # when off. This ONLY applies to the default; a user-set budget (global or
     # per-agent) always wins, so a deployment that pinned a value is never
     # silently changed by flipping the summarization switch.
@@ -394,7 +394,7 @@ def build_subagent_runtime_middlewares(
 
     middlewares.extend(load_configured_extension_middlewares(app_config))
 
-    # Same provider safety-termination guard the lead agent uses — subagents
+    # Same provider safety-termination guard the lead agent uses �?subagents
     # are equally exposed to truncated tool_calls returned with
     # finish_reason=content_filter (and friends), and the bad call would then
     # propagate back to the lead agent via the task tool result.
@@ -404,7 +404,7 @@ def build_subagent_runtime_middlewares(
 
         middlewares.append(SafetyFinishReasonMiddleware.from_config(safety_config))
 
-    # DurableContextMiddleware (#4039) — summarization stores compacted history in the
+    # DurableContextMiddleware (#4039) �?summarization stores compacted history in the
     # ``summary_text`` state channel instead of writing a summary message back
     # into ``messages``. Mirror the lead chain so subagents project that summary
     # into subsequent model requests; otherwise a message-count keep policy can
@@ -420,14 +420,13 @@ def build_subagent_runtime_middlewares(
         )
     )
 
-    # DeerFlowSummarizationMiddleware — subagents inherit none of the lead's
+    # DeerFlowSummarizationMiddleware �?subagents inherit none of the lead's
     # context compaction today (#3875 Phase 3): a deep-research subagent
     # (``max_turns`` up to 150) can accumulate >1M cumulative input before
     # max_turns/timeout/token_budget engage, even though Phase 2's budget now
     # caps the pathological tail. Gated on the SAME
     # ``app_config.summarization.enabled`` switch the lead reads (per
-    # maintainer guidance in #3875) so a single config covers both chains —
-    # no separate ``subagents.summarization`` field. The shared factory
+    # maintainer guidance in #3875) so a single config covers both chains �?    # no separate ``subagents.summarization`` field. The shared factory
     # returns ``None`` when summarization is disabled, so this is a pure
     # no-op when the switch is off. Trigger/keep/model/prompt all come from
     # the same ``summarization`` config the lead reads, so the two chains
@@ -435,9 +434,9 @@ def build_subagent_runtime_middlewares(
     #
     # Placement differs from the lead chain: the lead appends summarization
     # BEFORE the guard trio (loop/token/safety), here it is appended AFTER.
-    # This is benign — compaction runs in ``before_model`` regardless of
+    # This is benign �?compaction runs in ``before_model`` regardless of
     # relative position, and the guard middlewares account in ``after_model``
-    # — but noted because the relative order is not an exact mirror.
+    # �?but noted because the relative order is not an exact mirror.
     #
     # ``skip_memory_flush=True``: the factory otherwise attaches
     # ``memory_flush_hook`` (when ``memory.enabled``), which flushes
@@ -470,11 +469,11 @@ def build_subagent_runtime_middlewares(
     if summarization_middleware is not None:
         middlewares.append(summarization_middleware)
 
-    # SystemMessageCoalescingMiddleware (#4040) — DurableContextMiddleware above
+    # SystemMessageCoalescingMiddleware (#4040) �?DurableContextMiddleware above
     # inserts a second ``SystemMessage(authority_contract)`` after the leading
     # system prompt (subagents carry their prompt as a leading ``SystemMessage``
     # in ``messages``, not via ``create_agent(system_prompt=...)``). Two system
-    # messages — or a non-leading one — are exactly what the strict backends this
+    # messages �?or a non-leading one �?are exactly what the strict backends this
     # targets (vLLM/SGLang/Qwen/Anthropic) reject, so the durable fix would trade
     # #4039's assistant-first 400 for a duplicate-system 400. Mirror the lead
     # chain: append the coalescer innermost so it merges every SystemMessage into

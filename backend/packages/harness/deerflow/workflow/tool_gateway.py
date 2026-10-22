@@ -173,6 +173,7 @@ def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, Base
         include_mcp=False,
         subagent_enabled=False,
         include_upload_tool=False,
+        include_workspace_tools=True,
         app_config=app_config,
     )
     return {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}

@@ -89,20 +89,6 @@ const CRASH_CONFIRM = boolean("crash_confirm", "crashConfirm", {
   helperKey: "crashConfirmHint",
 });
 
-/**
- * Execution-policy fields shared by most node types. `flow:start` and
- * `flow:end` omit breakpoint because the compiler rejects it there.
- */
-const COMMON_FIELDS: readonly NodeParamField[] = [
-  boolean("breakpoint", "breakpoint"),
-  json("idempotency", "idempotency", { helperKey: "jsonHint" }),
-  boolean("detect_conflicts", "detectConflicts"),
-];
-
-const NO_BREAKPOINT_FIELDS = COMMON_FIELDS.filter(
-  (field) => field.key !== "breakpoint",
-);
-
 const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
   "flow:if": [json("ports", "ifPorts", { helperKey: "jsonHint" })],
   "flow:switch": [
@@ -226,7 +212,6 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
   "app:script": [
     json("args", "args", { helperKey: "jsonHint" }),
     json("env", "env", { helperKey: "jsonHint" }),
-    json("conflict_globs", "conflictGlobs", { helperKey: "jsonHint" }),
     boolean("check_presence", "checkPresence"),
     number("undo_steps", "undoSteps", { defaultValue: 1, min: 1 }),
     CRASH_CONFIRM,
@@ -259,11 +244,7 @@ const DEDICATED_PARAM_KEYS: Partial<Record<NodeType, readonly string[]>> = {
 };
 
 export function getNodeParamFields(type: NodeType): readonly NodeParamField[] {
-  const common =
-    type === "flow:start" || type === "flow:end"
-      ? NO_BREAKPOINT_FIELDS
-      : COMMON_FIELDS;
-  return [...(EXTRA_FIELDS[type] ?? []), ...common];
+  return EXTRA_FIELDS[type] ?? [];
 }
 
 export function getNodeParamKeys(type: NodeType): ReadonlySet<string> {

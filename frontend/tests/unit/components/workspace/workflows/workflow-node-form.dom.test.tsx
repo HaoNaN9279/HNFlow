@@ -33,7 +33,7 @@ rs.mock("@/core/i18n/hooks", () => ({
           params: {
             invalidValue: "Invalid value",
             jsonHint: "Enter JSON",
-            fields: { breakpoint: "Breakpoint" },
+            fields: { ifPorts: "Branch ports [true, false]" },
           },
           ai: {
             title: "AI Agent",
@@ -664,6 +664,6 @@ describe("WorkflowNodeForm — fixed params", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Breakpoint")).toBeTruthy();
+    expect(screen.getByLabelText("Branch ports [true, false]")).toBeTruthy();
   });
 });

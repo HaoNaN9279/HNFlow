@@ -617,6 +617,11 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     app.include_router(workbench_routes.router)
     app.include_router(workflow_monitor_routes.router)
 
+    # Lead Agent resource-change history and Undo
+    from app.gateway.routers import workspace_resource_routes
+
+    app.include_router(workspace_resource_routes.router)
+
     # Human tasks API is mounted at /api/human-tasks
     app.include_router(human_task_routes.router)
 

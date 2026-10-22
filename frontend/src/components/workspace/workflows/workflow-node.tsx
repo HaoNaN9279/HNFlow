@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, NodeResizer, Position, type NodeProps } from "@xyflow/react";
-import { PauseIcon, Trash2Icon } from "lucide-react";
+import { Trash2Icon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -170,7 +170,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
     errors,
     readonly,
     updateNode,
-    updateNodeParams,
     deleteNode,
     updateNodeDisplayName,
     markDirty,
@@ -203,18 +202,7 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
-  const hasBreakpoint = workflow.params.breakpoint === true;
   const paramEntries = Object.entries(workflow.params);
-
-  const toggleBreakpoint = () => {
-    const params = { ...workflow.params };
-    if (hasBreakpoint) {
-      delete params.breakpoint;
-    } else {
-      params.breakpoint = true;
-    }
-    updateNodeParams(id, params);
-  };
 
   return (
     <>
@@ -308,24 +296,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
-            <Button
-              type="button"
-              variant={hasBreakpoint ? "secondary" : "ghost"}
-              size="icon-sm"
-              className="nodrag nopan"
-              disabled={readonly}
-              aria-pressed={hasBreakpoint}
-              aria-label={t.workflows.properties.breakpointLabel}
-              title={t.workflows.properties.breakpointHint}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.stopPropagation();
-                toggleBreakpoint();
-              }}
-              data-testid="workflow-breakpoint-toggle"
-            >
-              <PauseIcon className="size-3.5" />
-            </Button>
             <Button
               type="button"
               variant="ghost"

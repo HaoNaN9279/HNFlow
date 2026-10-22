@@ -343,7 +343,9 @@ _SERVER_OWNED_AUTHZ_CONTEXT_KEYS: frozenset[str] = frozenset(
 #   ``disable_clarification`` — set for non-interactive channels (GitHub
 #                              webhooks) so ClarificationMiddleware proceeds
 #                              instead of dead-ending the run.
-_CONTEXT_RUNTIME_ONLY_KEYS: frozenset[str] = frozenset({"github_token", "disable_clarification"})
+#   ``active_skills``        — Lead Agent menu selection; the skill activation
+#                              middleware validates and injects it once per run.
+_CONTEXT_RUNTIME_ONLY_KEYS: frozenset[str] = frozenset({"github_token", "disable_clarification", "active_skills"})
 
 
 def strip_internal_context_keys(config: dict[str, Any]) -> None:

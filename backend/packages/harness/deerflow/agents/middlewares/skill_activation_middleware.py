@@ -42,21 +42,22 @@ logger = logging.getLogger(__name__)
 
 _SLASH_SKILL_ACTIVATION_KEY = "slash_skill_activation"
 _SLASH_SKILL_ACTIVATION_TARGET_ID_KEY = "slash_skill_activation_target_id"
+_ACTIVE_SKILL_ACTIVATION_RUN_KEY = "active_skill_activation_run_key"
 
 # _SECRETS_BINDING_AUDIT_KEY: last audited binding (skill and secret names only,
 # never values) so unchanged bindings are not re-recorded each call.
 # The shared slash-source context contract holds the latest slash activation,
 # ONLY the activated skill's canonical container path (never its declared
-# secrets — those are read from the live registry on each call, #3938). The
+# secrets �?those are read from the live registry on each call, #3938). The
 # injection set is recomputed every model call, but a slash-activated skill must
-# stay bound for the rest of the run — the model's tool loop issues many model
+# stay bound for the rest of the run �?the model's tool loop issues many model
 # calls after the single activation call (#3861 semantics).
 # _SLASH_SKILL_ACTIVATION_RUN_KEY: identity of the slash message already activated
 # in this run, so the reminder injection + skill disk read + "activate" audit event
 # fire once per user slash command instead of on every model call. The reminder is
 # added via request.override(messages=...) for a single model call and never
 # persisted to graph state, so the 2nd..Nth model call of a turn rebuilds
-# request.messages from state without it — the run context is the only signal that
+# request.messages from state without it �?the run context is the only signal that
 # survives the tool loop. All three live in secret_context so they are covered by
 # REDACTED_CONTEXT_KEYS in one place.
 
@@ -98,6 +99,7 @@ class SkillActivationMiddleware(AgentMiddleware):
         app_config: AppConfig | None = None,
         user_id: str | None = None,
         slash_source_owner_token: str,
+        active_skills_enabled: bool = True,
     ) -> None:
         super().__init__()
         if not isinstance(slash_source_owner_token, str) or not slash_source_owner_token:
@@ -106,6 +108,7 @@ class SkillActivationMiddleware(AgentMiddleware):
         self._app_config = app_config
         self._user_id = user_id
         self._slash_source_owner_token = slash_source_owner_token
+        self._active_skills_enabled = active_skills_enabled
 
     def _storage(self) -> SkillStorage:
         if self._user_id is not None:
@@ -118,7 +121,7 @@ class SkillActivationMiddleware(AgentMiddleware):
     def _read_skill_content(skill_file: Path, skills_root: Path, *, storage: SkillStorage | None = None) -> str:
         if skill_file.name != SKILL_MD_FILE:
             raise ValueError(f"Expected {SKILL_MD_FILE}, got {skill_file.name}")
-        # Use the storage's path validation if available — UserScopedSkillStorage
+        # Use the storage's path validation if available �?UserScopedSkillStorage
         # stores custom skills in a per-user directory that is not a sub-path of
         # the global skills root, so the simple relative_to check would reject them.
         # Fall back to the relative_to check when the storage is a mock (e.g. tests)
@@ -179,6 +182,36 @@ class SkillActivationMiddleware(AgentMiddleware):
                 remaining_text=resolved.remaining_text,
                 editable=editable,
                 required_secrets=tuple(resolved.skill.required_secrets or ()),
+            )
+        )
+
+    def _resolve_active_skill(self, name: str, remaining_text: str) -> _ActivationResolution:
+        """Resolve a menu-activated skill by name, with the same gates as slash."""
+        storage = self._storage()
+        skills = storage.load_skills(enabled_only=False)
+        skill = next((candidate for candidate in skills if candidate.name == name), None)
+        if skill is None:
+            return _ActivationResolution(failure_message=f"Skill `{name}` is not installed.")
+        if not skill.enabled:
+            return _ActivationResolution(failure_message=f"Skill `{name}` is installed but disabled. Enable it before activating it.")
+        if self._available_skills is not None and name not in self._available_skills:
+            return _ActivationResolution(failure_message=f"Skill `{name}` is not available for this agent.")
+        try:
+            skill_content = self._read_skill_content(skill.skill_file, storage.get_skills_root_path(), storage=storage)
+        except (OSError, ValueError):
+            logger.exception("Failed to read menu-activated skill %s", skill.name)
+            return _ActivationResolution(failure_message=f"Skill `{name}` could not be loaded safely. Please check the skill installation.")
+        content_hash = hashlib.sha256(skill_content.encode("utf-8")).hexdigest()
+        return _ActivationResolution(
+            activation=_Activation(
+                skill_name=skill.name,
+                category=str(skill.category),
+                container_file_path=skill.get_container_file_path(storage.get_container_root()),
+                skill_content=skill_content,
+                content_hash=content_hash,
+                remaining_text=remaining_text,
+                editable=skill.category == SkillCategory.CUSTOM,
+                required_secrets=tuple(skill.required_secrets or ()),
             )
         )
 
@@ -251,11 +284,11 @@ Follow this skill before choosing a general workflow. Load supporting resources 
         Sibling to ``_has_existing_activation_for_target``: that helper catches an
         activation reminder still present in the scanned ``messages`` window; this
         one catches a prior activation recorded on ``run_context`` whose reminder
-        already fell out of that window (the tool-loop case — see
+        already fell out of that window (the tool-loop case �?see
         ``_SLASH_SKILL_ACTIVATION_RUN_KEY``). ``run_key`` is computed once by the
         caller (``_find_activation_target``) and reused as-is at the write site in
         ``_prepare_model_request``, so the same key is always used to check and to
-        record — this helper only ever checks membership, never computes the key.
+        record �?this helper only ever checks membership, never computes the key.
         """
         return isinstance(run_context, dict) and run_context.get(_SLASH_SKILL_ACTIVATION_RUN_KEY) == run_key
 
@@ -274,7 +307,7 @@ Follow this skill before choosing a general workflow. Load supporting resources 
             return None
         # This exact slash message may have already activated earlier in the run.
         # The message scan above cannot catch it because the reminder lives only in
-        # a per-call request override, never in state — the run context is the
+        # a per-call request override, never in state �?the run context is the
         # durable signal (see _already_activated / _SLASH_SKILL_ACTIVATION_RUN_KEY).
         # Skipping here avoids the redundant skill disk read, reminder re-injection,
         # and duplicate "activate" audit. run_key is computed once here and threaded
@@ -315,40 +348,87 @@ Follow this skill before choosing a general workflow. Load supporting resources 
     def _prepare_model_request(self, request: ModelRequest, *, hook: str) -> tuple[ModelRequest | AIMessage | None, _Activation | None]:
         run_context = self._run_context(request)
         target_and_resolution = self._find_activation_target(list(request.messages), run_context=run_context)
-        if target_and_resolution is None:
-            return None, None
+        if target_and_resolution is not None:
+            target_index, target, resolution, run_key = target_and_resolution
+            if resolution.failure_message:
+                return AIMessage(content=resolution.failure_message), None
+            activation = resolution.activation
+            if activation is None:
+                return None, None
+            logger.info(
+                "SkillActivationMiddleware: activating slash skill %s category=%s path=%s hash=%s",
+                activation.skill_name,
+                activation.category,
+                activation.container_file_path,
+                activation.content_hash,
+            )
+            self._record_activation(request, activation, hook=hook)
+            # Mark this slash message as activated for the run so the tool loop's later
+            # model calls skip the redundant re-activation (#3861: one activation call,
+            # many follow-up model calls). A new user slash message keys differently and
+            # still activates. Overwrite (`=`), not append/accumulate, is intentional:
+            # _find_activation_target only ever considers the latest real user message as
+            # an activation target, so there is nothing earlier in the run worth
+            # remembering once a new activation replaces it — do not "fix" this into a
+            # set. run_key is the same value already checked in _find_activation_target
+            # (computed once there, threaded through here) rather than recomputed.
+            if run_context is not None:
+                run_context[_SLASH_SKILL_ACTIVATION_RUN_KEY] = run_key
+            activation_msg = self._make_activation_message(target, self._build_activation_reminder(activation))
+            messages = list(request.messages)
+            messages.insert(target_index, activation_msg)
+            return request.override(messages=messages), activation
 
-        target_index, target, resolution, run_key = target_and_resolution
+        if not self._active_skills_enabled:
+            return None, None
+        active_name = self._active_skill_name(run_context)
+        if active_name is None:
+            return None, None
+        target_index = next((idx for idx in range(len(request.messages) - 1, -1, -1) if _is_user_activation_target(request.messages[idx])), None)
+        if target_index is None:
+            return None, None
+        target = request.messages[target_index]
+        if not isinstance(target, HumanMessage):
+            return None, None
+        run_key = f"active:{active_name}:{target.id or hashlib.sha256(get_original_user_content_text(target.content, target.additional_kwargs).encode('utf-8')).hexdigest()}"
+        if run_context is not None and run_context.get(_ACTIVE_SKILL_ACTIVATION_RUN_KEY) == run_key:
+            return None, None
+        remaining_text = get_original_user_content_text(target.content, target.additional_kwargs)
+        resolution = self._resolve_active_skill(active_name, remaining_text)
         if resolution.failure_message:
             return AIMessage(content=resolution.failure_message), None
-
         activation = resolution.activation
         if activation is None:
             return None, None
-
         logger.info(
-            "SkillActivationMiddleware: activating slash skill %s category=%s path=%s hash=%s",
+            "SkillActivationMiddleware: activating menu skill %s category=%s path=%s hash=%s",
             activation.skill_name,
             activation.category,
             activation.container_file_path,
             activation.content_hash,
         )
         self._record_activation(request, activation, hook=hook)
-        # Mark this slash message as activated for the run so the tool loop's later
-        # model calls skip the redundant re-activation (#3861: one activation call,
-        # many follow-up model calls). A new user slash message keys differently and
-        # still activates. Overwrite (`=`), not append/accumulate, is intentional:
-        # _find_activation_target only ever considers the latest real user message as
-        # an activation target, so there is nothing earlier in the run worth
-        # remembering once a new activation replaces it — do not "fix" this into a
-        # set. run_key is the same value already checked in _find_activation_target
-        # (computed once there, threaded through here) rather than recomputed.
         if run_context is not None:
-            run_context[_SLASH_SKILL_ACTIVATION_RUN_KEY] = run_key
+            run_context[_ACTIVE_SKILL_ACTIVATION_RUN_KEY] = run_key
         activation_msg = self._make_activation_message(target, self._build_activation_reminder(activation))
         messages = list(request.messages)
         messages.insert(target_index, activation_msg)
         return request.override(messages=messages), activation
+
+    @staticmethod
+    def _active_skill_name(run_context: dict | None) -> str | None:
+        if not isinstance(run_context, dict):
+            return None
+        raw = run_context.get("active_skills")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            return raw.strip() or None
+        if isinstance(raw, (list, tuple)):
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    return item.strip()
+        return None
 
     def _handle_model_request(self, request: ModelRequest, *, hook: str) -> ModelRequest | AIMessage:
         prepared, activation = self._prepare_model_request(request, hook=hook)
@@ -365,7 +445,7 @@ Follow this skill before choosing a general workflow. Load supporting resources 
 
         - the most recent slash activation of this run (persisted as a source on
           the run context so the whole tool loop after the activation call keeps
-          the binding — a new slash activation replaces it). The slash source is
+          the binding �?a new slash activation replaces it). The slash source is
           validated once, at activation (enabled + allowlist checks in
           ``_resolve_activation``), and deliberately NOT re-validated per call:
           slash is a run-scoped commitment made by the user, and it dies with
@@ -374,14 +454,14 @@ Follow this skill before choosing a general workflow. Load supporting resources 
           re-validated against the live registry on each call: enabled,
           runtime-allowed for this agent, and not opted out via
           ``secrets-autonomous: false``. Slash activation is exempt from the
-          opt-out — it is the explicit-ceremony path.
+          opt-out �?it is the explicit-ceremony path.
 
         The set is recomputed and REPLACED each call, so a skill evicted from
         skill_context, or a caller that stops supplying a value, loses its
         injection on the next call automatically. Injected values always come
-        from the caller's request (``context.secrets``) — never the host
+        from the caller's request (``context.secrets``) �?never the host
         environment, which ``env_policy.build_sandbox_env`` scrubs before
-        injection — so a skill can never harvest a host platform credential.
+        injection �?so a skill can never harvest a host platform credential.
         Secret *values* are never logged; the audit journal records names only.
         """
         runtime = getattr(request, "runtime", None)
@@ -390,7 +470,7 @@ Follow this skill before choosing a general workflow. Load supporting resources 
             return
 
         # The slash source records the canonical container path plus a
-        # middleware-chain-local owner token — never declared secrets. Both
+        # middleware-chain-local owner token �?never declared secrets. Both
         # consumers authenticate the source and resolve the live registry skill
         # by path, so caller-mergeable context cannot forge an activation.
         if activation is not None:
@@ -455,14 +535,13 @@ Follow this skill before choosing a general workflow. Load supporting resources 
         enabled state from extensions_config so an operator disabling a skill
         revokes its secret binding on the very next model call. A cache keyed on
         file mtimes would miss enable/disable toggles (which do not touch
-        SKILL.md) and keep injecting after a disable — trading the
+        SKILL.md) and keep injecting after a disable �?trading the
         immediate-revocation security property for speed. The cost is gated: the
         only caller runs this only when the caller supplied secrets.
 
         Paths are normalized so a non-canonical ``container_path`` config (e.g. a
         trailing slash) still matches the canonical path captured in
-        ``skill_context`` (#3938). Returns ``None`` if the registry can't load —
-        both the slash and in-context sources then bind nothing for that call
+        ``skill_context`` (#3938). Returns ``None`` if the registry can't load �?        both the slash and in-context sources then bind nothing for that call
         (fail closed). This is a deliberate availability-for-security trade-off:
         a transient registry read failure mid-run drops the injection for that
         call rather than trusting stale caller-supplied data.
@@ -480,7 +559,7 @@ Follow this skill before choosing a general workflow. Load supporting resources 
         """Resolve a container path to a live registry skill eligible for secret
         binding, or ``None``.
 
-        Match strictly by normalized container file path — never by name. A
+        Match strictly by normalized container file path �?never by name. A
         by-name fallback would be a confused deputy: DeerFlow lets a custom skill
         shadow a same-named public/legacy one (load_skills de-dupes by name,
         custom wins), so a reference to public/foo could bind the custom foo's

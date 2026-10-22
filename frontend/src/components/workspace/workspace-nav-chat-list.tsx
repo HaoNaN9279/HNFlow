@@ -5,7 +5,6 @@ import {
   CalendarClock,
   LayoutDashboardIcon,
   LayersIcon,
-  MessagesSquare,
   WrenchIcon,
   Workflow,
 } from "lucide-react";
@@ -40,14 +39,6 @@ export function WorkspaceNavChatList() {
   return (
     <SidebarGroup className="pt-1">
       <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton isActive={pathname === "/workspace/chats"} asChild>
-            <Link className="text-muted-foreground" href="/workspace/chats">
-              <MessagesSquare />
-              <span>{t.sidebar.chats}</span>
-            </Link>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
             isActive={pathname.startsWith("/workspace/scheduled-tasks")}

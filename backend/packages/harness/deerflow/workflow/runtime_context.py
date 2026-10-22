@@ -169,7 +169,7 @@ def build_workflow_runtime_context(
         context[MODEL_PROFILES_CONTEXT_KEY] = model_profiles
 
     if debug_step:
-        from deerflow.workflow.breakpoint import DEBUG_STEP_CONTEXT_KEY
+        from deerflow.workflow.debug_step import DEBUG_STEP_CONTEXT_KEY
 
         context[DEBUG_STEP_CONTEXT_KEY] = True
 

@@ -1,6 +1,5 @@
 import type { AnchorHTMLAttributes } from "react";
 
-import { resolveMarkdownArtifactURL } from "@/core/artifacts/utils";
 import { cn } from "@/lib/utils";
 
 import { CitationLink, extractReactNodeText } from "../citations/citation-link";
@@ -61,7 +60,7 @@ function isExternalUrl(href: string | undefined): boolean {
  * Passing a `threadId` also resolves `/mnt/` artifact links; without it those
  * links fall through to the default external-link handling.
  */
-export function createMarkdownLinkComponent(threadId?: string) {
+export function createMarkdownLinkComponent(_threadId?: string) {
   return function MarkdownLink({
     href,
     ...props
@@ -102,16 +101,6 @@ export function createMarkdownLinkComponent(threadId?: string) {
           </CitationLink>
         );
       }
-    }
-    if (threadId && href?.startsWith("/mnt/")) {
-      return (
-        <a
-          {...props}
-          href={resolveMarkdownArtifactURL(href, threadId)}
-          target="_blank"
-          rel="noopener noreferrer"
-        />
-      );
     }
     const { className, target, rel, ...rest } = props;
     const external = isExternalUrl(href);

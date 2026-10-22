@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import {
   mockLangGraphAPI,
   MOCK_RUN_ID,
@@ -85,11 +86,11 @@ test("historical run messages preview labelled dotted Mermaid arrows", async ({
     }),
   );
 
-  await page.goto(`/workspace/chats/${MOCK_THREAD_ID}`);
+  await openLeadAgent(page, MOCK_THREAD_ID);
 
-  await expect(page.getByLabel("Mermaid chart")).toBeVisible({
-    timeout: 15_000,
-  });
+  await expect(
+    page.getByRole("button", { name: /download diagram/i }),
+  ).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText("Mermaid Error:")).toHaveCount(0);
   const highlightedTokens = page.locator(
     '[data-streamdown="code-block-body"] code > span > span',

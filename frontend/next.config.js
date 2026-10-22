@@ -39,7 +39,7 @@ const config = {
     return [
       {
         source: "/",
-        destination: "/workspace/chats/new",
+        destination: "/workspace/workflows",
         permanent: false,
       },
     ];

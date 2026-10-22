@@ -1,8 +1,8 @@
 """Tests for workflow idempotency primitives.
 
 Covers:
-- pure validation / key resolution (``deerflow.workflow.reliability``);
-- idempotency-key propagation into ``tool:http`` / ``tool:bash``.
+- stable engine-managed key derivation (``deerflow.workflow.reliability``);
+- automatic key injection and propagation into ``tool:http`` / ``tool:bash``.
 """
 
 from __future__ import annotations
@@ -12,16 +12,13 @@ from typing import Any
 
 import pytest
 
-from deerflow.workflow.compiler import WorkflowCompileError, clear_compile_cache, compile_definition
+from deerflow.workflow.compiler import clear_compile_cache, compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.reliability import (
     IDEMPOTENCY_ENV,
     IDEMPOTENCY_HEADER,
     IDEMPOTENCY_PARAM,
-    IdempotencyParamError,
     idempotency_key,
-    resolve_idempotency_key,
-    validate_idempotency_param,
 )
 from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
 
@@ -55,40 +52,10 @@ def _isolate_cache() -> Any:
     clear_compile_cache()
 
 
-class TestValidateIdempotencyParam:
-    def test_ok(self) -> None:
-        validate_idempotency_param({})
-        validate_idempotency_param({"idempotency": True})
-        validate_idempotency_param({"idempotency": False})
-        validate_idempotency_param({"idempotency": "order-42"})
-
-    def test_empty_string_rejected(self) -> None:
-        with pytest.raises(IdempotencyParamError):
-            validate_idempotency_param({"idempotency": "  "})
-
-    def test_int_rejected(self) -> None:
-        with pytest.raises(IdempotencyParamError):
-            validate_idempotency_param({"idempotency": 1})
-
-
 class TestIdempotencyKeys:
     def test_stable_key(self) -> None:
         assert idempotency_key("run-1", "node-a") == "run-1:node-a"
         assert idempotency_key("run-1", "node-a") == idempotency_key("run-1", "node-a")
-
-    def test_resolve(self) -> None:
-        assert resolve_idempotency_key({}, run_id="r", node_id="n") is None
-        assert resolve_idempotency_key({"idempotency": False}, run_id="r", node_id="n") is None
-        assert resolve_idempotency_key({"idempotency": True}, run_id="r", node_id="n") == "r:n"
-        assert resolve_idempotency_key({"idempotency": "custom"}, run_id="r", node_id="n") == "custom"
-
-
-class TestCompileTimeValidation:
-    def test_bad_idempotency_param_is_compile_error(self) -> None:
-        work = _assign_node(params={"idempotency": ""})
-        def_ = _make_def([_start_node(), work, _end_node()], [Edge(source="start", source_port="input", target="work", target_port="in"), Edge(source="work", source_port="out", target="end", target_port="in")])
-        with pytest.raises(WorkflowCompileError):
-            compile_definition(def_, context=build_default_registry().build_context())
 
 
 async def _run_assign(*, params: dict[str, Any], exec_fn: Any, context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -112,19 +79,19 @@ class TestRuntimeIdempotency:
             seen.append(p.get(IDEMPOTENCY_PARAM))
             return {"out": "ok"}
 
-        await _run_assign(params={"idempotency": True}, exec_fn=_capture, context={"run_id": "run-x"})
+        await _run_assign(params={}, exec_fn=_capture, context={"run_id": "run-x"})
         assert seen == ["run-x:work"]
 
     @pytest.mark.asyncio
-    async def test_no_idempotency_key_when_not_requested(self) -> None:
+    async def test_author_param_cannot_override_the_engine_key(self) -> None:
         seen: list[Any] = []
 
         def _capture(rt: Any, p: dict, _i: dict) -> dict[str, Any]:
             seen.append(p.get(IDEMPOTENCY_PARAM))
             return {"out": "ok"}
 
-        await _run_assign(params={}, exec_fn=_capture)
-        assert seen == [None]
+        await _run_assign(params={"idempotency": "custom"}, exec_fn=_capture, context={"run_id": "run-x"})
+        assert seen == ["run-x:work"]
 
 
 class TestHttpIdempotencyHeader:

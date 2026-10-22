@@ -4,15 +4,15 @@ import { getBackendBaseURL } from "@/core/config";
 /**
  * Human-task client for the §25 debug controls (N14ae).
  *
- * A breakpoint and a single step both suspend a node as a `human_tasks` row of
- * the same family the review node uses, so the canvas resolves them by
- * submitting (`acknowledge`) or skipping the row — it does not invent a second
- * suspension protocol.  The generic `human:task` form and the dedicated
- * `human:review` form are the two submission renderers.
+ * A single step suspends a node as a `human_tasks` row of the same family the
+ * review node uses, so the canvas resolves it by submitting (`acknowledge`) or
+ * skipping the row; it does not invent a second suspension protocol.  The
+ * generic `human:task` form and the dedicated `human:review` form are the two
+ * submission renderers.
  */
 
 /** Task kinds the debug controls resolve as a simple continue/skip (§25). */
-export const DEBUG_PAUSE_KINDS = ["breakpoint", "step"] as const;
+export const DEBUG_PAUSE_KINDS = ["step"] as const;
 
 export type DebugPauseKind = (typeof DEBUG_PAUSE_KINDS)[number];
 
@@ -278,7 +278,7 @@ function fieldKind(
  * The choices a field offers.
  *
  * A boolean port offers exactly the booleans its `enum` rule allows (a
- * breakpoint's `acknowledge` allows only `true`), or both when it declares no
+ * step pause's `acknowledge` allows only `true`), or both when it declares no
  * rule — never a hand-written label that could disagree with the rule.
  */
 function fieldOptions(

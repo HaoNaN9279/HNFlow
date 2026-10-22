@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 
+import { openLeadAgent } from "./utils/lead-agent";
 import { handleRunStream, mockLangGraphAPI } from "./utils/mock-api";
 
 /**
@@ -64,7 +65,7 @@ test.describe("Chat: thread API request ordering on first send", () => {
       return handleRunStream(route);
     });
 
-    await page.goto("/workspace/chats/new");
+    await openLeadAgent(page);
 
     const textarea = page.getByPlaceholder(/how can i assist you/i);
     await expect(textarea).toBeVisible({ timeout: 15_000 });

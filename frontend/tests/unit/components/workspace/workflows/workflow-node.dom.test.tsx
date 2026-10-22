@@ -26,15 +26,12 @@ rs.mock("@/core/i18n/hooks", () => ({
       workflows: {
         renameNodeHint: "Double-click to rename this node",
         properties: {
-          breakpointLabel: "Pause before this node (breakpoint)",
-          breakpointHint: "Pause before this node",
           deleteNode: "Delete node",
           paramsTitle: "Parameters",
           params: {
             invalidValue: "Invalid value",
             jsonHint: "Enter JSON",
             fields: {
-              breakpoint: "Breakpoint",
               duration: "Duration (s)",
             },
           },
@@ -193,18 +190,12 @@ describe("WorkflowNode card content", () => {
     expect(
       card.querySelector('[data-testid="workflow-node-delete"]'),
     ).toBeTruthy();
+    expect(
+      card.querySelector('[data-testid="workflow-breakpoint-toggle"]'),
+    ).toBeNull();
 
     await waitFor(() =>
       expect(bridgeNodes?.some((item) => item.id === "n-selected")).toBe(true),
-    );
-    fireEvent.click(
-      card.querySelector('[data-testid="workflow-breakpoint-toggle"]')!,
-    );
-    await waitFor(() =>
-      expect(
-        bridgeNodes?.find((item) => item.id === "n-selected")?.data.workflow
-          .params.breakpoint,
-      ).toBe(true),
     );
   });
 

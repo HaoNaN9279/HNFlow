@@ -7,7 +7,6 @@ import {
   Trash2Icon,
   UploadIcon,
 } from "lucide-react";
-import Link from "next/link";
 import { useDeferredValue, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 
@@ -23,6 +22,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { useLeadAgent } from "@/components/workspace/lead-agent/lead-agent-context";
 import { useI18n } from "@/core/i18n/hooks";
 import { exportMemory } from "@/core/memory/api";
 import {
@@ -40,7 +40,6 @@ import type {
 } from "@/core/memory/types";
 import { SafeStreamdown } from "@/core/streamdown/components";
 import { streamdownPlugins } from "@/core/streamdown/plugins";
-import { pathOfThread } from "@/core/threads/utils";
 import { formatTimeAgo } from "@/core/utils/datetime";
 
 import { SettingsSection } from "./settings-section";
@@ -275,6 +274,7 @@ function upperFirst(str: string) {
 
 export function MemorySettingsPage() {
   const { t } = useI18n();
+  const { openThread } = useLeadAgent();
   const { memory, isLoading, error } = useMemory();
   const clearMemory = useClearMemory();
   const createMemoryFact = useCreateMemoryFact();
@@ -699,12 +699,13 @@ export function MemorySettingsPage() {
                                 {fact.source === "manual" ? (
                                   t.settings.memory.manualFactSource
                                 ) : (
-                                  <Link
-                                    href={pathOfThread(fact.source)}
+                                  <button
+                                    type="button"
                                     className="text-primary underline-offset-4 hover:underline"
+                                    onClick={() => openThread(fact.source)}
                                   >
                                     {t.settings.memory.markdown.table.view}
-                                  </Link>
+                                  </button>
                                 )}
                               </span>
                             </div>

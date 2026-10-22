@@ -2,9 +2,8 @@
 
 Step mode is a *run-level* switch: every node suspends before it executes, and a
 resume of a *step* task keeps stepping. Covered here: the predicate, the
-compiler gate (including its interaction with a static node breakpoint), the end
-to end advance-one-node-per-resume flow, and both resume paths re-deriving the
-flag from the task row.
+compiler gate, the end to end advance-one-node-per-resume flow, and both resume
+paths re-deriving the flag from the task row.
 """
 
 from __future__ import annotations
@@ -16,15 +15,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from deerflow.workflow.breakpoint import (
-    BREAKPOINT_SNAPSHOT_KIND,
+from deerflow.workflow.compiler import clear_compile_cache, compile_definition
+from deerflow.workflow.debug_step import (
     DEBUG_STEP_CONTEXT_KEY,
     STEP_SNAPSHOT_KIND,
-    breakpoint_requested,
-    run_breakpoint,
     step_mode_requested,
 )
-from deerflow.workflow.compiler import WorkflowRuntime, clear_compile_cache, compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.schema import Edge, Node, NodeType, Port, PortType, WorkflowDefinition
 
@@ -123,25 +119,6 @@ class TestStepModePredicate:
         assert step_mode_requested("debug_step") is False
 
 
-class TestRunBreakpointKind:
-    def test_step_kind_is_recorded_on_the_task(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        repo = _FakeRepo()
-        monkeypatch.setattr("deerflow.workflow.breakpoint.interrupt", lambda payload: {})
-
-        asyncio.run(run_breakpoint(WorkflowRuntime(state={}, context={"human_task_repo": repo, "run_id": "r"}), node_id="a", node_type="data:assign", kind=STEP_SNAPSHOT_KIND))
-
-        row = repo.create_calls[0]
-        assert row["kind"] == STEP_SNAPSHOT_KIND
-        assert row["inputs_snapshot"]["kind"] == STEP_SNAPSHOT_KIND
-        assert row["description"].startswith(f"[{STEP_SNAPSHOT_KIND}] ")
-
-    def test_default_kind_is_the_node_breakpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        repo = _FakeRepo()
-        monkeypatch.setattr("deerflow.workflow.breakpoint.interrupt", lambda payload: {})
-        asyncio.run(run_breakpoint(WorkflowRuntime(state={}, context={"human_task_repo": repo, "run_id": "r"}), node_id="a", node_type="data:assign"))
-        assert repo.create_calls[0]["kind"] == BREAKPOINT_SNAPSHOT_KIND
-
-
 # ── 2. end to end: one node per resume ────────────────────────────────────────
 
 
@@ -207,28 +184,18 @@ class TestStepModeEndToEnd:
         assert final["wf:b:out"] == "B"
         assert repo.create_calls == []
 
-    def test_a_node_with_its_own_breakpoint_pauses_once_under_step_mode(self) -> None:
-        # Step mode already paused the node; a second pause (its own breakpoint)
-        # would need a second resume for the same visit.
+    def test_a_stale_node_breakpoint_param_is_ignored(self) -> None:
         seen: list[str] = []
         repo = _FakeRepo()
         definition = _definition(_work_node("a", value="A", breakpoint=True), _work_node("b", value="B"))
         graph = _graph(definition, seen=seen)
-        config = _config("t-both", repo, debug_step=True)
+        config = _config("t-stale-breakpoint", repo, debug_step=False)
 
-        async def _run() -> Any:
-            await graph.ainvoke({"wf:start:input": "go"}, config)
-            await graph.ainvoke(Command(resume={"acknowledge": True}), config)  # 'a' runs
-            assert seen == ["A"]
-            await graph.ainvoke(Command(resume={"acknowledge": True}), config)  # 'b' runs
-            return await graph.aget_state(config)
-
-        final = asyncio.run(_run())
+        final = asyncio.run(graph.ainvoke({"wf:start:input": "go"}, config))
 
         assert seen == ["A", "B"]
-        assert final.next == ()
-        # Both pauses are the step kind, and neither node minted two tasks.
-        assert [row["kind"] for row in repo.create_calls] == [STEP_SNAPSHOT_KIND, STEP_SNAPSHOT_KIND]
+        assert final["wf:b:out"] == "B"
+        assert repo.create_calls == []
 
 
 # ── 3. resume paths keep stepping ─────────────────────────────────────────────
@@ -238,7 +205,7 @@ class TestResumeKeepsStepping:
     def test_app_resume_reads_the_step_kind_from_the_task_row(self) -> None:
         from app.gateway.routers import human_task_routes
 
-        for snapshot_kind, expected in ((STEP_SNAPSHOT_KIND, True), (BREAKPOINT_SNAPSHOT_KIND, False), (None, False)):
+        for snapshot_kind, expected in ((STEP_SNAPSHOT_KIND, True), (None, False)):
             task = {
                 "id": "ht-1",
                 "checkpoint_ref": {"thread_id": "t1"},
@@ -259,7 +226,7 @@ class TestResumeKeepsStepping:
     def test_harness_resume_reads_the_step_kind_from_the_task_row(self) -> None:
         from deerflow.workflow import dispatch
 
-        for snapshot_kind, expected in ((STEP_SNAPSHOT_KIND, True), (BREAKPOINT_SNAPSHOT_KIND, False)):
+        for snapshot_kind, expected in ((STEP_SNAPSHOT_KIND, True), (None, False)):
             task = {
                 "id": "ht-1",
                 "checkpoint_ref": {"thread_id": "t1"},
@@ -283,13 +250,3 @@ class TestResumeKeepsStepping:
                 asyncio.run(dispatch.resume_workflow_run(task, runtime=runtime))
 
             assert mock_start.await_args.kwargs["debug_step"] is expected
-
-
-# ── 4. interaction with the static breakpoint helper ──────────────────────────
-
-
-def test_breakpoint_predicate_is_unchanged_by_step_mode() -> None:
-    # The node-level flag stays node-level: step mode is per run and must not
-    # leak into a definition's params.
-    assert breakpoint_requested({"breakpoint": True}) is True
-    assert breakpoint_requested({"debug_step": True}) is False

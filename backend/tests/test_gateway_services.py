@@ -1463,6 +1463,7 @@ def test_merge_run_context_overrides_forwards_context_only_keys():
         {
             "github_token": "ghs_installation_token",
             "disable_clarification": True,
+            "active_skills": ["workspace-manager"],
             "agent_name": "coding-llm-gateway",
         },
     )
@@ -1470,11 +1471,13 @@ def test_merge_run_context_overrides_forwards_context_only_keys():
     # Forwarded into runtime context — what tools/middlewares read.
     assert config["context"]["github_token"] == "ghs_installation_token"
     assert config["context"]["disable_clarification"] is True
+    assert config["context"]["active_skills"] == ["workspace-manager"]
     assert config["context"]["agent_name"] == "coding-llm-gateway"
 
     # NOT written into configurable (checkpoint-persisted).
     assert "github_token" not in config.get("configurable", {})
     assert "disable_clarification" not in config.get("configurable", {})
+    assert "active_skills" not in config.get("configurable", {})
 
 
 def test_merge_run_context_overrides_context_only_keys_do_not_override_existing():

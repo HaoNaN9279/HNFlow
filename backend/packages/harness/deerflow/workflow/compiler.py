@@ -102,12 +102,7 @@ from deerflow.workflow.model_profiles import (
     resolve_model_profile,
 )
 from deerflow.workflow.prompts import build_capability_layer, build_identity_layer, build_task_layer
-from deerflow.workflow.reliability import (
-    IDEMPOTENCY_PARAM,
-    IdempotencyParamError,
-    resolve_idempotency_key,
-    validate_idempotency_param,
-)
+from deerflow.workflow.reliability import IDEMPOTENCY_PARAM, idempotency_key
 from deerflow.workflow.replay import MODE_RECORD as REPLAY_MODE_RECORD
 from deerflow.workflow.replay import MODE_REPLAY as REPLAY_MODE_REPLAY
 from deerflow.workflow.replay import REPLAY_CONTEXT_KEY
@@ -336,7 +331,7 @@ class CompileContext:
             the compiler free of a registry import cycle.
         resource_accessors: ``NodeType`` → resource-access callable registry
             (N13).  The compiler derives automatic locks from the accessor
-            after breakpoint gates and holds them for the executor call.
+            after any step pause and holds them for the executor call.
             Missing entries mean the node type declares no resources.
         checkpointer: Optional LangGraph checkpointer for the top-level graph.
             Subgraphs are always compiled with ``checkpointer=None`` so their
@@ -619,13 +614,13 @@ def _make_node_fn(
     Only output ports that the executor actually returned are written
     to state.
 
-    When the node requests an idempotency key (``params.idempotency``) it is
-    injected into the executor params as ``__idempotency_key`` for the tool
-    executors to forward.
+    Every node receives an engine-managed ``__idempotency_key`` derived from
+    ``(run_id, node_id)`` for the tool executors to forward; there is no
+    author-facing idempotency parameter.
 
-    When *resource_accessor* is supplied, it runs after the breakpoint gate and
-    its write accesses are held as cross-process locks around the executor call
-    only; read-only accesses do not lock.
+    When *resource_accessor* is supplied, its write accesses are held as
+    cross-process locks around the executor call only; read-only accesses do
+    not lock.
 
     ``review_target`` is the compiler-resolved target of a ``human:review``
     node's rejected edge.  It is injected into the executor params so the task
@@ -710,33 +705,24 @@ def _make_node_fn(
             executor_params = dict(node.params)
             executor_params.setdefault("node_id", node.id)
 
-        # §25 debugging: an explicit breakpoint suspends the node *before* it
-        # executes, so an operator can inspect state and then resume (or skip).
-        # Single-step mode (a run-level switch) does the same for **every** node.
-        # A node that stepped is not paused again by its own breakpoint — one
-        # pause per node visit.
-        from deerflow.workflow.breakpoint import STEP_SNAPSHOT_KIND, breakpoint_requested, run_breakpoint, step_mode_requested
+        # §25 debugging: single-step is a run-level switch.  With it on, every
+        # node suspends before it executes so an operator advances one node per
+        # resume.  A skipped step continues with the node's outputs unset.
+        from deerflow.workflow.debug_step import run_step_pause, step_mode_requested
 
-        paused = False
         if step_mode_requested(runtime_context):
-            step_decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value, kind=STEP_SNAPSHOT_KIND)
-            paused = True
+            step_decision = await run_step_pause(runtime, node_id=node.id, node_type=node.type.value)
             if step_decision.skipped:
-                # Same contract as a skipped ``human:task``: continue with the
-                # node's output ports unset.
-                return {}
-        if not paused and breakpoint_requested(executor_params):
-            decision = await run_breakpoint(runtime, node_id=node.id, node_type=node.type.value)
-            if decision.skipped:
                 return {}
 
-        # N14 §24.7: a node that asks for an idempotency key gets a stable one
-        # (per run+node) injected for the tool executors to forward, so an
-        # external system can dedupe repeated invocations.
-        idempotency = resolve_idempotency_key(node.params, run_id=str(runtime_context.get("run_id") or ""), node_id=node.id)
-        if idempotency is not None:
-            executor_params = dict(executor_params)
-            executor_params[IDEMPOTENCY_PARAM] = idempotency
+        # N14 §24.7: the engine always injects a stable per-(run, node) key for
+        # the tool executors to forward, so an external system can dedupe a
+        # repeated invocation.  Authors cannot override it.
+        executor_params = dict(executor_params)
+        executor_params[IDEMPOTENCY_PARAM] = idempotency_key(
+            str(runtime_context.get("run_id") or ""),
+            node.id,
+        )
 
         # N14 §24.11: a replay session on the run context can serve this node's
         # recorded result (replay mode) or capture it (record mode).  A replay
@@ -751,8 +737,8 @@ def _make_node_fn(
         duration_ms: float | None = None
         if result is None:
             # N13: the compiler, not the author, owns resource locking.  The
-            # accessor runs after the breakpoint gate (a pending human pause
-            # must not hold a file lock) and only write access participates.
+            # accessor runs after any step pause (a pending human pause must not
+            # hold a file lock) and only write access participates.
             accesses = tuple(resource_accessor(runtime, executor_params, inputs)) if resource_accessor is not None else ()
             try:
                 async with hold_resource_locks(accesses):
@@ -1623,25 +1609,6 @@ def _validate_model_profiles(def_: WorkflowDefinition, ctx: CompileContext) -> N
             raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
 
 
-def _validate_breakpoints(def_: WorkflowDefinition) -> None:
-    """Reject ``params.breakpoint`` where it could never take effect (§25).
-
-    A breakpoint pauses a node *before it runs*; ``flow:start`` / ``flow:end``
-    are graph sentinels with no node function, so a breakpoint there would be
-    silently ignored — exactly the failure mode this validator exists to stop.
-    ``breakpoint`` must also be a real boolean (``"true"`` is a config typo, not
-    a breakpoint).
-    """
-    for node in def_.nodes:
-        params = node.params or {}
-        if "breakpoint" not in params:
-            continue
-        if not isinstance(params.get("breakpoint"), bool):
-            raise WorkflowCompileError(f"node '{node.id}': breakpoint must be a boolean, got {params.get('breakpoint')!r}")
-        if params.get("breakpoint") is True and node.type in (NodeType.FLOW_START, NodeType.FLOW_END):
-            raise WorkflowCompileError(f"node '{node.id}': breakpoint is not supported on '{node.type.value}' (the node never executes)")
-
-
 def _validate_handoff(def_: WorkflowDefinition) -> None:
     """Validate every ``flow:handoff`` node (§24.6a) at compile time.
 
@@ -1905,16 +1872,6 @@ def _validate_prompt_preview(def_: WorkflowDefinition) -> None:
         _infer_prompt_preview_agent(node, node_map, def_.edges)
 
 
-def _validate_idempotency(def_: WorkflowDefinition) -> None:
-    """Compile-time validation for ``params.idempotency`` shape."""
-    for node in def_.nodes:
-        params = node.params or {}
-        try:
-            validate_idempotency_param(params)
-        except IdempotencyParamError as exc:
-            raise WorkflowCompileError(f"node '{node.id}': {exc}") from exc
-
-
 def _validate_run_budget(def_: WorkflowDefinition) -> None:
     """Compile-time validation for the N14 §24.10 ``metadata.budget``."""
     try:
@@ -2050,7 +2007,6 @@ def _compile_impl(
     errors = validate_definition(def_)
     if errors:
         raise WorkflowCompileError("workflow validation failed:\n" + "\n".join(errors))
-    _validate_breakpoints(def_)
     _validate_handoff(def_)
     _validate_loop_bodies(def_)
     _validate_shared_nodes(def_)
@@ -2063,7 +2019,6 @@ def _compile_impl(
         validate_capability_group_wiring(def_)
     except CapabilityGroupWiringError as exc:
         raise WorkflowCompileError(str(exc)) from exc
-    _validate_idempotency(def_)
     _validate_run_budget(def_)
     run_budget = parse_run_budget(def_.metadata.model_dump())
 
@@ -2081,7 +2036,7 @@ def _compile_impl(
         to filter out child-subgraph node events.
 
         Automatic resource locks (N13) are applied inside ``_make_node_fn``,
-        after the breakpoint gate, so they do not need a wrapper here.
+        after any step pause, so they do not need a wrapper here.
         """
         node = node_map.get(node_id)
         builder.add_node(node_id, _with_node_events(node_id, depth - 1, node_fn, node.type if node is not None else None))

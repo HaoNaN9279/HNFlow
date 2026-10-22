@@ -29,10 +29,6 @@ import { Task, TaskTrigger } from "@/components/ai-elements/task";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  resolveArtifactURL,
-  resolveMessageImageURL,
-} from "@/core/artifacts/utils";
 import { extractCitationSources } from "@/core/citations/sources";
 import { useI18n } from "@/core/i18n/hooks";
 import {
@@ -43,7 +39,6 @@ import {
   stripUploadedFilesTag,
   type FileInMessage,
 } from "@/core/messages/utils";
-import { readReferenceMessageContexts } from "@/core/sidecar";
 import {
   parseSlashSkillReference,
   resolveSlashSkillDisplay,
@@ -55,7 +50,6 @@ import { cn } from "@/lib/utils";
 import { WorkspaceChangeBadge } from "../changes";
 import { CitationSourcesPanel } from "../citations/citation-sources-panel";
 import { CopyButton } from "../copy-button";
-import { ReferenceAttachmentSummary } from "../sidecar/reference-attachments";
 import { SlashSkillChip } from "../slash-skill-chip";
 import { Tooltip } from "../tooltip";
 
@@ -68,7 +62,6 @@ export function MessageListItem({
   isLoading,
   runId,
   threadId,
-  artifactPaths = [],
   showCopyButton = true,
   showWorkspaceChanges = false,
   canEdit = false,
@@ -79,7 +72,6 @@ export function MessageListItem({
   message: Message;
   isLoading?: boolean;
   threadId: string;
-  artifactPaths?: readonly string[];
   runId?: string;
   showCopyButton?: boolean;
   showWorkspaceChanges?: boolean;
@@ -137,7 +129,6 @@ export function MessageListItem({
         message={message}
         isLoading={isLoading}
         threadId={threadId}
-        artifactPaths={artifactPaths}
         runId={runId}
         showWorkspaceChanges={showWorkspaceChanges}
         editState={
@@ -191,13 +182,9 @@ export function MessageListItem({
 function MessageImage({
   src,
   alt,
-  threadId,
-  artifactPaths,
   maxWidth = "90%",
   ...props
 }: React.ImgHTMLAttributes<HTMLImageElement> & {
-  threadId: string;
-  artifactPaths: readonly string[];
   maxWidth?: string;
 }) {
   if (!src) return null;
@@ -222,15 +209,13 @@ function MessageImage({
     );
   }
 
-  const url = resolveMessageImageURL(src, threadId, artifactPaths);
-
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer">
+    <a href={src} target="_blank" rel="noopener noreferrer">
       <img
         {...props}
         className={imgClassName}
         style={imgStyle}
-        src={url}
+        src={src}
         alt={alt}
         loading="lazy"
         decoding="async"
@@ -280,7 +265,6 @@ function MessageContent_({
   message,
   isLoading = false,
   threadId,
-  artifactPaths,
   runId,
   showWorkspaceChanges = false,
   editState,
@@ -289,7 +273,6 @@ function MessageContent_({
   message: Message;
   isLoading?: boolean;
   threadId: string;
-  artifactPaths: readonly string[];
   runId?: string;
   showWorkspaceChanges?: boolean;
   editState?: {
@@ -315,16 +298,11 @@ function MessageContent_({
   const components = useMemo(
     () => ({
       img: (props: ImgHTMLAttributes<HTMLImageElement>) => (
-        <MessageImage
-          {...props}
-          threadId={threadId}
-          artifactPaths={artifactPaths}
-          maxWidth="90%"
-        />
+        <MessageImage {...props} maxWidth="90%" />
       ),
       a: createMarkdownLinkComponent(threadId),
     }),
-    [artifactPaths, threadId],
+    [threadId],
   );
 
   const rawContent = extractContentFromMessage(message);
@@ -344,17 +322,6 @@ function MessageContent_({
     }
     return files as FileInMessage[];
   }, [message.additional_kwargs?.files, rawContent]);
-  const referenceAttachments = useMemo(
-    () =>
-      readReferenceMessageContexts(message.additional_kwargs).map(
-        (context, index) => ({
-          id: index,
-          context,
-        }),
-      ),
-    [message.additional_kwargs],
-  );
-
   const contentToDisplay = useMemo(() => {
     if (isHuman) {
       return rawContent ? stripUploadedFilesTag(rawContent) : "";
@@ -367,9 +334,7 @@ function MessageContent_({
   );
 
   const filesList =
-    files && files.length > 0 ? (
-      <RichFilesList files={files} threadId={threadId} />
-    ) : null;
+    files && files.length > 0 ? <RichFilesList files={files} /> : null;
 
   // Uploading state: mock AI message shown while files upload
   if (message.additional_kwargs?.element === "task") {
@@ -411,13 +376,6 @@ function MessageContent_({
           className,
         )}
       >
-        {referenceAttachments.length > 0 && (
-          <ReferenceAttachmentSummary
-            className="self-end shadow-none"
-            references={referenceAttachments}
-            testId="message-reference-attachment"
-          />
-        )}
         {filesList}
         {editState ? (
           <div className="bg-background border-border flex w-full min-w-0 flex-col gap-2 rounded-lg border p-2 shadow-sm">
@@ -533,15 +491,9 @@ const FILE_TYPE_MAP: Record<string, string> = {
   gz: "GZ",
 };
 
-const IMAGE_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
-
 function getFileTypeLabel(filename: string): string {
   const ext = getFileExt(filename);
   return FILE_TYPE_MAP[ext] ?? (ext.toUpperCase() || "FILE");
-}
-
-function isImageFile(filename: string): boolean {
-  return IMAGE_EXTENSIONS.includes(getFileExt(filename));
 }
 
 /**
@@ -557,22 +509,12 @@ function formatBytes(bytes: number): string {
 /**
  * List of files from additional_kwargs.files (with optional upload status)
  */
-function RichFilesList({
-  files,
-  threadId,
-}: {
-  files: FileInMessage[];
-  threadId: string;
-}) {
+function RichFilesList({ files }: { files: FileInMessage[] }) {
   if (files.length === 0) return null;
   return (
     <div className="mb-2 flex flex-wrap justify-end gap-2">
       {files.map((file, index) => (
-        <RichFileCard
-          key={`${file.filename}-${index}`}
-          file={file}
-          threadId={threadId}
-        />
+        <RichFileCard key={`${file.filename}-${index}`} file={file} />
       ))}
     </div>
   );
@@ -581,16 +523,9 @@ function RichFilesList({
 /**
  * Single file card that handles FileInMessage (supports uploading state)
  */
-function RichFileCard({
-  file,
-  threadId,
-}: {
-  file: FileInMessage;
-  threadId: string;
-}) {
+function RichFileCard({ file }: { file: FileInMessage }) {
   const { t } = useI18n();
   const isUploading = file.status === "uploading";
-  const isImage = isImageFile(file.filename);
 
   if (isUploading) {
     return (
@@ -620,27 +555,6 @@ function RichFileCard({
   }
 
   if (!file.path) return null;
-
-  const fileUrl = resolveArtifactURL(file.path, threadId);
-
-  if (isImage) {
-    return (
-      <a
-        href={fileUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="group border-border/40 relative block overflow-hidden rounded-lg border"
-      >
-        <img
-          src={fileUrl}
-          alt={file.filename}
-          loading="lazy"
-          decoding="async"
-          className="h-32 w-auto max-w-60 object-cover transition-transform group-hover:scale-105"
-        />
-      </a>
-    );
-  }
 
   return (
     <div className="bg-background border-border/40 flex max-w-50 min-w-30 flex-col gap-1 rounded-lg border p-3 shadow-sm">
