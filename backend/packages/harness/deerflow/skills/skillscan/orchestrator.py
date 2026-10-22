@@ -16,6 +16,7 @@ import logging
 import posixpath
 import re
 import stat
+import sys
 import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -343,12 +344,63 @@ def _scan_declaration(rel_path: str, text: str) -> list[SecurityFinding]:
     return findings
 
 
+def _parse_python_ast(text: str) -> ast.AST:
+    """Parse untrusted Python without letting a deep expression defeat the scan.
+
+    ``ast.parse`` is recursive, and a hostile package can nest a long binary
+    expression deep enough to hit the interpreter's recursion limit before any
+    deterministic rule runs. Scan results must not depend on the host's default
+    limit (Windows uses a smaller C stack than Linux), so parse under a bounded
+    elevated limit and restore it immediately afterwards.
+    """
+    previous_limit = sys.getrecursionlimit()
+    elevated_limit = max(previous_limit, 10_000)
+    if elevated_limit != previous_limit:
+        sys.setrecursionlimit(elevated_limit)
+    try:
+        return ast.parse(text)
+    finally:
+        if elevated_limit != previous_limit:
+            sys.setrecursionlimit(previous_limit)
+
+
+def _scan_python_text_fallback(rel_path: str, text: str) -> list[SecurityFinding]:
+    """Best-effort deterministic rules for Python that the AST parser cannot read.
+
+    This is intentionally narrower than the AST analysis: it only catches
+    unmistakable primitives so an adversarially deep expression cannot turn an
+    otherwise obvious shell/exfiltration payload into a clean scan.
+    """
+    findings: list[SecurityFinding] = []
+    shell = re.search(r"\b(?:os\.system|os\.popen|subprocess\.(?:run|call|Popen|check_output|check_call))\s*\(", text)
+    if shell:
+        findings.append(_finding_from_match("python-shell-exec", rel_path, text, shell))
+    dynamic = re.search(r"\b(?:eval|exec)\s*\(", text)
+    if dynamic:
+        findings.append(_finding_from_match("python-dynamic-exec", rel_path, text, dynamic))
+
+    network = re.search(r"\b(?:requests|httpx|urllib|http\.client|socket)\b", text)
+    if network:
+        env = re.search(r"\bos\.(?:environ|getenv)\b", text)
+        if env:
+            findings.append(_finding("python-env-dump-exfil", file=rel_path, line=_line_number(text, env.start()), evidence="os.environ + network client"))
+        sensitive = _SENSITIVE_PATH_RE.search(text)
+        if sensitive:
+            findings.append(_finding("python-sensitive-exfil", file=rel_path, line=_line_number(text, sensitive.start()), evidence="sensitive read + network client"))
+    return findings
+
+
 def _scan_python(rel_path: str, text: str) -> list[SecurityFinding]:
     findings: list[SecurityFinding] = []
     try:
-        tree = ast.parse(text)
+        tree = _parse_python_ast(text)
     except SyntaxError:
         return findings
+    except RecursionError:
+        # A hostile expression can still defeat the parser on hosts with a
+        # smaller C stack. Fall back to the deterministic text rules so the
+        # obvious execution/exfiltration primitives are not silently skipped.
+        return _scan_python_text_fallback(rel_path, text)
 
     aliases = _collect_python_aliases(tree)
     has_sensitive_read = False

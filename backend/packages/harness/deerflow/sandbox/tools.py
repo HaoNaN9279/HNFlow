@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import ntpath
 import os
 import posixpath
 import re
@@ -727,13 +728,23 @@ def _thread_virtual_to_actual_mappings(thread_data: ThreadDataState) -> dict[str
         mappings[f"{VIRTUAL_PATH_PREFIX}/outputs"] = outputs
 
     # Also map the virtual root when all known dirs share the same parent.
-    actual_dirs = [Path(p) for p in (workspace, uploads, outputs) if p]
+    # Use a separator-preserving parent calculation: ``Path(...).parent``
+    # normalises POSIX-style paths to backslashes on Windows, which would make
+    # a virtual→actual replacement change the caller's path style.
+    actual_dirs = [p for p in (workspace, uploads, outputs) if p]
     if actual_dirs:
-        common_parent = str(Path(actual_dirs[0]).parent)
-        if all(str(path.parent) == common_parent for path in actual_dirs):
+        common_parent = _parent_preserving_style(actual_dirs[0])
+        if all(_parent_preserving_style(path) == common_parent for path in actual_dirs):
             mappings[VIRTUAL_PATH_PREFIX] = common_parent
 
     return mappings
+
+
+def _parent_preserving_style(path: str) -> str:
+    """Return the parent of *path* without changing its separator style."""
+    if "\\" in path or re.match(r"^[A-Za-z]:", path):
+        return ntpath.dirname(path)
+    return posixpath.dirname(path)
 
 
 def _thread_actual_to_virtual_mappings(thread_data: ThreadDataState) -> dict[str, str]:
@@ -838,6 +849,8 @@ def mask_local_paths_in_output(output: str, thread_data: ThreadDataState | None)
             if matched_path == _base:
                 return _virtual
             relative = matched_path[len(_base) :].lstrip("/\\")
+            if "\\" in _base:
+                relative = relative.replace("\\", "/")
             return f"{_virtual}/{relative}" if relative else _virtual
 
         result = pattern.sub(replace_match, result)

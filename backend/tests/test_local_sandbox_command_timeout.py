@@ -76,6 +76,7 @@ def test_foreground_blocking_command_times_out_with_notice():
 
 
 def test_timeout_notice_formats_fractional_and_singular_timeouts(monkeypatch):
+    monkeypatch.setattr(local_sandbox.os, "name", "posix")
     monkeypatch.setattr(LocalSandbox, "_get_shell", lambda self: "/bin/sh")
     monkeypatch.setattr(LocalSandbox, "_run_posix_command", staticmethod(lambda args, timeout, env=None: ("", "", 0, True)))
 

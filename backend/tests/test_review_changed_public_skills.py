@@ -296,7 +296,7 @@ def test_main_exits_nonzero_when_review_cli_reports_error(tmp_path: Path, monkey
             "--fail-on-incomplete",
         ]
         assert kwargs["cwd"] == tmp_path
-        assert "backend/packages/harness" in kwargs["env"]["PYTHONPATH"]
+        assert "backend/packages/harness" in kwargs["env"]["PYTHONPATH"].replace("\\", "/")
         assert kwargs["check"] is False
         return _completed(command, returncode=1)
 

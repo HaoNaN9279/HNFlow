@@ -851,6 +851,7 @@ asyncio.run(acp.run_agent(_HungAgent()))
 """
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="anyio's Windows test loop cannot spawn asyncio subprocesses")
 @pytest.mark.anyio
 async def test_invoke_acp_agent_times_out_and_kills_hung_subprocess(monkeypatch, tmp_path):
     """invoke_acp_agent must time out and kill the subprocess instead of hanging

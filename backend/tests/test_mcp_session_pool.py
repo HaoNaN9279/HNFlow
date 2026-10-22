@@ -2,8 +2,10 @@
 
 import asyncio
 import logging
+import os
 import stat
 import threading
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -309,7 +311,8 @@ async def test_session_pool_tool_pins_cwd_and_temp_env(tmp_path):
     assert session_connection["env"]["TMP"] == str(tmp_dir)
     assert session_connection["env"]["TEMP"] == str(tmp_dir)
     assert tmp_dir.is_dir()
-    assert stat.S_IMODE(tmp_dir.stat().st_mode) == 0o700
+    if os.name != "nt":
+        assert stat.S_IMODE(tmp_dir.stat().st_mode) == 0o700
 
 
 @pytest.mark.asyncio
@@ -354,7 +357,7 @@ async def test_session_pool_tool_does_not_override_explicit_tmpdir(tmp_path):
     session_connection = create_session.call_args.args[0]
     # Operator-provided TMPDIR is preserved; TMP/TEMP still get our default.
     assert session_connection["env"]["TMPDIR"] == "/operator/tmp"
-    assert session_connection["env"]["TMP"].endswith(_MCP_TMP_SUBDIR)
+    assert Path(session_connection["env"]["TMP"]).parts[-2:] == tuple(_MCP_TMP_SUBDIR.split("/"))
 
 
 @pytest.mark.asyncio

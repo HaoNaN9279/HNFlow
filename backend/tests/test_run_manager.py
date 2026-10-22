@@ -524,6 +524,11 @@ async def test_list_by_thread(manager: RunManager):
     r1 = await manager.create("thread-1")
     r2 = await manager.create("thread-1")
     await manager.create("thread-2")
+    # Pin distinct timestamps: Windows' coarser clock can put both creates in
+    # the same tick, and equal timestamps legitimately preserve insertion order
+    # (covered separately by the tie-break test).
+    r1.created_at = "2026-01-01T00:00:00+00:00"
+    r2.created_at = "2026-01-02T00:00:00+00:00"
 
     runs = await manager.list_by_thread("thread-1")
     assert len(runs) == 2

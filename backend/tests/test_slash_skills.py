@@ -3,6 +3,7 @@ import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
@@ -722,7 +723,10 @@ def test_skill_activation_middleware_rejects_skill_file_outside_skills_root(monk
     outside_dir.mkdir()
     outside_file = outside_dir / "SKILL.md"
     outside_file.write_text("# Leaked\nDo not read me.", encoding="utf-8")
-    (skill_dir / "SKILL.md").symlink_to(outside_file)
+    try:
+        (skill_dir / "SKILL.md").symlink_to(outside_file)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are not available: {exc}")
     skill = Skill(
         name="data-analysis",
         description="Description for data-analysis",

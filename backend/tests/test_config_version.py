@@ -7,6 +7,7 @@ import os
 import tempfile
 from pathlib import Path
 
+import pytest
 import yaml
 
 from deerflow.config.app_config import AppConfig
@@ -126,6 +127,7 @@ def test_newer_user_version_no_warning(caplog):
         assert "outdated" not in caplog.text
 
 
+@pytest.mark.skipif(os.name == "nt", reason="config-upgrade.sh requires a usable POSIX bash")
 def test_version_26_config_upgrades_to_checkpoint_channel_mode(tmp_path, caplog):
     """A v26 user config must be flagged outdated and merge the new persisted field.
 

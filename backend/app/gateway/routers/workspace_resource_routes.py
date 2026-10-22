@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from app.gateway.deps import get_optional_user_from_request
 from app.gateway.permissions import require_permission
 from deerflow.persistence.engine import get_session_factory
+from deerflow.utils.thread_id import ThreadId
 from deerflow.workspace import (
     WorkspaceResourceConflict,
     WorkspaceResourceError,
@@ -55,7 +56,7 @@ def _http_error(exc: Exception) -> HTTPException:
 @router.get("")
 @require_permission("threads", "read")
 async def list_resource_changes(
-    thread_id: str,
+    thread_id: ThreadId,
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
 ):
@@ -69,7 +70,7 @@ async def list_resource_changes(
 
 @router.post("/undo")
 @require_permission("threads", "write")
-async def undo_resource_changes(thread_id: str, request: Request, body: WorkspaceUndoRequest | None = None):
+async def undo_resource_changes(thread_id: ThreadId, request: Request, body: WorkspaceUndoRequest | None = None):
     """Undo the latest completed Lead Agent turn's resource changes."""
     service = await _service(request)
     payload = body or WorkspaceUndoRequest()

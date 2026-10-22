@@ -10,7 +10,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+pytestmark = pytest.mark.skipif(shutil.which("sh") is None, reason="POSIX sh is required to exercise the Dockerfile/deploy shell snippets")
 
 
 def _backend_dockerfile_uv_sync_script() -> str:

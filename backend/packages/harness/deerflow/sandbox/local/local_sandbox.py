@@ -233,10 +233,14 @@ class LocalSandbox(Sandbox):
         # What is specific to this site: without the boundary the regex yields the bare
         # root, which then *equals* the mount root and so satisfies
         # ``_reverse_resolve_path``'s own ``+ "/"`` guard — the sibling is rewritten to a
-        # container path that forward resolution refuses to map back. And bases stay
-        # separator-*sensitive*: they come from ``Path.resolve()`` and already carry the
-        # platform's separator, so relaxing them would widen what this masks.
-        return [build_output_mask_pattern(self._resolved_local_paths[m]) for m in self._mappings_by_local_specificity]
+        # container path that forward resolution refuses to map back.
+        #
+        # Bases are matched separator-agnostically: ``write_file`` normalises
+        # container paths in agent-authored content to forward slashes (so Windows
+        # backslashes cannot become Python escape sequences), while
+        # ``Path.resolve()`` renders the base with native backslashes. Without
+        # this, a written-then-read file on Windows leaks the raw host path.
+        return [build_output_mask_pattern(self._resolved_local_paths[m], separator_agnostic=True) for m in self._mappings_by_local_specificity]
 
     @cached_property
     def _resolved_local_paths(self) -> dict[PathMapping, str]:

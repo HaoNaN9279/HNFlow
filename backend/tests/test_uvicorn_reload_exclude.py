@@ -164,7 +164,7 @@ def test_sandbox_mkdir_precedes_uvicorn_launch(name):
     """
     lines = LAUNCHERS[name].read_text(encoding="utf-8").splitlines()
     launch_idx = next(
-        (i for i, ln in enumerate(lines) if not ln.lstrip().startswith("#") and re.search(r"uv run (?:python -m )?uvicorn", ln)),
+        (i for i, ln in enumerate(lines) if not ln.lstrip().startswith("#") and re.search(r"(?:uv run (?:python -m )?uvicorn|\$GATEWAY_PYTHON_CMD -m uvicorn)", ln)),
         None,
     )
     mkdir_idx = next((i for i, ln in enumerate(lines) if re.search(r"\bmkdir\b", ln) and "sandbox" in ln.lower()), None)

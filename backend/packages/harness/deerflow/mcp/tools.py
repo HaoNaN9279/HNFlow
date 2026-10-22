@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 from collections.abc import Iterable, Mapping
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.config import get_config
@@ -53,7 +55,7 @@ _MCP_TMP_SUBDIR = ".mcp/tmp"
 # server process cwd (e.g. ``temp/page.yml``, ``./shot.png``). Each match is
 # only rewritten when it resolves to an existing file inside the thread's
 # user-data tree, so an over-eager match is harmless (left untouched).
-_LOCAL_PATH_IN_TEXT_RE = re.compile(r"(?:file://)?/[^\s'\"<>|*?]+|(?:\.{0,2}/|[\w.-]+/)[^\s'\"<>|*?]+")
+_LOCAL_PATH_IN_TEXT_RE = re.compile(r"(?:file://)?(?:[A-Za-z]:[\\/][^\s'\"<>|*?]+|\\\\[^\s'\"<>|*?]+|/[^\s'\"<>|*?]+|(?:\.{0,2}/|[\w.-]+/)[^\s'\"<>|*?]+)")
 
 # Trailing characters that are punctuation/markup rather than part of a path.
 _TEXT_PATH_TRAILING_CHARS = ".,;:!?)]}>\"'`"
@@ -71,20 +73,38 @@ def _local_path_from_uri(uri: str, *, base_dir: Path | None = None) -> Path | No
     """
     if not uri:
         return None
+    # ``urlparse`` treats a Windows drive prefix (``C:\...`` / ``C:/...``) as a
+    # URL scheme. Recognize it as a local absolute path before parsing.
+    if len(uri) >= 3 and uri[0].isalpha() and uri[1] == ":" and uri[2] in "\\/":
+        return Path(uri)
     try:
         parsed = urlparse(uri)
     except ValueError:
         return None
     if parsed.scheme == "file":
-        raw = unquote(parsed.path)
-    elif parsed.scheme == "":
-        raw = uri
-    else:
+        if parsed.netloc and parsed.netloc.lower() != "localhost":
+            # Windows drive letters arrive in ``netloc`` for the non-canonical
+            # ``file://C:\path`` spelling; a real remote host is UNC.
+            if re.match(r"^[A-Za-z]:", unquote(parsed.netloc)):
+                raw = unquote(parsed.netloc) + unquote(parsed.path)
+            else:
+                raw = f"//{unquote(parsed.netloc)}{unquote(parsed.path)}"
+        else:
+            raw = unquote(parsed.path)
+        if not raw:
+            return None
+        if os.name == "nt":
+            raw = url2pathname(raw)
+        path = Path(raw)
+        if not path.is_absolute() and not raw.startswith(("/", "\\")):
+            return None
+        return path
+    if parsed.scheme != "":
         return None
-    if not raw:
-        return None
+
+    raw = uri
     path = Path(raw)
-    if not path.is_absolute():
+    if not path.is_absolute() and not raw.startswith(("/", "\\")):
         if base_dir is None:
             return None
         path = base_dir / path

@@ -37,19 +37,29 @@ def _collect_live_tests(
     if config_exists:
         (temp_repo / "config.yaml").write_text("models: []\n", encoding="utf-8")
 
-    env = {
-        "PATH": os.environ.get("PATH", ""),
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONIOENCODING": "utf-8",
-        "PYTHONUTF8": "1",
-        "PYTHONPATH": os.pathsep.join(
-            [
-                str(BACKEND_ROOT),
-                str(BACKEND_ROOT / "packages" / "harness"),
-            ]
-        ),
-        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-    }
+    # Start from the host environment because Windows needs SYSTEMROOT/TEMP/etc.
+    # to initialize sockets and the stdlib; then strip credential-bearing and
+    # live-policy variables so the probe still proves the opt-in contract.
+    env = os.environ.copy()
+    for key in list(env):
+        upper = key.upper()
+        if upper.startswith(("DEER_FLOW", "OPENAI_", "ANTHROPIC_", "LANGFUSE_", "LANGSMITH_")) or upper in {"CI", "PYTHONPATH", "PYTHONHOME"}:
+            env.pop(key, None)
+    env.update(
+        {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
+            "PYTHONPATH": os.pathsep.join(
+                [
+                    str(BACKEND_ROOT),
+                    str(BACKEND_ROOT / "packages" / "harness"),
+                ]
+            ),
+            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        }
+    )
     if opt_in:
         env[LIVE_OPT_IN] = "1"
     if ci:

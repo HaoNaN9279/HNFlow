@@ -9,6 +9,7 @@ same shape — see PR #2767 / Issue #2754.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -16,6 +17,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENTRYPOINT = REPO_ROOT / "docker" / "dev-entrypoint.sh"
+
+pytestmark = pytest.mark.skipif(shutil.which("sh") is None, reason="POSIX sh is required to exercise dev-entrypoint.sh")
 
 
 def _run(uv_extras: str | None) -> subprocess.CompletedProcess[str]:

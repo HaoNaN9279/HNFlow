@@ -68,6 +68,6 @@ async def test_install_skill_archive_does_not_block_event_loop(tmp_path: Path, m
 
     assert result["success"] is True
     assert result["skill_name"] == "loop-skill"
-    installed_md = tmp_path / "skills" / "custom" / "loop-skill" / "SKILL.md"
+    installed_md = tmp_path / "skills" / "custom" / "loop-skill" / "v0.1.0" / "SKILL.md"
     assert await asyncio.to_thread(installed_md.exists)
-    assert await asyncio.to_thread((tmp_path / "skills" / "custom" / "loop-skill" / "references" / "usage.md").exists)
+    assert await asyncio.to_thread((installed_md.parent / "references" / "usage.md").exists)

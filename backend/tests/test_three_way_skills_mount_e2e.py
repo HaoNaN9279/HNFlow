@@ -362,11 +362,11 @@ class TestThreeWayMountEndToEnd:
 
         assert "/mnt/skills/custom" in mount_entries
         assert "dst=/mnt/skills/custom" in mount_entries["/mnt/skills/custom"]
-        assert "users/noob/skills_view/custom" in mount_entries["/mnt/skills/custom"]
+        assert "users/noob/skills_view/custom" in mount_entries["/mnt/skills/custom"].replace("\\", "/")
 
         assert "/mnt/skills/integrations" in mount_entries
         assert "dst=/mnt/skills/integrations" in mount_entries["/mnt/skills/integrations"]
-        assert "users/noob/skills_view/integrations" in mount_entries["/mnt/skills/integrations"]
+        assert "users/noob/skills_view/integrations" in mount_entries["/mnt/skills/integrations"].replace("\\", "/")
 
         # noob has no per-user custom → legacy is mounted
         assert "/mnt/skills/legacy" in mount_entries

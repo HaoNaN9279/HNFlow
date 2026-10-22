@@ -385,7 +385,7 @@ async def test_run_once_releases_claim_when_driver_is_missing_or_fails():
     assert "No MCP task driver registered" in released["task-1"]["error"]
     assert released["task-2"]["error"] == "network down"
     assert released["task-1"]["next_poll_at"] == now + timedelta(seconds=5)
-    assert released["task-2"]["next_poll_at"] > now + timedelta(seconds=5)
+    assert released["task-2"]["next_poll_at"] >= now + timedelta(seconds=5)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,7 @@
+import os
 import stat
+
+import pytest
 
 from deerflow.skills.permissions import make_skill_tree_sandbox_readable, make_skill_written_path_sandbox_readable
 
@@ -7,6 +10,7 @@ def _mode(path):
     return stat.S_IMODE(path.stat().st_mode)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no POSIX permission bits")
 def test_skill_tree_readability_includes_hidden_paths_and_removes_sandbox_write(tmp_path):
     root = tmp_path / "demo-skill"
     hidden_dir = root / ".hidden"
@@ -37,6 +41,7 @@ def test_skill_tree_readability_includes_hidden_paths_and_removes_sandbox_write(
     assert _mode(script_file) == 0o755
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no POSIX permission bits")
 def test_written_path_readability_is_limited_to_written_path(tmp_path):
     root = tmp_path / "demo-skill"
     ref_dir = root / "references"

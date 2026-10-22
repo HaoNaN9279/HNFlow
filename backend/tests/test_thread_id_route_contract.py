@@ -78,9 +78,10 @@ def _collect_thread_id_routes():
         thread_runs,
         threads,
         uploads,
+        workspace_resource_routes,
     )
 
-    routers = [artifacts, browser, runs, scheduled_tasks, skills, thread_runs, threads, uploads]
+    routers = [artifacts, browser, runs, scheduled_tasks, skills, thread_runs, threads, uploads, workspace_resource_routes]
     cases = []
     for module in routers:
         for route in module.router.routes:

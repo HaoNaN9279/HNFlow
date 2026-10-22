@@ -109,7 +109,7 @@ class TestLocalUriToVirtualPath:
         src = _workspace_file(paths, "shot.png")
 
         with _patch_paths(paths):
-            result = mcp_tools._local_uri_to_virtual_path(f"file://{src}", thread_id="t1", user_id="u1")
+            result = mcp_tools._local_uri_to_virtual_path(src.as_uri(), thread_id="t1", user_id="u1")
 
         assert result == f"{VIRTUAL_PATH_PREFIX}/workspace/shot.png"
 
@@ -430,7 +430,7 @@ class TestConvertCallToolResultRewrites:
     def test_resource_link_image_inside_workspace_rewritten(self, paths: Paths):
         src = _workspace_file(paths, "page.png", content=b"png")
         result = CallToolResult(
-            content=[ResourceLink(type="resource_link", name="page", uri=f"file://{src}", mimeType="image/png")],
+            content=[ResourceLink(type="resource_link", name="page", uri=src.as_uri(), mimeType="image/png")],
             isError=False,
         )
 
@@ -446,7 +446,7 @@ class TestConvertCallToolResultRewrites:
         src = outputs / "doc.pdf"
         src.write_bytes(b"pdf")
         result = CallToolResult(
-            content=[ResourceLink(type="resource_link", name="doc", uri=f"file://{src}", mimeType="application/pdf")],
+            content=[ResourceLink(type="resource_link", name="doc", uri=src.as_uri(), mimeType="application/pdf")],
             isError=False,
         )
 
@@ -459,7 +459,7 @@ class TestConvertCallToolResultRewrites:
     def test_resource_link_outside_user_data_untouched(self, tmp_path: Path, paths: Paths):
         src = tmp_path / "page.png"
         src.write_bytes(b"png")
-        uri = f"file://{src}"
+        uri = src.as_uri()
         result = CallToolResult(
             content=[ResourceLink(type="resource_link", name="page", uri=uri, mimeType="image/png")],
             isError=False,
@@ -513,7 +513,7 @@ class TestConvertCallToolResultRewrites:
 
     def test_no_context_does_not_rewrite(self, paths: Paths):
         src = _workspace_file(paths, "x.png", content=b"png")
-        uri = f"file://{src}"
+        uri = src.as_uri()
         result = CallToolResult(
             content=[ResourceLink(type="resource_link", name="x", uri=uri, mimeType="image/png")],
             isError=False,

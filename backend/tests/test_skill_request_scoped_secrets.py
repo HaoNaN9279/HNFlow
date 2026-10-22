@@ -23,13 +23,18 @@ from deerflow.skills.types import SecretRequirement, Skill, SkillCategory
 _SLASH_SOURCE_OWNER_TOKEN = "test-slash-source-owner"
 
 
+def _print_env(name: str) -> str:
+    """Shell command that prints one env var, independent of host shell syntax."""
+    return f"python -c \"import os; print(os.environ.get('{name}', ''))\""
+
+
 class TestLocalSandboxEnvInjection:
     """LocalSandbox.execute_command(env=...) injects per-call env into the subprocess."""
 
     def test_injected_env_visible_to_command(self):
         sandbox = LocalSandbox(id="local")
         out = sandbox.execute_command(
-            "echo $DEERFLOW_TEST_SECRET",
+            _print_env("DEERFLOW_TEST_SECRET"),
             env={"DEERFLOW_TEST_SECRET": "s3cret-value"},
         )
         assert "s3cret-value" in out
@@ -38,14 +43,14 @@ class TestLocalSandboxEnvInjection:
         """env=None preserves the legacy inherited-os.environ behaviour."""
         monkeypatch.setenv("DEERFLOW_INHERITED_VAR", "inherited-value")
         sandbox = LocalSandbox(id="local")
-        out = sandbox.execute_command("echo $DEERFLOW_INHERITED_VAR")
+        out = sandbox.execute_command(_print_env("DEERFLOW_INHERITED_VAR"))
         assert "inherited-value" in out
 
     def test_injected_env_is_per_call_only(self):
         """Injected env must not leak into a subsequent call that does not pass it."""
         sandbox = LocalSandbox(id="local")
-        sandbox.execute_command("true", env={"DEERFLOW_EPHEMERAL": "leaky"})
-        out = sandbox.execute_command("echo [$DEERFLOW_EPHEMERAL]")
+        sandbox.execute_command('python -c "pass"', env={"DEERFLOW_EPHEMERAL": "leaky"})
+        out = sandbox.execute_command(_print_env("DEERFLOW_EPHEMERAL"))
         assert "leaky" not in out
 
     def test_platform_secret_scrubbed_from_inherited_env(self, monkeypatch):
@@ -54,14 +59,14 @@ class TestLocalSandboxEnvInjection:
         is security theatre — a skill script could simply read $OPENAI_API_KEY."""
         monkeypatch.setenv("OPENAI_API_KEY", "sk-platform-should-not-leak")
         sandbox = LocalSandbox(id="local")
-        out = sandbox.execute_command("echo [$OPENAI_API_KEY]")
+        out = sandbox.execute_command(_print_env("OPENAI_API_KEY"))
         assert "sk-platform-should-not-leak" not in out
 
     def test_benign_env_still_inherited_after_scrub(self, monkeypatch):
         """Scrubbing platform secrets must not strip harmless vars that skills rely on."""
         monkeypatch.setenv("DEERFLOW_PLAIN_VAR", "harmless-value")
         sandbox = LocalSandbox(id="local")
-        out = sandbox.execute_command("echo [$DEERFLOW_PLAIN_VAR]")
+        out = sandbox.execute_command(_print_env("DEERFLOW_PLAIN_VAR"))
         assert "harmless-value" in out
 
     def test_injected_secret_survives_scrub(self, monkeypatch):
@@ -69,7 +74,7 @@ class TestLocalSandboxEnvInjection:
         pattern — injection happens after scrubbing the inherited environment."""
         sandbox = LocalSandbox(id="local")
         out = sandbox.execute_command(
-            "echo [$INJECTED_API_KEY]",
+            _print_env("INJECTED_API_KEY"),
             env={"INJECTED_API_KEY": "scoped-value"},
         )
         assert "scoped-value" in out
@@ -246,11 +251,14 @@ class TestEnvPolicy:
         monkeypatch.setenv("MYSQL_URL", "mysql://user:pw@host/db")
         monkeypatch.setenv("MYSQL_PWD", "prod-db-password")
         monkeypatch.setenv("REDISCLI_AUTH", "prod-redis-auth")
+        # PWD is POSIX-specific; set it explicitly so the "benign names survive"
+        # assertion is meaningful on Windows too.
+        monkeypatch.setenv("PWD", "/tmp/work")
         env = build_sandbox_env()
         assert "MYSQL_URL" not in env
         assert "MYSQL_PWD" not in env
         assert "REDISCLI_AUTH" not in env
-        assert env.get("PWD")  # the working directory must survive the added entries
+        assert env.get("PWD") == "/tmp/work"
 
     def test_injection_still_wins_for_the_newly_blocked_names(self, monkeypatch):
         """``required-secrets`` stays the escape hatch for the names added here.

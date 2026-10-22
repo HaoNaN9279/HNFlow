@@ -39,6 +39,11 @@ def _is_repo_nginx_pid(
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is required to exercise serve.sh helpers")
+    try:
+        if subprocess.run([bash, "-c", "exit 0"], timeout=5, check=False).returncode != 0:
+            pytest.skip("the bash on PATH is not a usable POSIX shell (e.g. WSL without a distro)")
+    except OSError:
+        pytest.skip("bash could not be executed")
 
     function = _extract_shell_function("_is_repo_nginx_pid")
     script = f"""

@@ -2,6 +2,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from deerflow.community.aio_sandbox.aio_sandbox import AioSandbox
 from deerflow.config.paths import Paths
 from deerflow.sandbox.local.local_sandbox import LocalSandbox, PathMapping
@@ -358,7 +360,10 @@ def test_find_grep_matches_skips_symlink_outside_root(tmp_path) -> None:
     workspace.mkdir()
     outside = tmp_path / "outside.txt"
     outside.write_text("TODO outside\n", encoding="utf-8")
-    (workspace / "outside-link.txt").symlink_to(outside)
+    try:
+        (workspace / "outside-link.txt").symlink_to(outside)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip(f"symlinks are not available: {exc}")
 
     matches, truncated = find_grep_matches(workspace, "TODO")
 

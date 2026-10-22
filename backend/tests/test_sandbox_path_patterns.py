@@ -113,7 +113,10 @@ def test_local_sandbox_reverse_patterns_route_through_the_helper(tmp_path: Path)
     )
 
     resolved = str(Path(local).resolve())
-    assert [p.pattern for p in sandbox._reverse_output_patterns] == [build_output_mask_pattern(resolved).pattern]
+    # LocalSandbox also needs separator-agnostic matching: write_file normalises
+    # agent-authored content to forward slashes on Windows, while resolve()
+    # renders the base with backslashes.
+    assert [p.pattern for p in sandbox._reverse_output_patterns] == [build_output_mask_pattern(resolved, separator_agnostic=True).pattern]
 
 
 def test_tools_mask_patterns_route_through_the_helper(tmp_path: Path) -> None:

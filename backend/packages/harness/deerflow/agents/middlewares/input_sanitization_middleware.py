@@ -89,6 +89,9 @@ _BLOCKED_TAG_NAMES: frozenset[str] = frozenset(
         "memory_tool_system",
         "todo_list_system",
         "durable_context_data",
+        # Capability-group prompt blocks assembled by workflow/prompts.py.
+        "capability_rules",
+        "capability_skills",
         "slash_skill_activation",
         "mcp_routing_hints",
         "available-deferred-tools",

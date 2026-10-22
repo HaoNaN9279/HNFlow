@@ -28,5 +28,6 @@ def test_bundled_skill_frontmatter_is_valid(skill_dir: Path) -> None:
     assert name, f"{skill_dir.relative_to(SKILLS_PUBLIC_DIR)}: no name extracted"
 
 
-def test_public_skills_directory_has_no_bundled_packages() -> None:
-    assert not BUNDLED_SKILL_DIRS, f"unexpected bundled skills under {SKILLS_PUBLIC_DIR}"
+def test_public_skills_directory_contains_only_reviewed_packages() -> None:
+    packages = {skill_dir.relative_to(SKILLS_PUBLIC_DIR).parts[0] for skill_dir in BUNDLED_SKILL_DIRS}
+    assert packages == {"workspace-manager"}, f"unexpected bundled skills under {SKILLS_PUBLIC_DIR}: {sorted(packages)}"

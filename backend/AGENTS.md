@@ -1507,6 +1507,7 @@ CI.
 - Write tests in `backend/tests/` following the existing naming convention `test_<feature>.py`
 - Run the full offline suite before and after your change: `make test`
 - Tests must pass before a feature is considered complete
+- Windows compatibility: do not assume POSIX-only semantics. Symlink tests must skip on `OSError`/`NotImplementedError`; chmod/PWD assertions are POSIX-only; native-path expectations must use `Path(...).as_posix()` or separator normalization. Tests that invoke `sh`/`bash` skip when no usable POSIX shell exists (a WSL stub is not enough).
 - For lightweight config/utility modules, prefer pure unit tests with no external dependencies
 - If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `deerflow.subagents.executor`)
 

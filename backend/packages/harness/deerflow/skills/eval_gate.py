@@ -25,6 +25,7 @@ when a manifest actually requires a pass.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -292,7 +293,10 @@ async def enforce_skill_eval_gate(
     could not be run at all, because a declared gate that silently passes is
     worse than one that refuses.
     """
-    suite = collect_trigger_cases(root)
+    # Manifest discovery reads/rglobs the extracted package. Keep that
+    # synchronous filesystem work off the event loop, matching the rest of the
+    # install pipeline; the strict Blockbuster gate anchors this path.
+    suite = await asyncio.to_thread(collect_trigger_cases, root)
     for problem in suite.problems:
         logger.warning("Skill '%s' eval manifest problem (%s); not gating on it", skill_name, problem)
 

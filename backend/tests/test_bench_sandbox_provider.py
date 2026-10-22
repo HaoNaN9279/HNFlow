@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -302,7 +303,8 @@ def test_boxlite_shim_workaround_retries_after_fixing_permissions(monkeypatch, t
 
     assert result == "ok"
     assert calls == 2
-    assert shim.stat().st_mode & 0o111
+    if os.name != "nt":
+        assert shim.stat().st_mode & 0o111
 
 
 def test_boxlite_shim_workaround_loud_fails_for_other_versions(monkeypatch, tmp_path):

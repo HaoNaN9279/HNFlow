@@ -59,6 +59,10 @@ def _mock_sandbox(**kwargs: Any) -> MagicMock:
     sandbox.execute_command.return_value = kwargs.get("stdout", "")
     if "download" in kwargs:
         sandbox.download_file.return_value = kwargs["download"]
+    else:
+        # Compensation snapshots every mutating target before the operation.
+        # A target that does not exist yet is the normal case for import/export.
+        sandbox.download_file.side_effect = FileNotFoundError
     return sandbox
 
 
