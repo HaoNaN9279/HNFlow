@@ -133,6 +133,7 @@ describe("node catalog", () => {
       value: null,
       task: "",
     });
+    expect(getNodeCatalogEntry("data:schema")!.label).toBe("Schema");
     expect(getNodeCatalogEntry("data:convert")!.defaultParams).toEqual({
       to: "str",
     });

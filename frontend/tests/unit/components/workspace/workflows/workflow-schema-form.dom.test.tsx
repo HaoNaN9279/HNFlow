@@ -10,10 +10,18 @@ rs.mock("@/core/i18n/hooks", () => ({
       workflows: {
         properties: {
           schema: {
-            title: "AI Result Schema",
+            title: "Schema",
             hint: "Common fields are fixed",
             commonTitle: "Common fields",
             commonHint: "Common hint",
+            commonFieldHints: {
+              summary: "Summary hint",
+              status: "Status hint",
+              content: "Content hint",
+              artifacts: "Artifacts hint",
+              metadata: "Metadata hint",
+              error: "Error hint",
+            },
             customTitle: "Custom fields",
             addField: "Add field",
             noFields: "No custom fields",
@@ -28,30 +36,11 @@ rs.mock("@/core/i18n/hooks", () => ({
             enumValuesPlaceholder: "approve, reject",
             removeField: "Remove field",
             maxRepairs: "Max repairs",
-            referencesTitle: "References",
-            referencesHint: "Use [schema.summary]",
-            usageTitle: "Usage",
-            inputUsage: "As input",
-            outputUsage: "As output",
-            none: "None",
             rawJson: "Raw JSON",
           },
         },
       },
     },
-  }),
-}));
-
-rs.mock("@/components/workspace/workflows/workflow-editor-context", () => ({
-  useWorkflowEditor: () => ({
-    currentDefinition: () => ({
-      id: "wf-1",
-      name: "Workflow",
-      version: "0.1.0",
-      nodes: [],
-      edges: [],
-      metadata: {},
-    }),
   }),
 }));
 
@@ -82,7 +71,7 @@ afterEach(() => {
 });
 
 describe("WorkflowSchemaForm", () => {
-  it("shows the fixed common fields and adds a custom field", () => {
+  it("shows common field semantics and adds a custom field", () => {
     const onChange = rs.fn();
     render(
       <WorkflowSchemaForm
@@ -92,8 +81,11 @@ describe("WorkflowSchemaForm", () => {
       />,
     );
 
-    expect(screen.getByText("AI Result Schema")).toBeTruthy();
-    expect(screen.getByText("[schema.summary]")).toBeTruthy();
+    expect(screen.getByText("Schema")).toBeTruthy();
+    expect(screen.getByText("Summary hint")).toBeTruthy();
+    expect(screen.getByText("Error hint")).toBeTruthy();
+    expect(screen.queryByText("References")).toBeNull();
+    expect(screen.queryByText("Usage")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Add field" }));
 
     const next = onChange.mock.calls[0]![0] as WorkflowNode;

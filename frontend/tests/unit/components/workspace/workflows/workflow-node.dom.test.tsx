@@ -33,6 +33,8 @@ rs.mock("@/core/i18n/hooks", () => ({
             jsonHint: "Enter JSON",
             fields: {
               duration: "Duration (s)",
+              value: "Value",
+              taskPrompt: "Template prompt",
             },
           },
         },
@@ -161,14 +163,17 @@ describe("WorkflowNode card content", () => {
     const node = makeNode("n-params", "data:assign");
     node.data.workflow.inputs = [{ name: "in", type: "data" }];
     node.data.workflow.outputs = [{ name: "out", type: "data" }];
-    node.data.workflow.params = { value: "hello", tempo: 120 };
+    node.data.workflow.params = { value: "hello", task: "do it" };
     const { container } = renderNodes([node]);
     const card = nodeCard(container, "data:assign");
 
-    expect(card.textContent).toContain("value");
-    expect(card.textContent).toContain("hello");
-    expect(card.textContent).toContain("tempo");
-    expect(card.textContent).toContain("120");
+    expect(
+      card.querySelector<HTMLTextAreaElement>('[aria-label="Value"]')?.value,
+    ).toContain('"hello"');
+    expect(
+      card.querySelector<HTMLTextAreaElement>('[aria-label="Template prompt"]')
+        ?.value,
+    ).toBe("do it");
 
     const handles = card.querySelectorAll<HTMLElement>(".react-flow__handle");
     expect(handles).toHaveLength(2);
@@ -177,10 +182,10 @@ describe("WorkflowNode card content", () => {
     }
   });
 
-  it("renders fixed params and node actions when selected", async () => {
-    const node = makeNode("n-selected", "flow:wait");
+  it("renders fixed params and node actions without selection", async () => {
+    const node = makeNode("n-unselected", "flow:wait");
     node.data.workflow.params = { duration: 3 };
-    const { container } = renderNodes([node], node.id);
+    const { container } = renderNodes([node]);
     const card = nodeCard(container, "flow:wait");
 
     const duration = card.querySelector<HTMLInputElement>(
@@ -195,7 +200,9 @@ describe("WorkflowNode card content", () => {
     ).toBeNull();
 
     await waitFor(() =>
-      expect(bridgeNodes?.some((item) => item.id === "n-selected")).toBe(true),
+      expect(bridgeNodes?.some((item) => item.id === "n-unselected")).toBe(
+        true,
+      ),
     );
   });
 

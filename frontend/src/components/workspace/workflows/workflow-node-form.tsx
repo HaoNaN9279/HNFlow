@@ -61,8 +61,8 @@ type WorkflowNodeFormProps = {
 /**
  * Typed edit form for workflow nodes. Dedicated forms cover the AI agent,
  * prompt preview, subworkflow and app families; every type then gets the fixed
- * schema-driven params editor. The canvas renders this only for the selected
- * node, so prompt preview work and form hooks stay scoped to one card.
+ * schema-driven params editor. The canvas renders this for every card; only the
+ * selected card sets `active`, so prompt-preview work stays scoped to it.
  *
  * Commits are local-draft + commit-on-blur/select; `onChange` fires with a new
  * immutable `WorkflowNode` produced by `applyNodeFormValues`. Saving stays the

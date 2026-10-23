@@ -506,6 +506,14 @@ export interface Translations {
         hint: string;
         commonTitle: string;
         commonHint: string;
+        commonFieldHints: {
+          summary: string;
+          status: string;
+          content: string;
+          artifacts: string;
+          metadata: string;
+          error: string;
+        };
         customTitle: string;
         addField: string;
         noFields: string;
@@ -520,12 +528,6 @@ export interface Translations {
         enumValuesPlaceholder: string;
         removeField: string;
         maxRepairs: string;
-        referencesTitle: string;
-        referencesHint: string;
-        usageTitle: string;
-        inputUsage: string;
-        outputUsage: string;
-        none: string;
         rawJson: string;
       };
       capabilityGroup: {

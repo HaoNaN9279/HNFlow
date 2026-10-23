@@ -620,11 +620,19 @@ export const zhCN: Translations = {
         },
       },
       schema: {
-        title: "AI Result Schema",
+        title: "Schema",
         hint: "通用字段由 HNFlow 固定；这里只编辑自定义字段。",
         commonTitle: "通用字段（只读）",
         commonHint:
           "summary/status/content 必填；status=failed 时必须提供 error。",
+        commonFieldHints: {
+          summary: "一句话概括本次节点结果，供下游快速阅读。",
+          status: "结果状态，取值为 ok、partial 或 failed。",
+          content: "主要结果内容，通常是模型生成的正文。",
+          artifacts: "结果关联的文件或资产列表，可选。",
+          metadata: "附加的结构化上下文信息，可选。",
+          error: "失败原因；status=failed 时必填。",
+        },
         customTitle: "自定义字段",
         addField: "添加字段",
         noFields: "暂无自定义字段。",
@@ -639,13 +647,6 @@ export const zhCN: Translations = {
         enumValuesPlaceholder: "用逗号分隔，例如 approve, reject",
         removeField: "删除字段",
         maxRepairs: "最大修复次数",
-        referencesTitle: "模板引用",
-        referencesHint:
-          "在 template_prompt 中使用以下占位符；引擎会在调用模型前替换。",
-        usageTitle: "使用情况",
-        inputUsage: "作为输入 Schema",
-        outputUsage: "作为输出 Schema",
-        none: "无",
         rawJson: "查看原始 JSON",
       },
       capabilityGroup: {

@@ -43,26 +43,6 @@ const PORT_HANDLE_COLORS: Record<PortType, string> = {
   record: "#65a30d",
 };
 
-function formatParamValue(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (value === null) {
-    return "null";
-  }
-  if (value === undefined) {
-    return "undefined";
-  }
-  if (typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return Object.prototype.toString.call(value);
-  }
-}
-
 /** One port row.  The handle is centered on this row, never offset by a
  *  hard-coded header height —that offset is what pushed slots outside the
  *  node when the header/param area grew. */
@@ -153,10 +133,11 @@ function OpenSubworkflowButton({ workflow }: { workflow: WorkflowNodeModel }) {
 /**
  * Custom React Flow node for workflow steps.
  *
- * There is no inspector: ports, actions and params live on the card. Unselected
- * cards show a compact read-only summary; the selected card expands the fixed
- * schema-driven form. The card body scrolls inside the user-resized dimensions
- * so long instructions cannot push the handles out of their own box.
+ * There is no inspector: ports, actions and params live on the card. Every card
+ * renders the fixed schema-driven form; selection only controls the resizer,
+ * ring, and prompt-preview activity. The card body scrolls inside the
+ * user-resized dimensions so long instructions cannot push the handles out of
+ * their own box.
  */
 export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const { t } = useI18n();
@@ -202,7 +183,6 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
   const hasError = errors.some(
     (error) => error.type === "node" && error.id === id,
   );
-  const paramEntries = Object.entries(workflow.params);
 
   return (
     <>
@@ -343,46 +323,12 @@ export function WorkflowNode({ id, data, selected }: WorkflowNodeProps) {
           </div>
 
           <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-            {selected ? (
-              <WorkflowNodeForm
-                node={{ id, data }}
-                readonly={readonly}
-                active
-                onChange={(next) => updateNode(id, next)}
-              />
-            ) : (
-              paramEntries.length > 0 && (
-                <div className="flex flex-col gap-1 border-t pt-2">
-                  <div className="text-muted-foreground text-[10px] font-medium uppercase">
-                    {t.workflows.properties.paramsTitle}
-                  </div>
-                  <div className="max-h-44 overflow-auto">
-                    {paramEntries.map(([key, value]) => {
-                      const text = formatParamValue(value);
-                      return (
-                        <div
-                          key={key}
-                          className="grid grid-cols-[minmax(0,5.5rem)_minmax(0,1fr)] gap-2 py-0.5 text-[10px]"
-                        >
-                          <span
-                            className="text-muted-foreground truncate font-mono"
-                            title={key}
-                          >
-                            {key}
-                          </span>
-                          <span
-                            className="break-words whitespace-pre-wrap"
-                            title={text}
-                          >
-                            {text || "—"}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )
-            )}
+            <WorkflowNodeForm
+              node={{ id, data }}
+              readonly={readonly}
+              active={selected}
+              onChange={(next) => updateNode(id, next)}
+            />
           </div>
         </NodeContent>
       </Node>

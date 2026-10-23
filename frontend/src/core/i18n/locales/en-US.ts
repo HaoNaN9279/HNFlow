@@ -637,11 +637,20 @@ export const enUS: Translations = {
         },
       },
       schema: {
-        title: "AI Result Schema",
+        title: "Schema",
         hint: "Common fields are fixed by HNFlow; edit custom fields only.",
         commonTitle: "Common fields (read-only)",
         commonHint:
           "summary/status/content are required; status=failed requires error.",
+        commonFieldHints: {
+          summary:
+            "One-line summary of this node's result for downstream readers.",
+          status: "Result status: ok, partial, or failed.",
+          content: "The main result content, usually the model's answer text.",
+          artifacts: "Optional files or assets attached to the result.",
+          metadata: "Optional structured context about the result.",
+          error: "Failure reason; required when status is failed.",
+        },
         customTitle: "Custom fields",
         addField: "Add field",
         noFields: "No custom fields.",
@@ -656,13 +665,6 @@ export const enUS: Translations = {
         enumValuesPlaceholder: "Comma-separated, e.g. approve, reject",
         removeField: "Remove field",
         maxRepairs: "Max repairs",
-        referencesTitle: "Template references",
-        referencesHint:
-          "Use these placeholders in template_prompt; the engine resolves them before the model call.",
-        usageTitle: "Usage",
-        inputUsage: "As input schema",
-        outputUsage: "As output schema",
-        none: "None",
         rawJson: "View raw JSON",
       },
       capabilityGroup: {

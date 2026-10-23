@@ -174,7 +174,7 @@ export const NODE_CATALOG = [
   },
   {
     type: "data:schema",
-    label: "Output Schema",
+    label: "Schema",
     category: "data",
     defaultInputs: [],
     defaultOutputs: [{ name: "schema", type: "record", required: true }],

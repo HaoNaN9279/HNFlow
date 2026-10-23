@@ -10,7 +10,6 @@ import {
   AI_SCHEMA_FIELD_TYPES,
   AI_SCHEMA_MAX_REPAIRS,
   COMMON_AI_SCHEMA_FIELDS,
-  aiSchemaReferenceList,
   emptyAiSchema,
   newAiSchemaField,
   parseAiSchema,
@@ -20,8 +19,6 @@ import {
   type AiSchemaFieldType,
 } from "@/core/workflows/canvas/ai-schema";
 import type { WorkflowNode } from "@/core/workflows/canvas/types";
-
-import { useWorkflowEditor } from "./workflow-editor-context";
 
 type WorkflowSchemaFormProps = {
   node: { id: string; data?: { workflow: WorkflowNode } };
@@ -36,7 +33,6 @@ export function WorkflowSchemaForm({
 }: WorkflowSchemaFormProps) {
   const { t } = useI18n();
   const labels = t.workflows.properties.schema;
-  const { currentDefinition } = useWorkflowEditor();
   const workflow = node.data?.workflow;
   const [schema, setSchema] = useState<AiSchema>(() =>
     workflow ? parseAiSchema(workflow.params.schema) : emptyAiSchema(),
@@ -50,27 +46,6 @@ export function WorkflowSchemaForm({
   }, [node.id]);
 
   const errors = useMemo(() => validateAiSchema(schema), [schema]);
-  const references = useMemo(() => aiSchemaReferenceList(schema), [schema]);
-  const usage = useMemo(() => {
-    if (!workflow) {
-      return { input: [] as string[], output: [] as string[] };
-    }
-    const definition = currentDefinition();
-    const input: string[] = [];
-    const output: string[] = [];
-    for (const edge of definition.edges) {
-      if (edge.source !== node.id) {
-        continue;
-      }
-      if (edge.target_port === "input_schema") {
-        input.push(edge.target);
-      }
-      if (edge.target_port === "output_schema") {
-        output.push(edge.target);
-      }
-    }
-    return { input, output };
-  }, [currentDefinition, node.id, workflow]);
 
   if (!workflow) {
     return null;
@@ -118,7 +93,7 @@ export function WorkflowSchemaForm({
 
       <div className="flex flex-col gap-1.5 rounded border p-2">
         <div className="text-[11px] font-medium">{labels.commonTitle}</div>
-        <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,5rem)_4rem] gap-1 text-[10px]">
+        <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,5rem)_4rem] gap-x-1 gap-y-1 text-[10px]">
           {COMMON_AI_SCHEMA_FIELDS.map((field) => (
             <div key={field.name} className="contents">
               <code className="truncate font-mono">{field.name}</code>
@@ -126,6 +101,9 @@ export function WorkflowSchemaForm({
               <span className="text-muted-foreground">
                 {field.required ? labels.required : labels.optional}
               </span>
+              <p className="text-muted-foreground col-span-3 leading-snug">
+                {labels.commonFieldHints[field.name]}
+              </p>
             </div>
           ))}
         </div>
@@ -280,33 +258,6 @@ export function WorkflowSchemaForm({
           }}
           className="h-7 w-16 text-[11px]"
         />
-      </div>
-
-      <div className="flex flex-col gap-1.5 rounded border p-2">
-        <div className="text-[11px] font-medium">{labels.referencesTitle}</div>
-        <p className="text-muted-foreground text-[10px]">
-          {labels.referencesHint}
-        </p>
-        <div className="flex flex-wrap gap-1">
-          {references.map((reference) => (
-            <code
-              key={reference}
-              className="bg-muted rounded px-1 py-0.5 font-mono text-[10px]"
-            >
-              {reference}
-            </code>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col gap-1.5 rounded border p-2">
-        <div className="text-[11px] font-medium">{labels.usageTitle}</div>
-        <div className="text-muted-foreground text-[10px]">
-          {labels.inputUsage}: {usage.input.join(", ") || labels.none}
-        </div>
-        <div className="text-muted-foreground text-[10px]">
-          {labels.outputUsage}: {usage.output.join(", ") || labels.none}
-        </div>
       </div>
 
       <details className="rounded border p-2">
