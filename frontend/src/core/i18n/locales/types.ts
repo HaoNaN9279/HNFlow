@@ -693,6 +693,26 @@ export interface Translations {
     };
   };
 
+  // Projects (file-backed project directories)
+  projects: {
+    title: string;
+    description: string;
+    empty: string;
+    open: string;
+    openTitle: string;
+    openHint: string;
+    openExisting: string;
+    createNew: string;
+    openWorkbenches: string;
+    pathLabel: string;
+    pathPlaceholder: string;
+    nameLabel: string;
+    namePlaceholder: string;
+    loadFailed: string;
+    close: string;
+    closeConfirm: (name: string) => string;
+  };
+
   // Workbenches (saved project monitoring surfaces)
   workbenches: {
     title: string;

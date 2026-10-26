@@ -459,8 +459,8 @@ test.describe("Workflow canvas", () => {
 
     // Switch to another workspace tab, then return through the sidebar. The
     // workflow tab must reopen the same editor with the unsaved draft intact.
-    await page.locator("a[href='/workspace/workbenches']").click();
-    await page.waitForURL("**/workspace/workbenches**");
+    await page.locator("a[href='/workspace/projects']").click();
+    await page.waitForURL("**/workspace/projects**");
     await page.locator("a[href='/workspace/workflows']").click();
     await page.waitForURL(`**/workspace/workflows/${WORKFLOW_ID}`);
 

@@ -22,12 +22,12 @@ import {
 } from "@/core/workflows/workbench-hooks";
 import type { WorkbenchRecord } from "@/core/workflows/workbenches";
 
-export function WorkbenchList() {
+export function WorkbenchList({ projectId }: { projectId: string }) {
   const { t } = useI18n();
   const router = useRouter();
-  const workbenches = useWorkbenches();
-  const createWorkbench = useCreateWorkbench();
-  const deleteWorkbench = useDeleteWorkbench();
+  const workbenches = useWorkbenches(projectId);
+  const createWorkbench = useCreateWorkbench(projectId);
+  const deleteWorkbench = useDeleteWorkbench(projectId);
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -46,7 +46,7 @@ export function WorkbenchList() {
           setName("");
           setDescription("");
           router.push(
-            `/workspace/workbenches/${encodeURIComponent(record.id)}`,
+            `/workspace/projects/${encodeURIComponent(projectId)}/workbenches/${encodeURIComponent(record.id)}`,
           );
         },
       },
@@ -101,7 +101,7 @@ export function WorkbenchList() {
                   className="flex min-w-0 flex-col items-start gap-1 text-left"
                   onClick={() =>
                     router.push(
-                      `/workspace/workbenches/${encodeURIComponent(workbench.id)}`,
+                      `/workspace/projects/${encodeURIComponent(projectId)}/workbenches/${encodeURIComponent(workbench.id)}`,
                     )
                   }
                 >
@@ -121,7 +121,7 @@ export function WorkbenchList() {
                     variant="outline"
                     onClick={() =>
                       router.push(
-                        `/workspace/workbenches/${encodeURIComponent(workbench.id)}`,
+                        `/workspace/projects/${encodeURIComponent(projectId)}/workbenches/${encodeURIComponent(workbench.id)}`,
                       )
                     }
                   >

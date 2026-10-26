@@ -34,6 +34,5 @@ def test_workspace_tools_are_lead_agent_only(mock_bash, mock_cfg) -> None:
         "workspace_catalog",
         "workspace_get",
         "workflow_manage",
-        "workbench_manage",
         "workspace_undo",
     } <= lead_names

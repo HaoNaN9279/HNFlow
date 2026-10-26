@@ -20,18 +20,19 @@ import {
 
 const MONITOR_KEY = ["workflow-monitor-runs"] as const;
 
-export function useWorkbenches() {
+export function useWorkbenches(projectId: string) {
   return useQuery({
-    queryKey: ["workbenches"],
-    queryFn: listWorkbenches,
+    queryKey: ["projects", projectId, "workbenches"],
+    queryFn: () => listWorkbenches(projectId),
+    enabled: Boolean(projectId),
   });
 }
 
-export function useWorkbench(id: string | null | undefined) {
+export function useWorkbench(projectId: string, id: string | null | undefined) {
   return useQuery({
-    queryKey: ["workbenches", id],
-    queryFn: () => getWorkbench(id ?? ""),
-    enabled: Boolean(id),
+    queryKey: ["projects", projectId, "workbenches", id],
+    queryFn: () => getWorkbench(projectId, id ?? ""),
+    enabled: Boolean(projectId && id),
   });
 }
 
@@ -53,13 +54,16 @@ export function useMonitorRuns(options?: {
   });
 }
 
-export function useCreateWorkbench() {
+export function useCreateWorkbench(projectId: string) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
-    mutationFn: createWorkbench,
+    mutationFn: (payload: Parameters<typeof createWorkbench>[1]) =>
+      createWorkbench(projectId, payload),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["workbenches"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches"],
+      });
       toast.success(t.workbenches.created);
     },
     onError: (error: Error) => {
@@ -68,7 +72,7 @@ export function useCreateWorkbench() {
   });
 }
 
-export function useUpdateWorkbench(id: string) {
+export function useUpdateWorkbench(projectId: string, id: string) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
@@ -78,10 +82,14 @@ export function useUpdateWorkbench(id: string) {
       layout?: WorkbenchLayout | Record<string, unknown>;
       settings?: Record<string, unknown>;
       revision?: number;
-    }) => updateWorkbench(id, payload),
+    }) => updateWorkbench(projectId, id, payload),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["workbenches"] });
-      void queryClient.invalidateQueries({ queryKey: ["workbenches", id] });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches"],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches", id],
+      });
     },
     onError: (error: Error) => {
       toast.error(`${t.workbenches.saveFailed}: ${error.message}`);
@@ -89,13 +97,15 @@ export function useUpdateWorkbench(id: string) {
   });
 }
 
-export function useDeleteWorkbench() {
+export function useDeleteWorkbench(projectId: string) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
-    mutationFn: (id: string) => deleteWorkbench(id),
+    mutationFn: (id: string) => deleteWorkbench(projectId, id),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["workbenches"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches"],
+      });
     },
     onError: (error: Error) => {
       toast.error(`${t.workbenches.deleteFailed}: ${error.message}`);
@@ -103,17 +113,19 @@ export function useDeleteWorkbench() {
   });
 }
 
-export function useAddWorkbenchMember(workbenchId: string) {
+export function useAddWorkbenchMember(projectId: string, workbenchId: string) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
     mutationFn: (definitionId: string) =>
-      addWorkbenchMember(workbenchId, definitionId),
+      addWorkbenchMember(projectId, workbenchId, definitionId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["workbenches", workbenchId],
+        queryKey: ["projects", projectId, "workbenches", workbenchId],
       });
-      void queryClient.invalidateQueries({ queryKey: ["workbenches"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches"],
+      });
       toast.success(t.workbenches.memberAdded);
     },
     onError: (error: Error) => {
@@ -122,17 +134,22 @@ export function useAddWorkbenchMember(workbenchId: string) {
   });
 }
 
-export function useRemoveWorkbenchMember(workbenchId: string) {
+export function useRemoveWorkbenchMember(
+  projectId: string,
+  workbenchId: string,
+) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
     mutationFn: (definitionId: string) =>
-      removeWorkbenchMember(workbenchId, definitionId),
+      removeWorkbenchMember(projectId, workbenchId, definitionId),
     onSuccess: () => {
       void queryClient.invalidateQueries({
-        queryKey: ["workbenches", workbenchId],
+        queryKey: ["projects", projectId, "workbenches", workbenchId],
       });
-      void queryClient.invalidateQueries({ queryKey: ["workbenches"] });
+      void queryClient.invalidateQueries({
+        queryKey: ["projects", projectId, "workbenches"],
+      });
       toast.success(t.workbenches.memberRemoved);
     },
     onError: (error: Error) => {
@@ -141,7 +158,7 @@ export function useRemoveWorkbenchMember(workbenchId: string) {
   });
 }
 
-export function useCreateWorkbenchRun(workbenchId: string) {
+export function useCreateWorkbenchRun(projectId: string, workbenchId: string) {
   const queryClient = useQueryClient();
   const { t } = useI18n();
   return useMutation({
@@ -149,11 +166,11 @@ export function useCreateWorkbenchRun(workbenchId: string) {
       definition_id: string;
       params?: Record<string, unknown>;
       debug_step?: boolean;
-    }) => createWorkbenchRun(workbenchId, payload),
+    }) => createWorkbenchRun(projectId, workbenchId, payload),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: MONITOR_KEY });
       void queryClient.invalidateQueries({
-        queryKey: ["workbenches", workbenchId],
+        queryKey: ["projects", projectId, "workbenches", workbenchId],
       });
       toast.success(t.workbenches.runStarted);
     },
@@ -191,10 +208,11 @@ export function latestRunForDefinition(
 }
 
 export function workbenchEditorHref(
+  projectId: string,
   workbenchId: string,
   definitionId: string,
 ): string {
-  return `/workspace/workflows/${encodeURIComponent(definitionId)}?workbench=${encodeURIComponent(workbenchId)}`;
+  return `/workspace/workflows/${encodeURIComponent(definitionId)}?workbench=${encodeURIComponent(workbenchId)}&project=${encodeURIComponent(projectId)}`;
 }
 
 export type { MonitorRun, WorkbenchRecord };

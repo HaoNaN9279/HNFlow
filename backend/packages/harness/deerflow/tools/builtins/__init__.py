@@ -8,7 +8,7 @@ from .update_agent_tool import update_agent
 from .view_image_tool import view_image_tool
 from .workflow_runtime_tools import cancel_workflow, continue_node, get_workflow_run, list_human_tasks, pause_workflow, run_workflow, skip_human_task, submit_human_task
 from .workflow_tools import edit_workflow, generate_workflow
-from .workspace_tools import WORKSPACE_TOOLS, workbench_manage, workflow_manage, workspace_catalog, workspace_get, workspace_undo
+from .workspace_tools import WORKSPACE_TOOLS, workflow_manage, workspace_catalog, workspace_get, workspace_undo
 
 __all__ = [
     "setup_agent",
@@ -33,6 +33,5 @@ __all__ = [
     "workspace_catalog",
     "workspace_get",
     "workflow_manage",
-    "workbench_manage",
     "workspace_undo",
 ]

@@ -18,6 +18,7 @@ from deerflow.persistence.human_tasks.model import HumanTaskRow
 from deerflow.persistence.mcp_tasks.model import McpTaskRow
 from deerflow.persistence.model_profiles.model import ModelProfileRow
 from deerflow.persistence.models.run_event import RunEventRow
+from deerflow.persistence.projects.model import ProjectRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
@@ -40,6 +41,7 @@ __all__ = [
     "HumanTaskRow",
     "McpTaskRow",
     "ModelProfileRow",
+    "ProjectRow",
     "RunEventRow",
     "RunRow",
     "ScheduledTaskRow",

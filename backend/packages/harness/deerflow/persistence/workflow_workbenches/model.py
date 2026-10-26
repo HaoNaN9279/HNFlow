@@ -15,6 +15,8 @@ class WorkflowWorkbenchRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    #: Set for file-backed workbenches; NULL for legacy DB-only rows.
+    project_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str] = mapped_column(Text, default="")
     layout: Mapped[dict] = mapped_column(JSON, default=dict)

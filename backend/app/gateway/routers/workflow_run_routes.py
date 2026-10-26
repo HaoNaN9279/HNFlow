@@ -449,18 +449,24 @@ async def rewind_workflow_run(definition_id: str, run_id: str, body: WorkflowRun
     except RewindError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    rewind_metadata = dict(getattr(record, "metadata", None) or {})
+    rewind_metadata.update(
+        {
+            "rewind_from_run_id": run_id,
+            "rewind_node_id": body.node_id,
+            "rewind_checkpoint_id": point.checkpoint_id,
+        }
+    )
+    workbench_id = rewind_metadata.get("workbench_id")
     new_record = await start_workflow_run(
         definition_id=definition_id,
         definition=definition,
         params=dict(params) if isinstance(params, dict) else {},
         thread_id=record.thread_id,
         request=request,
-        on_disconnect="cancel",
-        metadata={
-            "rewind_from_run_id": run_id,
-            "rewind_node_id": body.node_id,
-            "rewind_checkpoint_id": point.checkpoint_id,
-        },
+        on_disconnect="continue" if isinstance(workbench_id, str) and workbench_id else "cancel",
+        metadata=rewind_metadata,
+        workbench_id=workbench_id if isinstance(workbench_id, str) and workbench_id else None,
         checkpoint_id=point.checkpoint_id,
     )
     return _record_to_response(new_record)

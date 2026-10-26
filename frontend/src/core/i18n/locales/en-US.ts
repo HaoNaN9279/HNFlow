@@ -856,6 +856,27 @@ export const enUS: Translations = {
     },
   },
 
+  projects: {
+    title: "Projects",
+    description: "Project directories with file-backed workbenches.",
+    empty: "No projects opened yet",
+    open: "Open project",
+    openTitle: "Open or create a project",
+    openHint:
+      "Enter a project directory. It must contain .hnflow/project.json to open, or a new project bundle will be created.",
+    openExisting: "Open existing",
+    createNew: "Create new",
+    openWorkbenches: "Workbenches",
+    pathLabel: "Project directory",
+    pathPlaceholder: "D:\\work\\my-project",
+    nameLabel: "Project name",
+    namePlaceholder: "Optional for new projects",
+    loadFailed: "Failed to load projects",
+    close: "Close project",
+    closeConfirm: (name: string) =>
+      `Remove "${name}" from the project list? Files are kept.`,
+  },
+
   // Workbenches
   workbenches: {
     title: "Workbenches",

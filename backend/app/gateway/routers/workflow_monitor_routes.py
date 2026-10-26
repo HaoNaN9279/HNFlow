@@ -178,6 +178,8 @@ async def list_monitor_runs(
 
         definition_name = definition_row.name if definition_row is not None and definition_row.user_id == user_id else None
         workbench_name = workbench_row.name if workbench_row is not None and workbench_row.user_id == user_id else None
+        run_metadata = run_row.metadata_json if isinstance(run_row.metadata_json, dict) else {}
+        project_id = run_metadata.get("project_id") if isinstance(run_metadata.get("project_id"), str) else None
         terminal = run_row.status not in _ACTIVE_STATUSES
         runs.append(
             {
@@ -187,6 +189,7 @@ async def list_monitor_runs(
                 "definition_name": definition_name,
                 "workbench_id": run_row.workbench_id,
                 "workbench_name": workbench_name,
+                "project_id": project_id,
                 "status": run_row.status,
                 "display_state": display_state,
                 "created_at": coerce_iso(run_row.created_at) if run_row.created_at is not None else None,

@@ -131,6 +131,14 @@ def build_workflow_runtime_context(
         "human_task_repo": human_task_repo,
         "spec_repo": getattr(run_ctx, "spec_repo", None),
     }
+    run_metadata = getattr(record, "metadata", None)
+    if isinstance(run_metadata, dict):
+        project = run_metadata.get("project")
+        if isinstance(project, dict):
+            context["project"] = project
+        workbench = run_metadata.get("workbench")
+        if isinstance(workbench, dict):
+            context["workbench"] = workbench
     if workflow_undo_repo is not None:
         from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY
 

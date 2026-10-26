@@ -463,4 +463,10 @@ async def delete_workflow(definition_id: str, request: Request):
             await workbench_repo.delete_memberships_for_definition(definition_id)
         except Exception:
             logger.warning("Failed to remove workbench memberships for deleted workflow %s", definition_id, exc_info=True)
+    project_service = getattr(request.app.state, "project_service", None)
+    if project_service is not None:
+        try:
+            await project_service.remove_definition_memberships(definition_id, user_id=str(user.id))
+        except Exception:
+            logger.warning("Failed to remove project workbench memberships for deleted workflow %s", definition_id, exc_info=True)
     return {"id": definition_id, "deleted": True}

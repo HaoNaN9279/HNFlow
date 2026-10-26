@@ -30,6 +30,7 @@ export type WorkbenchMember = {
 export type WorkbenchRecord = {
   id: string;
   user_id: string;
+  project_id: string;
   name: string;
   description: string;
   layout: WorkbenchLayout | Record<string, unknown>;
@@ -48,6 +49,7 @@ export type MonitorRun = {
   definition_name: string | null;
   workbench_id: string | null;
   workbench_name: string | null;
+  project_id: string | null;
   status: string;
   display_state: string;
   created_at: string | null;
@@ -66,6 +68,10 @@ function apiUrl(path: string): string {
   return `${getBackendBaseURL()}/api${path}`;
 }
 
+function projectPath(projectId: string, suffix = ""): string {
+  return `/projects/${encodeURIComponent(projectId)}/workbenches${suffix}`;
+}
+
 async function throwApiError(
   response: Response,
   fallback: string,
@@ -79,8 +85,10 @@ async function throwApiError(
   throw new Error(fallback);
 }
 
-export async function listWorkbenches(): Promise<WorkbenchRecord[]> {
-  const response = await fetch(apiUrl("/workbenches"));
+export async function listWorkbenches(
+  projectId: string,
+): Promise<WorkbenchRecord[]> {
+  const response = await fetch(apiUrl(projectPath(projectId)));
   if (!response.ok) {
     await throwApiError(
       response,
@@ -90,9 +98,12 @@ export async function listWorkbenches(): Promise<WorkbenchRecord[]> {
   return response.json() as Promise<WorkbenchRecord[]>;
 }
 
-export async function getWorkbench(id: string): Promise<WorkbenchRecord> {
+export async function getWorkbench(
+  projectId: string,
+  id: string,
+): Promise<WorkbenchRecord> {
   const response = await fetch(
-    apiUrl(`/workbenches/${encodeURIComponent(id)}`),
+    apiUrl(projectPath(projectId, `/${encodeURIComponent(id)}`)),
   );
   if (!response.ok) {
     await throwApiError(
@@ -103,13 +114,16 @@ export async function getWorkbench(id: string): Promise<WorkbenchRecord> {
   return response.json() as Promise<WorkbenchRecord>;
 }
 
-export async function createWorkbench(payload: {
-  name: string;
-  description?: string;
-  layout?: WorkbenchLayout;
-  settings?: Record<string, unknown>;
-}): Promise<WorkbenchRecord> {
-  const response = await fetch(apiUrl("/workbenches"), {
+export async function createWorkbench(
+  projectId: string,
+  payload: {
+    name: string;
+    description?: string;
+    layout?: WorkbenchLayout;
+    settings?: Record<string, unknown>;
+  },
+): Promise<WorkbenchRecord> {
+  const response = await fetch(apiUrl(projectPath(projectId)), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -124,6 +138,7 @@ export async function createWorkbench(payload: {
 }
 
 export async function updateWorkbench(
+  projectId: string,
   id: string,
   payload: {
     name?: string;
@@ -134,7 +149,7 @@ export async function updateWorkbench(
   },
 ): Promise<WorkbenchRecord> {
   const response = await fetch(
-    apiUrl(`/workbenches/${encodeURIComponent(id)}`),
+    apiUrl(projectPath(projectId, `/${encodeURIComponent(id)}`)),
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -150,12 +165,13 @@ export async function updateWorkbench(
   return response.json() as Promise<WorkbenchRecord>;
 }
 
-export async function deleteWorkbench(id: string): Promise<void> {
+export async function deleteWorkbench(
+  projectId: string,
+  id: string,
+): Promise<void> {
   const response = await fetch(
-    apiUrl(`/workbenches/${encodeURIComponent(id)}`),
-    {
-      method: "DELETE",
-    },
+    apiUrl(projectPath(projectId, `/${encodeURIComponent(id)}`)),
+    { method: "DELETE" },
   );
   if (!response.ok) {
     await throwApiError(
@@ -166,11 +182,14 @@ export async function deleteWorkbench(id: string): Promise<void> {
 }
 
 export async function addWorkbenchMember(
+  projectId: string,
   workbenchId: string,
   definitionId: string,
 ): Promise<WorkbenchMember> {
   const response = await fetch(
-    apiUrl(`/workbenches/${encodeURIComponent(workbenchId)}/members`),
+    apiUrl(
+      projectPath(projectId, `/${encodeURIComponent(workbenchId)}/members`),
+    ),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -187,12 +206,16 @@ export async function addWorkbenchMember(
 }
 
 export async function removeWorkbenchMember(
+  projectId: string,
   workbenchId: string,
   definitionId: string,
 ): Promise<void> {
   const response = await fetch(
     apiUrl(
-      `/workbenches/${encodeURIComponent(workbenchId)}/members/${encodeURIComponent(definitionId)}`,
+      projectPath(
+        projectId,
+        `/${encodeURIComponent(workbenchId)}/members/${encodeURIComponent(definitionId)}`,
+      ),
     ),
     { method: "DELETE" },
   );
@@ -205,6 +228,7 @@ export async function removeWorkbenchMember(
 }
 
 export async function createWorkbenchRun(
+  projectId: string,
   workbenchId: string,
   payload: {
     definition_id: string;
@@ -213,7 +237,7 @@ export async function createWorkbenchRun(
   },
 ): Promise<WorkflowRunRecord> {
   const response = await fetch(
-    apiUrl(`/workbenches/${encodeURIComponent(workbenchId)}/runs`),
+    apiUrl(projectPath(projectId, `/${encodeURIComponent(workbenchId)}/runs`)),
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

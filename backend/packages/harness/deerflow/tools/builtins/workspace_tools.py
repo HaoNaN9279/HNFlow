@@ -256,106 +256,6 @@ def workflow_manage(
 
 
 @tool(parse_docstring=True)
-def workbench_manage(
-    action: str,
-    runtime: Runtime,
-    workbench_id: str | None = None,
-    name: str | None = None,
-    description: str | None = None,
-    layout: dict[str, Any] | None = None,
-    settings: dict[str, Any] | None = None,
-    definition_id: str | None = None,
-    definition_ids: list[str] | None = None,
-    expected_revision: int | None = None,
-    confirm: bool = False,
-) -> str:
-    """Create and manage saved workbenches and their workflow members.
-
-    Actions: create, update, delete, add_member, remove_member,
-    reorder_members. Use expected_revision from workspace_get for update/delete.
-
-    Args:
-        action: Operation name.
-        workbench_id: Workbench id.
-        name: Workbench name.
-        description: Workbench description.
-        layout: Arbitrary layout JSON.
-        settings: Arbitrary settings JSON.
-        definition_id: Workflow id for add_member/remove_member.
-        definition_ids: Ordered workflow ids for reorder_members.
-        expected_revision: Optimistic revision for update/delete.
-        confirm: Required true for delete.
-    """
-    try:
-        from deerflow.workspace import WorkspaceResourceValidationError
-
-        change = _change_context(runtime)
-
-        async def operation(service: WorkspaceResourceService) -> Any:
-            if action == "create":
-                if not name:
-                    raise WorkspaceResourceValidationError(["create requires name"])
-                return await service.create_workbench(
-                    name=name,
-                    description=description or "",
-                    layout=layout,
-                    settings=settings,
-                    change=change,
-                )
-            if action == "update":
-                if not workbench_id:
-                    raise WorkspaceResourceValidationError(["update requires workbench_id"])
-                return await service.update_workbench(
-                    workbench_id=workbench_id,
-                    name=name,
-                    description=description,
-                    layout=layout,
-                    settings=settings,
-                    expected_revision=expected_revision,
-                    change=change,
-                )
-            if action == "delete":
-                if not workbench_id:
-                    raise WorkspaceResourceValidationError(["delete requires workbench_id"])
-                return await service.delete_workbench(
-                    workbench_id=workbench_id,
-                    expected_revision=expected_revision,
-                    confirm=confirm,
-                    change=change,
-                )
-            if action == "add_member":
-                if not workbench_id or not definition_id:
-                    raise WorkspaceResourceValidationError(["add_member requires workbench_id and definition_id"])
-                return await service.add_workbench_member(
-                    workbench_id=workbench_id,
-                    definition_id=definition_id,
-                    settings=settings,
-                    change=change,
-                )
-            if action == "remove_member":
-                if not workbench_id or not definition_id:
-                    raise WorkspaceResourceValidationError(["remove_member requires workbench_id and definition_id"])
-                return await service.remove_workbench_member(
-                    workbench_id=workbench_id,
-                    definition_id=definition_id,
-                    change=change,
-                )
-            if action == "reorder_members":
-                if not workbench_id or not definition_ids:
-                    raise WorkspaceResourceValidationError(["reorder_members requires workbench_id and definition_ids"])
-                return await service.reorder_workbench_members(
-                    workbench_id=workbench_id,
-                    definition_ids=definition_ids,
-                    change=change,
-                )
-            raise WorkspaceResourceValidationError([f"unknown workbench action {action!r}"])
-
-        return _ok(_run_async(_call(runtime, operation)))
-    except Exception as exc:  # noqa: BLE001 - tool boundary
-        return _error(exc)
-
-
-@tool(parse_docstring=True)
 def workspace_undo(action: str, runtime: Runtime, change_id: str | None = None, dry_run: bool = False) -> str:
     """Inspect or undo resource changes made by the Lead Agent in this conversation.
 
@@ -393,13 +293,11 @@ WORKSPACE_TOOLS = [
     workspace_catalog,
     workspace_get,
     workflow_manage,
-    workbench_manage,
     workspace_undo,
 ]
 
 __all__ = [
     "WORKSPACE_TOOLS",
-    "workbench_manage",
     "workspace_catalog",
     "workspace_get",
     "workspace_undo",

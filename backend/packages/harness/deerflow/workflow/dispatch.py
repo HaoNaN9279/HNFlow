@@ -368,14 +368,18 @@ async def continue_workflow_node(
             raise ValueError(f"workflow definition '{resolved_definition_id}' has no body")
         definition = deps["WorkflowDefinition"].model_validate(definition_dict)
 
+    continue_metadata = dict(getattr(record, "metadata", None) or {})
+    continue_metadata.update({"continue_from_run_id": run_id, "continue_node_id": node_id})
+    workbench_id = continue_metadata.get("workbench_id")
     started = await start_workflow_run(
         definition_id=resolved_definition_id,
         definition=definition,
         params=resolved_params,
         runtime=runtime,
+        on_disconnect="continue" if isinstance(workbench_id, str) and workbench_id else "cancel",
         continue_nodes={node_id: prompt},
         origin_thread_id=record.thread_id,
-        metadata={"continue_from_run_id": run_id, "continue_node_id": node_id},
+        metadata=continue_metadata,
     )
     return {**started, "continue_node_id": node_id, "origin_run_id": run_id}
 

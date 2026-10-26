@@ -210,6 +210,68 @@ class WorkflowWorkbenchRepository:
             await session.commit()
             return result.rowcount or 0
 
+    async def mirror_file_workbench(
+        self,
+        *,
+        workbench_id: str,
+        user_id: str,
+        project_id: str,
+        name: str,
+        description: str,
+        layout: dict[str, Any],
+        settings: dict[str, Any],
+        revision: int,
+        members: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert the internal mirror of a file-backed workbench.
+
+        The file remains authoritative.  The mirror exists so run monitoring and
+        legacy workspace tooling can keep reading the same SQL tables.
+        """
+        now = datetime.now(UTC)
+        async with self._sf() as session:
+            row = await session.get(WorkflowWorkbenchRow, workbench_id)
+            if row is None:
+                row = WorkflowWorkbenchRow(
+                    id=workbench_id,
+                    user_id=user_id,
+                    project_id=project_id,
+                    name=name,
+                    description=description,
+                    layout=layout,
+                    settings=settings,
+                    revision=revision,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(row)
+            else:
+                if row.user_id != user_id:
+                    raise LookupError("Workbench mirror belongs to another user")
+                row.project_id = project_id
+                row.name = name
+                row.description = description
+                row.layout = layout
+                row.settings = settings
+                row.revision = revision
+                row.updated_at = now
+
+            await session.execute(delete(WorkflowWorkbenchMemberRow).where(WorkflowWorkbenchMemberRow.workbench_id == workbench_id))
+            for member in members:
+                session.add(
+                    WorkflowWorkbenchMemberRow(
+                        id=f"wbm-{uuid4().hex}",
+                        workbench_id=workbench_id,
+                        definition_id=str(member["definition_id"]),
+                        order_index=int(member.get("order_index") or 0),
+                        settings=member.get("settings") or {},
+                        created_at=now,
+                    )
+                )
+            await session.commit()
+            await session.refresh(row)
+            return _iso_dict(row)
+
     async def get_member(self, workbench_id: str, *, user_id: str, definition_id: str) -> dict[str, Any] | None:
         async with self._sf() as session:
             workbench = await session.get(WorkflowWorkbenchRow, workbench_id)

@@ -27,6 +27,7 @@ from app.gateway.routers import (
     memory,
     model_profile_routes,
     models,
+    project_routes,
     runs,
     scheduled_tasks,
     skills,
@@ -617,9 +618,9 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     app.include_router(workflow_run_routes.router)
 
     # Saved workbenches and the cross-workbench execution monitor.
-    from app.gateway.routers import workbench_routes, workflow_monitor_routes
+    from app.gateway.routers import workflow_monitor_routes
 
-    app.include_router(workbench_routes.router)
+    app.include_router(project_routes.router)
     app.include_router(workflow_monitor_routes.router)
 
     # Lead Agent resource-change history and Undo

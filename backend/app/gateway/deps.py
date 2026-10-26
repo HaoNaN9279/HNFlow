@@ -427,6 +427,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             from deerflow.persistence.human_tasks import HumanTaskRepository
             from deerflow.persistence.mcp_tasks import McpTaskRepository
             from deerflow.persistence.model_profiles import ModelProfileRepository
+            from deerflow.persistence.projects import ProjectRepository
             from deerflow.persistence.scheduled_task_runs import (
                 ScheduledTaskRunRepository,
             )
@@ -445,6 +446,14 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
             app.state.workflow_folder_repo = WorkflowFolderRepository(sf)
             app.state.workflow_workbench_repo = WorkflowWorkbenchRepository(sf)
+            app.state.project_repo = ProjectRepository(sf)
+            from deerflow.projects.service import ProjectService
+
+            app.state.project_service = ProjectService(
+                app.state.project_repo,
+                definition_repo=app.state.workflow_definition_repo,
+                workbench_repo=app.state.workflow_workbench_repo,
+            )
             app.state.human_task_repo = HumanTaskRepository(sf)
             # Durable undo records (N10): what each irreversible node did, so a
             # failed node can roll back and a finished run can be undone.
@@ -465,6 +474,8 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.workflow_definition_repo = None
             app.state.workflow_folder_repo = None
             app.state.workflow_workbench_repo = None
+            app.state.project_repo = None
+            app.state.project_service = None
             app.state.human_task_repo = None
             app.state.workflow_undo_repo = None
             app.state.app_instance_repo = None
@@ -624,6 +635,20 @@ def get_workflow_workbench_repo(request: Request):
     val = getattr(request.app.state, "workflow_workbench_repo", None)
     if val is None:
         raise HTTPException(status_code=503, detail="Workflow workbench repo not available")
+    return val
+
+
+def get_project_repo(request: Request):
+    val = getattr(request.app.state, "project_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Project repo not available")
+    return val
+
+
+def get_project_service(request: Request):
+    val = getattr(request.app.state, "project_service", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Project service not available")
     return val
 
 

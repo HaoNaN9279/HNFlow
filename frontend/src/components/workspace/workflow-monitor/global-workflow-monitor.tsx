@@ -240,9 +240,9 @@ export function GlobalWorkflowMonitor() {
                   onClick={() => {
                     if (run.workbench_id) {
                       router.push(
-                        `/workspace/workbenches/${encodeURIComponent(
-                          run.workbench_id,
-                        )}?run=${encodeURIComponent(run.run_id)}`,
+                        run.project_id
+                          ? `/workspace/projects/${encodeURIComponent(run.project_id)}/workbenches/${encodeURIComponent(run.workbench_id)}?run=${encodeURIComponent(run.run_id)}`
+                          : "/workspace/projects",
                       );
                     }
                   }}

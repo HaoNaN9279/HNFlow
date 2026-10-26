@@ -751,35 +751,7 @@ class WorkspaceResourceService:
         settings: dict[str, Any] | None = None,
         change: ChangeContext | None = None,
     ) -> dict[str, Any]:
-        async with self._sf() as session, session.begin():
-            now = datetime.now(UTC)
-            row = WorkflowWorkbenchRow(
-                id=f"wb-{uuid4().hex}",
-                user_id=self._user_id,
-                name=name,
-                description=description,
-                layout=layout if layout is not None else {"version": 1, "cards": []},
-                settings=settings if settings is not None else {},
-                revision=1,
-                created_at=now,
-                updated_at=now,
-            )
-            session.add(row)
-            await session.flush()
-            await self._record_change(
-                session,
-                change,
-                kind=RESOURCE_WORKBENCH,
-                resource_id=row.id,
-                parent_id=None,
-                action="create",
-                before=None,
-                after=await self._snapshot_workbench(session, row.id),
-                before_token=None,
-                after_token=_workbench_token(row),
-            )
-            await session.flush()
-            return _row_dict(row)
+        raise WorkspaceResourceValidationError(["workbench management moved to file-backed projects; use the project workbench API"])
 
     async def update_workbench(
         self,
@@ -794,6 +766,7 @@ class WorkspaceResourceService:
     ) -> dict[str, Any]:
         async with self._sf() as session, session.begin():
             row = await self._require_workbench(session, workbench_id)
+            self._reject_file_managed_workbench(row)
             if expected_revision is not None and row.revision != expected_revision:
                 raise WorkspaceResourceConflict(f"Workbench revision {expected_revision} is stale (current {row.revision})")
             before = await self._snapshot_workbench(session, workbench_id)
@@ -835,6 +808,7 @@ class WorkspaceResourceService:
             raise WorkspaceResourceValidationError([f"delete workbench {workbench_id!r} requires confirm=true"])
         async with self._sf() as session, session.begin():
             row = await self._require_workbench(session, workbench_id)
+            self._reject_file_managed_workbench(row)
             if expected_revision is not None and row.revision != expected_revision:
                 raise WorkspaceResourceConflict(f"Workbench revision {expected_revision} is stale (current {row.revision})")
             before = await self._snapshot_workbench(session, workbench_id)
@@ -866,6 +840,7 @@ class WorkspaceResourceService:
     ) -> dict[str, Any]:
         async with self._sf() as session, session.begin():
             workbench = await self._require_workbench(session, workbench_id)
+            self._reject_file_managed_workbench(workbench)
             await self._require_workflow(session, definition_id)
             existing = await self._get_member_row(session, workbench_id, definition_id)
             if existing is not None:
@@ -906,6 +881,7 @@ class WorkspaceResourceService:
     ) -> dict[str, Any]:
         async with self._sf() as session, session.begin():
             workbench = await self._require_workbench(session, workbench_id)
+            self._reject_file_managed_workbench(workbench)
             row = await self._get_member_row(session, workbench_id, definition_id)
             if row is None:
                 raise WorkspaceResourceNotFound("Workbench member not found")
@@ -937,6 +913,7 @@ class WorkspaceResourceService:
     ) -> list[dict[str, Any]]:
         async with self._sf() as session, session.begin():
             workbench = await self._require_workbench(session, workbench_id)
+            self._reject_file_managed_workbench(workbench)
             rows = await self._list_member_rows(session, workbench_id)
             before = [_row_dict(row) for row in rows]
             by_id = {row.definition_id: row for row in rows}
@@ -1418,6 +1395,12 @@ class WorkspaceResourceService:
         if row is None or row.user_id != self._user_id:
             raise WorkspaceResourceNotFound(f"workbench {workbench_id!r} not found")
         return row
+
+    @staticmethod
+    def _reject_file_managed_workbench(row: WorkflowWorkbenchRow) -> None:
+        """Project-file workbenches must be mutated through the project API."""
+        if row.project_id:
+            raise WorkspaceResourceValidationError([f"workbench {row.id!r} is managed by project files; use the project workbench API"])
 
     async def _require_unique_folder(self, session: AsyncSession, *, parent_id: str | None, name: str, exclude_id: str | None = None) -> None:
         stmt = select(WorkflowFolderRow.id).where(

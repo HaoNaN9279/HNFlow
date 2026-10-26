@@ -44,6 +44,7 @@ rs.mock("@/core/workflows/workbench-hooks", () => ({
         definition_name: "Test workflow",
         workbench_id: "wb-1",
         workbench_name: "Project A",
+        project_id: "proj-1",
         status: "running",
         display_state: "running",
         created_at: "2026-01-01T00:00:00Z",
@@ -68,7 +69,8 @@ rs.mock("@/core/workflows/workbench-hooks", () => ({
   useCreateWorkbenchRun: () => ({ mutate: mutations.run, isPending: false }),
   latestRunForDefinition: (runs: { definition_id: string }[], id: string) =>
     runs.find((run) => run.definition_id === id) ?? null,
-  workbenchEditorHref: () => "/workspace/workflows/wf-1?workbench=wb-1",
+  workbenchEditorHref: () =>
+    "/workspace/workflows/wf-1?workbench=wb-1&project=proj-1",
 }));
 
 rs.mock("@/core/workflows/hooks", () => ({
@@ -142,7 +144,7 @@ afterEach(() => {
 
 describe("WorkbenchBoard", () => {
   it("renders members with their latest run state", () => {
-    render(<WorkbenchBoard workbenchId="wb-1" />);
+    render(<WorkbenchBoard projectId="proj-1" workbenchId="wb-1" />);
     expect(screen.getByText("Test workflow")).toBeTruthy();
     expect(screen.getByTestId("workbench-card-status").textContent).toBe(
       "Running",
@@ -151,7 +153,7 @@ describe("WorkbenchBoard", () => {
   });
 
   it("starts a normal and a single-step run from the card", () => {
-    render(<WorkbenchBoard workbenchId="wb-1" />);
+    render(<WorkbenchBoard projectId="proj-1" workbenchId="wb-1" />);
     fireEvent.click(screen.getByTestId("workbench-run"));
     expect(mutations.run).toHaveBeenCalledWith({ definition_id: "wf-1" });
     fireEvent.click(screen.getByTestId("workbench-step-run"));

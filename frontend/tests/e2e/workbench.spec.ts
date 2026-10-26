@@ -1,11 +1,30 @@
 import { expect, test } from "@playwright/test";
 
+const PROJECT_ID = "proj-e2e";
 const WORKBENCH_ID = "wb-e2e";
 const WORKFLOW_ID = "wf-e2e";
+
+const project = {
+  id: PROJECT_ID,
+  project_id: PROJECT_ID,
+  user_id: "default",
+  name: "E2E Project",
+  description: "Project fixture",
+  root_path: "D:/work/e2e",
+  manifest_hash: "hash",
+  default_environment: null,
+  capability_profile: null,
+  roots: [{ id: "main", path: ".", mode: "rw" }],
+  mcp_allowlist: [],
+  secret_refs: [],
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
 
 const workbench = {
   id: WORKBENCH_ID,
   user_id: "default",
+  project_id: PROJECT_ID,
   name: "E2E Project",
   description: "Workbench fixture",
   revision: 1,
@@ -71,6 +90,7 @@ const activeRun = {
   definition_name: "E2E Workflow",
   workbench_id: WORKBENCH_ID,
   workbench_name: "E2E Project",
+  project_id: PROJECT_ID,
   status: "running",
   display_state: "running",
   created_at: "2026-01-01T00:00:00Z",
@@ -91,7 +111,7 @@ test("workbench launches runs and the monitor survives navigation", async ({
   test.setTimeout(90_000);
   await page.setViewportSize({ width: 1600, height: 900 });
 
-  await page.route("**/api/workbenches", (route) => {
+  await page.route("**/api/projects/proj-e2e/workbenches", (route) => {
     if (route.request().method() === "GET") {
       return route.fulfill({
         status: 200,
@@ -106,30 +126,34 @@ test("workbench launches runs and the monitor survives navigation", async ({
     });
   });
 
-  await page.route(`**/api/workbenches/${WORKBENCH_ID}`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(workbench),
-    }),
+  await page.route(
+    `**/api/projects/proj-e2e/workbenches/${WORKBENCH_ID}`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(workbench),
+      }),
   );
 
-  await page.route(`**/api/workbenches/${WORKBENCH_ID}/runs`, (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        run_id: "run-new",
-        thread_id: "t-new",
-        assistant_id: WORKFLOW_ID,
-        status: "pending",
-        metadata: { workbench_id: WORKBENCH_ID },
-        kwargs: {},
-        multitask_strategy: "reject",
-        created_at: "2026-01-01T00:00:00Z",
-        updated_at: "2026-01-01T00:00:00Z",
+  await page.route(
+    `**/api/projects/proj-e2e/workbenches/${WORKBENCH_ID}/runs`,
+    (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          run_id: "run-new",
+          thread_id: "t-new",
+          assistant_id: WORKFLOW_ID,
+          status: "pending",
+          metadata: { workbench_id: WORKBENCH_ID },
+          kwargs: {},
+          multitask_strategy: "reject",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        }),
       }),
-    }),
   );
 
   await page.route("**/api/workflows", (route) =>
@@ -156,7 +180,7 @@ test("workbench launches runs and the monitor survives navigation", async ({
     }),
   );
 
-  await page.goto(`/workspace/workbenches/${WORKBENCH_ID}`);
+  await page.goto(`/workspace/projects/proj-e2e/workbenches/${WORKBENCH_ID}`);
   await expect(page.getByTestId(`workbench-card-${WORKFLOW_ID}`)).toContainText(
     "E2E Workflow",
   );
@@ -166,9 +190,19 @@ test("workbench launches runs and the monitor survives navigation", async ({
   );
   await expect(page.getByTestId("global-workflow-monitor")).toBeVisible();
 
+  await page.route("**/api/projects", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([project]),
+    }),
+  );
+
   const runRequest = page.waitForRequest(
     (request) =>
-      request.url().includes(`/api/workbenches/${WORKBENCH_ID}/runs`) &&
+      request
+        .url()
+        .includes(`/api/projects/proj-e2e/workbenches/${WORKBENCH_ID}/runs`) &&
       request.method() === "POST",
   );
   await page.getByTestId("workbench-run").click();
@@ -182,7 +216,7 @@ test("workbench launches runs and the monitor survives navigation", async ({
   await expect(
     page.getByTestId("global-workflow-monitor-collapsed"),
   ).toBeVisible();
-  await page.goto("/workspace/workflows");
+  await page.goto("/workspace/projects");
   await expect(
     page.getByTestId("global-workflow-monitor-collapsed"),
   ).toBeVisible();

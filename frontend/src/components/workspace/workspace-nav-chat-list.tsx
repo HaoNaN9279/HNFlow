@@ -55,15 +55,12 @@ export function WorkspaceNavChatList() {
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
-            isActive={pathname.startsWith("/workspace/workbenches")}
+            isActive={pathname.startsWith("/workspace/projects")}
             asChild
           >
-            <Link
-              className="text-muted-foreground"
-              href="/workspace/workbenches"
-            >
+            <Link className="text-muted-foreground" href="/workspace/projects">
               <LayoutDashboardIcon />
-              <span>{t.workbenches.title}</span>
+              <span>{t.projects.title}</span>
             </Link>
           </SidebarMenuButton>
         </SidebarMenuItem>

@@ -62,8 +62,11 @@ export function WorkflowToolbar() {
     saveEmbedded,
     currentDefinition,
   } = useWorkflowEditor();
+  const projectId = searchParams.get("project");
   const backHref = workbenchId
-    ? `/workspace/workbenches/${encodeURIComponent(workbenchId)}`
+    ? projectId
+      ? `/workspace/projects/${encodeURIComponent(projectId)}/workbenches/${encodeURIComponent(workbenchId)}`
+      : "/workspace/projects"
     : "/workspace/workflows";
   const backLabel = workbenchId
     ? t.workbenches.back

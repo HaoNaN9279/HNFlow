@@ -83,6 +83,7 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 - `structured_output.py` — AI Result Schema 解析/校验/修复核心：固定通用字段 + 自定义字段、AI Result Envelope、`[schema.*]` 引用；`INPUT_SCHEMA_PORT="input_schema"`、`OUTPUT_SCHEMA_PORT="output_schema"`。
 - `patterns.py` / `handoff.py` / `definition_evals.py` / `eval_runner.py` / `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `breakpoint.py` / `delegate.py` / `dispatch.py` / `human_task_state.py` — 模板、动态 handoff、评测、回放、运行级预算、成本、幂等、断点、委派与对话调度。运行级 `metadata.budget` 仍保留，AI 节点级 token 预算已删除。
 - `compensation.py` / `undo.py` / `undo_service.py` — 失败回滚与撤销。`rollback_on_failure` 不再暴露；支持的执行器默认备份/回滚。
+- `../projects/` — 文件化项目/工作台：`<project>/.hnflow/project.json` 是项目配置源，`.hnflow/workbenches/*.workbench.json` 是工作台源；`workflow_workbenches` 仅为运行监控/旧工具的 SQL 镜像。旧 `/api/workbenches` 已删除，改由 `/api/projects` 提供项目作用域 CRUD 与运行入口。
 - `../apps/` — 本地应用接入层（N4/N5/N6/N8/N10b）。
 - `../assets/` — `AssetRef` + 资产契约。
 - `../environment/` — 环境探测与数据目录。

@@ -56,16 +56,22 @@ function memberName(member: WorkbenchMember): string {
   return member.definition_name ?? member.definition_id;
 }
 
-export function WorkbenchBoard({ workbenchId }: { workbenchId: string }) {
+export function WorkbenchBoard({
+  projectId,
+  workbenchId,
+}: {
+  projectId: string;
+  workbenchId: string;
+}) {
   const { t } = useI18n();
   const params = useSearchParams();
   const selectedRunId = params.get("run");
-  const workbench = useWorkbench(workbenchId);
+  const workbench = useWorkbench(projectId, workbenchId);
   const workflows = useWorkflows();
   const { runs, isError: runsError } = useWorkbenchRuns(workbenchId);
-  const addMember = useAddWorkbenchMember(workbenchId);
-  const removeMember = useRemoveWorkbenchMember(workbenchId);
-  const createRun = useCreateWorkbenchRun(workbenchId);
+  const addMember = useAddWorkbenchMember(projectId, workbenchId);
+  const removeMember = useRemoveWorkbenchMember(projectId, workbenchId);
+  const createRun = useCreateWorkbenchRun(projectId, workbenchId);
 
   const [addOpen, setAddOpen] = useState(false);
   const [removeTarget, setRemoveTarget] = useState<WorkbenchMember | null>(
@@ -105,7 +111,9 @@ export function WorkbenchBoard({ workbenchId }: { workbenchId: string }) {
     <div className="flex size-full flex-col">
       <div className="flex flex-wrap items-center gap-3 border-b px-6 py-4">
         <Button asChild size="sm" variant="ghost" className="-ml-2">
-          <Link href="/workspace/workbenches">
+          <Link
+            href={`/workspace/projects/${encodeURIComponent(projectId)}/workbenches`}
+          >
             <ArrowLeftIcon className="size-4" />
             {t.workbenches.back}
           </Link>
@@ -282,6 +290,7 @@ export function WorkbenchBoard({ workbenchId }: { workbenchId: string }) {
                     <Button asChild size="sm" variant="ghost">
                       <Link
                         href={workbenchEditorHref(
+                          projectId,
                           workbenchId,
                           member.definition_id,
                         )}

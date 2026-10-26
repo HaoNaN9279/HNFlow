@@ -56,29 +56,6 @@ async def test_catalog_and_workflow_crud_are_user_scoped(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_workbench_members_survive_and_undo_restores_delete(tmp_path) -> None:
-    service = await _service(tmp_path)
-    try:
-        workflow = await service.create_workflow(name="Demo", definition=_definition())
-        workbench = await service.create_workbench(name="Board")
-        await service.add_workbench_member(workbench_id=workbench["id"], definition_id=workflow["id"])
-        before = await service.get(kind="workbench", resource_id=workbench["id"])
-        assert len(before["resource"]["members"]) == 1
-
-        ctx = ChangeContext(user_id="user-1", thread_id="thread-1", run_id="run-1")
-        await service.delete_workbench(workbench_id=workbench["id"], confirm=True, change=ctx)
-        with pytest.raises(Exception):
-            await service.get(kind="workbench", resource_id=workbench["id"])
-
-        result = await service.undo(thread_id="thread-1")
-        assert result["count"] == 1
-        restored = await service.get(kind="workbench", resource_id=workbench["id"])
-        assert len(restored["resource"]["members"]) == 1
-    finally:
-        await close_engine()
-
-
-@pytest.mark.asyncio
 async def test_undo_is_all_or_nothing_when_resource_changed_outside_agent(tmp_path) -> None:
     service = await _service(tmp_path)
     try:
@@ -175,24 +152,5 @@ async def test_undo_group_applies_create_and_update_in_reverse(tmp_path) -> None
         assert result["count"] == 2
         with pytest.raises(Exception):
             await service.get(kind="workflow", resource_id=created["id"])
-    finally:
-        await close_engine()
-
-
-@pytest.mark.asyncio
-async def test_undo_workflow_delete_restores_workbench_membership(tmp_path) -> None:
-    service = await _service(tmp_path)
-    try:
-        workflow = await service.create_workflow(name="Demo", definition=_definition())
-        workbench = await service.create_workbench(name="Board")
-        await service.add_workbench_member(workbench_id=workbench["id"], definition_id=workflow["id"])
-        ctx = ChangeContext(user_id="user-1", thread_id="thread-1", run_id="run-1")
-        await service.delete_workflow(definition_id=workflow["id"], confirm=True, change=ctx)
-
-        result = await service.undo(thread_id="thread-1")
-
-        assert result["count"] == 1
-        restored = await service.get(kind="workbench", resource_id=workbench["id"])
-        assert [member["definition_id"] for member in restored["resource"]["members"]] == [workflow["id"]]
     finally:
         await close_engine()
