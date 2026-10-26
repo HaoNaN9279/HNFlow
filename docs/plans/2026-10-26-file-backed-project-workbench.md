@@ -231,3 +231,4 @@ POST   /api/projects/{project_id}/workbenches/{workbench_id}/runs
 - 旧内容：删除 `/api/workbenches` 路由、旧前端页面、旧工作台路由测试；迁移清理 `project_id IS NULL` 的旧工作台及其成员。
 - 保留：`workflow_workbenches` 作为文件工作台的 SQL 镜像，供 monitor/workspace 读取；Lead Agent 的 workbench 写工具不再暴露。
 - 测试：后端 `11350 passed, 136 skipped`；前端 `pnpm check`、`pnpm test`（1157 passed）；`workbench.spec.ts` E2E 通过。
+- 提交：`24f9e52 feat(projects): add file-backed projects and workbenches`。
