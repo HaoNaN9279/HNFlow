@@ -70,8 +70,6 @@ def main(argv: list[str] | None = None) -> int:
         copy_if_missing(examples / "prompts" / "lead-agent.md", data_home / "prompts" / "lead-agent.md")
         copy_if_missing(examples / "README.md", data_home / "README.md")
 
-        copy_tree_if_missing(examples / "capability-groups", data_home / "capability-groups")
-        copy_tree_if_missing(examples / "tools", data_home / "tools")
         copy_tree_if_missing(project_root / "skills" / "public", data_home / "skills" / "public")
 
         # Runtime-owned directories are created here so the first start has a

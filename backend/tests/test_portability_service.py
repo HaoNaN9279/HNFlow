@@ -81,7 +81,7 @@ class TestExport:
         manifest = result["manifest"]
         names = {entry["name"] for entry in manifest["entries"]}
         assert {"base", "users", "database"} <= names
-        assert set(result["excluded"]) == {"locks", "retrieval"}
+        assert set(result["excluded"]) == {"locks", "retrieval", "capability-groups", "tools"}
         db_entry = next(e for e in manifest["entries"] if e["kind"] == "database")
         assert db_entry["sha256"]  # snapshot digest recorded
         assert (tmp_path / "backup.zip").is_file()

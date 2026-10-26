@@ -228,6 +228,8 @@ async def test_workbench_run_carries_project_snapshot(tmp_path):
     assert kwargs["metadata"]["project"]["project_id"] == project["project_id"]
     assert kwargs["metadata"]["workbench"]["id"] == workbench["id"]
     assert kwargs["metadata"]["workbench"]["project_id"] == project["project_id"]
+    assert kwargs["metadata"]["capability_group_roots"][0]["source"] == "project"
+    assert kwargs["metadata"]["capability_group_roots"][0]["path"].replace("\\", "/").endswith(".vibestack/capability-groups")
 
     await close_engine()
 
@@ -240,9 +242,13 @@ def test_runtime_context_exposes_project_and_workbench():
         metadata={
             "project": {"project_id": "proj-1", "root_path": "D:/work/demo"},
             "workbench": {"id": "wb-1", "project_id": "proj-1"},
+            "capability_group_roots": [{"path": "D:/work/demo/.vibestack/capability-groups", "source": "project", "project_id": "proj-1", "root_id": "project"}],
+            "capability_group_snapshot": [{"guid": "a" * 32, "version": "0.1.0", "content_hash": "hash"}],
         },
     )
     run_ctx = SimpleNamespace(app_config=None, checkpointer=None, spec_repo=None, app_instance_repo=None, agent_adapter=None)
     context = build_workflow_runtime_context(record=record, run_ctx=run_ctx)
     assert context["project"]["project_id"] == "proj-1"
     assert context["workbench"]["id"] == "wb-1"
+    assert context["capability_group_roots"][0].source == "project"
+    assert context["capability_group_snapshot"][0]["content_hash"] == "hash"

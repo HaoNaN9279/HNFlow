@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.deps import get_current_user, get_project_service, get_workflow_definition_repo
 from app.gateway.permissions import require_permission
+from app.gateway.project_context import project_run_metadata
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import start_workflow_run
 from deerflow.projects import (
@@ -239,7 +240,6 @@ async def create_workbench_run(project_id: str, workbench_id: str, request: Requ
     user_id = await _user(request)
     service = get_project_service(request)
     try:
-        project = await service.get_project(project_id, user_id=user_id)
         workbench = await service.get_workbench(project_id, workbench_id, user_id=user_id)
     except Exception as exc:  # noqa: BLE001
         _raise_service_error(exc)
@@ -257,12 +257,10 @@ async def create_workbench_run(project_id: str, workbench_id: str, request: Requ
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
 
-    project_snapshot = dict(project.get("manifest") or {})
-    project_snapshot["root_path"] = project["root_path"]
+    project_metadata = await project_run_metadata(request, project_id, user_id=user_id)
     metadata = {
         **body.metadata,
-        "project_id": project_id,
-        "project": project_snapshot,
+        **project_metadata,
         "workbench_id": workbench_id,
         "workbench": {
             "id": workbench_id,

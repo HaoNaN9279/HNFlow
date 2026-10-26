@@ -35,12 +35,14 @@
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "project_id": "proj-...",
   "name": "example",
   "description": "",
   "default_environment": "local",
-  "capability_profile": null,
+  "capability_groups": {
+    "roots": [{"id": "project", "path": ".vibestack/capability-groups"}]
+  },
   "roots": [{"id": "main", "path": ".", "mode": "rw"}],
   "mcp_allowlist": [],
   "secret_refs": [],

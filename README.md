@@ -95,16 +95,16 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 - 上下文超限自动压缩：预算来自所选模型档案的 `context_window`，压缩使用内置压缩 skill，节点/用户无需配置；
 - AI 节点不做子 Agent 调用、不做 token 预算限制；工具集仍受能力组 allowed-tools 约束；
 
-### 功能组（Capability Group）
+### 能力组（Capability Group）
 
-功能组是能力抽象单元，由现有 Skills 体系升级而来，把「一组按领域划分的能力」做成一等公民：
+能力组是 HNFlow 外部的版本化内容仓库，HNFlow 只读取和解析，不拥有内容：
 
-- **GUID 不变性**：安装时生成 GUID，改名/移动写入 aliases，引用永远有效，路径仅用于展示与语义理解；
-- **语义版本 + 不可变版本目录**：存储布局 `<name>/v<semver>/`，已发布版本目录只读，修改 = 创建新版本，写路径全部走原子替换；
-- **依赖解析**：frontmatter 声明 `dependencies: [{guid, versionRange}]`，保存时静态校验存在性、版本范围并做跨实体循环检测；
-- **命名空间工具前缀**：同名工具自动加 `{group_namespace}.{tool_name}` 前缀，从机制上杜绝覆盖冲突；
-- **懒加载**：节点执行时按 `guid@version` 加载，工作流实例生命周期内缓存复用；
-- **依赖快照**：保存工作流时递归收集节点功能组依赖，固化为 `resolvedGroups`（`guid@version` 集合）落盘。
+- **全局仓库**：默认路径仍是 `hnflow-data/capability-groups/`，由用户 clone 或符号链接到 VibeStack 等独立仓库；
+- **工具同仓**：工具包位于同一仓库的 `tools/` 目录，默认路径 `hnflow-data/tools/` 同样由用户 clone 或链接；
+- **项目仓库**：项目级能力组默认在 `<project>/.vibestack/capability-groups/`，不放进 `.hnflow/`；
+- **项目声明**：`.hnflow/project.json` 的 `capability_groups.roots` 声明项目根目录，HNFlow 只做路径校验、发现和运行期解析；
+- **版本规则**：`<name>/<version>/group.json`，GUID 跨版本稳定，已发布版本目录不可修改；
+- **作用域**：项目 > 用户 > 全局；项目同名组覆盖全局组，同一作用域同名不同 GUID 直接报错。
 
 ### 人工节点（HumanTask）
 
@@ -218,8 +218,8 @@ HNFlow 采用六层架构，核心是**定义层 + 编译层**新增，其余全
 hnflow-data/
 ├── config.yaml / extensions_config.json / .env / frontend.env
 ├── prompts/lead-agent.md
-├── capability-groups/
-├── tools/
+├── capability-groups/   # 外部 VibeStack 仓库链接或 clone
+├── tools/               # 外部 VibeStack 仓库链接或 clone
 ├── skills/
 ├── data/deerflow.db
 └── users/{user_id}/threads/{thread_id}/...
@@ -233,7 +233,16 @@ make setup         # 或运行交互式向导（推荐）
 make data-migrate  # 旧布局迁移（DRY=1 预览；只复制不删除）
 ```
 
-案例模板在 `config-examples/`：主配置、扩展、Lead Agent 提示词、能力组、工具包、工作流和模型档案。实际配置、能力组、工具、提示词、工作区/工作流实例和 SQLite 数据库都在 `hnflow-data/`，不纳入版本管理。
+案例模板在 `config-examples/`：主配置、扩展、Lead Agent 提示词、工作流和模型档案。能力组与工具包不再随 HNFlow 仓库分发；`make config` 不会创建或覆盖 `hnflow-data/capability-groups`、`hnflow-data/tools`。实际配置、能力组、工具、提示词、工作区/工作流实例和 SQLite 数据库都在 `hnflow-data/`，不纳入版本管理。
+
+接入 VibeStack（Windows 示例）：
+
+```powershell
+New-Item -ItemType Junction -Path hnflow-data\capability-groups -Target D:\workspace\work\VibeStack\capability-groups
+New-Item -ItemType Junction -Path hnflow-data\tools -Target D:\workspace\work\VibeStack\tools
+```
+
+也可以直接把仓库 clone 到这两个目录。Docker 模式下，符号链接目标必须同时挂载进容器；最简单的方式是让 VibeStack 位于 `hnflow-data/` 内，或额外挂载其真实路径。
 
 规范根变量是 `HNFLOW_HOME`；`DEER_FLOW_HOME` 继续兼容。SQLite 相对目录按统一根解析，默认 `data`；skills 默认在 `hnflow-data/skills/`。`make doctor` 可随时校验配置并给出修复提示。
 
@@ -379,7 +388,7 @@ HNFlow 默认面向**本地信任环境模型**（个人 / 小团队本机部署
 - **沙箱隔离**：bash / command 等命令类节点强制走 Sandbox 执行（本地 / Docker 模式），禁止直连宿主 shell；文件写入同样受沙箱文件系统约束；
 - **危险节点默认待审核**：AI 生成的 bash / http 等危险节点默认写入 `pending_review_nodes` 元数据，运行时要求人工确认；生成工具的任何结果必须过图结构校验才可保存；
 - **人工确认兜底**：节点失败直接终止，由人工确认后处理；涉及覆盖、提交、删除、发布等操作必须用户二次确认；
-- **依赖静态校验**：功能组依赖存在性、版本范围、循环引用在保存时静态拦截，节点锁定 `guid@version`，新版本只提示不自动升级；
+- **能力组静态校验**：保存/运行时校验能力组根目录、同名冲突与工具引用；工作流快照记录 `guid@version` 与内容 hash，外部仓库更新不会悄悄改变运行行为；
 - **用户隔离**：user_id 作用域存储，多用户同名工作流互不可见；
 - **部署提醒**：若部署到共享环境或多 worker 生产模式，请按上节「服务拓扑 / 快速开始」的说明配置持久化数据库、Redis stream bridge 与所有权心跳，并参考 `make doctor` 输出。
 

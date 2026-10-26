@@ -1,11 +1,10 @@
 ---
 name: workspace-manager
-description: Inspect and safely manage HNFlow workflows, workflow folders, workbenches, and workbench members with the Lead Agent workspace tools. Use when the user asks to create, edit, reorganize, delete, or audit workspace resources.
+description: Inspect and safely manage HNFlow workflows and workflow folders with the Lead Agent workspace tools. Use when the user asks to create, edit, reorganize, delete, or audit workspace resources.
 allowed-tools:
   - workspace_catalog
   - workspace_get
   - workflow_manage
-  - workbench_manage
   - workspace_undo
   - read_file
   - describe_skill
@@ -15,21 +14,19 @@ allowed-tools:
 # Workspace manager
 
 Use this skill whenever the task touches saved workflows, workflow folders,
-workbenches, or workbench members.
+or read-only workbench metadata.
 
 ## Resource model
 
 - `workflow` — a saved `WorkflowDefinition` with nodes, edges, metadata, version, and optional folder.
 - `workflow_folder` — an arbitrary-depth directory for workflows.
-- `workbench` — a saved monitoring surface with layout and settings; it is never executable.
-- `workbench_member` — a reference from a workbench to a root workflow.
 - `tool`, `capability_group`, `model_profile`, `skill` — read-only catalogs used for authoring.
 
 ## Workflow
 
 1. Start with `workspace_catalog(section="index")` to see counts and categories.
 2. Read the affected resource with `workspace_get` before changing it. Keep the
-   returned `updated_at` (workflow/folder) or `revision` (workbench).
+   returned `updated_at` (workflow/folder).
 3. Create with `workflow_manage(action="create")`.
 4. Prefer `workflow_manage(action="patch", operations=[...])` over rewriting
    the full definition. Supported operations: `add_node`, `update_node`,
@@ -41,10 +38,10 @@ workbenches, or workbench members.
 
 ## Workbench
 
-1. Read the workbench first and keep its `revision`.
-2. Use `workbench_manage` for layout, settings, members, and ordering.
-3. Delete only with `confirm=true`.
-4. Removing a workflow from a workbench never deletes the workflow.
+Workbenches are project files under `<project>/.hnflow/workbenches/`. They are
+not mutated through workspace tools. Use the project workbench API or edit the
+JSON file directly; removing a workflow from a workbench never deletes the
+workflow.
 
 ## Undo
 

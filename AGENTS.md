@@ -45,7 +45,7 @@ Nginx 是唯一公共入口：它托管前端，并把 `/api/langgraph/*` 代理
 ```
 HNFlow/
 ├── Makefile                        # 根编排：驱动整个栈（dev/start/stop、docker、setup）
-├── config-examples/                # 已提交的配置模板（config/prompts/capability-groups/tools/workflows/model-profiles）
+├── config-examples/                # 已提交的配置模板（config/prompts/workflows/model-profiles）
 ├── config.example.yaml             # 主配置模板，由 make config 播种到 hnflow-data/config.yaml
 ├── extensions_config.example.json  # MCP/skills 模板，播种到 hnflow-data/extensions_config.json
 ├── hnflow-data/                    # 唯一用户数据根（gitignored）：配置、提示词、能力组、工具、skills、DB、工作区/工作流实例
@@ -101,8 +101,8 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 hnflow-data/
 ├── config.yaml / extensions_config.json / .env / frontend.env
 ├── prompts/lead-agent.md
-├── capability-groups/
-├── tools/
+├── capability-groups/   # 外部 VibeStack 仓库链接或 clone
+├── tools/               # 外部 VibeStack 仓库链接或 clone
 ├── skills/
 ├── data/deerflow.db
 └── users/{user_id}/threads/{thread_id}/...
@@ -113,8 +113,8 @@ hnflow-data/
 - SQLite 的相对 `sqlite_dir` 按统一根解析；默认 `data`。
 - 工作流实例以 `thread_id` 标识，实例文件在 `users/{uid}/threads/{tid}/`；工作流定义、模型档案等事务数据在 `data/deerflow.db`。
 - Lead Agent 提示词优先读 `prompts/lead-agent.md`，兼容旧 `SOUL.md`。
-- `capability-groups/`、`tools/` 的公共根从 `$HNFLOW_HOME` 派生；用户级能力组仍在 `users/{uid}/capability-groups/`。
-- 案例/模板保留在 `config-examples/`，`make config` 只复制缺失文件，不覆盖用户配置。
+- `capability-groups/`、`tools/` 的公共根仍从 `$HNFLOW_HOME` 派生，但内容是用户管理的外部仓库（默认 VibeStack），HNFlow 不播种、不写入；用户级能力组仍在 `users/{uid}/capability-groups/`。
+- 案例/模板保留在 `config-examples/`，`make config` 只复制缺失文件，不覆盖用户配置；能力组与工具包不播种。
 - `make data-migrate`（`DRY=1` 预览）把旧位置复制进统一根，不删除旧文件。
 
 配置 schema 与解析顺序见 [backend/AGENTS.md](backend/AGENTS.md)。
@@ -198,9 +198,9 @@ cd frontend && pnpm typecheck         # 仅 TypeScript 类型检查
 
 工具与能力组是两层：能力组只引用工具，不拥有工具定义。
 
-- **自定义工具包**：`hnflow-data/tools/<name>/<version>/tool.json`（本地受信任代码；模板在 `config-examples/tools/`）。工具包用 `guid + version` 稳定标识，provider 支持 `python` / `mcp` / `builtin` / `sandbox` / `app`；实现见 `backend/packages/harness/deerflow/tools/packages.py`。
+- **自定义工具包**：`hnflow-data/tools/<name>/<version>/tool.json`，内容随 VibeStack 外部仓库管理（本地受信任代码）。工具包用 `guid + version` 稳定标识，provider 支持 `python` / `mcp` / `builtin` / `sandbox` / `app`；实现见 `backend/packages/harness/deerflow/tools/packages.py`。
 - **统一工具 ID**：`tool:<guid>@v<version>`、`mcp:<server>:<tool>`、`builtin:<name>`、`sandbox:<name>`、`app:<name>`。由 `deerflow/tools/registry.py` 解析。
-- **能力组引用**：`hnflow-data/capability-groups/<name>/<version>/group.json` 增加 `tools` 与可选 `tool_permissions`。`resolve_capability_tools` 加载能力组闭包、解析工具引用、执行权限裁决；显式声明的工具缺失或越权时 fail-loud，不静默降级。
+- **能力组引用**：全局 `hnflow-data/capability-groups/<name>/<version>/group.json`，项目级 `<project>/.vibestack/capability-groups/<name>/<version>/group.json`；`tools` 与可选 `tool_permissions` 由 `resolve_capability_tools` 解析。显式声明的工具缺失或越权时 fail-loud，不静默降级。
 - **MCP**：server 配置仍在 `extensions_config.json`；MCP provider 为每个工具记录 `mcp:<server>:<tool>` 元数据，能力组只引用工具 ID，不复制 transport/凭证。
 - **API**：`GET /api/tools` 返回统一工具目录（自定义包 + provider 工具），供能力组管理页选择引用。
 

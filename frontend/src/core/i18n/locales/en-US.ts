@@ -196,7 +196,8 @@ export const enUS: Translations = {
     loadFailed: "Failed to load capability groups",
     retry: "Retry",
     empty: "No capability groups installed",
-    emptyHint: "Add group.json under capability-groups/<name>/<version>/.",
+    emptyHint:
+      "Add group.json under capability-groups/<name>/<version>/ in the external VibeStack repository or the project .vibestack/capability-groups/.",
     loadingContents: "Loading contents...",
     loadContentsFailed: "Failed to load capability group contents",
     noFiles: "This capability group has no files to show",
@@ -206,7 +207,7 @@ export const enUS: Translations = {
     revealGroup: "Open capability group folder",
     revealFailed: "Failed to reveal file",
     revealed: "Revealed in file manager",
-    source: { public: "Built-in", user: "User" },
+    source: { public: "Global", user: "User", project: "Project" },
     categories: {
       rules: "Rules",
       agents: "Agents",

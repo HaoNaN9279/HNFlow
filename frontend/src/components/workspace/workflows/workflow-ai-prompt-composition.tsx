@@ -1,6 +1,7 @@
 "use client";
 
 import { ChevronRightIcon, RefreshCwIcon } from "lucide-react";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -66,6 +67,8 @@ export function AiPromptComposition({
   const { t } = useI18n();
   const labels = t.workflows.properties.ai.promptComposition;
   const { workflowId, currentDefinition } = useWorkflowEditor();
+  const searchParams = useSearchParams();
+  const projectId = searchParams?.get("project") ?? undefined;
   const [preview, setPreview] = useState<WorkflowPromptPreview | null>(null);
   const [selected, setSelected] = useState<WorkflowPromptComponent | null>(
     null,
@@ -89,6 +92,7 @@ export function AiPromptComposition({
       previewWorkflowPrompt(workflowId, {
         node_id: nodeId,
         definition: currentDefinition(),
+        project_id: projectId,
       })
         .then((result) => {
           if (!cancelled) {

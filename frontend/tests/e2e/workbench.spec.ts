@@ -13,7 +13,9 @@ const project = {
   root_path: "D:/work/e2e",
   manifest_hash: "hash",
   default_environment: null,
-  capability_profile: null,
+  capability_groups: {
+    roots: [{ id: "project", path: ".vibestack/capability-groups" }],
+  },
   roots: [{ id: "main", path: ".", mode: "rw" }],
   mcp_allowlist: [],
   secret_refs: [],

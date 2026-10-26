@@ -1,4 +1,4 @@
-export type CapabilityGroupSource = "public" | "user";
+export type CapabilityGroupSource = "public" | "user" | "project";
 
 export type CapabilityGroupCounts = Record<string, number>;
 
@@ -8,6 +8,8 @@ export interface CapabilityGroupSummary {
   version: string;
   description: string;
   source: CapabilityGroupSource;
+  project_id?: string | null;
+  root_id?: string | null;
   permissions: string[];
   extends: string[];
   tools?: string[];

@@ -1,5 +1,6 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -409,7 +410,9 @@ function CapabilityGroupSelectorForm({
   const [values, setValues] = useState<NodeFormValues>(() =>
     parseNodeFormValues(workflow),
   );
-  const groupsQuery = useCapabilityGroups();
+  const searchParams = useSearchParams();
+  const projectId = searchParams?.get("project") ?? undefined;
+  const groupsQuery = useCapabilityGroups(projectId);
 
   useEffect(() => {
     setValues(parseNodeFormValues(node.data.workflow));
@@ -485,6 +488,8 @@ function PromptPreviewForm({
   const labels = t.workflows.properties;
   const workflow = node.data.workflow;
   const { workflowId, nodes, currentDefinition } = useWorkflowEditor();
+  const searchParams = useSearchParams();
+  const projectId = searchParams?.get("project") ?? undefined;
   const [values, setValues] = useState<NodeFormValues>(() =>
     parseNodeFormValues(workflow),
   );
@@ -519,6 +524,7 @@ function PromptPreviewForm({
       const result = await previewWorkflowPrompt(workflowId, {
         node_id: node.id,
         definition: currentDefinition(),
+        project_id: projectId,
       });
       setPreview(result.prompt);
       setOmitted(result.omitted_runtime_blocks);

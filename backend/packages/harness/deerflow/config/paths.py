@@ -630,14 +630,14 @@ class Paths:
             DataDir(
                 name="capability-groups",
                 path=self.capability_groups_dir,
-                purpose="User-editable versioned capability-group packages.",
-                required=True,
+                purpose="External capability-group repository (clone or symlink); HNFlow reads it but never seeds or owns it.",
+                required=False,
             ),
             DataDir(
                 name="tools",
                 path=self.tool_packages_dir,
-                purpose="User-editable versioned custom tool packages.",
-                required=True,
+                purpose="External custom tool-package repository (clone or symlink); HNFlow reads it but never seeds or owns it.",
+                required=False,
             ),
             DataDir(
                 name="skills",

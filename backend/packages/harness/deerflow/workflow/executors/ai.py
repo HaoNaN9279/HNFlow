@@ -13,7 +13,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from deerflow.capability_groups.discovery import CapabilityGroupError
+from deerflow.capability_groups.discovery import (
+    CapabilityGroupError,
+    CapabilityGroupRoot,
+    verify_capability_group_snapshot,
+)
 from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
 from deerflow.config.agents_config import load_agent_config
 from deerflow.config.token_budget_config import TokenBudgetConfig
@@ -136,6 +140,7 @@ def _resolve_node_tools(
     capability_groups: list[str],
     *,
     user_id: str | None,
+    project_roots: tuple[CapabilityGroupRoot, ...],
     app_config: Any,
     instance_repo: Any = None,
     node_id: str | None = None,
@@ -154,7 +159,13 @@ def _resolve_node_tools(
     from deerflow.workflow.tool_gateway import resolve_capability_tools
 
     try:
-        return resolve_capability_tools(capability_groups, user_id=user_id, app_config=app_config, instance_repo=instance_repo)
+        return resolve_capability_tools(
+            capability_groups,
+            user_id=user_id,
+            project_roots=project_roots,
+            app_config=app_config,
+            instance_repo=instance_repo,
+        )
     except ToolResolutionError as exc:
         # An explicitly declared tool is part of the node's contract.  Silently
         # running with a smaller tool set would make configuration errors look
@@ -208,6 +219,8 @@ async def exec_llm_agent(
     user_id = context.get("user_id")
     app_config = context.get("app_config")
     instance_repo = context.get(APP_INSTANCE_REPO_CONTEXT_KEY)
+    project_roots = tuple(context.get("capability_group_roots") or ())
+    capability_group_snapshot = tuple(context.get("capability_group_snapshot") or ())
     thread_id = context.get("thread_id")
 
     raw_groups = params.get("capability_groups") or []
@@ -290,12 +303,23 @@ async def exec_llm_agent(
             node_id,
         )
 
+    if capability_groups and capability_group_snapshot:
+        try:
+            verify_capability_group_snapshot(
+                capability_groups,
+                user_id=user_id,
+                project_roots=project_roots,
+                snapshot=capability_group_snapshot,
+            )
+        except CapabilityGroupError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
     capability_rules: list[Any] = []
     capability_skills: list[Any] = []
     try:
         if not is_continue:
-            capability_rules = load_capability_rules(capability_groups, user_id=user_id)
-        capability_skills = load_capability_skills(capability_groups, user_id=user_id)
+            capability_rules = load_capability_rules(capability_groups, user_id=user_id, project_roots=project_roots)
+        capability_skills = load_capability_skills(capability_groups, user_id=user_id, project_roots=project_roots)
     except (CapabilityContentError, CapabilityGroupError) as exc:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
 
@@ -350,6 +374,7 @@ async def exec_llm_agent(
     node_tools = _resolve_node_tools(
         capability_groups,
         user_id=user_id,
+        project_roots=project_roots,
         app_config=app_config,
         instance_repo=instance_repo,
         node_id=node_id,

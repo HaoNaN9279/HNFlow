@@ -30,6 +30,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from langchain.tools import BaseTool
 
+    from deerflow.capability_groups import CapabilityGroupRoot
+
 logger = logging.getLogger(__name__)
 
 #: Provider category labels for a resolved tool.
@@ -427,13 +429,18 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
     return gateway
 
 
-def _load_capability_group_closure(references: list[str], *, user_id: str | None) -> list[Any]:
+def _load_capability_group_closure(
+    references: list[str],
+    *,
+    user_id: str | None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
+) -> list[Any]:
     """Load selected groups plus their ``extends`` bases, de-duplicated by GUID."""
     from deerflow.capability_groups import CapabilityGroupError, load_capability_group_closure
     from deerflow.tools.registry import ToolResolutionError
 
     try:
-        return load_capability_group_closure(references, user_id=user_id)
+        return load_capability_group_closure(references, user_id=user_id, project_roots=project_roots)
     except CapabilityGroupError as exc:
         raise ToolResolutionError(f"capability group is not available: {exc}") from exc
 
@@ -442,6 +449,7 @@ def resolve_capability_tools(
     capability_groups: list[str],
     *,
     user_id: str | None = None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
     model_name: str | None = None,
     app_config: Any = None,
     instance_repo: Any = None,
@@ -461,7 +469,7 @@ def resolve_capability_tools(
 
     from deerflow.tools.registry import ToolRegistry
 
-    groups = _load_capability_group_closure(capability_groups, user_id=user_id)
+    groups = _load_capability_group_closure(capability_groups, user_id=user_id, project_roots=project_roots)
     refs: list[str] = []
     permissions: list[str] = []
     overrides: dict[str, tuple[str, ...]] = {}

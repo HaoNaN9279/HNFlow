@@ -193,7 +193,7 @@ def test_registry_uses_group_permission_override_for_unknown_mcp_name() -> None:
 def test_resolve_capability_tools_loads_groups_and_extends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="base", guid="b" * 32, tools=["builtin:beta"])
     _group(tmp_path, name="child", guid="c" * 32, tools=["builtin:alpha"], extends=["base"])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: FakeGateway(builtin={"alpha": alpha, "beta": beta}))
 
     resolved = tg.resolve_capability_tools(["child"])
@@ -203,7 +203,7 @@ def test_resolve_capability_tools_loads_groups_and_extends(tmp_path: Path, monke
 
 def test_resolve_capability_tools_fails_on_missing_declared_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="demo", guid="d" * 32, tools=["builtin:missing"])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: FakeGateway())
 
     with pytest.raises(ToolResolutionError, match="builtin tool 'missing' is not available"):
@@ -212,7 +212,7 @@ def test_resolve_capability_tools_fails_on_missing_declared_tool(tmp_path: Path,
 
 def test_resolve_capability_tools_returns_empty_without_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="demo", guid="e" * 32, tools=[])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: pytest.fail("gateway should not be built"))
 
     assert tg.resolve_capability_tools(["demo"]) == []

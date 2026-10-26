@@ -133,11 +133,6 @@ export function ProjectList() {
                   <span className="text-muted-foreground w-full truncate font-mono text-[10px]">
                     {project.root_path}
                   </span>
-                  {project.capability_profile && (
-                    <span className="text-muted-foreground text-xs">
-                      {project.capability_profile}
-                    </span>
-                  )}
                   {project.error && (
                     <span className="text-destructive line-clamp-2 text-xs">
                       {project.error}

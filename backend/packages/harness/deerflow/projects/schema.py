@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+from pathlib import PurePosixPath
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 WORKBENCH_SCHEMA_VERSION = 1
 
 _PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -19,7 +20,7 @@ _ROOT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 #: source of truth.
 _FORBIDDEN_WORKBENCH_SETTINGS = frozenset(
     {
-        "capability_profile",
+        "capability_groups",
         "default_environment",
         "mcp_allowlist",
         "project_id",
@@ -56,6 +57,56 @@ class ProjectRoot(BaseModel):
         return normalized
 
 
+class ProjectCapabilityGroupRoot(BaseModel):
+    """A project-relative capability-group root, outside ``.hnflow``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default="project", min_length=1, max_length=64)
+    path: str = Field(default=".vibestack/capability-groups", min_length=1)
+
+    @field_validator("id")
+    @classmethod
+    def _validate_id(cls, value: str) -> str:
+        if not _ROOT_ID_RE.fullmatch(value):
+            raise ValueError(f"capability-group root id must match {_ROOT_ID_RE.pattern}; got {value!r}")
+        return value
+
+    @field_validator("path")
+    @classmethod
+    def _validate_path(cls, value: str) -> str:
+        normalized = value.strip().replace("\\", "/")
+        if not normalized or normalized == ".":
+            raise ValueError("capability-group root path must be a project-relative directory")
+        if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+            raise ValueError("capability-group root path must be project-relative")
+        parts = PurePosixPath(normalized).parts
+        if not parts or any(part in ("", ".", "..") for part in parts):
+            raise ValueError("capability-group root path must not escape the project root")
+        if any(part.lower() == ".hnflow" for part in parts):
+            raise ValueError("capability-group content must not live under .hnflow")
+        return PurePosixPath(*parts).as_posix()
+
+
+class ProjectCapabilityGroups(BaseModel):
+    """Project-specific capability-group roots, in precedence order."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    roots: list[ProjectCapabilityGroupRoot] = Field(default_factory=lambda: [ProjectCapabilityGroupRoot()])
+
+    @field_validator("roots")
+    @classmethod
+    def _validate_roots(cls, value: list[ProjectCapabilityGroupRoot]) -> list[ProjectCapabilityGroupRoot]:
+        ids = [root.id for root in value]
+        if len(ids) != len(set(ids)):
+            raise ValueError("capability-group root ids must be unique")
+        paths = [root.path for root in value]
+        if len(paths) != len(set(paths)):
+            raise ValueError("capability-group root paths must be unique")
+        return value
+
+
 class ProjectManifest(BaseModel):
     """The contents of ``<project>/.hnflow/project.json``."""
 
@@ -66,7 +117,7 @@ class ProjectManifest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = ""
     default_environment: str | None = Field(default=None, max_length=64)
-    capability_profile: str | None = Field(default=None, max_length=255)
+    capability_groups: ProjectCapabilityGroups = Field(default_factory=ProjectCapabilityGroups)
     roots: list[ProjectRoot] = Field(default_factory=lambda: [ProjectRoot()])
     mcp_allowlist: list[str] = Field(default_factory=list)
     secret_refs: list[str] = Field(default_factory=list)

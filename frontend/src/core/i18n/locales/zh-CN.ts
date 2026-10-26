@@ -186,7 +186,8 @@ export const zhCN: Translations = {
     loadFailed: "加载能力组失败",
     retry: "重试",
     empty: "暂无能力组",
-    emptyHint: "在 capability-groups/<name>/<version>/ 下添加 group.json。",
+    emptyHint:
+      "在外部 VibeStack 仓库的 capability-groups/<name>/<version>/ 或项目 .vibestack/capability-groups/ 下添加 group.json。",
     loadingContents: "正在加载内容...",
     loadContentsFailed: "加载能力组内容失败",
     noFiles: "该能力组没有可展示的文件",
@@ -196,7 +197,7 @@ export const zhCN: Translations = {
     revealGroup: "打开能力组目录",
     revealFailed: "定位文件失败",
     revealed: "已在资源管理器中定位",
-    source: { public: "内置", user: "用户" },
+    source: { public: "全局", user: "用户", project: "项目" },
     categories: {
       rules: "Rules",
       agents: "Agents",

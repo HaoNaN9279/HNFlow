@@ -28,7 +28,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from deerflow.capability_groups import discover_capability_groups
+from deerflow.capability_groups import CapabilityGroupRoot, capability_group_content_hash, discover_capability_groups
 from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
@@ -43,7 +43,13 @@ class WorkflowDefinitionSaveError(RuntimeError):
     """Raised when a workflow definition cannot be saved."""
 
 
-def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[str, Any]) -> dict[str, Any]:
+def _resolve_workflow_metadata(
+    definition: WorkflowDefinition,
+    metadata: dict[str, Any],
+    *,
+    user_id: str | None = None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
+) -> dict[str, Any]:
     """Populate ``metadata["resolved_groups"]`` from the definition's capability groups.
 
     Only when any node declares ``capability_groups``; otherwise ``resolved_groups``
@@ -59,11 +65,30 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
         return result
 
     try:
-        groups = discover_capability_groups()
+        groups = discover_capability_groups(user_id=user_id, project_roots=project_roots)
         by_reference = {group.name: group for group in groups}
         by_reference.update({group.guid: group for group in groups})
         resolved = collect_resolved_groups(definition, by_reference)
         result["resolved_groups"] = resolved if resolved else None
+        by_snapshot = {f"{group.guid}@v{group.version}": group for group in groups}
+        snapshot = []
+        for reference in resolved or []:
+            group = by_snapshot.get(reference)
+            if group is None:
+                continue
+            snapshot.append(
+                {
+                    "guid": group.guid,
+                    "name": group.name,
+                    "version": group.version,
+                    "source": group.source,
+                    "project_id": group.project_id,
+                    "root_id": group.root_id,
+                    "content_hash": capability_group_content_hash(group),
+                }
+            )
+        result["capability_group_snapshot"] = snapshot
+        result["capability_group_roots"] = [root.to_dict() for root in project_roots]
     except Exception as e:  # noqa: BLE001 - fail-open by design
         logger.warning("Failed to resolve workflow capability groups: %s", e)
 
@@ -84,6 +109,8 @@ def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, 
         "schema_version": SCHEMA_VERSION,
         "workflow": {"id": definition.id, "version": definition.version},
         "capability_groups": list(groups),
+        "capability_group_snapshot": list(resolved_metadata.get("capability_group_snapshot") or []),
+        "capability_group_roots": list(resolved_metadata.get("capability_group_roots") or []),
         "created_at": datetime.now(UTC).isoformat(),
     }
     try:

@@ -74,11 +74,11 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None: [],
+        lambda groups, user_id=None, project_roots=(): [],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None: [],
+        lambda groups, user_id=None, project_roots=(): [],
     )
     definition = _definition(
         selector=True,
@@ -217,11 +217,11 @@ def test_rules_and_skill_descriptions_have_their_own_sources(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None: [rule],
+        lambda groups, user_id=None, project_roots=(): [rule],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None: [skill],
+        lambda groups, user_id=None, project_roots=(): [skill],
     )
     definition = _definition(
         selector=True,

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from deerflow.capability_groups import CapabilityGroupRoot
 from deerflow.persistence.projects import ProjectRepository, ProjectRootConflictError
 from deerflow.projects.schema import ProjectManifest, WorkbenchFile, WorkbenchMember
 from deerflow.projects.store import (
@@ -17,6 +18,7 @@ from deerflow.projects.store import (
     delete_workbench_file,
     list_workbench_files,
     manifest_content_hash,
+    project_dir,
     read_manifest,
     read_workbench,
     resolve_project_root,
@@ -24,6 +26,19 @@ from deerflow.projects.store import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _count_capability_groups(root: Path) -> int:
+    if not root.is_dir():
+        return 0
+    count = 0
+    for name_dir in root.iterdir():
+        if not name_dir.is_dir() or name_dir.name.startswith("."):
+            continue
+        for version_dir in name_dir.iterdir():
+            if version_dir.is_dir() and not version_dir.name.startswith(".") and (version_dir / "group.json").is_file():
+                count += 1
+    return count
 
 
 class ProjectError(ValueError):
@@ -96,7 +111,9 @@ class ProjectService:
             )
         except ProjectRootConflictError as exc:
             raise ProjectConflictError(str(exc)) from exc
-        return self._project_payload(row, manifest)
+        payload = self._project_payload(row, manifest)
+        payload["capability_group_roots"] = await self.capability_group_root_status(manifest.project_id, user_id=user_id)
+        return payload
 
     async def open_project(self, *, root_path: str, user_id: str) -> dict[str, Any]:
         try:
@@ -114,7 +131,9 @@ class ProjectService:
             )
         except ProjectRootConflictError as exc:
             raise ProjectConflictError(str(exc)) from exc
-        return self._project_payload(row, manifest)
+        payload = self._project_payload(row, manifest)
+        payload["capability_group_roots"] = await self.capability_group_root_status(manifest.project_id, user_id=user_id)
+        return payload
 
     async def list_projects(self, *, user_id: str) -> list[dict[str, Any]]:
         rows = await self._projects.list_by_user(user_id)
@@ -126,6 +145,18 @@ class ProjectService:
             except Exception as exc:  # noqa: BLE001 - a broken project must stay visible
                 projects.append({**row, "id": row["id"], "project_id": row["id"], "error": str(exc), "manifest": None})
                 continue
+            digest = manifest_content_hash(manifest)
+            if row.get("manifest_hash") != digest or row.get("name") != manifest.name:
+                try:
+                    row = await self._projects.upsert(
+                        project_id=manifest.project_id,
+                        user_id=user_id,
+                        name=manifest.name,
+                        root_path=str(root),
+                        manifest_hash=digest,
+                    )
+                except Exception:
+                    logger.warning("Failed to refresh project %s metadata from list", row["id"], exc_info=True)
             payload = self._project_payload(row, manifest)
             payload["manifest"] = manifest.model_dump(mode="json")
             projects.append(payload)
@@ -136,6 +167,7 @@ class ProjectService:
         payload = self._project_payload(row, manifest)
         payload["manifest"] = manifest.model_dump(mode="json")
         payload["workbenches_path"] = str(root / ".hnflow" / "workbenches")
+        payload["capability_group_roots"] = await self.capability_group_root_status(project_id, user_id=user_id)
         return payload
 
     async def close_project(self, project_id: str, *, user_id: str) -> bool:
@@ -152,7 +184,67 @@ class ProjectService:
             raise ProjectNotFoundError(f"project {project_id!r} files are unavailable: {exc}") from exc
         if manifest.project_id != project_id:
             raise ProjectError(f"project manifest id {manifest.project_id!r} does not match registered id {project_id!r}")
+        digest = manifest_content_hash(manifest)
+        if row.get("manifest_hash") != digest or row.get("name") != manifest.name:
+            try:
+                row = await self._projects.upsert(
+                    project_id=manifest.project_id,
+                    user_id=user_id,
+                    name=manifest.name,
+                    root_path=str(root),
+                    manifest_hash=digest,
+                )
+            except Exception:
+                logger.warning("Failed to refresh project %s metadata", project_id, exc_info=True)
         return row, root, manifest
+
+    async def capability_group_roots(self, project_id: str, *, user_id: str) -> list[CapabilityGroupRoot]:
+        """Resolve project-specific capability-group roots from ``project.json``."""
+        _, root, manifest = await self._load_project(project_id, user_id=user_id)
+        return self._resolve_capability_group_roots(root, manifest, project_id)
+
+    async def capability_group_root_status(self, project_id: str, *, user_id: str) -> list[dict[str, Any]]:
+        """Describe each declared project capability-group root without creating it."""
+        _, root, manifest = await self._load_project(project_id, user_id=user_id)
+        statuses: list[dict[str, Any]] = []
+        for config in manifest.capability_groups.roots:
+            raw = root / config.path
+            resolved = raw.resolve(strict=False)
+            statuses.append(
+                {
+                    "id": config.id,
+                    "path": config.path,
+                    "resolved_path": str(resolved),
+                    "exists": resolved.is_dir(),
+                    "is_symlink": raw.is_symlink(),
+                    "is_junction": bool(getattr(raw, "is_junction", lambda: False)()),
+                    "group_count": _count_capability_groups(resolved),
+                }
+            )
+        return statuses
+
+    @staticmethod
+    def _resolve_capability_group_roots(root: Path, manifest: ProjectManifest, project_id: str) -> list[CapabilityGroupRoot]:
+        hnflow_dir = project_dir(root).resolve(strict=False)
+        resolved_roots: list[CapabilityGroupRoot] = []
+        seen: set[str] = set()
+        for config in manifest.capability_groups.roots:
+            resolved = (root / config.path).resolve(strict=False)
+            if resolved == hnflow_dir or hnflow_dir in resolved.parents:
+                raise ProjectError(f"capability-group root {config.path!r} must not live under .hnflow")
+            key = str(resolved).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved_roots.append(
+                CapabilityGroupRoot(
+                    path=resolved,
+                    source="project",
+                    project_id=project_id,
+                    root_id=config.id,
+                )
+            )
+        return resolved_roots
 
     @staticmethod
     def _project_payload(row: dict[str, Any], manifest: ProjectManifest) -> dict[str, Any]:
@@ -165,7 +257,7 @@ class ProjectService:
             "root_path": row["root_path"],
             "manifest_hash": row["manifest_hash"],
             "default_environment": manifest.default_environment,
-            "capability_profile": manifest.capability_profile,
+            "capability_groups": manifest.capability_groups.model_dump(mode="json"),
             "roots": [root.model_dump(mode="json") for root in manifest.roots],
             "mcp_allowlist": list(manifest.mcp_allowlist),
             "secret_refs": list(manifest.secret_refs),

@@ -17,7 +17,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 
-from deerflow.capability_groups.discovery import load_capability_group_closure
+from deerflow.capability_groups.discovery import CapabilityGroupRoot, load_capability_group_closure
 from deerflow.skills.frontmatter import split_skill_markdown
 
 logger = logging.getLogger(__name__)
@@ -72,14 +72,20 @@ class CapabilitySkill:
         return f"Skill: {self.group_name} / {self.name}"
 
 
-def _ordered_groups(references: list[str], *, user_id: str | None) -> list:
-    return load_capability_group_closure(references, user_id=user_id, bases_first=True)
+def _ordered_groups(
+    references: list[str],
+    *,
+    user_id: str | None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
+) -> list:
+    return load_capability_group_closure(references, user_id=user_id, project_roots=project_roots, bases_first=True)
 
 
 def load_capability_rules(
     references: list[str],
     *,
     user_id: str | None = None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
 ) -> list[CapabilityRule]:
     """Load every Markdown rule from the active group closure.
 
@@ -89,7 +95,7 @@ def load_capability_rules(
     """
     rules: dict[str, CapabilityRule] = {}
     order: list[str] = []
-    for group in _ordered_groups(references, user_id=user_id):
+    for group in _ordered_groups(references, user_id=user_id, project_roots=project_roots):
         for file in group.files:
             if file.category != "rules" or not file.is_markdown:
                 continue
@@ -115,6 +121,7 @@ def load_capability_skills(
     references: list[str],
     *,
     user_id: str | None = None,
+    project_roots: tuple[CapabilityGroupRoot, ...] = (),
 ) -> list[CapabilitySkill]:
     """Load skill metadata from every active capability group.
 
@@ -124,7 +131,7 @@ def load_capability_skills(
     """
     skills: dict[str, CapabilitySkill] = {}
     order: list[str] = []
-    for group in _ordered_groups(references, user_id=user_id):
+    for group in _ordered_groups(references, user_id=user_id, project_roots=project_roots):
         for file in group.files:
             if file.category != "skills" or file.name != "SKILL.md" or not file.is_markdown:
                 continue

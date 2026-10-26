@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 
 from app.gateway.deps import get_current_user, get_optional_user_from_request, get_run_context, get_run_manager, get_stream_bridge, get_workflow_definition_repo
 from app.gateway.permissions import require_permission
+from app.gateway.project_context import project_run_metadata
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import _build_workflow_template_resolver, sse_consumer, start_workflow_run, wait_for_run_completion
 from deerflow.config import get_app_config
@@ -41,6 +42,7 @@ class WorkflowRunRequest(BaseModel):
     thread_id: str | None = None
     on_disconnect: str = "cancel"
     metadata: dict[str, Any] = Field(default_factory=dict)
+    project_id: str | None = Field(default=None, description="Project scope for project-specific capability groups")
     # §25 single-step debugging: suspend before **every** node so a caller can
     # advance the graph one node at a time. A resume run keeps stepping while
     # the task it resumes was a step task (see the human-task resume path).
@@ -208,6 +210,14 @@ async def _workflow_state_values(
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 
+async def _run_metadata(request: Request, body: WorkflowRunRequest, *, user_id: str) -> dict[str, Any]:
+    metadata = dict(body.metadata)
+    if body.project_id:
+        project_metadata = await project_run_metadata(request, body.project_id, user_id=user_id)
+        metadata = {**metadata, **project_metadata}
+    return metadata
+
+
 @router.post("/{definition_id}/runs", response_model=RunResponse)
 @require_permission("runs", "create")
 async def create_workflow_run(definition_id: str, body: WorkflowRunRequest, request: Request) -> RunResponse:
@@ -217,6 +227,7 @@ async def create_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         raise HTTPException(status_code=401, detail="Authentication required")
 
     _, definition = await _resolve_definition(request, definition_id, user)
+    metadata = await _run_metadata(request, body, user_id=str(user.id))
 
     record = await start_workflow_run(
         definition_id=definition_id,
@@ -225,7 +236,7 @@ async def create_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         thread_id=body.thread_id or _default_workflow_thread_id(definition_id),
         request=request,
         on_disconnect=body.on_disconnect,
-        metadata=body.metadata,
+        metadata=metadata,
         debug_step=body.debug_step,
     )
     return _record_to_response(record)
@@ -244,6 +255,7 @@ async def stream_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         raise HTTPException(status_code=401, detail="Authentication required")
 
     _, definition = await _resolve_definition(request, definition_id, user)
+    metadata = await _run_metadata(request, body, user_id=str(user.id))
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
 
@@ -254,7 +266,7 @@ async def stream_workflow_run(definition_id: str, body: WorkflowRunRequest, requ
         thread_id=body.thread_id or _default_workflow_thread_id(definition_id),
         request=request,
         on_disconnect=body.on_disconnect,
-        metadata=body.metadata,
+        metadata=metadata,
         debug_step=body.debug_step,
     )
 
@@ -279,6 +291,7 @@ async def wait_workflow_run(definition_id: str, body: WorkflowRunRequest, reques
         raise HTTPException(status_code=401, detail="Authentication required")
 
     _, definition = await _resolve_definition(request, definition_id, user)
+    metadata = await _run_metadata(request, body, user_id=str(user.id))
     bridge = get_stream_bridge(request)
     run_mgr = get_run_manager(request)
 
@@ -289,7 +302,7 @@ async def wait_workflow_run(definition_id: str, body: WorkflowRunRequest, reques
         thread_id=body.thread_id or _default_workflow_thread_id(definition_id),
         request=request,
         on_disconnect=body.on_disconnect,
-        metadata=body.metadata,
+        metadata=metadata,
         debug_step=body.debug_step,
     )
 

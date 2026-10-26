@@ -37,7 +37,7 @@ class TestBackupPlanEndpoint:
         assert body["database_included"] is True
         names = {member["name"] for member in body["members"]}
         assert {"base", "users", "database"} <= names
-        assert {entry["name"] for entry in body["excluded"]} == {"locks", "retrieval"}
+        assert {entry["name"] for entry in body["excluded"]} == {"locks", "retrieval", "capability-groups", "tools"}
         assert "note" in body
 
     def test_memory_plan_has_no_database(self) -> None:

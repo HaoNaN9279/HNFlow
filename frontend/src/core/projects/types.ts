@@ -4,13 +4,28 @@ export type ProjectRoot = {
   mode: "rw" | "ro";
 };
 
+export type ProjectCapabilityGroupRoot = {
+  id: string;
+  path: string;
+};
+
+export type ProjectCapabilityGroupRootStatus = {
+  id: string;
+  path: string;
+  resolved_path: string;
+  exists: boolean;
+  is_symlink: boolean;
+  is_junction: boolean;
+  group_count: number;
+};
+
 export type ProjectManifest = {
   schema_version: number;
   project_id: string;
   name: string;
   description: string;
   default_environment: string | null;
-  capability_profile: string | null;
+  capability_groups: { roots: ProjectCapabilityGroupRoot[] };
   roots: ProjectRoot[];
   mcp_allowlist: string[];
   secret_refs: string[];
@@ -26,7 +41,7 @@ export type ProjectRecord = {
   root_path: string;
   manifest_hash: string;
   default_environment: string | null;
-  capability_profile: string | null;
+  capability_groups: { roots: ProjectCapabilityGroupRoot[] };
   roots: ProjectRoot[];
   mcp_allowlist: string[];
   secret_refs: string[];
@@ -34,5 +49,6 @@ export type ProjectRecord = {
   updated_at: string;
   manifest?: ProjectManifest | null;
   workbenches_path?: string;
+  capability_group_roots?: ProjectCapabilityGroupRootStatus[];
   error?: string;
 };

@@ -182,7 +182,7 @@ export interface Translations {
     revealGroup: string;
     revealFailed: string;
     revealed: string;
-    source: { public: string; user: string };
+    source: { public: string; user: string; project: string };
     categories: {
       rules: string;
       agents: string;

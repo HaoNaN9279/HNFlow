@@ -7,14 +7,12 @@ from pathlib import Path
 
 import yaml
 
-from deerflow.capability_groups.discovery import _load_manifest
 from deerflow.config import paths as paths_module
 from deerflow.config.app_config import AppConfig
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.config.extensions_config import ExtensionsConfig
 from deerflow.config.paths import Paths
 from deerflow.config.runtime_paths import USER_DATA_DIRNAME, user_data_home
-from deerflow.tools.packages import load_tool_package
 from deerflow.workflow.schema import WorkflowDefinition
 from deerflow.workflow.workflow_io import validate_definition
 
@@ -58,25 +56,6 @@ def test_lead_agent_prompt_example_exists() -> None:
     prompt = EXAMPLES / "prompts" / "lead-agent.md"
     assert prompt.is_file()
     assert "HNFlow Lead Agent" in prompt.read_text(encoding="utf-8")
-
-
-def test_capability_group_example_is_valid() -> None:
-    root = EXAMPLES / "capability-groups" / "demo-pipeline" / "0.1.0"
-    group = _load_manifest(root, name_hint="demo-pipeline", version_hint="0.1.0", source="public")
-
-    assert group.name == "demo-pipeline"
-    assert group.version == "0.1.0"
-    assert group.counts["skills"] == 1
-    assert group.tools == ("builtin:read_file",)
-
-
-def test_tool_package_example_is_valid() -> None:
-    package = load_tool_package("echo-tool", root=EXAMPLES / "tools")
-
-    assert package.name == "echo-tool"
-    assert package.provider == "python"
-    assert package.entrypoint == "tool.py:build_tool"
-    assert package.ref == f"tool:{package.guid}@v0.1.0"
 
 
 def test_workflow_examples_are_valid() -> None:

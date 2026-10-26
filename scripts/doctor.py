@@ -239,6 +239,31 @@ def check_config_exists(config_path: Path) -> CheckResult:
     )
 
 
+def check_external_repositories(data_home: Path) -> list[CheckResult]:
+    """Report the external capability-group/tool repositories without creating them."""
+    results: list[CheckResult] = []
+    for name, pattern in (("capability-groups", "group.json"), ("tools", "tool.json")):
+        path = data_home / name
+        if not path.exists():
+            results.append(
+                CheckResult(
+                    f"{name} repository",
+                    "warn",
+                    f"missing at {path}",
+                    fix=(f"Clone the VibeStack repository or link its sibling directory here:\n  {name} -> D:\\workspace\\work\\VibeStack\\{name}"),
+                )
+            )
+            continue
+        if not path.is_dir():
+            results.append(CheckResult(f"{name} repository", "fail", f"not a directory: {path}"))
+            continue
+        count = sum(1 for child in path.rglob(pattern) if child.is_file())
+        link = path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
+        detail = f"{count} package(s)" + (f" via link -> {path.resolve()}" if link else "")
+        results.append(CheckResult(f"{name} repository", "ok" if count else "warn", detail))
+    return results
+
+
 def check_config_version(config_path: Path, project_root: Path) -> CheckResult:
     if not config_path.exists():
         return CheckResult("config.yaml version", "skip")
@@ -761,6 +786,8 @@ def main() -> int:
         *check_llm_package(config_path),
     ]
     sections.append(("LLM Provider", llm_checks))
+
+    sections.append(("External repositories", check_external_repositories(data_home)))
 
     # ── Web Capabilities ─────────────────────────────────────────────────────
     search_checks = [

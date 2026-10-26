@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo, get_workflow_folder_repo
 from app.gateway.permissions import require_permission
+from app.gateway.project_context import project_capability_group_roots
 from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
@@ -41,6 +42,7 @@ class WorkflowCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     version: str = "0.1.0"
     folder_id: str | None = None
+    project_id: str | None = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -49,6 +51,7 @@ class WorkflowUpdateRequest(BaseModel):
     metadata: dict[str, Any] | None = None
     version: str | None = None
     folder_id: str | None = None
+    project_id: str | None = None
 
 
 class WorkflowPromptPreviewRequest(BaseModel):
@@ -56,6 +59,7 @@ class WorkflowPromptPreviewRequest(BaseModel):
     # The canvas sends its current (possibly unsaved) definition so the preview
     # matches what the author is looking at.  Omitted means "use the saved one".
     definition: dict[str, Any] | None = None
+    project_id: str | None = None
 
 
 async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
@@ -88,7 +92,13 @@ async def _run_embedded_eval_gate(model: WorkflowDefinition) -> None:
 # 鈹€鈹€ Helpers 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
 
-async def _validate_semantics(request: Request, definition: WorkflowDefinition, user: Any) -> None:
+async def _validate_semantics(
+    request: Request,
+    definition: WorkflowDefinition,
+    user: Any,
+    *,
+    project_roots: tuple = (),
+) -> None:
     """Dry-run compile so semantic errors fail the save, not a later run.
 
     Structural validation only checks graph shape.  Review/retry/loop/context/
@@ -98,7 +108,7 @@ async def _validate_semantics(request: Request, definition: WorkflowDefinition, 
     from app.gateway.services import _build_workflow_template_resolver
     from deerflow.workflow.schema import validate_capability_tool_refs
 
-    tool_errors = validate_capability_tool_refs(definition, user_id=str(user.id))
+    tool_errors = validate_capability_tool_refs(definition, user_id=str(user.id), project_roots=project_roots)
     if tool_errors:
         raise HTTPException(status_code=422, detail={"errors": tool_errors})
 
@@ -136,7 +146,13 @@ async def _validate_semantics(request: Request, definition: WorkflowDefinition, 
         raise HTTPException(status_code=422, detail={"errors": [f"瀹氫箟璇箟鏍￠獙澶辫触: {message}"]}) from exc
 
 
-def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[str, Any]) -> dict[str, Any]:
+def _resolve_workflow_metadata(
+    definition: WorkflowDefinition,
+    metadata: dict[str, Any],
+    *,
+    user_id: str | None = None,
+    project_roots: tuple = (),
+) -> dict[str, Any]:
     """Populate ``metadata["resolved_groups"]`` and freeze the lockfile snapshot.
 
     ``resolved_groups`` is resolved from the definition's capability groups when
@@ -152,7 +168,7 @@ def _resolve_workflow_metadata(definition: WorkflowDefinition, metadata: dict[st
     # The harness owns capability resolution + lockfile construction; the
     # Gateway only supplies caller metadata.  Keeping one implementation stops
     # the two save paths (HTTP vs. chat tool) from drifting.
-    return resolve_metadata(definition, metadata)
+    return resolve_metadata(definition, metadata, user_id=user_id, project_roots=project_roots)
 
 
 async def _check_workflow_dependency_cycles(
@@ -251,7 +267,8 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
     await _validate_folder(request, body.folder_id, user)
-    await _validate_semantics(request, model, user)
+    project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
+    await _validate_semantics(request, model, user, project_roots=tuple(project_roots))
 
     # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
     await _run_embedded_eval_gate(model)
@@ -261,7 +278,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), target_id, model)
     if cycle_errors:
         raise HTTPException(status_code=422, detail={"errors": [f"依赖环: {e}" for e in cycle_errors]})
-    metadata = _resolve_workflow_metadata(model, body.metadata)
+    metadata = _resolve_workflow_metadata(model, body.metadata, user_id=str(user.id), project_roots=tuple(project_roots))
     result = await repo.create(
         definition_id=target_id,
         user_id=str(user.id),
@@ -369,8 +386,15 @@ async def preview_workflow_prompt(definition_id: str, request: Request, body: Wo
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
+    project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
     try:
-        preview = await asyncio.to_thread(build_prompt_preview, model, body.node_id, user_id=str(user.id))
+        preview = await asyncio.to_thread(
+            build_prompt_preview,
+            model,
+            body.node_id,
+            user_id=str(user.id),
+            project_roots=tuple(project_roots),
+        )
     except PromptPreviewError as exc:
         raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
     return preview.to_dict()
@@ -405,7 +429,8 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         errors = validate_definition(model)
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
-        await _validate_semantics(request, model, user)
+        project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
+        await _validate_semantics(request, model, user, project_roots=tuple(project_roots))
 
         # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
         await _run_embedded_eval_gate(model)
@@ -421,7 +446,12 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         # carry forward the existing metadata so keys like resolved_groups
         # can be rebuilt from the definition without wiping user fields.
         base_meta = body.metadata if body.metadata is not None else existing.get("metadata") or {}
-        updates["metadata"] = _resolve_workflow_metadata(model, base_meta)
+        updates["metadata"] = _resolve_workflow_metadata(
+            model,
+            base_meta,
+            user_id=str(user.id),
+            project_roots=tuple(project_roots),
+        )
 
     if body.name is not None:
         updates["name"] = body.name

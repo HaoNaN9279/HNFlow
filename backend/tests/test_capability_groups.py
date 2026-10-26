@@ -75,21 +75,21 @@ def test_build_capability_contents_groups_and_skips_manifest(tmp_path: Path) -> 
 
 def test_discover_and_load_current_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _make_group(tmp_path, version="0.1.0")
-    _make_group(tmp_path, version="0.2.0", guid="b" * 32)
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    _make_group(tmp_path, version="0.2.0")
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
     groups = discover_capability_groups()
     assert len(groups) == 1
     assert groups[0].version == "0.2.0"
     loaded = load_capability_group("demo")
-    assert loaded.guid == "b" * 32
+    assert loaded.guid == "a" * 32
     assert loaded.counts["skills"] == 1
 
 
 def test_detail_lists_dynamic_categories_after_builtins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     group_dir = _make_group(tmp_path)
     _write(group_dir / "commands" / "nested" / "build.md", "# Build\n")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
     group = load_capability_group("demo")
     detail = group.detail_dict()
@@ -114,14 +114,14 @@ def test_malformed_group_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     _make_group(tmp_path)
     broken = tmp_path / "broken" / "0.1.0"
     _write(broken / "group.json", "{not json")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
     groups = discover_capability_groups()
     assert [group.name for group in groups] == ["demo"]
 
 
 def test_missing_group_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     with pytest.raises(CapabilityGroupError):
         load_capability_group("missing")
 
@@ -132,7 +132,7 @@ def test_group_parses_tool_references_and_permission_overrides(tmp_path: Path, m
     manifest["tools"] = ["builtin:read_file", "mcp:github:search", "builtin:read_file"]
     manifest["tool_permissions"] = {"mcp:github:search": ["net"]}
     (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
     group = load_capability_group("demo")
 
@@ -148,7 +148,7 @@ def test_validate_capability_tool_refs_checks_custom_packages(tmp_path: Path, mo
     manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
     manifest["tools"] = ["tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@v0.1.0", "builtin:read_file"]
     (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     definition = WorkflowDefinition(
         id="wf",
         name="wf",
@@ -167,7 +167,7 @@ def test_group_rejects_malformed_tool_permissions(tmp_path: Path, monkeypatch: p
     manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
     manifest["tool_permissions"] = {"mcp:github:search": "net"}
     (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None: [(tmp_path, "public")])
+    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
     groups = discover_capability_groups()
 

@@ -87,7 +87,11 @@ export type WorkflowPromptPreview = {
  */
 export async function previewWorkflowPrompt(
   workflowId: string,
-  body: { node_id: string; definition?: WorkflowDefinition },
+  body: {
+    node_id: string;
+    definition?: WorkflowDefinition;
+    project_id?: string;
+  },
 ): Promise<WorkflowPromptPreview> {
   const response = await fetch(
     workflowsUrl(`/${encodeURIComponent(workflowId)}/prompt-preview`),
@@ -138,6 +142,7 @@ export type CreateWorkflowPayload = {
   metadata?: Record<string, unknown>;
   version?: string;
   folder_id?: string | null;
+  project_id?: string;
 };
 
 export type UpdateWorkflowPayload = {
@@ -146,6 +151,7 @@ export type UpdateWorkflowPayload = {
   metadata?: Record<string, unknown>;
   version?: string;
   folder_id?: string | null;
+  project_id?: string;
 };
 
 export async function listWorkflows(): Promise<WorkflowRecord[]> {

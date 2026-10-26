@@ -125,8 +125,6 @@ def main() -> int:
         copy_if_missing(frontend_env_example, frontend_env)
         copy_if_missing(data_home / "frontend.env", project_root / "frontend" / ".env")
         copy_if_missing(project_root / "config-examples" / "prompts" / "lead-agent.md", data_home / "prompts" / "lead-agent.md")
-        copy_tree_if_missing(project_root / "config-examples" / "capability-groups", data_home / "capability-groups")
-        copy_tree_if_missing(project_root / "config-examples" / "tools", data_home / "tools")
         copy_tree_if_missing(project_root / "skills" / "public", data_home / "skills" / "public")
 
         print_header("Setup complete!")

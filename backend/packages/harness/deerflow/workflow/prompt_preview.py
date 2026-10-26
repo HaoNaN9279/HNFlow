@@ -139,6 +139,7 @@ def build_prompt_preview(
     node_id: str,
     *,
     user_id: str | None = None,
+    project_roots: tuple = (),
 ) -> PromptPreview:
     """Assemble the static text prompt for one AI node."""
     node = next((candidate for candidate in definition.nodes if candidate.id == node_id), None)
@@ -156,8 +157,8 @@ def build_prompt_preview(
     input_schema = _schema_for_node(definition, node.id, INPUT_SCHEMA_PORT)
     output_schema = _schema_for_node(definition, node.id, OUTPUT_SCHEMA_PORT)
     try:
-        capability_rules = load_capability_rules(capability_groups, user_id=user_id)
-        capability_skills = load_capability_skills(capability_groups, user_id=user_id)
+        capability_rules = load_capability_rules(capability_groups, user_id=user_id, project_roots=project_roots)
+        capability_skills = load_capability_skills(capability_groups, user_id=user_id, project_roots=project_roots)
     except (CapabilityContentError, CapabilityGroupError) as exc:
         raise PromptPreviewError(str(exc)) from exc
 

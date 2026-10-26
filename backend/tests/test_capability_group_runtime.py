@@ -75,7 +75,7 @@ def test_rules_follow_base_then_derived_and_derived_wins(monkeypatch, tmp_path: 
     )
     monkeypatch.setattr(
         "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, bases_first=False: [base, derived],
+        lambda refs, user_id=None, project_roots=(), bases_first=False: [base, derived],
     )
 
     rules = load_capability_rules(["derived"])
@@ -100,7 +100,7 @@ def test_skills_load_only_metadata(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, bases_first=False: [group],
+        lambda refs, user_id=None, project_roots=(), bases_first=False: [group],
     )
 
     skills = load_capability_skills(["data"])
@@ -132,7 +132,7 @@ def test_duplicate_skill_names_fail_loud(monkeypatch, tmp_path: Path) -> None:
     )
     monkeypatch.setattr(
         "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, bases_first=False: [first, second],
+        lambda refs, user_id=None, project_roots=(), bases_first=False: [first, second],
     )
 
     with pytest.raises(CapabilityContentError, match="duplicate capability skill"):
@@ -154,7 +154,7 @@ def test_reader_reads_skill_and_rejects_traversal(monkeypatch, tmp_path: Path) -
     )
     monkeypatch.setattr(
         "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, bases_first=False: [group],
+        lambda refs, user_id=None, project_roots=(), bases_first=False: [group],
     )
     skill = load_capability_skills(["data"])[0]
     tool = build_read_capability_skill_tool([skill])

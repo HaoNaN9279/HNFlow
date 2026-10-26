@@ -308,7 +308,12 @@ def validate_capability_groups(
     return errors
 
 
-def validate_capability_tool_refs(definition: WorkflowDefinition, *, user_id: str | None = None) -> list[str]:
+def validate_capability_tool_refs(
+    definition: WorkflowDefinition,
+    *,
+    user_id: str | None = None,
+    project_roots: tuple = (),
+) -> list[str]:
     """Validate tool ids declared by installed capability groups.
 
     Custom ``tool:`` refs are checked against the package registry at save time.
@@ -324,7 +329,7 @@ def validate_capability_tool_refs(definition: WorkflowDefinition, *, user_id: st
     for node in definition.nodes:
         for reference in declared_capability_groups(node):
             try:
-                group = load_capability_group(reference, user_id=user_id)
+                group = load_capability_group(reference, user_id=user_id, project_roots=project_roots)
             except CapabilityGroupError:
                 # Unknown groups are an existing fail-open authoring state.
                 continue

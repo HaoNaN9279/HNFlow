@@ -74,7 +74,10 @@ export function WorkflowToolbar() {
 
   const saveMutation = useMutation({
     mutationFn: (payload: UpdateWorkflowPayload) =>
-      updateWorkflow(workflowId, payload),
+      updateWorkflow(workflowId, {
+        ...payload,
+        project_id: projectId ?? undefined,
+      }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["workflows"] });
       void queryClient.invalidateQueries({

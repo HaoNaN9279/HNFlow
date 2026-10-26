@@ -44,6 +44,8 @@ from deerflow.portability.spec import (
 EXCLUDED_DIRS: dict[str, str] = {
     "locks": "transient cross-process lock files (recreated on demand)",
     "retrieval": "derived memory retrieval index (rebuilt from the canonical memory data)",
+    "capability-groups": "external capability-group repository; back up its Git remote separately",
+    "tools": "external tool-package repository; back up its Git remote separately",
 }
 
 #: The data-directory entry shape is a directory; the database is one file.

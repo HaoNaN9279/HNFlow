@@ -47,11 +47,11 @@ def _client(monkeypatch) -> TestClient:
 def test_prompt_preview_returns_assembled_prompt(monkeypatch) -> None:
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None: [],
+        lambda groups, user_id=None, project_roots=(): [],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None: [],
+        lambda groups, user_id=None, project_roots=(): [],
     )
     response = _client(monkeypatch).post(
         "/api/workflows/wf-preview/prompt-preview",
