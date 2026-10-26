@@ -85,6 +85,7 @@ class Migrator:
         # Lead Agent prompt and user content.
         legacy_home = self.project_root / "backend" / ".deer-flow"
         self.copy_file(legacy_home / "SOUL.md", self.target / "prompts" / "lead-agent.md", label="lead-agent prompt")
+        self.copy_file(legacy_home / ".jwt_secret", self.target / ".jwt_secret", label=".jwt_secret")
         self.copy_tree(self.project_root / "capability-groups", self.target / "capability-groups", label="capability-groups")
         self.copy_tree(self.project_root / "tools", self.target / "tools", label="tools")
         self.copy_tree(self.project_root / "skills" / "public", self.target / "skills" / "public", label="skills/public")

@@ -130,6 +130,7 @@ def test_migration_script_is_copy_only_and_idempotent(tmp_path: Path) -> None:
     legacy.mkdir(parents=True)
     (project / "config.yaml").write_text("config_version: 40\n", encoding="utf-8")
     (legacy / "SOUL.md").write_text("legacy prompt", encoding="utf-8")
+    (legacy / ".jwt_secret").write_text("secret", encoding="utf-8")
     (legacy / "users" / "u1" / "skills_view").mkdir(parents=True)
     (legacy / "users" / "u1" / "skills_view" / ".projection-manifest.json").write_text("{}", encoding="utf-8")
 
@@ -140,5 +141,6 @@ def test_migration_script_is_copy_only_and_idempotent(tmp_path: Path) -> None:
     assert second == 0
     assert (target / "config.yaml").read_text(encoding="utf-8") == "config_version: 40\n"
     assert (target / "prompts" / "lead-agent.md").read_text(encoding="utf-8") == "legacy prompt"
+    assert (target / ".jwt_secret").read_text(encoding="utf-8") == "secret"
     assert (project / "config.yaml").is_file(), "migration must not delete the legacy source"
     assert not (target / "users" / "u1" / "skills_view" / ".projection-manifest.json").exists()
