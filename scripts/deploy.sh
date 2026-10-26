@@ -42,7 +42,9 @@ esac
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-ENV_FILE="$REPO_ROOT/.env"
+HNFLOW_HOME="${HNFLOW_HOME:-${DEER_FLOW_HOME:-$REPO_ROOT/hnflow-data}}"
+ENV_FILE="${HNFLOW_ENV_FILE:-$HNFLOW_HOME/.env}"
+[ -f "$ENV_FILE" ] || ENV_FILE="$REPO_ROOT/.env"
 DOCKER_DIR="$REPO_ROOT/docker"
 if [ -f "$ENV_FILE" ]; then
     COMPOSE_CMD=(docker compose --env-file "$ENV_FILE" -p deer-flow -f "$DOCKER_DIR/docker-compose.yaml")
@@ -114,11 +116,17 @@ NC='\033[0m'
 
 # ── DEER_FLOW_HOME ────────────────────────────────────────────────────────────
 
-if [ -z "$DEER_FLOW_HOME" ]; then
-    export DEER_FLOW_HOME="$REPO_ROOT/backend/.deer-flow"
+HNFLOW_HOME="${HNFLOW_HOME:-$REPO_ROOT/hnflow-data}"
+export HNFLOW_HOME
+export DEER_FLOW_HOME="$HNFLOW_HOME"
+echo -e "${BLUE}HNFLOW_HOME=$HNFLOW_HOME${NC}"
+mkdir -p "$HNFLOW_HOME"
+if [ ! -f "$HNFLOW_HOME/.env" ] && [ -f "$REPO_ROOT/.env.example" ]; then
+    cp "$REPO_ROOT/.env.example" "$HNFLOW_HOME/.env"
 fi
-echo -e "${BLUE}DEER_FLOW_HOME=$DEER_FLOW_HOME${NC}"
-mkdir -p "$DEER_FLOW_HOME"
+if [ ! -f "$HNFLOW_HOME/frontend.env" ] && [ -f "$REPO_ROOT/config-examples/frontend.env.example" ]; then
+    cp "$REPO_ROOT/config-examples/frontend.env.example" "$HNFLOW_HOME/frontend.env"
+fi
 
 # ── DEER_FLOW_REPO_ROOT (for skills host path in DooD) ───────────────────────
 
@@ -127,12 +135,13 @@ export DEER_FLOW_REPO_ROOT="$REPO_ROOT"
 # ── config.yaml ───────────────────────────────────────────────────────────────
 
 if [ -z "$DEER_FLOW_CONFIG_PATH" ]; then
-    export DEER_FLOW_CONFIG_PATH="$REPO_ROOT/config.yaml"
+    export DEER_FLOW_CONFIG_PATH="$HNFLOW_HOME/config.yaml"
 fi
 
 if  [ "$CMD" != "down" ] && [ ! -f "$DEER_FLOW_CONFIG_PATH" ]; then
     # Try to seed from repo (config.example.yaml is the canonical template)
     if [ -f "$REPO_ROOT/config.example.yaml" ]; then
+        mkdir -p "$(dirname "$DEER_FLOW_CONFIG_PATH")"
         cp "$REPO_ROOT/config.example.yaml" "$DEER_FLOW_CONFIG_PATH"
         echo -e "${GREEN}✓ Seeded config.example.yaml → $DEER_FLOW_CONFIG_PATH${NC}"
         echo -e "${YELLOW}⚠ config.yaml was seeded from the example template.${NC}"
@@ -150,12 +159,13 @@ fi
 # ── extensions_config.json ───────────────────────────────────────────────────
 
 if [ -z "$DEER_FLOW_EXTENSIONS_CONFIG_PATH" ]; then
-    export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$REPO_ROOT/extensions_config.json"
+    export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$HNFLOW_HOME/extensions_config.json"
 fi
 
 if [ ! -f "$DEER_FLOW_EXTENSIONS_CONFIG_PATH" ]; then
-    if [ -f "$REPO_ROOT/extensions_config.json" ]; then
-        cp "$REPO_ROOT/extensions_config.json" "$DEER_FLOW_EXTENSIONS_CONFIG_PATH"
+    if [ -f "$REPO_ROOT/extensions_config.example.json" ]; then
+        mkdir -p "$(dirname "$DEER_FLOW_EXTENSIONS_CONFIG_PATH")"
+        cp "$REPO_ROOT/extensions_config.example.json" "$DEER_FLOW_EXTENSIONS_CONFIG_PATH"
         echo -e "${GREEN}✓ Seeded extensions_config.json → $DEER_FLOW_EXTENSIONS_CONFIG_PATH${NC}"
     else
         # Create a minimal empty config so the gateway doesn't fail on startup
@@ -296,7 +306,8 @@ detect_sandbox_mode() {
 if [ "$CMD" = "down" ]; then
     # Set minimal env var defaults so docker compose can parse the file without
     # warning about unset variables that appear in volume specs.
-    export DEER_FLOW_HOME="${DEER_FLOW_HOME:-$REPO_ROOT/backend/.deer-flow}"
+    export HNFLOW_HOME="${HNFLOW_HOME:-$REPO_ROOT/hnflow-data}"
+    export DEER_FLOW_HOME="${DEER_FLOW_HOME:-$HNFLOW_HOME}"
     export DEER_FLOW_CONFIG_PATH="${DEER_FLOW_CONFIG_PATH:-$DEER_FLOW_HOME/config.yaml}"
     export DEER_FLOW_EXTENSIONS_CONFIG_PATH="${DEER_FLOW_EXTENSIONS_CONFIG_PATH:-$DEER_FLOW_HOME/extensions_config.json}"
     export DEER_FLOW_REPO_ROOT="${DEER_FLOW_REPO_ROOT:-$REPO_ROOT}"

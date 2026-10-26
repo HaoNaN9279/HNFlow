@@ -15,7 +15,7 @@ def default_source(repo_root: Path) -> Path:
 
 
 def default_target(repo_root: Path) -> Path:
-    return repo_root / "backend" / ".deer-flow" / "memory.json"
+    return repo_root / "hnflow-data" / "memory.json"
 
 
 def parse_args(repo_root: Path) -> argparse.Namespace:

@@ -68,7 +68,8 @@ def find_config_file() -> Path | None:
         candidate = Path(explicit)
         if candidate.is_file():
             return candidate
-    for path in (Path("config.yaml"), Path("backend/config.yaml")):
+    home = Path(os.environ.get("HNFLOW_HOME") or os.environ.get("DEER_FLOW_HOME") or "hnflow-data")
+    for path in (home / "config.yaml", Path("config.yaml"), Path("backend/config.yaml")):
         if path.is_file():
             return path
     return None

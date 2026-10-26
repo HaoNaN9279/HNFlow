@@ -8,11 +8,11 @@
 #
 # Key environment variables (set via environment/.env or scripts/deploy.sh):
 #   DEER_FLOW_PROJECT_ROOT           — project root for relative runtime paths
-#   DEER_FLOW_HOME                   — runtime data dir, default .deer-flow under $DEER_FLOW_PROJECT_ROOT (or cwd)
-#   DEER_FLOW_CONFIG_PATH            — path to config.yaml
-#   DEER_FLOW_EXTENSIONS_CONFIG_PATH — path to extensions_config.json
-#   DEER_FLOW_SKILLS_PATH            — skills dir, default $DEER_FLOW_PROJECT_ROOT/skills
-#   DEER_FLOW_DOCKER_SOCKET          — Docker socket path for aio/DooD mode, default /var/run/docker.sock (used only by the opt-in docker-compose.dood.yaml overlay)
+#   HNFLOW_HOME                      - unified user-data dir (config + content + DB + workspaces)
+#   DEER_FLOW_HOME                   - compatibility alias for HNFLOW_HOME
+#   DEER_FLOW_CONFIG_PATH            - path to config.yaml (default $HNFLOW_HOME/config.yaml)
+#   DEER_FLOW_EXTENSIONS_CONFIG_PATH - path to extensions_config.json
+#   DEER_FLOW_SKILLS_PATH            - skills dir (default $HNFLOW_HOME/skills)
 #   DEER_FLOW_REPO_ROOT              — repo root (used for skills host path in DooD)
 #   BETTER_AUTH_SECRET               — required for frontend auth/session security
 #
@@ -59,7 +59,7 @@ services:
       - BETTER_AUTH_SECRET=${BETTER_AUTH_SECRET}
       - DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:8001
     env_file:
-      - ../frontend/.env
+      - ../hnflow-data/frontend.env
     networks:
       - deer-flow
     restart: unless-stopped
@@ -82,10 +82,8 @@ services:
     # the stream bridge is in-process, so there is no cross-worker SSE delivery.
     command: sh -c "cd backend && PYTHONPATH=. uv run uvicorn app.gateway.app:app --host 0.0.0.0 --port 8001 --workers 1"
     volumes:
-      - ${DEER_FLOW_CONFIG_PATH}:/app/backend/config.yaml:ro
-      - ${DEER_FLOW_EXTENSIONS_CONFIG_PATH}:/app/backend/extensions_config.json:ro
+      - ${DEER_FLOW_HOME}:/app/hnflow-data
       - ../skills:/app/skills:ro
-      - ${DEER_FLOW_HOME}:/app/backend/.deer-flow
       # DooD: the host Docker socket is NOT mounted by default. It is added only
       # for aio (pure-DooD) sandbox mode via the opt-in docker-compose.dood.yaml
       # overlay (appended by scripts/deploy.sh). See backend/docs/CONFIGURATION.md
@@ -101,9 +99,11 @@ services:
     environment:
       - CI=true
       - DEER_FLOW_PROJECT_ROOT=/app
-      - DEER_FLOW_HOME=/app/backend/.deer-flow
-      - DEER_FLOW_CONFIG_PATH=/app/backend/config.yaml
-      - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/backend/extensions_config.json
+      - HNFLOW_HOME=/app/hnflow-data
+      - DEER_FLOW_HOME=/app/hnflow-data
+      - DEER_FLOW_CONFIG_PATH=/app/hnflow-data/config.yaml
+      - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/hnflow-data/extensions_config.json
+      - DEER_FLOW_SKILLS_PATH=/app/hnflow-data/skills
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN}
@@ -115,7 +115,7 @@ services:
       - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
       - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
     env_file:
-      - ../.env
+      - ../hnflow-data/.env
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:

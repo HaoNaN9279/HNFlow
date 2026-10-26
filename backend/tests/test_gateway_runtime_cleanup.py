@@ -79,8 +79,9 @@ def test_docker_dev_mounts_mutable_configs_through_project_directory():
     assert re.search(r"^\s*-\s*\.\./:/app/project(?:\:\S+)?\s*$", compose, re.M)
     assert not re.search(r"^\s*-\s*[^\n#]*config\.yaml\s*:\s*[^\n#]*$", compose, re.M)
     assert not re.search(r"^\s*-\s*[^\n#]*extensions_config\.json\s*:\s*[^\n#]*$", compose, re.M)
-    assert "DEER_FLOW_CONFIG_PATH=/app/project/config.yaml" in compose
-    assert "DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/project/extensions_config.json" in compose
+    assert re.search(r"^\s*-\s*\.\./hnflow-data:/app/hnflow-data\s*$", compose, re.M)
+    assert "DEER_FLOW_CONFIG_PATH=/app/hnflow-data/config.yaml" in compose
+    assert "DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/hnflow-data/extensions_config.json" in compose
 
 
 def test_local_dev_gateway_reload_excludes_runtime_state_with_absolute_dirs():
@@ -88,11 +89,11 @@ def test_local_dev_gateway_reload_excludes_runtime_state_with_absolute_dirs():
 
     assert 'export DEER_FLOW_PROJECT_ROOT="$REPO_ROOT"' in serve_sh
     assert 'BACKEND_RUNTIME_HOME="$REPO_ROOT/backend/.deer-flow"' in serve_sh
-    assert 'export DEER_FLOW_HOME="$BACKEND_RUNTIME_HOME"' in serve_sh
+    assert 'export DEER_FLOW_HOME="$HNFLOW_HOME"' in serve_sh
     # Every absolute reload-exclude must be pre-created, including backend/sandbox
     # (#3459 / #3454) — see test_uvicorn_reload_exclude.py for the mechanism.
-    assert 'mkdir -p "$DEER_FLOW_HOME" "$BACKEND_RUNTIME_HOME" "$REPO_ROOT/backend/sandbox"' in serve_sh
-    assert "--reload-exclude='$DEER_FLOW_HOME'" in serve_sh
+    assert 'mkdir -p "$HNFLOW_HOME" "$BACKEND_RUNTIME_HOME" "$REPO_ROOT/backend/sandbox"' in serve_sh
+    assert "--reload-exclude='$HNFLOW_HOME'" in serve_sh
     assert "--reload-exclude='$BACKEND_RUNTIME_HOME'" in serve_sh
     assert "--reload-exclude='sandbox/'" not in serve_sh
     assert "--reload-exclude='.deer-flow/'" not in serve_sh
@@ -101,7 +102,7 @@ def test_local_dev_gateway_reload_excludes_runtime_state_with_absolute_dirs():
 def test_backend_make_dev_gateway_reload_excludes_runtime_state_with_absolute_dirs():
     makefile = _read("backend/Makefile")
 
-    assert "DEER_FLOW_HOME ?= $(CURDIR)/.deer-flow" in makefile
+    assert "DEER_FLOW_HOME ?= $(CURDIR)/../hnflow-data" in makefile
     assert "DEER_FLOW_HOME := $(abspath $(DEER_FLOW_HOME))" in makefile
     assert "BACKEND_SANDBOX_HOME := $(abspath $(CURDIR)/sandbox)" in makefile
     assert 'mkdir -p "$(DEER_FLOW_HOME)" "$(BACKEND_SANDBOX_HOME)"' in makefile

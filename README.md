@@ -212,22 +212,30 @@ HNFlow 采用六层架构，核心是**定义层 + 编译层**新增，其余全
 
 ### 配置
 
-从仓库根目录复制模板生成本地配置：
+所有用户可配置内容统一放在仓库根 `hnflow-data/`（整体 gitignored）：
 
-```bash
-cp config.example.yaml config.yaml               # 主配置：模型、沙箱、数据库、通道
-cp extensions_config.example.json extensions_config.json  # 扩展：MCP servers + skills
+```text
+hnflow-data/
+├── config.yaml / extensions_config.json / .env / frontend.env
+├── prompts/lead-agent.md
+├── capability-groups/
+├── tools/
+├── skills/
+├── data/deerflow.db
+└── users/{user_id}/threads/{thread_id}/...
 ```
 
-或直接运行交互式配置向导（推荐，约 2 分钟）：
+首次初始化：
 
 ```bash
-make setup
+make config        # 从 config-examples/ 播种；已有 config 时中止
+make setup         # 或运行交互式向导（推荐）
+make data-migrate  # 旧布局迁移（DRY=1 预览；只复制不删除）
 ```
 
-向导会引导选择 LLM provider、可选 Web 搜索、执行/安全偏好（沙箱模式、bash 访问、文件写入工具），生成最小 `config.yaml` 并把密钥写入 `.env`。`make doctor` 可随时校验配置并给出修复提示。
+案例模板在 `config-examples/`：主配置、扩展、Lead Agent 提示词、能力组、工具包、工作流和模型档案。实际配置、能力组、工具、提示词、工作区/工作流实例和 SQLite 数据库都在 `hnflow-data/`，不纳入版本管理。
 
-运行时状态默认落在项目根 `.deer-flow/`（可用 `DEER_FLOW_HOME` 调整），skills 默认在 `skills/`（可用 `DEER_FLOW_SKILLS_PATH` 调整）。
+规范根变量是 `HNFLOW_HOME`；`DEER_FLOW_HOME` 继续兼容。SQLite 相对目录按统一根解析，默认 `data`；skills 默认在 `hnflow-data/skills/`。`make doctor` 可随时校验配置并给出修复提示。
 
 ### 本地开发模式
 

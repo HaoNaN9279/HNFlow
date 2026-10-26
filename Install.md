@@ -35,9 +35,9 @@
 
 ## 步骤
 
-- **确认根目录**：检查 `Makefile`、`backend/`、`frontend/`、`config.example.yaml` 都存在；缺任一文件则说明当前目录不是仓库根，停止并报告。
-- **检测 `config.yaml`**：确认是否已存在；已存在则跳过生成步骤，直接进入下一步检测。
-- **生成配置**：若 `config.yaml` 不存在，运行 `make config`。该命令从 example 生成本地配置，已存在时中止——不要重复运行。
+- **确认根目录**：检查 `Makefile`、`backend/`、`frontend/`、`config.example.yaml`、`config-examples/` 都存在；缺任一文件则说明当前目录不是仓库根，停止并报告。
+- **检测 `hnflow-data/config.yaml`**：确认是否已存在；已存在则跳过生成步骤，直接进入下一步检测。
+- **生成配置**：若 `hnflow-data/config.yaml` 不存在，运行 `make config`。该命令从 `config-examples/` 播种到 gitignored 的 `hnflow-data/`，已存在时中止——不要重复运行。
 - **检测 Docker**：用 `docker info` 检查 Docker 是否可用、守护进程是否可达。`docker info` 失败即视为 Docker 不可用，转入本地路径。
 - **若 Docker 可用**：
   - 运行 `make docker-init`。
@@ -49,9 +49,9 @@
   - 若 `make check` 报告缺失系统依赖（如 `node`、`pnpm`、`uv`、`nginx`），停止并报告缺失工具，**不要尝试特权安装**。
   - 前置条件满足后，运行 `make install`。
   - 告诉用户推荐的下一条命令是 `make dev`。
-- **检查模型配置**：只检查 `config.yaml` 中缺失的模型配置项或引用的环境变量占位符。**不要读** `.env`、`frontend/.env` 或其他含密钥的文件。
-- 若未配置任何模型，告诉用户必须在 `config.yaml` 的 `models` 下至少添加一项。
-- 若 `config.yaml` 引用了 `$OPENAI_API_KEY` 之类的变量，告诉用户哪些变量名仍需真实值——但不要打开密钥类文件去核实。
+- **检查模型配置**：只检查 `hnflow-data/config.yaml` 中缺失的模型配置项或引用的环境变量占位符。**不要读** `hnflow-data/.env`、`hnflow-data/frontend.env` 或其他含密钥的文件。
+- 若未配置任何模型，告诉用户必须在 `hnflow-data/config.yaml` 的 `models` 下至少添加一项。
+- 若 `hnflow-data/config.yaml` 引用了 `$OPENAI_API_KEY` 之类的变量，告诉用户哪些变量名仍需真实值——但不要打开密钥类文件去核实。
 - 若仓库看起来已配置好，避免重复昂贵的准备工作，除非确有必要验证环境。
 
 ## 验证
@@ -61,14 +61,14 @@
 Docker 路径：
 
 - 确认 `make docker-init` 成功完成。
-- 确认 `config.yaml` 存在。
+- 确认 `hnflow-data/config.yaml` 存在。
 - 明确说明 Docker 服务**未启动**，`make docker-start` 仍是第一个真正的启动步骤。
 - 除非用户要求，不留后台服务运行。
 
 本地路径：
 
 - 确认 `make install` 成功完成。
-- 确认 `config.yaml` 存在。
+- 确认 `hnflow-data/config.yaml` 存在。
 - 除非用户要求，不留后台服务运行。
 
 ## 最终报告格式
@@ -77,7 +77,7 @@ Docker 路径：
 
 1. 使用的路径：Docker 或本地
 2. 到达的层次：Docker 前置已准备 / 本地依赖已安装
-3. 已创建或检测到的文件：例如 `config.yaml`
+3. 已创建或检测到的文件：例如 `hnflow-data/config.yaml`
 4. 剩余用户动作：模型配置、环境变量值、认证文件，或没有
 5. 启动 HNFlow 的确切下一条命令
 

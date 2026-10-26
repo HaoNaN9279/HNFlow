@@ -61,8 +61,8 @@ class ToolPackage:
 
 
 def _root() -> Path:
-    """Public tool-package root, next to ``capability-groups/``."""
-    return get_paths().base_dir.parent.parent / "tools"
+    """User-editable tool-package root (``{HNFLOW_HOME}/tools``)."""
+    return get_paths().tool_packages_dir
 
 
 def _version_key(version: str) -> tuple[int, ...]:

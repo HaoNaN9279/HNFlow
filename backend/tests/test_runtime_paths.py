@@ -20,6 +20,7 @@ def _clear_path_env(monkeypatch):
     for name in (
         "DEER_FLOW_CONFIG_PATH",
         "DEER_FLOW_EXTENSIONS_CONFIG_PATH",
+        "HNFLOW_HOME",
         "DEER_FLOW_HOME",
         "DEER_FLOW_PROJECT_ROOT",
         "DEER_FLOW_SKILLS_PATH",
@@ -40,7 +41,7 @@ def test_default_runtime_paths_resolve_from_current_project(tmp_path: Path, monk
 
     assert AppConfig.resolve_config_path() == tmp_path / "config.yaml"
     assert ExtensionsConfig.resolve_config_path() == tmp_path / "extensions_config.json"
-    assert Paths().base_dir == tmp_path / ".deer-flow"
+    assert Paths().base_dir == tmp_path / "hnflow-data"
     assert SkillsConfig().get_skills_path() == tmp_path / "skills"
     assert get_or_new_skill_storage(skills_path=SkillsConfig().get_skills_path()).get_skills_root_path() == tmp_path / "skills"
 
@@ -62,7 +63,7 @@ def test_deer_flow_project_root_overrides_current_directory(tmp_path: Path, monk
 
     assert AppConfig.resolve_config_path() == project_root / "config.yaml"
     assert ExtensionsConfig.resolve_config_path() == project_root / "mcp_config.json"
-    assert Paths().base_dir == project_root / ".deer-flow"
+    assert Paths().base_dir == project_root / "hnflow-data"
     assert SkillsConfig(path="custom-skills").get_skills_path() == project_root / "custom-skills"
 
 
@@ -145,8 +146,8 @@ def test_skills_config_falls_back_to_legacy_when_project_root_lacks_skills(tmp_p
 
 
 def test_skills_config_returns_project_default_when_neither_exists(tmp_path: Path, monkeypatch):
-    """When nothing exists, fall back to the project-root default path so callers
-    surface a stable empty location instead of silently picking a stale legacy dir."""
+    """When nothing exists, fall back to the unified root so callers surface a
+    stable empty location instead of silently picking a stale legacy dir."""
     _clear_path_env(monkeypatch)
     cwd = tmp_path / "cwd"
     cwd.mkdir()
@@ -154,7 +155,7 @@ def test_skills_config_returns_project_default_when_neither_exists(tmp_path: Pat
 
     monkeypatch.setattr(skills_config_module, "_legacy_skills_candidates", lambda: ())
 
-    assert SkillsConfig().get_skills_path() == cwd / "skills"
+    assert SkillsConfig().get_skills_path() == cwd / "hnflow-data" / "skills"
 
 
 def test_extensions_config_falls_back_to_legacy_when_project_root_lacks_file(tmp_path: Path, monkeypatch):

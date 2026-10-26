@@ -31,7 +31,14 @@ cd "$REPO_ROOT"
 
 # ── Load .env ────────────────────────────────────────────────────────────────
 
-if [ -f "$REPO_ROOT/.env" ]; then
+# The unified user-data root is the single source of configuration.  Keep the
+# project-root .env as a one-release fallback for existing checkouts.
+HNFLOW_HOME="${HNFLOW_HOME:-${DEER_FLOW_HOME:-$REPO_ROOT/hnflow-data}}"
+if [ -f "$HNFLOW_HOME/.env" ]; then
+    set -a
+    source "$HNFLOW_HOME/.env"
+    set +a
+elif [ -f "$REPO_ROOT/.env" ]; then
     set -a
     source "$REPO_ROOT/.env"
     set +a
@@ -370,31 +377,45 @@ else
     fi
 fi
 
-# Runtime path defaults. Local `make dev` launches Gateway from `backend/`,
-# so pin DeerFlow-owned state to the expected backend runtime directory and
-# create it before uvicorn builds its reload exclude filter.
+# Runtime path defaults.  `hnflow-data/` is the single user-data root; the
+# legacy backend/.deer-flow path is still pre-created solely so uvicorn's
+# reload-exclude filter has a real directory when an older checkout exists.
 if [ -z "$DEER_FLOW_PROJECT_ROOT" ]; then
     export DEER_FLOW_PROJECT_ROOT="$REPO_ROOT"
 fi
 
+HNFLOW_HOME="${HNFLOW_HOME:-$REPO_ROOT/hnflow-data}"
 BACKEND_RUNTIME_HOME="$REPO_ROOT/backend/.deer-flow"
-if [ -z "$DEER_FLOW_HOME" ]; then
-    export DEER_FLOW_HOME="$BACKEND_RUNTIME_HOME"
-fi
+export HNFLOW_HOME
+export DEER_FLOW_HOME="$HNFLOW_HOME"
 
 # `backend/sandbox` is excluded from uvicorn's reload watcher below. uvicorn only
 # excludes an absolute path directly when it already exists as a directory;
 # otherwise it globs the pattern, and Python 3.12's pathlib rejects absolute glob
 # patterns with NotImplementedError, crashing `make dev` on a fresh checkout
 # (#3459 / #3454). Creating it here keeps every absolute exclude on the is_dir path.
-mkdir -p "$DEER_FLOW_HOME" "$BACKEND_RUNTIME_HOME" "$REPO_ROOT/backend/sandbox"
-DEER_FLOW_HOME="$(cd "$DEER_FLOW_HOME" && pwd -P)"
+mkdir -p "$HNFLOW_HOME" "$BACKEND_RUNTIME_HOME" "$REPO_ROOT/backend/sandbox"
+HNFLOW_HOME="$(cd "$HNFLOW_HOME" && pwd -P)"
 BACKEND_RUNTIME_HOME="$(cd "$BACKEND_RUNTIME_HOME" && pwd -P)"
-export DEER_FLOW_HOME
+export HNFLOW_HOME
+export DEER_FLOW_HOME="$HNFLOW_HOME"
+
+if [ -f "$HNFLOW_HOME/frontend.env" ]; then
+    cp "$HNFLOW_HOME/frontend.env" "$REPO_ROOT/frontend/.env"
+fi
+
+# Canonical config files live inside the unified root.  Explicit environment
+# overrides remain supported for advanced deployments.
+if [ -z "$DEER_FLOW_CONFIG_PATH" ]; then
+    export DEER_FLOW_CONFIG_PATH="$HNFLOW_HOME/config.yaml"
+fi
+if [ -z "$DEER_FLOW_EXTENSIONS_CONFIG_PATH" ]; then
+    export DEER_FLOW_EXTENSIONS_CONFIG_PATH="$HNFLOW_HOME/extensions_config.json"
+fi
 
 # Extra flags for uvicorn
 if $DEV_MODE && ! $DAEMON_MODE; then
-    GATEWAY_EXTRA_FLAGS="--reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude='*.pyc' --reload-exclude='__pycache__' --reload-exclude='$REPO_ROOT/backend/sandbox' --reload-exclude='$DEER_FLOW_HOME' --reload-exclude='$BACKEND_RUNTIME_HOME'"
+    GATEWAY_EXTRA_FLAGS="--reload --reload-include='*.yaml' --reload-include='.env' --reload-exclude='*.pyc' --reload-exclude='__pycache__' --reload-exclude='$REPO_ROOT/backend/sandbox' --reload-exclude='$HNFLOW_HOME' --reload-exclude='$BACKEND_RUNTIME_HOME'"
 else
     GATEWAY_EXTRA_FLAGS=""
 fi
@@ -428,11 +449,12 @@ fi
 
 if ! { \
         [ -n "$DEER_FLOW_CONFIG_PATH" ] && [ -f "$DEER_FLOW_CONFIG_PATH" ] || \
+        [ -f "$HNFLOW_HOME/config.yaml" ] || \
         [ -f backend/config.yaml ] || \
         [ -f config.yaml ]; \
     }; then
-    echo "✗ No DeerFlow config file found."
-    echo "  Run 'make setup' (recommended) or 'make config' to generate config.yaml."
+    echo "�?No DeerFlow config file found."
+    echo "  Run 'make setup' (recommended) or 'make config' to generate hnflow-data/config.yaml."
     exit 1
 fi
 

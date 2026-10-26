@@ -207,11 +207,14 @@ def load_agent_soul(agent_name: str | None, *, user_id: str | None = None) -> st
         The SOUL.md content as a string, or None if not set.
     """
     if not agent_name:
-        soul_path = get_paths().base_dir / SOUL_FILENAME
-        if not soul_path.exists():
-            return None
-        content = soul_path.read_text(encoding="utf-8").strip()
-        return content or None
+        paths = get_paths()
+        for soul_path in (paths.lead_agent_prompt_file, paths.legacy_soul_file):
+            if not soul_path.exists():
+                continue
+            content = soul_path.read_text(encoding="utf-8").strip()
+            if content:
+                return content
+        return None
     from deerflow.persistence.agents import get_agent_store
 
     return get_agent_store().get_soul(agent_name, user_id=user_id)

@@ -21,10 +21,7 @@ def _is_interactive() -> bool:
 def main() -> int:
     try:
         if not _is_interactive():
-            print(
-                "Non-interactive environment detected.\n"
-                "Please edit config.yaml and .env directly, or run 'make setup' in a terminal."
-            )
+            print("Non-interactive environment detected.\nPlease edit config.yaml and .env directly, or run 'make setup' in a terminal.")
             return 1
 
         from wizard.ui import (
@@ -40,8 +37,12 @@ def main() -> int:
         from wizard.writer import write_config_yaml, write_env_file
 
         project_root = Path(__file__).resolve().parents[1]
-        config_path = project_root / "config.yaml"
-        env_path = project_root / ".env"
+        from configure import _data_home, copy_if_missing, copy_tree_if_missing
+
+        data_home = _data_home(project_root)
+        data_home.mkdir(parents=True, exist_ok=True)
+        config_path = data_home / "config.yaml"
+        env_path = data_home / ".env"
 
         print()
         print(bold("Welcome to HNFlow Setup!"))
@@ -98,12 +99,13 @@ def main() -> int:
             include_bash_tool=execution.include_bash_tool,
             include_write_tools=execution.include_write_tools,
         )
-        print_success(f"Config written to: {config_path.relative_to(project_root)}")
+        print_success(f"Config written to: {config_path}")
 
         if not env_path.exists():
             env_example = project_root / ".env.example"
             if env_example.exists():
                 import shutil
+
                 shutil.copyfile(env_example, env_path)
 
         env_pairs: dict[str, str] = {}
@@ -116,14 +118,16 @@ def main() -> int:
 
         if env_pairs:
             write_env_file(env_path, env_pairs)
-            print_success(f"API keys written to: {env_path.relative_to(project_root)}")
+            print_success(f"API keys written to: {env_path}")
 
-        frontend_env = project_root / "frontend" / ".env"
-        frontend_env_example = project_root / "frontend" / ".env.example"
-        if not frontend_env.exists() and frontend_env_example.exists():
-            import shutil
-            shutil.copyfile(frontend_env_example, frontend_env)
-            print_success("frontend/.env created from example")
+        frontend_env = data_home / "frontend.env"
+        frontend_env_example = project_root / "config-examples" / "frontend.env.example"
+        copy_if_missing(frontend_env_example, frontend_env)
+        copy_if_missing(data_home / "frontend.env", project_root / "frontend" / ".env")
+        copy_if_missing(project_root / "config-examples" / "prompts" / "lead-agent.md", data_home / "prompts" / "lead-agent.md")
+        copy_tree_if_missing(project_root / "config-examples" / "capability-groups", data_home / "capability-groups")
+        copy_tree_if_missing(project_root / "config-examples" / "tools", data_home / "tools")
+        copy_tree_if_missing(project_root / "skills" / "public", data_home / "skills" / "public")
 
         print_header("Setup complete!")
         print(f"  {green('✓')} LLM:        {llm.provider.display_name} / {llm.model_name}")

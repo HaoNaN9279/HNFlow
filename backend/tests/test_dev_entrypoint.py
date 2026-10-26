@@ -46,14 +46,14 @@ def test_entrypoint_script_exists_and_is_posix_sh():
 def test_entrypoint_excludes_runtime_state_from_uvicorn_reload():
     content = ENTRYPOINT.read_text(encoding="utf-8")
 
-    assert ': "${DEER_FLOW_HOME:=/app/backend/.deer-flow}"' in content
+    assert ': "${HNFLOW_HOME:=${DEER_FLOW_HOME:-/app/hnflow-data}}"' in content
     # sandbox must be created too, not just .deer-flow (#3459 / #3454).
-    assert 'mkdir -p "$DEER_FLOW_HOME" /app/backend/.deer-flow /app/backend/sandbox' in content
+    assert 'mkdir -p "$HNFLOW_HOME" /app/backend/.deer-flow /app/backend/sandbox' in content
     assert "--reload-include='*.yaml .env'" not in content
     assert "--reload-include='*.yaml'" in content
     assert "--reload-include='.env'" in content
     assert "--reload-exclude=/app/backend/sandbox" in content
-    assert '--reload-exclude="$DEER_FLOW_HOME"' in content
+    assert '--reload-exclude="$HNFLOW_HOME"' in content
     assert "--reload-exclude=/app/backend/.deer-flow" in content
 
 

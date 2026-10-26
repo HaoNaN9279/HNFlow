@@ -45,8 +45,10 @@ Nginx 是唯一公共入口：它托管前端，并把 `/api/langgraph/*` 代理
 ```
 HNFlow/
 ├── Makefile                        # 根编排：驱动整个栈（dev/start/stop、docker、setup）
-├── config.example.yaml             # 模板 → 复制为仓库根 config.yaml（gitignored）
-├── extensions_config.example.json  # 模板 → 复制为 extensions_config.json（gitignored）：MCP servers + skills
+├── config-examples/                # 已提交的配置模板（config/prompts/capability-groups/tools/workflows/model-profiles）
+├── config.example.yaml             # 主配置模板，由 make config 播种到 hnflow-data/config.yaml
+├── extensions_config.example.json  # MCP/skills 模板，播种到 hnflow-data/extensions_config.json
+├── hnflow-data/                    # 唯一用户数据根（gitignored）：配置、提示词、能力组、工具、skills、DB、工作区/工作流实例
 ├── backend/                        # Python 后端——见 backend/AGENTS.md
 │   ├── Makefile                    # 后端模块命令（dev、gateway、test、lint、format、migrate-rev）
 │   ├── packages/extension-api/     # deerflow-extension-api 包（import: deerflow_extension_api.*）——公共扩展契约
@@ -54,9 +56,7 @@ HNFlow/
 │   └── app/                        # FastAPI Gateway（import: app.*）
 ├── frontend/                       # Next.js 前端（pnpm）——见 frontend/AGENTS.md
 ├── docker/                         # docker-compose 文件、nginx 配置
-├── skills/                         # Agent skills：public/（已提交）、custom/（gitignored）
-│                                    # 托管集成 skill 包全局位于 .deer-flow/integrations/skills/{provider}/
-│                                    # 集成凭据与启用状态保持按用户隔离
+├── skills/                         # 产品内置 skills：public/（已提交模板）；运行时副本播种到 hnflow-data/skills/public/
 ├── contracts/                      # 跨组件 JSON 契约（如 subagent 状态、skill review）
 ├── scripts/                        # Makefile 调用的根编排脚本（check、configure、doctor、support_bundle、serve、nginx、docker、deploy、setup_wizard）
 ├── tests/                          # 根级测试（当前为 tests/skills/——public skill 测试）
@@ -92,7 +92,31 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 
 第三方扩展从 `config.yaml` 顶层 `plugins:` 列表加载（运营商有意控制——该列表会导致代码被导入，因此刻意不放入 API 可写的 `extensions_config.json`）。见 [backend/AGENTS.md](backend/AGENTS.md) 的扩展系统一节。
 
-运行时配置位于**仓库根**：复制 `config.example.yaml` → `config.yaml`（主应用配置）、`extensions_config.example.json` → `extensions_config.json`（MCP servers + skills）。两个真实文件均 gitignored，可在运行时通过 Gateway API 编辑。配置 schema 与解析顺序见 [backend/AGENTS.md](backend/AGENTS.md)。
+### 统一用户数据目录（hnflow-data/）
+
+所有用户可配置内容与用户数据统一放在仓库根 `hnflow-data/`，该目录整体 gitignored：
+
+```text
+hnflow-data/
+├── config.yaml / extensions_config.json / .env / frontend.env
+├── prompts/lead-agent.md
+├── capability-groups/
+├── tools/
+├── skills/
+├── data/deerflow.db
+└── users/{user_id}/threads/{thread_id}/...
+```
+
+- 规范根变量是 `HNFLOW_HOME`；`DEER_FLOW_HOME` 继续作为兼容别名。
+- 主配置解析顺序：显式 `DEER_FLOW_CONFIG_PATH` → `$HNFLOW_HOME/config.yaml` → 旧仓库根/backend 位置。
+- SQLite 的相对 `sqlite_dir` 按统一根解析；默认 `data`。
+- 工作流实例以 `thread_id` 标识，实例文件在 `users/{uid}/threads/{tid}/`；工作流定义、模型档案等事务数据在 `data/deerflow.db`。
+- Lead Agent 提示词优先读 `prompts/lead-agent.md`，兼容旧 `SOUL.md`。
+- `capability-groups/`、`tools/` 的公共根从 `$HNFLOW_HOME` 派生；用户级能力组仍在 `users/{uid}/capability-groups/`。
+- 案例/模板保留在 `config-examples/`，`make config` 只复制缺失文件，不覆盖用户配置。
+- `make data-migrate`（`DRY=1` 预览）把旧位置复制进统一根，不删除旧文件。
+
+配置 schema 与解析顺序见 [backend/AGENTS.md](backend/AGENTS.md)。
 
 ## 命令：根 vs 模块
 
@@ -103,8 +127,9 @@ HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`
 make setup            # 交互式安装向导（新用户推荐）
 make doctor           # 检查配置与系统要求
 make support-bundle   # 生成脱敏排障摘要、AI issue 草稿与可选 zip
-make config           # 从 example 生成本地配置文件（已存在则中止）
-make config-upgrade   # 将 config.example.yaml 的新字段合并进 config.yaml
+make config           # 从 config-examples/ 播种 hnflow-data/（config 已存在则中止）
+make config-upgrade   # 将 config.example.yaml 的新字段合并进 hnflow-data/config.yaml
+make data-migrate     # 把旧配置/数据复制进 hnflow-data/（DRY=1 预览）
 make check            # 检查所需工具是否已安装
 make install          # 安装全部依赖（frontend + backend + pre-commit hooks）
 make setup-sandbox    # 预拉 sandbox 容器镜像（可选但推荐）
@@ -172,9 +197,9 @@ cd frontend && pnpm typecheck         # 仅 TypeScript 类型检查
 
 工具与能力组是两层：能力组只引用工具，不拥有工具定义。
 
-- **自定义工具包**：`tools/<name>/<version>/tool.json`（仅 public，无 per-user）。工具包用 `guid + version` 稳定标识，provider 支持 `python` / `mcp` / `builtin` / `sandbox` / `app`；实现见 `backend/packages/harness/deerflow/tools/packages.py`。
+- **自定义工具包**：`hnflow-data/tools/<name>/<version>/tool.json`（本地受信任代码；模板在 `config-examples/tools/`）。工具包用 `guid + version` 稳定标识，provider 支持 `python` / `mcp` / `builtin` / `sandbox` / `app`；实现见 `backend/packages/harness/deerflow/tools/packages.py`。
 - **统一工具 ID**：`tool:<guid>@v<version>`、`mcp:<server>:<tool>`、`builtin:<name>`、`sandbox:<name>`、`app:<name>`。由 `deerflow/tools/registry.py` 解析。
-- **能力组引用**：`capability-groups/<name>/<version>/group.json` 增加 `tools` 与可选 `tool_permissions`。`resolve_capability_tools` 加载能力组闭包、解析工具引用、执行权限裁决；显式声明的工具缺失或越权时 fail-loud，不静默降级。
+- **能力组引用**：`hnflow-data/capability-groups/<name>/<version>/group.json` 增加 `tools` 与可选 `tool_permissions`。`resolve_capability_tools` 加载能力组闭包、解析工具引用、执行权限裁决；显式声明的工具缺失或越权时 fail-loud，不静默降级。
 - **MCP**：server 配置仍在 `extensions_config.json`；MCP provider 为每个工具记录 `mcp:<server>:<tool>` 元数据，能力组只引用工具 ID，不复制 transport/凭证。
 - **API**：`GET /api/tools` 返回统一工具目录（自定义包 + provider 工具），供能力组管理页选择引用。
 

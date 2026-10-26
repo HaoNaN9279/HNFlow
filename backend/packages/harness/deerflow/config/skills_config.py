@@ -3,7 +3,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from deerflow.config.runtime_paths import project_root, resolve_path
+from deerflow.config.runtime_paths import project_root, resolve_path, user_data_home
 from deerflow.constants import DEFAULT_SKILLS_CONTAINER_PATH
 
 
@@ -53,6 +53,10 @@ class SkillsConfig(BaseModel):
         if env_path := os.getenv("DEER_FLOW_SKILLS_PATH"):
             return resolve_path(env_path)
 
+        unified_default = user_data_home() / "skills"
+        if unified_default.is_dir():
+            return unified_default
+
         project_default = project_root() / "skills"
         if project_default.is_dir():
             return project_default
@@ -61,7 +65,7 @@ class SkillsConfig(BaseModel):
             if candidate.is_dir():
                 return candidate
 
-        return project_default
+        return unified_default
 
     def get_skill_container_path(self, skill_name: str, category: str = "public") -> str:
         """

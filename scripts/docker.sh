@@ -11,12 +11,15 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 DOCKER_DIR="$PROJECT_ROOT/docker"
+HNFLOW_HOME="${HNFLOW_HOME:-${DEER_FLOW_HOME:-$PROJECT_ROOT/hnflow-data}}"
+ENV_FILE="${HNFLOW_ENV_FILE:-$HNFLOW_HOME/.env}"
+[ -f "$ENV_FILE" ] || ENV_FILE="$PROJECT_ROOT/.env"
 
 # Docker Compose command with project name
 COMPOSE_CMD="docker compose -p deer-flow-dev -f docker-compose-dev.yaml"
 
 load_proxy_env_from_dotenv() {
-    local env_file="$PROJECT_ROOT/.env"
+    local env_file="$ENV_FILE"
     local var
     local line
     local value
@@ -42,7 +45,14 @@ load_proxy_env_from_dotenv() {
 }
 
 detect_sandbox_mode() {
-    local config_file="$PROJECT_ROOT/config.yaml"
+    local config_file="$PROJECT_ROOT/hnflow-data/config.yaml"
+    # Legacy in-tree config still wins when it exists (also keeps the
+    # detection helper usable with an explicit temporary PROJECT_ROOT).
+    if [ -f "$PROJECT_ROOT/config.yaml" ]; then
+        config_file="$PROJECT_ROOT/config.yaml"
+    elif [ -f "$HNFLOW_HOME/config.yaml" ]; then
+        config_file="$HNFLOW_HOME/config.yaml"
+    fi
     local sandbox_use=""
 
     if [ ! -f "$config_file" ]; then
@@ -200,10 +210,11 @@ start() {
         echo ""
     fi
 
-    # Ensure config.yaml exists before starting.
-    if [ ! -f "$PROJECT_ROOT/config.yaml" ]; then
+    # Ensure the unified config exists before starting.
+    if [ ! -f "$HNFLOW_HOME/config.yaml" ]; then
         if [ -f "$PROJECT_ROOT/config.example.yaml" ]; then
-            cp "$PROJECT_ROOT/config.example.yaml" "$PROJECT_ROOT/config.yaml"
+            mkdir -p "$HNFLOW_HOME"
+            cp "$PROJECT_ROOT/config.example.yaml" "$HNFLOW_HOME/config.yaml"
             echo ""
             echo -e "${YELLOW}============================================================${NC}"
             echo -e "${YELLOW}  config.yaml has been created from config.example.yaml.${NC}"
@@ -212,7 +223,7 @@ start() {
             echo -e "${YELLOW}============================================================${NC}"
             echo ""
             echo -e "${YELLOW}  Recommended: run 'make setup' before starting Docker.    ${NC}"
-            echo -e "${YELLOW}  Edit the file:  $PROJECT_ROOT/config.yaml${NC}"
+            echo -e "${YELLOW}  Edit the file:  $HNFLOW_HOME/config.yaml${NC}"
             echo -e "${YELLOW}  Then run:        make docker-start${NC}"
             echo ""
             exit 0
@@ -222,14 +233,24 @@ start() {
         fi
     fi
 
+    # Ensure the unified env files exist before Compose reads them.
+    mkdir -p "$HNFLOW_HOME"
+    if [ ! -f "$HNFLOW_HOME/.env" ] && [ -f "$PROJECT_ROOT/.env.example" ]; then
+        cp "$PROJECT_ROOT/.env.example" "$HNFLOW_HOME/.env"
+    fi
+    if [ ! -f "$HNFLOW_HOME/frontend.env" ] && [ -f "$PROJECT_ROOT/config-examples/frontend.env.example" ]; then
+        cp "$PROJECT_ROOT/config-examples/frontend.env.example" "$HNFLOW_HOME/frontend.env"
+    fi
+
     # Ensure extensions_config.json exists as a file before mounting.
     # Docker creates a directory when bind-mounting a non-existent host path.
-    if [ ! -f "$PROJECT_ROOT/extensions_config.json" ]; then
+    if [ ! -f "$HNFLOW_HOME/extensions_config.json" ]; then
         if [ -f "$PROJECT_ROOT/extensions_config.example.json" ]; then
-            cp "$PROJECT_ROOT/extensions_config.example.json" "$PROJECT_ROOT/extensions_config.json"
+            mkdir -p "$HNFLOW_HOME"
+            cp "$PROJECT_ROOT/extensions_config.example.json" "$HNFLOW_HOME/extensions_config.json"
             echo -e "${BLUE}Created extensions_config.json from example${NC}"
         else
-            echo "{}" > "$PROJECT_ROOT/extensions_config.json"
+            echo "{}" > "$HNFLOW_HOME/extensions_config.json"
             echo -e "${BLUE}Created empty extensions_config.json${NC}"
         fi
     fi

@@ -45,6 +45,7 @@ npm-debug.log
 Thumbs.db
 
 # Project specific
+hnflow-data/
 conf.yaml
 web/
 docs/

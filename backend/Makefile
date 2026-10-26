@@ -1,4 +1,4 @@
-﻿DEER_FLOW_HOME ?= $(CURDIR)/.deer-flow
+﻿DEER_FLOW_HOME ?= $(CURDIR)/../hnflow-data
 DEER_FLOW_HOME := $(abspath $(DEER_FLOW_HOME))
 BACKEND_SANDBOX_HOME := $(abspath $(CURDIR)/sandbox)
 

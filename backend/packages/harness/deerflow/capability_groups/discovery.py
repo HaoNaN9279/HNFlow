@@ -154,8 +154,8 @@ def _load_manifest(group_dir: Path, *, name_hint: str, version_hint: str, source
 
 
 def _public_root() -> Path:
-    # {repo}/backend/.deer-flow -> {repo}
-    return get_paths().base_dir.parent.parent / "capability-groups"
+    """Return the user-editable capability-group root (``{HNFLOW_HOME}/capability-groups``)."""
+    return get_paths().capability_groups_dir
 
 
 def _user_root(user_id: str) -> Path:

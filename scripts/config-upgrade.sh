@@ -11,9 +11,12 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EXAMPLE="$REPO_ROOT/config.example.yaml"
 
-# Resolve config.yaml location: env var > backend/ > repo root
+# Resolve config.yaml location: env var > unified root > backend/ > repo root
+HNFLOW_HOME="${HNFLOW_HOME:-${DEER_FLOW_HOME:-$REPO_ROOT/hnflow-data}}"
 if [ -n "$DEER_FLOW_CONFIG_PATH" ] && [ -f "$DEER_FLOW_CONFIG_PATH" ]; then
     CONFIG="$DEER_FLOW_CONFIG_PATH"
+elif [ -f "$HNFLOW_HOME/config.yaml" ]; then
+    CONFIG="$HNFLOW_HOME/config.yaml"
 elif [ -f "$REPO_ROOT/backend/config.yaml" ]; then
     CONFIG="$REPO_ROOT/backend/config.yaml"
 elif [ -f "$REPO_ROOT/config.yaml" ]; then
@@ -28,9 +31,10 @@ if [ ! -f "$EXAMPLE" ]; then
 fi
 
 if [ -z "$CONFIG" ]; then
-    echo "No config.yaml found — creating from example..."
-    cp "$EXAMPLE" "$REPO_ROOT/config.yaml"
-    echo "OK config.yaml created. Please review and set your API keys."
+    echo "No config.yaml found �?creating from example..."
+    mkdir -p "$HNFLOW_HOME"
+    cp "$EXAMPLE" "$HNFLOW_HOME/config.yaml"
+    echo "OK $HNFLOW_HOME/config.yaml created. Please review and set your API keys."
     exit 0
 fi
 

@@ -61,7 +61,7 @@ services:
       - CI=true
       - DEER_FLOW_INTERNAL_GATEWAY_BASE_URL=http://gateway:8001
     env_file:
-      - ../frontend/.env
+      - ../hnflow-data/frontend.env
     networks:
       - deer-flow-dev
     restart: unless-stopped
@@ -97,6 +97,7 @@ services:
       # Host editors commonly replace files on save; a directory bind keeps those
       # replacements visible inside Docker Desktop/WSL containers.
       - ../:/app/project
+      - ../hnflow-data:/app/hnflow-data
       - ../skills:/app/skills
       - ../logs:/app/logs
       # Use a Docker-managed uv cache volume instead of a host bind mount.
@@ -117,20 +118,22 @@ services:
     environment:
       - CI=true
       - DEER_FLOW_PROJECT_ROOT=/app
-      - DEER_FLOW_HOME=/app/backend/.deer-flow
-      - DEER_FLOW_CONFIG_PATH=/app/project/config.yaml
-      - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/project/extensions_config.json
+      - HNFLOW_HOME=/app/hnflow-data
+      - DEER_FLOW_HOME=/app/hnflow-data
+      - DEER_FLOW_CONFIG_PATH=/app/hnflow-data/config.yaml
+      - DEER_FLOW_EXTENSIONS_CONFIG_PATH=/app/hnflow-data/extensions_config.json
+      - DEER_FLOW_SKILLS_PATH=/app/hnflow-data/skills
       - DEER_FLOW_CHANNELS_LANGGRAPH_URL=${DEER_FLOW_CHANNELS_LANGGRAPH_URL:-http://gateway:8001/api}
       - DEER_FLOW_CHANNELS_GATEWAY_URL=${DEER_FLOW_CHANNELS_GATEWAY_URL:-http://gateway:8001}
       - DEER_FLOW_INTERNAL_AUTH_TOKEN=${DEER_FLOW_INTERNAL_AUTH_TOKEN:-}
-      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/backend/.deer-flow
+      - DEER_FLOW_HOST_BASE_DIR=${DEER_FLOW_ROOT}/hnflow-data
       - DEER_FLOW_SANDBOX_HOST=host.docker.internal
       # Proxy values (HTTP_PROXY/HTTPS_PROXY/ALL_PROXY) are inherited from ../.env via env_file.
       # Only NO_PROXY is declared here so internal service hostnames are always exempt from the proxy.
       - NO_PROXY=${NO_PROXY:-}${NO_PROXY:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
       - no_proxy=${no_proxy:-}${no_proxy:+,}localhost,127.0.0.1,::1,gateway,frontend,nginx,openviking,host.docker.internal
     env_file:
-      - ../.env
+      - ../hnflow-data/.env
     extra_hosts:
       # For Linux: map host.docker.internal to host gateway
       - "host.docker.internal:host-gateway"

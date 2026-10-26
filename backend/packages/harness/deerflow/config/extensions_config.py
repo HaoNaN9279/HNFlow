@@ -11,7 +11,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from deerflow.config.runtime_paths import existing_project_file
+from deerflow.config.runtime_paths import existing_project_file, user_data_home
 from deerflow.constants import DEFAULT_MCP_SESSION_INIT_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -229,6 +229,10 @@ class ExtensionsConfig(BaseModel):
                 raise FileNotFoundError(f"Extensions config file specified by environment variable `DEER_FLOW_EXTENSIONS_CONFIG_PATH` not found at {path}")
             return path
         else:
+            unified_config = user_data_home() / "extensions_config.json"
+            if unified_config.is_file():
+                return unified_config
+
             project_config = existing_project_file(("extensions_config.json", "mcp_config.json"))
             if project_config is not None:
                 return project_config

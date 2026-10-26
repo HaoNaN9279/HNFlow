@@ -69,9 +69,10 @@ fi
 # directory, not as a plain glob pattern — on Python 3.12, globbing an absolute
 # pattern raises NotImplementedError and crashes startup (#3459 / #3454). That
 # means `sandbox` must be created here too, not just `.deer-flow`.
-: "${DEER_FLOW_HOME:=/app/backend/.deer-flow}"
-export DEER_FLOW_HOME
-mkdir -p "$DEER_FLOW_HOME" /app/backend/.deer-flow /app/backend/sandbox
+: "${HNFLOW_HOME:=${DEER_FLOW_HOME:-/app/hnflow-data}}"
+export HNFLOW_HOME
+export DEER_FLOW_HOME="$HNFLOW_HOME"
+mkdir -p "$HNFLOW_HOME" /app/backend/.deer-flow /app/backend/sandbox
 
 # ── Sync dependencies (with self-heal) ──────────────────────────────────────
 
@@ -99,5 +100,5 @@ PYTHONPATH=. exec uv run uvicorn app.gateway.app:app \
     --reload-include='*.yaml' \
     --reload-include='.env' \
     --reload-exclude=/app/backend/sandbox \
-    --reload-exclude="$DEER_FLOW_HOME" \
+    --reload-exclude="$HNFLOW_HOME" \
     --reload-exclude=/app/backend/.deer-flow

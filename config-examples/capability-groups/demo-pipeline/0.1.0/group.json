@@ -1,0 +1,14 @@
+{
+  "guid": "44444444444444444444444444444444",
+  "name": "demo-pipeline",
+  "version": "0.1.0",
+  "description": "Minimal example capability group for local documents and data checks.",
+  "permissions": ["fs"],
+  "extends": [],
+  "tools": [
+    "builtin:read_file"
+  ],
+  "tool_permissions": {
+    "builtin:read_file": ["fs"]
+  }
+}

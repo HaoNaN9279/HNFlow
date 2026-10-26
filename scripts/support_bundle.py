@@ -258,10 +258,16 @@ def _validate_thread_id(thread_id: str) -> None:
 def _candidate_thread_data_dirs(project_root: Path, thread_id: str) -> list[Path]:
     _validate_thread_id(thread_id)
     candidates = [
+        project_root / "hnflow-data" / "threads" / thread_id / "user-data",
+        project_root / "hnflow-data" / "users" / thread_id / "user-data",
         project_root / ".deer-flow" / "threads" / thread_id / "user-data",
         project_root / "backend" / ".deer-flow" / "threads" / thread_id / "user-data",
     ]
-    for base in (project_root / ".deer-flow" / "users", project_root / "backend" / ".deer-flow" / "users"):
+    for base in (
+        project_root / "hnflow-data" / "users",
+        project_root / ".deer-flow" / "users",
+        project_root / "backend" / ".deer-flow" / "users",
+    ):
         if base.exists():
             candidates.extend(user_dir / "threads" / thread_id / "user-data" for user_dir in base.iterdir() if user_dir.is_dir())
     return candidates
@@ -787,7 +793,7 @@ def render_bundle_readme(triage: dict[str, Any]) -> str:
 
 def _default_out_path(project_root: Path) -> Path:
     timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    return project_root / ".deer-flow" / "support-bundles" / f"deer-flow-support-bundle-{timestamp}.zip"
+    return project_root / "hnflow-data" / "backups" / "support-bundles" / f"deer-flow-support-bundle-{timestamp}.zip"
 
 
 def _write_json(zf: zipfile.ZipFile, name: str, data: Any) -> None:

@@ -26,7 +26,7 @@ from deerflow.config.model_config import ModelConfig
 from deerflow.config.read_before_write_config import ReadBeforeWriteConfig
 from deerflow.config.reload_boundary import format_field_description
 from deerflow.config.run_events_config import RunEventsConfig
-from deerflow.config.runtime_paths import existing_project_file
+from deerflow.config.runtime_paths import existing_project_file, user_data_home
 from deerflow.config.safety_finish_reason_config import SafetyFinishReasonConfig
 from deerflow.config.sandbox_config import SandboxConfig
 from deerflow.config.scheduler_config import SchedulerConfig
@@ -45,6 +45,13 @@ from deerflow.config.tool_progress_config import ToolProgressConfig
 from deerflow.config.tool_search_config import ToolSearchConfig, load_tool_search_config_from_dict
 from deerflow.extensions.loader import ExtensionSpec
 
+# Load the unified data directory's .env first, then the historical
+# project-root file for one-release compatibility. Process environment values
+# always win because both calls use override=False.
+try:
+    load_dotenv(dotenv_path=user_data_home() / ".env", override=False)
+except (OSError, ValueError):
+    pass
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -52,7 +59,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILE_DATABASE_DEFAULTS = {
     "backend": "sqlite",
-    "sqlite_dir": ".deer-flow/data",
+    "sqlite_dir": "data",
 }
 
 
@@ -363,6 +370,10 @@ class AppConfig(BaseModel):
                 raise FileNotFoundError(f"Config file specified by environment variable `DEER_FLOW_CONFIG_PATH` not found at {path}")
             return path
         else:
+            unified_config = user_data_home() / "config.yaml"
+            if unified_config.is_file():
+                return unified_config
+
             project_config = existing_project_file(("config.yaml",))
             if project_config is not None:
                 return project_config
@@ -370,7 +381,7 @@ class AppConfig(BaseModel):
             for path in _legacy_config_candidates():
                 if path.exists():
                     return path
-            raise FileNotFoundError("`config.yaml` file not found in the project root or legacy backend/repository root locations")
+            raise FileNotFoundError(f"`config.yaml` file not found under {user_data_home()} or the legacy project/backend roots")
 
     @classmethod
     def from_file(cls, config_path: str | None = None) -> Self:

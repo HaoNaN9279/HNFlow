@@ -38,7 +38,7 @@ class TestDataDirModel:
 class TestDataDirs:
     def test_lists_the_layout_in_a_stable_order(self, paths: Paths) -> None:
         names = [entry.name for entry in paths.data_dirs()]
-        assert names == ["base", "users", "skills_view", "integrations", "locks", "undo", "retrieval", "threads"]
+        assert names == ["base", "users", "skills_view", "integrations", "prompts", "capability-groups", "tools", "skills", "backups", "locks", "undo", "retrieval", "threads"]
 
     def test_every_path_lives_under_the_base_dir(self, paths: Paths) -> None:
         for entry in paths.data_dirs():

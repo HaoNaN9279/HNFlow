@@ -29,6 +29,10 @@ backend/scripts/benchmark/*.jsonl
 # Environment variables
 .env
 
+# Unified user data (config, capability groups, tools, prompts, DB, workspaces)
+/hnflow-data/
+/backend/hnflow-data/
+
 # Configuration files
 config.yaml
 mcp_config.json

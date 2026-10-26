@@ -107,7 +107,7 @@ make migrate-rev MSG="..."  # Autogenerate a new alembic revision (see Schema Mi
 ```
 
 The backend `make dev` target pre-creates and excludes `DEER_FLOW_HOME`
-(default: `backend/.deer-flow`) and `backend/sandbox` from Uvicorn's reload
+(default: `../hnflow-data`) and `backend/sandbox` from Uvicorn's reload
 watcher. Do not replace it with a bare `uvicorn --reload`: agent tasks write
 Python and other runtime files below `DEER_FLOW_HOME`, which would otherwise
 restart the Gateway during an active run.
@@ -387,7 +387,7 @@ Lead-agent middlewares are assembled in strict order across three functions: the
 1. **InputSanitizationMiddleware** - First, so it is the outermost `wrap_model_call` wrapper; every inner middleware (including LLM retries) sees sanitized messages. `additional_kwargs.original_user_content` is server-owned provenance: Gateway strips caller-supplied values for non-internal run requests, trusted IM calls may carry the string they captured before adding transport/file context, and the middleware replaces any non-string value before wrapping. Uploads and sanitization retain first-writer-wins only for validated strings.
 2. **ToolOutputBudgetMiddleware** - Caps tool output size (per app config) before it re-enters the model context. Oversized results are externalized to `tool_output.storage_subdir` (default `.tool-results`, shared constant `TOOL_RESULTS_DIRNAME`) under the thread outputs dir with a typed synopsis + `read_file` reference left in context; those files are process feedback, so the workspace-changes scanner excludes that directory and run delivery verification never counts them as produced artifacts
 3. **ToolResultSanitizationMiddleware** - Neutralizes framework/injection tags (e.g. `<system-reminder>`) and boundary markers in *remote-content* tool results (`web_fetch`/`web_search`/`image_search`/`web_capture`) so attacker-controlled fetched pages cannot forge trusted framework context. Mirrors `InputSanitizationMiddleware`'s user-input guardrail for the other untrusted-content entry point; sits inner of `ToolOutputBudgetMiddleware` (neutralizes the raw output, then the budget truncates). Local tool output (bash/read_file) is left untouched. Scope is a name-based allowlist, so MCP remote-content tools registered under other names (e.g. `fetch_url`) are not yet covered — a metadata-tagging follow-up is tracked in the middleware source
-4. **ThreadDataMiddleware** - Creates per-thread directories under the user's isolation scope (`backend/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/{workspace,uploads,outputs}`); resolves identity via `resolve_runtime_user_id(runtime)`, including Gateway runtime context and standalone LangGraph Server auth, then falls back to the request ContextVar / `"default"`
+4. **ThreadDataMiddleware** - Creates per-thread directories under the user's isolation scope (`hnflow-data/users/{user_id}/threads/{thread_id}/user-data/{workspace,uploads,outputs}`); resolves identity via `resolve_runtime_user_id(runtime)`, including Gateway runtime context and standalone LangGraph Server auth, then falls back to the request ContextVar / `"default"`
 5. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation (lead agent only); upload existence checks use the same runtime-resolved user bucket as thread-data creation
 6. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
 7. **DanglingToolCallMiddleware** - Injects placeholder ToolMessages for AIMessage tool_calls that lack responses (e.g., user interruption), preserving raw provider tool-call payloads in `additional_kwargs["tool_calls"]`; malformed tool-call names and arguments are sanitized in the model-bound request so strict OpenAI-compatible providers do not reject the next request
@@ -534,9 +534,18 @@ that the current host silently ignores.
 
 ### Configuration System
 
+**Unified user-data directory** (`HNFLOW_HOME`, default `{repo}/hnflow-data`):
+
+- `HNFLOW_HOME` is canonical; `DEER_FLOW_HOME` remains a compatibility alias. `DEER_FLOW_PROJECT_ROOT`, `DEER_FLOW_CONFIG_PATH`, and `DEER_FLOW_EXTENSIONS_CONFIG_PATH` remain explicit overrides.
+- `hnflow-data/` is entirely gitignored and contains `config.yaml`, `extensions_config.json`, `.env`, `frontend.env`, `prompts/lead-agent.md`, `capability-groups/`, `tools/`, `skills/`, `data/deerflow.db`, and `users/{user_id}/threads/{thread_id}/...`.
+- Relative `database.sqlite_dir` values resolve under the unified root; the default is `data` (legacy `.deer-flow/data` is normalized to the same directory).
+- `make config` seeds only missing templates from `config-examples/`; `make data-migrate` (or `DRY=1 make data-migrate`) copies legacy files into the new root without deleting them.
+- Tool packages under `hnflow-data/tools/` are trusted local code imported into the Gateway process; do not add an untrusted upload path.
+- Workflow definitions, revisions, folders, workbenches, specifications, model profiles, runs, checkpoints, human tasks, and undo records remain transactional rows in `hnflow-data/data/deerflow.db`; workspace/workflow instance files remain under `hnflow-data/users/`.
+
 **Main Configuration** (`config.yaml`):
 
-Setup: Copy `config.example.yaml` to `config.yaml` in the **project root** directory.
+Setup: Run `make config` to seed `config-examples/` into `hnflow-data/`; the canonical file is `hnflow-data/config.yaml`.
 
 **Config Versioning**: `config.example.yaml` has a `config_version` field. On startup, `AppConfig.from_file()` compares user version vs example version and emits a warning if outdated. Missing `config_version` = version 0. Run `make config-upgrade` to auto-merge missing fields. When changing the config schema, bump `config_version` in `config.example.yaml`.
 
@@ -555,26 +564,27 @@ application repositories continue to use `database`.
 Configuration priority:
 1. Explicit `config_path` argument
 2. `DEER_FLOW_CONFIG_PATH` environment variable
-3. `config.yaml` in current directory (backend/)
-4. `config.yaml` in parent directory (project root - **recommended location**)
+3. `$HNFLOW_HOME/config.yaml` (canonical location in `hnflow-data/`)
+4. Legacy project-root/backend `config.yaml`
 
 Config values starting with `$` are resolved as environment variables (e.g., `$OPENAI_API_KEY`).
 `ModelConfig` also declares `use_responses_api` and `output_version` so OpenAI `/v1/responses` can be enabled explicitly while still using `langchain_openai:ChatOpenAI`.
 
 **Extensions Configuration** (`extensions_config.json`):
 
-MCP servers and skills are configured together in `extensions_config.json` in project root:
+MCP servers and skills are configured together in `hnflow-data/extensions_config.json`:
 
-Docker development mounts the project directory at `/app/project` and points
-`DEER_FLOW_CONFIG_PATH` / `DEER_FLOW_EXTENSIONS_CONFIG_PATH` into that directory.
-Keep mutable config files behind a directory bind mount: single-file bind mounts
-can become stale or inaccessible when a host editor replaces a file on save.
+Docker development mounts `hnflow-data/` at `/app/hnflow-data` and points
+`HNFLOW_HOME` / `DEER_FLOW_CONFIG_PATH` / `DEER_FLOW_EXTENSIONS_CONFIG_PATH`
+into that directory. Keep mutable config files behind a directory bind mount:
+single-file bind mounts can become stale or inaccessible when a host editor
+replaces a file on save.
 
 Configuration priority:
 1. Explicit `config_path` argument
 2. `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable
-3. `extensions_config.json` in current directory (backend/)
-4. `extensions_config.json` in parent directory (project root - **recommended location**)
+3. `$HNFLOW_HOME/extensions_config.json` (canonical location in `hnflow-data/`)
+4. Legacy project-root/backend `extensions_config.json`
 
 Extensions are optional only in the fallback *search* mode (priority 3-4 above): `ExtensionsConfig.resolve_config_path()` returns `None` when neither an explicit `config_path` nor `DEER_FLOW_EXTENSIONS_CONFIG_PATH` is given and the search locations find nothing. An explicit `config_path` argument or a set `DEER_FLOW_EXTENSIONS_CONFIG_PATH` (priority 1-2) is an operator assertion that one particular file must be used, so a missing file in either of those modes raises `FileNotFoundError` instead — including when the file existed earlier and has since been deleted. The MCP tools cache's staleness check (`deerflow.mcp.cache._resolve_config_path`) is a narrow, deliberate exception to that rule: it catches that `FileNotFoundError` locally and treats it as "unconfigured" so a previously-valid config disappearing mid-run degrades the cache to serving its last-known-good tools instead of raising out of a per-request hot path (see the MCP System section below).
 
@@ -811,7 +821,7 @@ that cannot tell sibling branches apart.
 
 **Virtual Path System**:
 - Agent sees: `/mnt/user-data/{workspace,uploads,outputs}`, `/mnt/skills`
-- Physical: `backend/.deer-flow/users/{user_id}/threads/{thread_id}/user-data/...`; raw skills stay under `deer-flow/skills/` and managed integration storage, while sandboxes read `backend/.deer-flow/skills_view/public/` and `backend/.deer-flow/users/{user_id}/skills_view/{custom,legacy,integrations}/`
+- Physical: `hnflow-data/users/{user_id}/threads/{thread_id}/user-data/...`; built-in skill templates stay under `skills/public/` and are seeded into `hnflow-data/skills/public/`, while sandboxes read `hnflow-data/skills_view/public/` and `hnflow-data/users/{user_id}/skills_view/{custom,legacy,integrations}/`
 - Translation: `LocalSandboxProvider` builds per-thread `PathMapping`s for the user-data prefixes at acquire time; `tools.py` keeps `replace_virtual_path()` / `replace_virtual_paths_in_command()` as a defense-in-depth layer (and for path validation). AIO has the directories volume-mounted at the same virtual paths inside its container, so both implementations accept `/mnt/user-data/...` natively.
 - Detection: `is_local_sandbox()` accepts both `sandbox_id == "local"` (legacy / no-thread) and `sandbox_id.startswith("local:")` (per-thread)
 
@@ -1021,11 +1031,11 @@ E2B output sync records remote file versions and actual host file metadata in a 
 
 ### Skills System (`packages/harness/deerflow/skills/`)
 
-> **Tools are a separate first-class layer.** A capability group only references tools through `group.json.tools`; it does not own tool definitions. Custom tool packages live at `tools/<name>/<version>/tool.json` (public only) and are resolved by `deerflow/tools/registry.py` into `tool:<guid>@v<version>`. MCP tools are addressable as `mcp:<server>:<tool>` while their transport/credentials stay in `extensions_config.json`. `resolve_capability_tools` is fail-loud for explicitly declared but missing/unauthorized tools.
+> **Tools are a separate first-class layer.** A capability group only references tools through `group.json.tools`; it does not own tool definitions. Custom tool packages live at `hnflow-data/tools/<name>/<version>/tool.json` (trusted local code) and are resolved by `deerflow/tools/registry.py` into `tool:<guid>@v<version>`. MCP tools are addressable as `mcp:<server>:<tool>` while their transport/credentials stay in `extensions_config.json`. `resolve_capability_tools` is fail-loud for explicitly declared but missing/unauthorized tools.
 >
-> **Capability groups are not skills.** A capability group is a top-level versioned package (`capability-groups/<name>/<version>/group.json`) that can contain rules, agents, skills, tools, references, templates, assets and evals. A skill is one child resource inside a group. The old skill-as-capability-group resolution was removed; use `/api/capability-groups` for group discovery/contents/reveal. The `ai:capability_group` selector node is now a compile-time selector over capability-group GUIDs/names (`params.groups`), and `ai:capability_merge` is gone.
+> **Capability groups are not skills.** A capability group is a top-level versioned package (`hnflow-data/capability-groups/<name>/<version>/group.json`) that can contain rules, agents, skills, tools, references, templates, assets and evals. A skill is one child resource inside a group. The old skill-as-capability-group resolution was removed; use `/api/capability-groups` for group discovery/contents/reveal. The `ai:capability_group` selector node is now a compile-time selector over capability-group GUIDs/names (`params.groups`), and `ai:capability_merge` is gone.
 
-- **Location**: global public skills live under `deer-flow/skills/public/`; user-authored custom skills live under `{DEER_FLOW_HOME}/users/{user_id}/skills/custom/`; globally managed integration skills live under `{DEER_FLOW_HOME}/integrations/skills/{provider}/`; per-user integration credentials remain under `{DEER_FLOW_HOME}/users/{user_id}/integrations/{provider}/{config,data}`
+- **Location**: built-in public skill templates live under `skills/public/`; the runtime public root is `{HNFLOW_HOME}/skills/public/`; user-authored custom skills live under `{HNFLOW_HOME}/users/{user_id}/skills/custom/`; globally managed integration skills live under `{DEER_FLOW_HOME}/integrations/skills/{provider}/`; per-user integration credentials remain under `{DEER_FLOW_HOME}/users/{user_id}/integrations/{provider}/{config,data}`
 - **Format**: Directory with `SKILL.md` (YAML frontmatter: name, description, license, allowed-tools, required-secrets, and the N14 §5.5 capability contract `permissions` / `tool-schema-version` / `context-budget`, parsed fail-soft into `Skill.permissions`/`tool_schema_version`/`context_budget` and checkable via `skills/contract.py::validate_capability_contract`; N14 §24.12 adds `tool-permissions` as a `{tool_name: [fs, net, exec, secrets]}` mapping parsed into `Skill.tool_permissions`)
 - **Tool-level permission adjudication** (`skills/permission_policy.py`, N14 §24.12): the runtime half of the §5.5 `permissions` declaration. `resolve_capability_tools` resolves the groups' declared `tools` ids through `deerflow/tools/registry.py` and adjudicates each concrete tool against the capability groups' **union** of declared permissions plus per-tool `tool_permissions` overrides. An explicit tool that is missing or outside the declaration raises `ToolResolutionError` (fail-loud); it is never silently dropped. Three properties are deliberate: **opt-in** (a group declaring no permissions is not restricted — a package that never asked for least privilege must not silently lose its tools); **fail-closed on an unclassifiable tool** (the table in this module states the known families — sandbox fs/exec, `web_*`/`browser_*`/search-fetch `net`, the `app` provider `exec` — and anything else, MCP servers included, is denied rather than assumed harmless, with the denial naming `tool-permissions` as the knob that can declare it); and **declared, not inferred** (a per-tool `tool-permissions` override is how an opted-in group keeps an MCP or community tool, and it is unioned per tool name across `extends`). A denial never silently reduces a boundary: the node simply receives fewer tools, and when nothing survives, it gets none. Tests: `tests/test_skill_permission_policy.py`.
 - **Composition** (`skills/composition.py`, N14 §5.5): frontmatter `extends` (a group name or list) makes a package build on another's declaration, and `overlay: true` makes its own `allowed-tools` **replace** the inherited list instead of adding to it (the only way to *narrow* an inherited tool set). Merge rules: `allowed-tools`/`permissions`/`required-secrets`/`requirements` union, plus `tool_permissions` unioned **per tool name** (N14 §24.12 — dropping either side would ship a narrower requirement than its author declared); `tool-schema-version`/`context-budget` — own value, else the last base that declared one. Resolution is catalog-based (`resolve_declaration`/`resolve_allowed_tools`/`resolve_group_closure`), broken composition (unknown base, self-extension, cycle, depth overrun) raises `CompositionError`, and `validate_composition` reports every problem without raising (tooling/CI). Both fields parse **fail-loud** — like `dependencies`, a malformed composition declaration makes the file unloadable, because loading it without the inheritance would ship a package with fewer (or wider) capabilities than its author declared. Consumers: `workflow.tool_gateway.resolve_capability_tools` resolves the selected groups' declared `tools` ids through `tools/registry.py` (missing or unauthorized explicit tools raise `ToolResolutionError`), and `workflow.schema.collect_resolved_groups` folds the `extends` closure into a definition's resolved-group snapshot. Legacy skill-package composition remains available to skill policy paths.
@@ -1513,7 +1523,7 @@ Gateway API endpoints and `DeerFlowClient` methods can modify MCP servers and sk
 | Uploads | `upload_files(thread_id, files)`, `list_uploads(thread_id)`, `delete_upload(thread_id, filename)` | `{"success": true, "files": [...]}`, `{"files": [...], "count": N}` |
 | Artifacts | `get_artifact(thread_id, path)` → `(bytes, mime_type)` | tuple |
 
-**Key difference from Gateway**: Upload accepts local `Path` objects instead of HTTP `UploadFile`, rejects directory paths before copying, and reuses a single worker when document conversion must run inside an active event loop. Artifact returns `(bytes, mime_type)` instead of HTTP Response. The new Gateway-only thread cleanup route deletes `.deer-flow/threads/{thread_id}` after LangGraph thread deletion; there is no matching `DeerFlowClient` method yet. `update_mcp_config()` and `update_skill()` automatically invalidate the cached agent.
+**Key difference from Gateway**: Upload accepts local `Path` objects instead of HTTP `UploadFile`, rejects directory paths before copying, and reuses a single worker when document conversion must run inside an active event loop. Artifact returns `(bytes, mime_type)` instead of HTTP Response. The new Gateway-only thread cleanup route deletes `hnflow-data/threads/{thread_id}` after LangGraph thread deletion; there is no matching `DeerFlowClient` method yet. `update_mcp_config()` and `update_skill()` automatically invalidate the cached agent.
 
 **Tests**: `tests/test_client.py` (offline unit tests including
 `TestGatewayConformance`), `tests/test_client_live.py` (live integration tests,

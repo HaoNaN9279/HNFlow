@@ -263,6 +263,56 @@ class Paths:
         return self.base_dir / "USER.md"
 
     @property
+    def config_file(self) -> Path:
+        """Primary application config: `{base_dir}/config.yaml`."""
+        return self.base_dir / "config.yaml"
+
+    @property
+    def extensions_config_file(self) -> Path:
+        """MCP/skills extension config: `{base_dir}/extensions_config.json`."""
+        return self.base_dir / "extensions_config.json"
+
+    @property
+    def env_file(self) -> Path:
+        """Environment/secret file: `{base_dir}/.env`."""
+        return self.base_dir / ".env"
+
+    @property
+    def prompts_dir(self) -> Path:
+        """User-editable prompt root: `{base_dir}/prompts/`."""
+        return self.base_dir / "prompts"
+
+    @property
+    def lead_agent_prompt_file(self) -> Path:
+        """Canonical Lead Agent prompt: `{base_dir}/prompts/lead-agent.md`."""
+        return self.prompts_dir / "lead-agent.md"
+
+    @property
+    def legacy_soul_file(self) -> Path:
+        """Pre-prompt-directory Lead Agent prompt: `{base_dir}/SOUL.md`."""
+        return self.base_dir / "SOUL.md"
+
+    @property
+    def capability_groups_dir(self) -> Path:
+        """User-editable capability groups: `{base_dir}/capability-groups/`."""
+        return self.base_dir / "capability-groups"
+
+    @property
+    def tool_packages_dir(self) -> Path:
+        """User-editable tool packages: `{base_dir}/tools/`."""
+        return self.base_dir / "tools"
+
+    @property
+    def skills_dir(self) -> Path:
+        """User-editable skills root: `{base_dir}/skills/`."""
+        return self.base_dir / "skills"
+
+    @property
+    def backups_dir(self) -> Path:
+        """Configuration/data backup root: `{base_dir}/backups/`."""
+        return self.base_dir / "backups"
+
+    @property
     def agents_dir(self) -> Path:
         """Legacy root for shared (pre user-isolation) custom agents: `{base_dir}/agents/`.
 
@@ -570,6 +620,36 @@ class Paths:
                 path=self.integration_skills_dir(),
                 purpose="Globally installed managed integration skill packages (read-only; credentials stay per-user).",
                 required=True,
+            ),
+            DataDir(
+                name="prompts",
+                path=self.prompts_dir,
+                purpose="User-editable agent prompts (Lead Agent identity and behavior).",
+                required=True,
+            ),
+            DataDir(
+                name="capability-groups",
+                path=self.capability_groups_dir,
+                purpose="User-editable versioned capability-group packages.",
+                required=True,
+            ),
+            DataDir(
+                name="tools",
+                path=self.tool_packages_dir,
+                purpose="User-editable versioned custom tool packages.",
+                required=True,
+            ),
+            DataDir(
+                name="skills",
+                path=self.skills_dir,
+                purpose="User-editable skills root (public defaults and custom packages).",
+                required=False,
+            ),
+            DataDir(
+                name="backups",
+                path=self.backups_dir,
+                purpose="Config and data backups created by setup/config-upgrade.",
+                required=False,
             ),
             DataDir(
                 name="locks",

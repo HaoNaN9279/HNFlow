@@ -257,10 +257,29 @@ class DatabaseConfig(BaseModel):
 
     @property
     def _resolved_sqlite_dir(self) -> str:
-        """Resolve sqlite_dir to an absolute path (relative to CWD)."""
+        """Resolve sqlite_dir to an absolute path.
+
+        Relative paths are resolved under the unified user-data root
+        (``HNFLOW_HOME`` / ``DEER_FLOW_HOME`` / ``{project}/hnflow-data``) so
+        the default ``data`` directory stays inside the single managed root
+        regardless of the process working directory.  Absolute paths are
+        returned unchanged.
+        """
         from pathlib import Path
 
-        return str(Path(self.sqlite_dir).resolve())
+        configured = Path(self.sqlite_dir)
+        if configured.is_absolute():
+            return str(configured.resolve())
+
+        from deerflow.config.paths import get_paths
+
+        base = get_paths().base_dir
+        # The pre-unification default was ``.deer-flow/data`` because the base
+        # directory was ``backend/.deer-flow`` and the process cwd was
+        # ``backend``.  Both spellings now mean ``{base}/data``.
+        if configured.as_posix() in {"data", "./data", ".deer-flow/data"}:
+            return str((base / "data").resolve())
+        return str((base / configured).resolve())
 
     @property
     def sqlite_path(self) -> str:

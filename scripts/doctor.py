@@ -609,14 +609,17 @@ def check_image_search(config_path: Path) -> CheckResult:
     return check_web_tool(config_path, tool_name="image_search", label="image search configured")
 
 
-def check_frontend_env(project_root: Path) -> CheckResult:
-    env_path = project_root / "frontend" / ".env"
-    if env_path.exists():
-        return CheckResult("frontend/.env found", "ok")
+def check_frontend_env(project_root: Path, data_home: Path | None = None) -> CheckResult:
+    candidates = [project_root / "frontend" / ".env"]
+    if data_home is not None:
+        candidates.insert(0, data_home / "frontend.env")
+    for env_path in candidates:
+        if env_path.exists():
+            return CheckResult("frontend env found", "ok", str(env_path))
     return CheckResult(
-        "frontend/.env found",
+        "frontend env found",
         "warn",
-        fix="Run 'make setup' or copy frontend/.env.example to frontend/.env",
+        fix="Run 'make setup' or 'make config' to seed hnflow-data/frontend.env",
     )
 
 
@@ -691,14 +694,14 @@ def check_sandbox(config_path: Path) -> list[CheckResult]:
         return [CheckResult("sandbox configured", "fail", str(exc))]
 
 
-def check_env_file(project_root: Path) -> CheckResult:
-    env_path = project_root / ".env"
+def check_env_file(project_root: Path, env_path: Path | None = None) -> CheckResult:
+    env_path = env_path or project_root / ".env"
     if env_path.exists():
         return CheckResult(".env found", "ok")
     return CheckResult(
         ".env found",
         "warn",
-        fix="Run 'make setup' or copy .env.example to .env",
+        fix="Run 'make setup' or run 'make config' to seed hnflow-data/.env",
     )
 
 
@@ -708,14 +711,17 @@ def check_env_file(project_root: Path) -> CheckResult:
 
 
 def main() -> int:
+    import os
+
     project_root = Path(__file__).resolve().parents[1]
-    config_path = project_root / "config.yaml"
+    data_home = Path(os.getenv("HNFLOW_HOME") or os.getenv("DEER_FLOW_HOME") or project_root / "hnflow-data").resolve()
+    config_path = data_home / "config.yaml"
 
     # Load .env early so key checks work
     try:
         from dotenv import load_dotenv
 
-        env_path = project_root / ".env"
+        env_path = data_home / ".env"
         if env_path.exists():
             load_dotenv(env_path, override=False)
     except ImportError:
@@ -739,8 +745,8 @@ def main() -> int:
 
     # ── Configuration ─────────────────────────────────────────────────────────
     cfg_checks: list[CheckResult] = [
-        check_env_file(project_root),
-        check_frontend_env(project_root),
+        check_env_file(project_root, data_home / ".env"),
+        check_frontend_env(project_root, data_home),
         check_config_exists(config_path),
         check_config_version(config_path, project_root),
         check_config_loadable(config_path),

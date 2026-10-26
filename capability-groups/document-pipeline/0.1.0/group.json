@@ -1,8 +1,0 @@
-{
-  "guid": "11111111111111111111111111111111",
-  "name": "document-pipeline",
-  "version": "0.1.0",
-  "description": "文档整理、编辑与导出能力组",
-  "permissions": ["fs"],
-  "extends": []
-}
