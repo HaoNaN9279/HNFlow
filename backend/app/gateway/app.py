@@ -600,6 +600,11 @@ This gateway provides runtime endpoints for agent runs plus custom endpoints for
     # Scheduled tasks API is mounted at /api/scheduled-tasks
     app.include_router(scheduled_tasks.router)
 
+    # Formal specifications (versioned, frozen spec revisions)
+    from app.gateway.routers import specification_routes
+
+    app.include_router(specification_routes.router)
+
     # Workflow directory folders and definitions
     from app.gateway.routers import workflow_folder_routes
 

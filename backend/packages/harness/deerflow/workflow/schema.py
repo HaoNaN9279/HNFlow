@@ -72,6 +72,9 @@ class PortType(StrEnum):
     NUMBER = "number"
     ARRAY = "array"
     RECORD = "record"
+    #: Pinned formal-specification reference (``SpecRef``).  Kept as a distinct
+    #: type so a verifier cannot be wired from an arbitrary data payload.
+    SPEC = "spec"
 
 
 class NodeType(StrEnum):
@@ -97,6 +100,8 @@ class NodeType(StrEnum):
     DATA_SCHEMA = "data:schema"
     DATA_JSON = "data:json"
     DATA_REGEX = "data:regex"
+    #: Formal-specification authoring / lifecycle node.
+    DATA_SPEC = "data:spec"
 
     # External tools
     TOOL_BASH = "tool:bash"
@@ -124,6 +129,11 @@ class NodeType(StrEnum):
     HUMAN_TASK = "human:task"
     # Explicit approve/reject gate with a static retry edge.
     HUMAN_REVIEW = "human:review"
+
+    # Formal verification
+    #: Three-valued verification gate.  Branch outputs are ``verified`` /
+    #: ``failed`` / ``inconclusive``; the compiler routes on ``status``.
+    VERIFY_GATE = "verify:gate"
 
     # Composition
     NESTED_SUBWORKFLOW = "nested:subworkflow"

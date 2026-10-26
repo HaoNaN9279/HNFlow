@@ -120,6 +120,12 @@ from deerflow.workflow.review import (
 )
 from deerflow.workflow.schema import Edge, Node, NodeType, WorkflowDefinition
 from deerflow.workflow.structured_output import INPUT_SCHEMA_PARAM, INPUT_SCHEMA_PORT, OUTPUT_SCHEMA_PARAM, OUTPUT_SCHEMA_PORT
+from deerflow.workflow.verification import (
+    VERIFICATION_RESULT_KEY,
+    VERIFY_BRANCH_PORTS,
+    VERIFY_STATUS_PORT,
+    VerificationStatus,
+)
 from deerflow.workflow.workflow_io import serialize, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -479,6 +485,10 @@ def _build_state_schema(def_: WorkflowDefinition) -> type:
             # engine bookkeeping; the node event exposes only approved/rejected.
             fields[review_state_key(node.id, REVIEW_DECISION_CHANNEL)] = Any
             fields[review_state_key(node.id, REVIEW_VISIT_CHANNEL)] = Any
+        if node.type == NodeType.VERIFY_GATE:
+            # Structured evidence for run.end.verification_summary; the status
+            # output port remains the routing truth.
+            fields[f"wf:{node.id}:{VERIFICATION_RESULT_KEY}"] = Any
         # N14x: every node declares a reserved execution-duration channel so the
         # write in ``_make_node_fn`` persists into the final state → run.end
         # ``node_timings`` → get_workflow_run.  Declared for every node type
@@ -703,8 +713,11 @@ def _make_node_fn(
             executor_params.setdefault(REVIEW_TARGET_PARAM, review_target)
         if node.type == NodeType.FLOW_HANDOFF:
             # §24.6a: the handoff executor needs its own node id to read the
-            # reserved handoff counter (its budget) — a definition cannot know
+            # reserved handoff counter (its budget) �?a definition cannot know
             # which run it is in, and there is no other channel for that.
+            executor_params = dict(node.params)
+            executor_params.setdefault("node_id", node.id)
+        if node.type in (NodeType.VERIFY_GATE, NodeType.DATA_SPEC):
             executor_params = dict(node.params)
             executor_params.setdefault("node_id", node.id)
 
@@ -784,6 +797,11 @@ def _make_node_fn(
         # of a declared output port. ``exec_llm_agent`` returns the reserved
         # ``__workflow_token_usage`` key only when provider usage was observed,
         # so absent usage leaves no channel write.
+        if node.type == NodeType.VERIFY_GATE:
+            verification = result.get(VERIFICATION_RESULT_KEY)
+            if isinstance(verification, dict):
+                outputs[f"wf:{node.id}:{VERIFICATION_RESULT_KEY}"] = verification
+
         if node.type == NodeType.AI_LLM_AGENT:
             token_usage = result.get("__workflow_token_usage")
             if isinstance(token_usage, dict):
@@ -1973,6 +1991,27 @@ def _make_review_route_fn(node_id: str, approved_target: str, rejected_target: s
     return _route
 
 
+def _make_verify_route_fn(node_id: str, targets: dict[str, str]) -> Callable[[dict[str, Any]], str]:
+    """Route a ``verify:gate`` by its authoritative ``status`` output port.
+
+    Branch payloads are evidence, not routing truth: a failed result may contain
+    an empty payload, and ``inconclusive`` must still route to its own branch.
+    """
+
+    def _route(state: dict[str, Any]) -> str:
+        status = state.get(f"wf:{node_id}:{VERIFY_STATUS_PORT}")
+        try:
+            parsed = VerificationStatus(str(status))
+        except ValueError as exc:
+            raise WorkflowRouteError(f"verify node '{node_id}': no valid status (got {status!r})") from exc
+        target = targets.get(parsed.value)
+        if target is None:
+            raise WorkflowRouteError(f"verify node '{node_id}': status '{parsed.value}' has no wired branch")
+        return target
+
+    return _route
+
+
 def _make_handoff_route_fn(node_id: str, targets: tuple[str, ...]) -> Callable[[dict[str, Any]], str]:
     """Build the routing function for a ``flow:handoff`` node (§24.6a).
 
@@ -2364,7 +2403,7 @@ def _compile_impl(
         # Adding the default edge here would unconditionally fire the
         # default target alongside any routed branch.
         src_node = node_map[source]
-        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW):
+        if src_node.type in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW, NodeType.VERIFY_GATE):
             continue
 
         # Non-conditional source node: conditional edges are NOT allowed.
@@ -2381,10 +2420,27 @@ def _compile_impl(
 
     # Pass B: conditional edges from if / switch / loop / handoff nodes
     for node in def_.nodes:
-        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW):
+        if node.type not in (NodeType.FLOW_IF, NodeType.FLOW_SWITCH, NodeType.FLOW_LOOP, NodeType.FLOW_HANDOFF, NodeType.HUMAN_REVIEW, NodeType.VERIFY_GATE):
             continue
 
         cond_id = node.id
+
+        if node.type == NodeType.VERIFY_GATE:
+            branch_targets: dict[str, str] = {}
+            verify_path_map: dict[str, Any] = {}
+            for branch in VERIFY_BRANCH_PORTS:
+                matches = [edge for edge in runtime_edges if edge.source == cond_id and edge.source_port == branch]
+                if len(matches) != 1:
+                    raise WorkflowCompileError(f"verify node '{cond_id}' requires exactly one '{branch}' out-edge (found {len(matches)})")
+                target = matches[0].target
+                branch_targets[branch] = target
+                verify_path_map[target] = _end_target(target)
+            builder.add_conditional_edges(
+                cond_id,
+                _make_verify_route_fn(cond_id, branch_targets),
+                verify_path_map,
+            )
+            continue
 
         if node.type == NodeType.HUMAN_REVIEW:
             approved = next(edge for edge in runtime_edges if edge.source == cond_id and edge.source_port == REVIEW_APPROVED_PORT)

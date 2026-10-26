@@ -33,6 +33,7 @@ from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
 from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups, declared_capability_groups
+from deerflow.workflow.spec import collect_spec_refs
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -85,6 +86,12 @@ def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, 
         "capability_groups": list(groups),
         "created_at": datetime.now(UTC).isoformat(),
     }
+    try:
+        specs = [ref.to_dict() for ref in collect_spec_refs(definition)]
+        if specs:
+            lockfile["specs"] = specs
+    except Exception as e:  # noqa: BLE001 - a malformed optional reference is reported at save validation
+        logger.warning("Failed to snapshot specification references into workflow lockfile: %s", e)
     try:
         config = get_app_config()
         default_model = config.models[0] if config.models else None

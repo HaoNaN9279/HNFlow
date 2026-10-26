@@ -21,6 +21,8 @@ from deerflow.persistence.models.run_event import RunEventRow
 from deerflow.persistence.run.model import RunRow
 from deerflow.persistence.scheduled_task_runs.model import ScheduledTaskRunRow
 from deerflow.persistence.scheduled_tasks.model import ScheduledTaskRow
+from deerflow.persistence.specifications.model import WorkflowSpecificationRow
+from deerflow.persistence.specifications.revision_model import WorkflowSpecificationRevisionRow
 from deerflow.persistence.thread_meta.model import ThreadMetaRow
 from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
 from deerflow.persistence.workflow_definitions.revision_model import WorkflowDefinitionRevisionRow
@@ -43,6 +45,8 @@ __all__ = [
     "ScheduledTaskRow",
     "ScheduledTaskRunRow",
     "ThreadMetaRow",
+    "WorkflowSpecificationRow",
+    "WorkflowSpecificationRevisionRow",
     "WorkflowDefinitionRow",
     "WorkflowDefinitionRevisionRow",
     "WorkflowFolderRow",

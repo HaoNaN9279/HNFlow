@@ -129,6 +129,7 @@ def build_workflow_runtime_context(
         "delegation_depth": 0,
         "checkpointer": getattr(run_ctx, "checkpointer", None),
         "human_task_repo": human_task_repo,
+        "spec_repo": getattr(run_ctx, "spec_repo", None),
     }
     if workflow_undo_repo is not None:
         from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY

@@ -17,6 +17,7 @@ export const PORT_TYPES = [
   "number",
   "array",
   "record",
+  "spec",
 ] as const;
 export type PortType = (typeof PORT_TYPES)[number];
 
@@ -40,6 +41,7 @@ export const NODE_TYPES = [
   "data:file",
   "data:json",
   "data:regex",
+  "data:spec",
   // External tools
   "tool:bash",
   "tool:http",
@@ -58,6 +60,8 @@ export const NODE_TYPES = [
   // Human interaction
   "human:task",
   "human:review",
+  // Formal verification
+  "verify:gate",
   // Composition
   "nested:subworkflow",
 ] as const;

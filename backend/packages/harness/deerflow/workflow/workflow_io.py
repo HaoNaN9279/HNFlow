@@ -26,6 +26,15 @@ from deerflow.workflow.schema import (
     PortType,
     WorkflowDefinition,
 )
+from deerflow.workflow.spec import SPEC_PORT_TYPE, parse_spec_ref
+from deerflow.workflow.verification import (
+    VERIFY_BRANCH_PORTS,
+    VERIFY_EVIDENCE_PORT,
+    VERIFY_IMPLEMENTATION_PORT,
+    VERIFY_INCONCLUSIVE_PORT,
+    VERIFY_SPEC_PORT,
+    VERIFY_STATUS_PORT,
+)
 
 # ── Schema version ───────────────────────────────────────────────────────────────
 
@@ -66,6 +75,8 @@ def validate_definition(def_: WorkflowDefinition, known_agent_names: set[str] | 
     errors.extend(_check_single_inbound_ports(def_.edges, node_map))
     errors.extend(_check_port_types(node_map, def_.edges))
     errors.extend(_check_review_nodes(node_map, def_.edges))
+    errors.extend(_check_verify_nodes(node_map, def_.edges))
+    errors.extend(_check_spec_params(def_.nodes))
     errors.extend(_check_params_json_compatible(def_.nodes))
     errors.extend(_check_subworkflow_params(def_.nodes))
     if known_agent_names is not None:
@@ -287,6 +298,98 @@ def _check_review_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[st
                     errors.append(f"node '{node.id}': rejected target '{target.id}' is not reachable from flow:start")
                 if not _reachable(target.id, node.id, edges, node_map):
                     errors.append(f"node '{node.id}': rejected target '{target.id}' has no forward path back to the review")
+
+    return errors
+
+
+# ── Private: formal verification node checks ─────────────────────────────────────
+
+
+_SPEC_NODE_OPERATIONS = frozenset({"create", "revise", "freeze", "resolve", "lint"})
+
+
+def _check_spec_params(nodes: list[Node]) -> list[str]:
+    """Validate ``spec_ref`` shapes and the ``data:spec`` operation contract."""
+    errors: list[str] = []
+    for node in nodes:
+        raw = node.params.get("spec_ref")
+        if raw is not None:
+            try:
+                parse_spec_ref(raw)
+            except ValueError as exc:
+                errors.append(f"node '{node.id}': params.spec_ref {exc}")
+
+        if node.type == NodeType.DATA_SPEC:
+            operation = node.params.get("operation")
+            if operation not in _SPEC_NODE_OPERATIONS:
+                errors.append(f"node '{node.id}': data:spec requires params.operation to be one of {sorted(_SPEC_NODE_OPERATIONS)} (got {operation!r})")
+            output_ports = {port.name: port for port in node.outputs}
+            spec_port = output_ports.get("spec")
+            if spec_port is None:
+                errors.append(f"node '{node.id}': data:spec requires a 'spec' output port")
+            elif spec_port.type is not PortType.SPEC:
+                errors.append(f"node '{node.id}': data:spec output 'spec' must be type {SPEC_PORT_TYPE}")
+            if operation in {"freeze", "resolve", "revise", "lint"} and raw is None:
+                spec_input = next((port for port in node.inputs if port.name == "spec"), None)
+                if spec_input is None:
+                    errors.append(f"node '{node.id}': data:spec operation '{operation}' requires params.spec_ref or a 'spec' input port")
+                elif spec_input.type is not PortType.SPEC:
+                    errors.append(f"node '{node.id}': data:spec input 'spec' must be type {SPEC_PORT_TYPE}")
+
+    return errors
+
+
+def _check_verify_nodes(node_map: dict[str, Node], edges: list[Edge]) -> list[str]:
+    """Validate the fixed three-branch shape of a ``verify:gate`` node.
+
+    The gate is deliberately stricter than ``flow:if``: all three branches must
+    be wired, so an ``inconclusive`` result can never fall through as a pass.
+    """
+    errors: list[str] = []
+    for node in node_map.values():
+        if node.type != NodeType.VERIFY_GATE:
+            continue
+
+        input_ports = {port.name: port for port in node.inputs}
+        implementation = input_ports.get(VERIFY_IMPLEMENTATION_PORT)
+        if implementation is None:
+            errors.append(f"node '{node.id}': verify:gate requires an '{VERIFY_IMPLEMENTATION_PORT}' input port")
+        elif implementation.type not in (PortType.DATA, PortType.FILE):
+            errors.append(f"node '{node.id}': verify:gate input '{VERIFY_IMPLEMENTATION_PORT}' must be data or file")
+        spec_input = input_ports.get(VERIFY_SPEC_PORT)
+        if spec_input is not None and spec_input.type is not PortType.SPEC:
+            errors.append(f"node '{node.id}': verify:gate input '{VERIFY_SPEC_PORT}' must be type {SPEC_PORT_TYPE}")
+        if node.params.get("spec_ref") is None and spec_input is None:
+            errors.append(f"node '{node.id}': verify:gate requires params.spec_ref or a '{VERIFY_SPEC_PORT}' input port")
+
+        output_ports = {port.name: port for port in node.outputs}
+        status_port = output_ports.get(VERIFY_STATUS_PORT)
+        if status_port is None:
+            errors.append(f"node '{node.id}': verify:gate requires a '{VERIFY_STATUS_PORT}' output port")
+        elif status_port.type is not PortType.ENUM:
+            errors.append(f"node '{node.id}': verify:gate output '{VERIFY_STATUS_PORT}' must be enum")
+        for branch in VERIFY_BRANCH_PORTS:
+            port = output_ports.get(branch)
+            if port is None:
+                errors.append(f"node '{node.id}': verify:gate requires a '{branch}' output port")
+            elif port.type is not PortType.DATA:
+                errors.append(f"node '{node.id}': verify:gate output '{branch}' must be data")
+        evidence = output_ports.get(VERIFY_EVIDENCE_PORT)
+        if evidence is not None and evidence.type is not PortType.RECORD:
+            errors.append(f"node '{node.id}': verify:gate output '{VERIFY_EVIDENCE_PORT}' must be record")
+
+        for branch in VERIFY_BRANCH_PORTS:
+            branch_edges = [edge for edge in edges if edge.source == node.id and edge.source_port == branch]
+            if len(branch_edges) != 1:
+                errors.append(f"node '{node.id}': verify:gate requires exactly one '{branch}' out-edge (found {len(branch_edges)})")
+            for edge in branch_edges:
+                if edge.condition is not None:
+                    errors.append(f"node '{node.id}': verify:gate '{branch}' edge must not carry a condition")
+
+        # ``inconclusive`` is the branch that prevents a silent pass; make the
+        # requirement explicit in the error text as well.
+        if not any(edge.source == node.id and edge.source_port == VERIFY_INCONCLUSIVE_PORT for edge in edges):
+            errors.append(f"node '{node.id}': verify:gate must wire '{VERIFY_INCONCLUSIVE_PORT}' (inconclusive results may not be dropped)")
 
     return errors
 

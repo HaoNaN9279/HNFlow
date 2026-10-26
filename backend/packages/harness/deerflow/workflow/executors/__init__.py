@@ -27,7 +27,9 @@ from .flow import exec_handoff, exec_if, exec_switch, exec_wait  # noqa: E402
 from .human import exec_human_task  # noqa: E402
 from .local_app import app_resource_access, exec_app_collect, exec_app_launch, exec_app_script, exec_app_wait, preview_app_launch, preview_app_script  # noqa: E402
 from .review import exec_human_review  # noqa: E402
+from .spec import exec_spec  # noqa: E402
 from .tool import bash_resource_access, exec_bash, exec_http, exec_log, exec_nested_subworkflow, exec_notify, exec_tool_invoke, tool_invoke_resource_access  # noqa: E402
+from .verify import exec_verify_gate  # noqa: E402
 
 # ── Default registry assembly ────────────────────────────────────────────────
 
@@ -83,6 +85,10 @@ def build_default_registry() -> ExecutorRegistry:
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_SHARED, executor=exec_shared, idempotent=True, description="Shared workspace read / write / append executor (N14)"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_JSON, executor=exec_json, idempotent=True, description="JSON stringify / parse executor"))
     reg.register(ExecutorRegistration(node_type=NodeType.DATA_REGEX, executor=exec_regex, idempotent=True, description="Regex search executor"))
+    # Spec authoring mutates the spec store (a new immutable revision), so it is
+    # not idempotent; it is not crash-confirm gated because it cannot touch the
+    # host or the sandbox filesystem.
+    reg.register(ExecutorRegistration(node_type=NodeType.DATA_SPEC, executor=exec_spec, idempotent=False, description="Formal specification lifecycle executor"))
 
     # ── External tools ────────────────────────────────────────────────────
     reg.register(
@@ -118,6 +124,19 @@ def build_default_registry() -> ExecutorRegistry:
             requires_confirmation=True,
             description="Direct gateway tool invocation executor (crash-confirm gated)",
             resource_access=tool_invoke_resource_access,
+        )
+    )
+
+    # ── Formal verification ───────────────────────────────────────────────
+    # Read-only verifier execution: idempotent, never crash-confirm gated.  The
+    # verifier process itself runs inside the sandbox.
+    reg.register(
+        ExecutorRegistration(
+            node_type=NodeType.VERIFY_GATE,
+            executor=exec_verify_gate,
+            idempotent=True,
+            requires_confirmation=False,
+            description="Three-valued formal verification gate",
         )
     )
 

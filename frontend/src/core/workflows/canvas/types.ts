@@ -26,6 +26,7 @@ export type NodeCategory =
   | "ai"
   | "app"
   | "human"
+  | "verify"
   | "subworkflow";
 
 /** NodeId → canvas coordinates, stored at `metadata.canvas.positions`. */

@@ -27,6 +27,13 @@ from .schema import (
     collect_resolved_groups,
     declared_capability_groups,
 )
+from .spec import SpecificationRevision, SpecLanguage, SpecRef, SpecStatus, content_hash  # noqa: E402
+from .verification import (  # noqa: E402
+    VerificationResult,
+    VerificationStatus,
+    VerifierIssue,
+    normalize_verifier_result,
+)
 from .workflow_io import (
     SCHEMA_VERSION,
     deserialize,
@@ -63,4 +70,13 @@ __all__ = [
     "ResourceAccessor",
     "build_default_registry",
     "crash_confirm_required",
+    "SpecLanguage",
+    "SpecRef",
+    "SpecStatus",
+    "SpecificationRevision",
+    "content_hash",
+    "VerificationResult",
+    "VerificationStatus",
+    "VerifierIssue",
+    "normalize_verifier_result",
 ]

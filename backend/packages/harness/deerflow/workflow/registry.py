@@ -215,6 +215,7 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         (NodeType.DATA_ASSET, "Asset inspect / import / export / convert executor"),
         (NodeType.DATA_JSON, "JSON stringify / parse executor"),
         (NodeType.DATA_REGEX, "Regex search / replace executor"),
+        (NodeType.DATA_SPEC, "Formal specification lifecycle executor"),
         # External tools
         (NodeType.TOOL_BASH, "Shell command executor (sandboxed)"),
         (NodeType.TOOL_HTTP, "HTTP request executor"),
@@ -228,6 +229,8 @@ def _build_placeholder_registry() -> ExecutorRegistry:
         (NodeType.APP_SCRIPT, "Local application script executor"),
         (NodeType.APP_WAIT, "Local application wait executor"),
         (NodeType.APP_COLLECT, "Local application artifact collect executor"),
+        # Formal verification
+        (NodeType.VERIFY_GATE, "Three-valued verification gate executor"),
         # Human interaction
         (NodeType.HUMAN_TASK, "Human task executor (T9)"),
         # Composition

@@ -67,15 +67,18 @@ HNFlow/
 
 HNFlow 的核心新增层，位于 `backend/packages/harness/deerflow/workflow/`。定义层与执行层解耦：数据模型不引入 LangGraph 依赖，保证纯 JSON 可序列化。
 
-- `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`PortType` 含 `data/file/bool/enum/number/array/record`；`Node` 含 `agent_name` 主身份绑定与 `capability_groups`。节点类型含 `data:schema`（静态输出 Schema 提供者）；`data:knowledge` 已删除。
-- `workflow_io.py` — `validate_definition`：无环 DFS、单起点单终点、端口类型匹配、**同一输入端口只允许一条入边**（`flow:end` 与 `flow:loop` 除外）、Schema 节点边校验。`serialize`/`deserialize` 带 schema version 迁移链。
-- `compiler.py` — 定义 → LangGraph。端口绑定 `wf:<node_id>:<port>`；节点生命周期事件；loop/try/handoff 原生展开；共享工作区；自动资源锁；编译缓存。**已删除 fan-in `params.merge`**；AI 节点通过 `input_schema` / `output_schema` 输入解析同一个 `data:schema` 节点，AI→AI 交付边两侧 Schema 节点必须一致。
+- `schema.py` — 节点/边/端口类型定义（Pydantic v2）：`PortType` 含 `data/file/bool/enum/number/array/record/spec`；`Node` 含 `agent_name` 主身份绑定与 `capability_groups`。节点类型含 `data:schema`（静态输出 Schema 提供者）、`data:spec`（规约生命周期）与 `verify:gate`（三值验证门禁）；`data:knowledge` 已删除。
+- `workflow_io.py` — `validate_definition`：无环 DFS、单起点单终点、端口类型匹配、**同一输入端口只允许一条入边**（`flow:end` 与 `flow:loop` 除外）、Schema 节点边校验、`verify:gate` 三分支（`verified` / `failed` / `inconclusive`）必须全部接线。`serialize`/`deserialize` 带 schema version 迁移链。
+- `spec.py` / `verification.py` — 规约引用（`SpecRef`）、不可变规约修订（draft/frozen/superseded）、检查结果三值（verified/failed/inconclusive）与结构化诊断。`spec` 端口只传引用，正文由持久化修订解析。
+- `verifiers/` — `spec_lint`、`mock_verifier`、`dafny_verify`、`tla_model_check`、`lean_check`、`cel_evaluate`（后者当前显式 inconclusive）。验证器 CLI 一律经 sandbox 执行，工具描述符声明只读/确定性，节点不要求 `crash_confirm`。
+- `executors/spec.py` / `executors/verify.py` — `data:spec` 的 create/revise/freeze/resolve/lint；`verify:gate` 经 ToolGateway 调 verifier，按 `status` 路由三值分支，缺失 spec/工具 fail-loud，验证器超时/崩溃/坏输出为 `inconclusive`。
+- `compiler.py` — 定义 → LangGraph。端口绑定 `wf:<node_id>:<port>`；节点生命周期事件；loop/try/handoff 原生展开；共享工作区；自动资源锁；编译缓存；`verify:gate` 三值条件路由与 `wf:<node>:__verification` 保留通道。**已删除 fan-in `params.merge`**；AI 节点通过 `input_schema` / `output_schema` 输入解析同一个 `data:schema` 节点，AI→AI 交付边两侧 Schema 节点必须一致。
 - `worker.py` — 编排入口，复用 RunRecord/checkpointer/run events；`runtime_context.py` 是唯一 compile/runtime context 装配点。
 - `model_profiles/` + `0023_model_profiles` — AI 节点只写 `params.model_profile`；profile 只指向 `config.yaml -> models[]` 实际模型；未知/停用/目标缺失 fail-loud；`/api/model-profiles` CRUD；`GET /api/models` 仍只读。
 - `context_compression.py` — 自动上下文压缩：预算来自所选模型 `context_window`，压缩阈值/尾部保留由内部常量计算；压缩提示词为内置 skill；复用 `DeerFlowSummarizationMiddleware`；所有 `ai:llm_agent` 默认启用，无节点参数、无前端可见消息。
 - `executors/ai.py` — AI 节点：身份 + 能力 + `template_prompt` 任务；无 `instruction`、`autonomy`、`context_policy`、`memory`、`retrieval`、`model_policy`；不做子 Agent 调用；不注入 token 预算；输入/输出 Schema 来自 `__input_schema` / `__output_schema`；`out` 为 AI Result Envelope；保留 token usage/stop_reason/prompt 观测通道。
 - `executors/` — `flow.py` / `data.py` / `asset.py` / `tool.py` / `local_app.py` / `human.py` / `review.py`。`data:file`、`data:asset`、`app:script` 默认启用失败回滚，无节点开关。
-- `prompts.py` — 提示词桶：identity / capability / capability_rules / capability_skills / schema_contract / task / schema。`task` 只来自 `template_prompt`；`schema_contract` 是 HNFlow 内置通用字段规则。已删除 examples/context 桶。
+- `prompts.py` — 提示词桶：identity / capability / capability_rules / capability_skills / specification / schema_contract / task / schema。`task` 只来自 `template_prompt`；`specification` 由 AI 节点的 `spec` 输入解析冻结规约后注入；`schema_contract` 是 HNFlow 内置通用字段规则。已删除 examples/context 桶。
 - `prompt_preview.py` — 静态预览同一套桶；`template_prompt` 是 runtime omitted；`input_schema` / `output_schema` 均来自 `data:schema` 节点。
 - `structured_output.py` — AI Result Schema 解析/校验/修复核心：固定通用字段 + 自定义字段、AI Result Envelope、`[schema.*]` 引用；`INPUT_SCHEMA_PORT="input_schema"`、`OUTPUT_SCHEMA_PORT="output_schema"`。
 - `patterns.py` / `handoff.py` / `definition_evals.py` / `eval_runner.py` / `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `breakpoint.py` / `delegate.py` / `dispatch.py` / `human_task_state.py` — 模板、动态 handoff、评测、回放、运行级预算、成本、幂等、断点、委派与对话调度。运行级 `metadata.budget` 仍保留，AI 节点级 token 预算已删除。

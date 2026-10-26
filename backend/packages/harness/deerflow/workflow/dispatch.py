@@ -430,6 +430,9 @@ async def get_workflow_run(run_id: str, *, runtime: Any) -> dict[str, Any] | Non
     node_timings = await _read_run_node_timings(record, bundle)
     if node_timings is not None:
         summary["node_timings"] = node_timings
+    verification = await _read_run_verification(record, bundle)
+    if verification is not None:
+        summary["verification_summary"] = verification
     return summary
 
 
@@ -555,6 +558,15 @@ async def _read_run_node_timings(record: Any, bundle: dict[str, Any]) -> dict[st
         return None
     node_timings = content.get("node_timings")
     return node_timings if isinstance(node_timings, dict) else None
+
+
+async def _read_run_verification(record: Any, bundle: dict[str, Any]) -> dict[str, Any] | None:
+    """Read the run's additive ``verification_summary`` from ``run.end``."""
+    content = await _read_run_end_content(record, bundle)
+    if content is None:
+        return None
+    summary = content.get("verification_summary")
+    return summary if isinstance(summary, dict) else None
 
 
 async def list_run_events(run_id: str, *, runtime: Any) -> list[dict[str, Any]]:

@@ -26,6 +26,22 @@ describe("fixed node property schema", () => {
     expect(keys.has("require_approval")).toBe(false);
   });
 
+  test("verification nodes expose spec and verifier fields", () => {
+    const gateKeys = new Set(
+      getNodeParamFields("verify:gate").map((field) => field.key),
+    );
+    expect(gateKeys.has("spec_ref")).toBe(true);
+    expect(gateKeys.has("verifier")).toBe(true);
+    expect(gateKeys.has("timeout_seconds")).toBe(true);
+
+    const specKeys = new Set(
+      getNodeParamFields("data:spec").map((field) => field.key),
+    );
+    expect(specKeys.has("operation")).toBe(true);
+    expect(specKeys.has("spec_ref")).toBe(true);
+    expect(specKeys.has("approved_by")).toBe(true);
+  });
+
   test("stale execution knobs are dropped", () => {
     expect(
       sanitizeNodeParams("app:script", {

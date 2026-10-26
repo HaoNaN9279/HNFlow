@@ -164,7 +164,8 @@ class TestMcpProvider:
         builtin = tg._builtin_tools(model_name=None, app_config=None)
 
         assert captured["include_mcp"] is False  # MCP comes from its own provider
-        assert set(builtin) == {"bash"}
+        assert "bash" in builtin
+        assert {"spec_lint", "mock_verifier", "dafny_verify", "tla_model_check", "lean_check", "cel_evaluate"} <= set(builtin)
 
     def test_mcp_name_does_not_shadow_a_builtin_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(tg, "_sandbox_tools", lambda: {})

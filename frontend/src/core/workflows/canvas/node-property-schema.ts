@@ -167,6 +167,23 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
   ],
   "data:json": [select("operation", "jsonOperation", ["stringify", "parse"])],
   "data:regex": [text("pattern", "pattern"), text("group", "regexGroup")],
+  "data:spec": [
+    select("operation", "specOperation", [
+      "create",
+      "revise",
+      "freeze",
+      "resolve",
+      "lint",
+    ]),
+    json("spec_ref", "specRef", { helperKey: "specRefHint" }),
+    select("language", "specLanguage", ["dafny", "lean", "tla", "cel"], {
+      defaultValue: "dafny",
+    }),
+    textarea("content", "specContent"),
+    text("approved_by", "approvedBy"),
+    text("approval_task_id", "approvalTaskId"),
+    json("metadata", "specMetadata", { helperKey: "jsonHint" }),
+  ],
   "tool:bash": [
     textarea("command", "command"),
     json("env", "env", { helperKey: "jsonHint" }),
@@ -206,6 +223,14 @@ const EXTRA_FIELDS: Partial<Record<NodeType, readonly NodeParamField[]>> = {
     json("validation_rules", "validationRules", { helperKey: "jsonHint" }),
   ],
   "human:review": [textarea("instructions", "reviewInstructions")],
+  "verify:gate": [
+    json("spec_ref", "specRef", { helperKey: "specRefHint" }),
+    json("verifier", "verifier", { helperKey: "verifierHint" }),
+    json("target", "verifyTarget", { helperKey: "verifyTargetHint" }),
+    number("timeout_seconds", "timeout", { defaultValue: 120, min: 1 }),
+    textarea("mock_message", "mockMessage"),
+    select("mock_mode", "mockMode", ["verified", "failed", "inconclusive"]),
+  ],
   "app:launch": [
     select("mode", "appLaunchMode", ["launch", "attach"], {
       defaultValue: "launch",

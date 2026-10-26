@@ -88,7 +88,7 @@ const validDefinition = (): WorkflowDefinition => ({
 });
 
 describe("PORT_TYPES", () => {
-  test("is locked to the 7 backend values", () => {
+  test("is locked to the 8 backend values", () => {
     expect(PORT_TYPES).toEqual([
       "data",
       "file",
@@ -97,6 +97,7 @@ describe("PORT_TYPES", () => {
       "number",
       "array",
       "record",
+      "spec",
     ]);
   });
 });

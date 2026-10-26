@@ -48,6 +48,11 @@ class ToolDescriptor:
     provider: str
     description: str | None = None
     idempotent: bool = True
+    #: Verifiers are read-only and must not be crash-confirmed.  The safe
+    #: default for an unknown tool remains True (assume it can mutate).
+    side_effect: bool = True
+    deterministic: bool = False
+    verification: bool = False
 
 
 class ToolProvider(Protocol):
@@ -73,7 +78,21 @@ class StaticToolProvider:
         return self.tools.get(tool_id)
 
     def descriptors(self) -> list[ToolDescriptor]:
-        return [ToolDescriptor(id=name, provider=self.name, description=getattr(tool, "description", None)) for name, tool in sorted(self.tools.items())]
+        out: list[ToolDescriptor] = []
+        for name, tool in sorted(self.tools.items()):
+            metadata = getattr(tool, "metadata", None)
+            metadata = metadata if isinstance(metadata, dict) else {}
+            out.append(
+                ToolDescriptor(
+                    id=name,
+                    provider=self.name,
+                    description=getattr(tool, "description", None),
+                    side_effect=bool(metadata.get("side_effect", True)),
+                    deterministic=bool(metadata.get("deterministic", False)),
+                    verification=bool(metadata.get("verification", False)),
+                )
+            )
+        return out
 
 
 class ToolGateway:
@@ -176,7 +195,14 @@ def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, Base
         include_workspace_tools=True,
         app_config=app_config,
     )
-    return {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}
+    tools = {getattr(t, "name", ""): t for t in available if getattr(t, "name", "")}
+    # Formal-verification tools are builtins with explicit read-only metadata.
+    # They are always registered; a node that references one still fail-louds if
+    # the verifier binary is unavailable at execution time.
+    from deerflow.workflow.verifiers import verifier_tools
+
+    tools.update(verifier_tools())
+    return tools
 
 
 def _mcp_tools() -> dict[str, BaseTool]:

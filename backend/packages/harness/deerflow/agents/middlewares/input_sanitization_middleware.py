@@ -92,6 +92,7 @@ _BLOCKED_TAG_NAMES: frozenset[str] = frozenset(
         # Workflow prompt blocks assembled by workflow/prompts.py.
         "capability_rules",
         "capability_skills",
+        "formal_specification",
         "hnflow_ai_result_schema",
         "slash_skill_activation",
         "mcp_routing_hints",

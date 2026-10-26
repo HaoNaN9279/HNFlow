@@ -36,6 +36,7 @@ from deerflow.workflow.prompts import (
     build_task_layer,
 )
 from deerflow.workflow.registry import WorkflowExecutionError
+from deerflow.workflow.spec import SpecRef, parse_spec_ref
 from deerflow.workflow.structured_output import (
     INPUT_SCHEMA_PARAM,
     OUTPUT_SCHEMA_PARAM,
@@ -164,6 +165,30 @@ def _resolve_node_tools(
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': failed to resolve capability-group tools: {exc}") from exc
 
 
+async def _resolve_specification(runtime: WorkflowRuntime, inputs: dict[str, Any], user_id: Any) -> str | None:
+    """Resolve an optional ``spec`` input into a prompt-ready frozen spec.
+
+    A spec reference on a port is tiny; its content is loaded from the pinned
+    immutable revision.  A missing repo or missing revision fails loudly rather
+    than letting an AI node silently invent the contract.
+    """
+    raw = inputs.get("spec")
+    if raw is None:
+        return None
+    try:
+        ref: SpecRef = parse_spec_ref(raw)
+    except ValueError as exc:
+        raise WorkflowExecutionError(f"ai:llm_agent: invalid spec input: {exc}") from exc
+    repo = (runtime.context or {}).get("spec_repo")
+    if repo is None:
+        raise WorkflowExecutionError("ai:llm_agent: a 'spec' input requires a 'spec_repo' in runtime context")
+    try:
+        row = await repo.resolve_ref(ref, user_id=str(user_id or ""))
+    except Exception as exc:  # noqa: BLE001 - unresolved spec is a configuration error
+        raise WorkflowExecutionError(f"ai:llm_agent: cannot resolve spec {ref.spec_id}@{ref.revision}: {exc}") from exc
+    return f"spec: {ref.spec_id}@{ref.revision} ({row['language']})\n{row['content']}"
+
+
 async def exec_llm_agent(
     runtime: WorkflowRuntime,
     params: dict[str, Any],
@@ -255,6 +280,8 @@ async def exec_llm_agent(
         except ContextCompressionError as exc:
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
 
+    specification = None if is_continue else await _resolve_specification(runtime, inputs, user_id)
+
     session_enabled = params.get("__review_session") is True
     checkpoint_enabled = is_continue or session_enabled
     if is_continue and raw_template_prompt:
@@ -305,6 +332,7 @@ async def exec_llm_agent(
             capability_rules=capability_rules,
             capability_skills=capability_skills,
             schema_contract=schema_contract,
+            specification=specification,
         )
         if output_schema is not None:
             buckets["schema"] = schema_instruction(output_schema)

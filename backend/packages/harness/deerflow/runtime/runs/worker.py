@@ -473,6 +473,9 @@ class RunContext:
     #: User-managed model profiles (AI node -> profile -> actual LLM). ``None``
     #: on the memory backend; compile/runtime fail only when a node references one.
     model_profile_repo: Any | None = field(default=None)
+    #: Formal-specification repository (``data:spec`` / ``verify:gate``).
+    #: ``None`` on the memory backend; nodes that reference a spec fail loudly.
+    spec_repo: Any | None = field(default=None)
 
 
 def _install_runtime_context(config: dict, runtime_context: dict[str, Any]) -> None:

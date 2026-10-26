@@ -431,6 +431,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
                 ScheduledTaskRunRepository,
             )
             from deerflow.persistence.scheduled_tasks import ScheduledTaskRepository
+            from deerflow.persistence.specifications import SpecificationRepository
             from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
             from deerflow.persistence.workflow_folders import WorkflowFolderRepository
             from deerflow.persistence.workflow_undo import WorkflowUndoRepository
@@ -440,6 +441,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_repo = ScheduledTaskRepository(sf)
             app.state.scheduled_task_run_repo = ScheduledTaskRunRepository(sf)
             app.state.model_profile_repo = ModelProfileRepository(sf)
+            app.state.spec_repo = SpecificationRepository(sf)
             app.state.workflow_definition_repo = WorkflowDefinitionRepository(sf)
             app.state.workflow_folder_repo = WorkflowFolderRepository(sf)
             app.state.workflow_workbench_repo = WorkflowWorkbenchRepository(sf)
@@ -459,6 +461,7 @@ async def langgraph_runtime(app: FastAPI, startup_config: AppConfig) -> AsyncGen
             app.state.scheduled_task_repo = None
             app.state.scheduled_task_run_repo = None
             app.state.model_profile_repo = None
+            app.state.spec_repo = None
             app.state.workflow_definition_repo = None
             app.state.workflow_folder_repo = None
             app.state.workflow_workbench_repo = None
@@ -638,6 +641,13 @@ def get_model_profile_repo(request: Request):
     return val
 
 
+def get_spec_repo(request: Request):
+    val = getattr(request.app.state, "spec_repo", None)
+    if val is None:
+        raise HTTPException(status_code=503, detail="Specification repo not available")
+    return val
+
+
 def get_human_task_repo(request: Request):
     val = getattr(request.app.state, "human_task_repo", None)
     if val is None:
@@ -707,6 +717,7 @@ def get_run_context(request: Request) -> RunContext:
         on_run_completed=getattr(request.app.state, "scheduled_task_service", None).handle_run_completion if getattr(request.app.state, "scheduled_task_service", None) is not None else None,
         app_instance_repo=getattr(request.app.state, "app_instance_repo", None),
         model_profile_repo=getattr(request.app.state, "model_profile_repo", None),
+        spec_repo=getattr(request.app.state, "spec_repo", None),
     )
 
 

@@ -158,6 +158,7 @@ describe("applyNodeFormValues", () => {
       "continue_prompt",
       "input_schema",
       "output_schema",
+      "spec",
     ]);
     const applied = applyNodeFormValues(node, parseNodeFormValues(node));
     // Ports stay on the node (they are wired via canvas edges, not form values).

@@ -23,6 +23,7 @@ export const NODE_CATEGORIES = [
   { id: "ai", label: "AI" },
   { id: "app", label: "App" },
   { id: "human", label: "Human" },
+  { id: "verify", label: "Verification" },
   { id: "subworkflow", label: "Subworkflow" },
 ] as const satisfies readonly { id: NodeCategory; label: string }[];
 
@@ -212,6 +213,25 @@ export const NODE_CATALOG = [
     description: "Regular-expression match against the input.",
   },
   {
+    type: "data:spec",
+    label: "Specification",
+    category: "data",
+    defaultInputs: [
+      { name: "in", type: "data", required: false },
+      { name: "content", type: "data", required: false },
+      { name: "language", type: "data", required: false },
+      { name: "spec", type: "spec", required: false },
+    ],
+    defaultOutputs: [
+      { name: "spec", type: "spec", required: false },
+      { name: "out", type: "data", required: false },
+      { name: "issues", type: "array", required: false },
+    ],
+    defaultParams: { operation: "create", language: "dafny" },
+    description:
+      "Create, revise, freeze, resolve or lint an immutable formal specification.",
+  },
+  {
     type: "tool:bash",
     label: "Bash",
     category: "tool",
@@ -293,6 +313,12 @@ export const NODE_CATALOG = [
         required: false,
         description: "Output AI Result Schema from a data:schema node",
       },
+      {
+        name: "spec",
+        type: "spec",
+        required: false,
+        description: "Frozen formal specification (SpecRef) to inject",
+      },
     ],
     defaultOutputs: [{ name: "out", type: "data", required: true }],
     defaultParams: {},
@@ -342,6 +368,25 @@ export const NODE_CATALOG = [
     defaultParams: { instructions: "" },
     description:
       "Approve or reject a result; rejection routes feedback back to an LLM Agent continue target.",
+  },
+  {
+    type: "verify:gate",
+    label: "Verification Gate",
+    category: "verify",
+    defaultInputs: [
+      { name: "implementation", type: "data", required: true },
+      { name: "spec", type: "spec", required: false },
+    ],
+    defaultOutputs: [
+      { name: "status", type: "enum", required: true },
+      { name: "verified", type: "data", required: true },
+      { name: "failed", type: "data", required: true },
+      { name: "inconclusive", type: "data", required: true },
+      { name: "evidence", type: "record", required: false },
+    ],
+    defaultParams: { verifier: { tool: "dafny_verify" }, timeout_seconds: 120 },
+    description:
+      "Verify an implementation against a frozen specification; verified / failed / inconclusive are distinct branches.",
   },
   {
     type: "app:launch",

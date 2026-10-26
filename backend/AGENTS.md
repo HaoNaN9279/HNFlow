@@ -1073,6 +1073,19 @@ availability into its cache key, and `runtime_context.py` injects the user's
 profile map into every workflow run. Actual models remain operator config;
 Gateway exposes them read-only through `/api/models`.
 
+### Formal Verification (`workflow/spec.py`, `verification.py`, `verifiers/`)
+
+Formal verification is a graph-level process, not an AI-internal step.
+
+- **Specifications** are immutable revisions (`workflow_specifications` + `workflow_specification_revisions`; migration `0025_workflow_specifications`). `spec` ports carry a small `SpecRef` (`spec_id`, `revision`, `content_hash`, `language`); the full text is resolved from the exact revision. Freezing records `approved_by` / `approval_task_id`, and only frozen revisions may be referenced by a saved workflow.
+- **`data:spec`** supports `create` / `revise` / `freeze` / `resolve` / `lint`. It never silently writes around the approval fields.
+- **`verify:gate`** is a conditional node with exactly three branch outputs (`verified` / `failed` / `inconclusive`) and a `status` enum. All three branches must be wired; an unwired `inconclusive` is a compile error. Routing reads `wf:<node>:status`, never branch payload truthiness.
+- **Outcome semantics**: missing/unfrozen spec, missing ToolGateway, or an unresolved verifier is fail-loud (run error). A verifier proof failure is `failed`; timeout, abstention, crash, or malformed output is `inconclusive`. A verifier crash is never evidence that the implementation is wrong.
+- **Verifier tools** are builtin read-only tools (`spec_lint`, `dafny_verify`, `tla_model_check`, `lean_check`, `cel_evaluate`, plus `mock_verifier` for tests/authoring). They declare `side_effect=False`, `deterministic=True` and execute their CLI through the sandbox, not the host.
+- **Run summary**: worker folds `wf:<node>:__verification` into the additive `run.end.verification_summary` (`gates_total/passed/failed/inconclusive`, `specs_used`, `verifier_versions`, per-gate detail); `get_workflow_run` surfaces it optionally. No existing `run.end` key changes.
+- **AI binding**: an AI node may bind a `spec` input; the executor resolves the frozen revision and injects it as the `specification` prompt bucket. There is no `spec_ref` prompt magic and no AI-internal repair policy; repair is expressed with `flow:switch` / `flow:loop`.
+- **API**: `/api/specifications` provides list/create/revisions/get/freeze/lint. Tests: `tests/test_workflow_formal_verification.py`; frontend contract tests pin the `spec` port, `data:spec`, and `verify:gate` catalog entries.
+
 ### Workflow AI Node Contract
 
 The current AI node contract is intentionally small:

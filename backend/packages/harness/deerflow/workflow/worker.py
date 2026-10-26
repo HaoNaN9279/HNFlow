@@ -22,6 +22,7 @@ from deerflow.workflow.failure_taxonomy import classify_failure
 from deerflow.workflow.model_profiles import collect_model_profile_ids, model_names
 from deerflow.workflow.runtime_context import build_workflow_compile_context, build_workflow_runtime_context
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
+from deerflow.workflow.verification import VERIFICATION_RESULT_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -552,6 +553,9 @@ def _build_run_end_content(final_output: dict[str, Any], *, status: str, error: 
     node_timings = _aggregate_final_node_durations(final_output)
     if node_timings is not None:
         content["node_timings"] = node_timings
+    verification = _aggregate_final_verification(final_output)
+    if verification is not None:
+        content["verification_summary"] = verification
     content["status"] = status
     if error:
         content["error"] = error
@@ -673,6 +677,44 @@ def _aggregate_final_node_durations(final_output: dict[str, Any]) -> dict[str, A
         return None
     slowest = min(per_node.items(), key=lambda item: (-item[1], item[0]))[0]
     return {"nodes": per_node, "total_ms": round(sum(per_node.values()), 3), "slowest_node": slowest}
+
+
+def _aggregate_final_verification(final_output: dict[str, Any]) -> dict[str, Any] | None:
+    """Collapse per-gate ``wf:<node>:__verification`` state into a run summary."""
+    gates: dict[str, dict[str, Any]] = {}
+    specs: dict[str, dict[str, Any]] = {}
+    versions: dict[str, str] = {}
+    counts = {"verified": 0, "failed": 0, "inconclusive": 0}
+    suffix = f":{VERIFICATION_RESULT_KEY}"
+    for key, value in final_output.items():
+        if not (isinstance(key, str) and key.startswith("wf:") and key.endswith(suffix)):
+            continue
+        if not isinstance(value, dict):
+            continue
+        node_id = key[len("wf:") : -len(suffix)]
+        gates[node_id] = value
+        status = str(value.get("status") or "")
+        if status in counts:
+            counts[status] += 1
+        spec = value.get("spec")
+        if isinstance(spec, dict) and isinstance(spec.get("spec_id"), str):
+            ref_key = f"{spec['spec_id']}@{spec.get('revision')}"
+            specs[ref_key] = spec
+        verifier = value.get("verifier")
+        version = value.get("verifier_version")
+        if isinstance(verifier, str) and isinstance(version, str) and version:
+            versions[verifier] = version
+    if not gates:
+        return None
+    return {
+        "gates_total": len(gates),
+        "gates_passed": counts["verified"],
+        "gates_failed": counts["failed"],
+        "gates_inconclusive": counts["inconclusive"],
+        "specs_used": list(specs.values()),
+        "verifier_versions": versions,
+        "gates": gates,
+    }
 
 
 __all__ = ["run_workflow"]

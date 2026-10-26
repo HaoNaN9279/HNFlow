@@ -12,9 +12,9 @@ import {
 import { NODE_TYPES, type NodeType } from "@/core/workflows/types";
 
 describe("node catalog", () => {
-  test("covers exactly the 32 backend node types", () => {
+  test("covers exactly the 34 backend node types", () => {
     const catalog = getNodeCatalog();
-    expect(catalog).toHaveLength(32);
+    expect(catalog).toHaveLength(34);
     expect(catalog.map((e) => e.type).sort()).toEqual([...NODE_TYPES].sort());
   });
 
@@ -29,6 +29,7 @@ describe("node catalog", () => {
         "ai",
         "app",
         "human",
+        "verify",
         "subworkflow",
       ]).toContain(entry.category);
     }
@@ -38,11 +39,12 @@ describe("node catalog", () => {
     const byCategory = (category: string) =>
       getNodeCatalog().filter((e) => e.category === category).length;
     expect(byCategory("flow")).toBe(9);
-    expect(byCategory("data")).toBe(8);
+    expect(byCategory("data")).toBe(9);
     expect(byCategory("tool")).toBe(5);
     expect(byCategory("ai")).toBe(3);
     expect(byCategory("app")).toBe(4);
     expect(byCategory("human")).toBe(2);
+    expect(byCategory("verify")).toBe(1);
     expect(byCategory("subworkflow")).toBe(1);
   });
 
@@ -95,6 +97,7 @@ describe("node catalog", () => {
       "continue_prompt",
       "input_schema",
       "output_schema",
+      "spec",
     ]);
     expect(ai.defaultInputs[0]).toMatchObject({
       name: "in",
@@ -118,6 +121,11 @@ describe("node catalog", () => {
     expect(ai.defaultInputs[5]).toMatchObject({
       name: "output_schema",
       type: "record",
+      required: false,
+    });
+    expect(ai.defaultInputs[6]).toMatchObject({
+      name: "spec",
+      type: "spec",
       required: false,
     });
   });
@@ -200,8 +208,8 @@ describe("node catalog", () => {
     );
   });
 
-  test("NODE_CATEGORIES lists the 7 categories with labels", () => {
-    expect(NODE_CATEGORIES).toHaveLength(7);
+  test("NODE_CATEGORIES lists the 8 categories with labels", () => {
+    expect(NODE_CATEGORIES).toHaveLength(8);
     expect(NODE_CATEGORIES.map((c) => c.id)).toEqual([
       "flow",
       "data",
@@ -209,6 +217,7 @@ describe("node catalog", () => {
       "ai",
       "app",
       "human",
+      "verify",
       "subworkflow",
     ]);
     for (const category of NODE_CATEGORIES) {

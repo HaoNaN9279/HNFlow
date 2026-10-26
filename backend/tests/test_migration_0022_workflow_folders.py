@@ -45,7 +45,7 @@ async def test_folder_schema_and_workflow_reset(tmp_path: Path) -> None:
             remaining = raw.execute("SELECT COUNT(*) FROM workflow_definitions").fetchone()[0]
         assert "workflow_folders" in tables
         assert "folder_id" in columns
-        assert version == "0024_workspace_resource_changes"
+        assert version == "0025_workflow_specifications"
         assert remaining == 0
     finally:
         await close_engine()

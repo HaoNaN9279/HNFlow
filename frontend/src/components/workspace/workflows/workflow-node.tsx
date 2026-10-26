@@ -41,6 +41,7 @@ const PORT_HANDLE_COLORS: Record<PortType, string> = {
   number: "#0891b2",
   array: "#db2777",
   record: "#65a30d",
+  spec: "#0f766e",
 };
 
 /** One port row.  The handle is centered on this row, never offset by a
