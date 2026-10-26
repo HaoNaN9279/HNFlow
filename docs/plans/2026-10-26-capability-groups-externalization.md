@@ -98,3 +98,4 @@ VibeStack/
 - VibeStack 提交：
   - `3c242c7 feat: move HNFlow capability groups and tools into VibeStack`
   - `87160ad docs: align workspace capability group with project-managed workbenches`
+- HNFlow 提交：`3059bae feat(capabilities): externalize capability groups and tools`
