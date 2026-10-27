@@ -1,66 +1,22 @@
-# lark-cli init image (Pattern A)
+# lark-cli init 镜像（Pattern A）
 
-This image provisions the sandbox `lark-cli` runtime binary into a Kubernetes
-sandbox Pod via an **init container + shared `emptyDir`**, instead of the Gateway
-downloading Linux binaries from GitHub at install time and mounting them via
-hostPath/PVC.
+通过 **init container + 共享 `emptyDir`** 把 `lark-cli` 运行时放进沙箱 Pod，替代 Gateway 在安装时从 GitHub 下载 Linux 二进制。
 
-## What it does
+## 行为
 
-- **Build time** (network available): downloads and SHA-256-verifies the official
-  `larksuite/cli` Linux release binaries and stages the runtime layout under
-  `/opt/lark-cli`:
+构建期（有网络）下载并 SHA-256 校验官方 `larksuite/cli` Linux release，布局：
 
-  ```
-  /opt/lark-cli/bin/lark-cli            # arch-dispatch launcher (uname -m)
-  /opt/lark-cli/linux-amd64/lark-cli
-  /opt/lark-cli/linux-arm64/lark-cli
-  /opt/lark-cli/.deerflow-lark-cli-runtime.json   # {"version": "vX.Y.Z"}
-  ```
-
-  This is byte-identical to what the Gateway writer
-  (`_write_lark_cli_sandbox_launcher`) produces and what
-  `_validate_lark_cli_sandbox_runtime` enforces, so the sandbox PATH contract
-  (`/mnt/integrations/lark-cli/runtime/bin/lark-cli`) is unchanged.
-
-- **Run time**: copies `/opt/lark-cli/.` into the emptyDir mounted at
-  `${LARK_CLI_RUNTIME_DEST}` (default `/mnt/integrations/lark-cli/runtime`) and
-  exits `0`.
-
-## Build
-
-```bash
-docker build -t deer-flow/lark-cli-init:v1.0.65 \
-  --build-arg LARK_CLI_VERSION=v1.0.65 \
-  docker/lark-cli-init
+```text
+/opt/lark-cli/bin/lark-cli                       # 按 uname -m 分派
+/opt/lark-cli/linux-amd64/lark-cli
+/opt/lark-cli/linux-arm64/lark-cli
+/opt/lark-cli/.deerflow-lark-cli-runtime.json    # {"version": "vX.Y.Z"}
 ```
 
-The tag should encode the lark-cli version so it can be bumped independently of
-the upstream `all-in-one-sandbox` sandbox image.
+该布局与 Gateway writer（`_write_lark_cli_sandbox_launcher`）及校验函数（`_validate_lark_cli_sandbox_runtime`）一致，沙箱 PATH 契约保持 `/mnt/integrations/lark-cli/runtime/bin/lark-cli` 不变。
 
-CI publishes multi-arch (`linux/amd64,linux/arm64`) images to
-`ghcr.io/<owner>/deer-flow-lark-cli-init:<lark-cli-version>` via
-`.github/workflows/lark-cli-images.yaml` (run it with a `lark_cli_version` input,
-or push a `lark-cli-v*` tag). This is decoupled from the DeerFlow `v*` release
-because the image tracks the upstream `larksuite/cli` version.
+## 与 Pattern B 的区别
 
-## Wiring it into the provisioner
+Pattern A 把真实二进制和凭据目录挂进沙箱；Pattern B（`lark-cli-broker`）只在 sidecar 持有凭据，沙箱内仅放转发 shim。需要凭据隔离时选 Pattern B。
 
-The init-container runtime path is **opt-in** and off by default. Enable it by
-publishing this image and pointing the provisioner at it:
-
-- Set `LARK_CLI_INIT_IMAGE` on the provisioner service to the published tag
-  (e.g. `deer-flow/lark-cli-init:v1.0.65`). Empty ⇒ legacy hostPath / Gateway
-  download path (no behavior change).
-- When set, the provisioner adds a `lark-cli-runtime` `emptyDir` volume, an
-  `lark-cli-init` init container, and a read-only runtime mount on the sandbox
-  container — and ignores any `/mnt/integrations/lark-cli/runtime` hostPath/PVC
-  extra mount (the init container supersedes it). The per-user `config` / `data`
-  credential mounts are unchanged.
-- The provisioner reports whether it is configured via `GET /api/capabilities`
-  (`{"lark_cli_init_image": true|false}`), which the Gateway surfaces as the
-  Lark integration sandbox-runtime readiness signal in `/api/integrations/lark/status`.
-
-> Opt-in note: the init-container path stays off until `LARK_CLI_INIT_IMAGE` is
-> set on the provisioner, so an unpublished or unconfigured image is a no-op
-> (legacy hostPath / Gateway download path, no behavior change).
+镜像独立发布，详见根 [RELEASING.md](../../RELEASING.md)。

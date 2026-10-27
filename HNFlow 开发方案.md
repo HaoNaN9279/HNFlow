@@ -4,7 +4,7 @@
 >
 > **LangGraph 负责图编排，React Flow 负责编辑体验，HNFlow 自己拥有运行/能力/人工治理面，Agent 通过窄端口接入；DeerFlow 是默认 Agent 适配器，但不是唯一实现。**
 >
-> 当前状态的改造步骤、验收项和进度见 [`docs/plans/2026-10-19-hnflow-architecture-refactor.md`](docs/plans/2026-10-19-hnflow-architecture-refactor.md)。
+> 当前实现状态与约束见 [AGENTS.md](AGENTS.md)、[backend/AGENTS.md](backend/AGENTS.md) 与 [frontend/AGENTS.md](frontend/AGENTS.md)。
 
 ---
 

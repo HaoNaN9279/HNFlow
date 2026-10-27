@@ -1,57 +1,42 @@
-# DeerMem portability demo (other-agent integration)
+# DeerMem 可移植性示例（接入其他 agent）
 
-`backends/deermem/` is a **self-contained, portable** memory backend. It has
-exactly **one** `from deerflow` line -- the ABC contract
-(`from deerflow.agents.memory.manager import MemoryManager` in `deer_mem.py`).
-Everything else is relative imports within the folder. So another agent can
-adopt DeerMem in three steps, with **zero deer-flow code**.
+`backends/deermem/` 是自包含的 memory 后端，只有 **一处** `from deerflow` 导入：`deer_mem.py` 中的 `MemoryManager` ABC。其余均为包内相对导入，因此可以整体搬到其他 agent。
 
-## Three steps
+## 三步接入
 
-1. **Vendor the host contract** -- copy `agents/memory/manager.py` (the `MemoryManager`
-   ABC + `get_memory_manager()` factory + `_scan_backends()`) into your agent's
-   tree. It is small and host-neutral (9 abstract methods + a drop-in factory).
-   (A minimal ABC is enough if you instantiate `DeerMem` directly.)
+1. **内置契约**：把 `agents/memory/manager.py` 中的 `MemoryManager` ABC、`get_memory_manager()` 与 `_scan_backends()` 复制到目标 agent；直接实例化 `DeerMem` 时只需要最小 ABC。
+2. **复制后端**：把 `backends/deermem/` 放入目标 `backends/`，只改 `deer_mem.py` 的一行：
 
-2. **Drop the backend** -- copy the `backends/deermem/` folder into your agent's
-   `backends/`. Change exactly **one line** in `deer_mem.py`:
    ```python
    # from
    from deerflow.agents.memory.manager import MemoryManager
-   # to (your agent's vendored contract)
+   # to
    from <your_agent>.memory.manager import MemoryManager
    ```
-   Nothing else in the folder needs editing (all other imports are relative).
 
-3. **Configure** -- drop a `deermem_manager.yaml` (see below) and call
-   `get_memory_manager()` (or construct `DeerMem(backend_config=...)` directly).
+3. **配置**：提供 `deermem_manager.yaml`，调用 `get_memory_manager()` 或直接 `DeerMem(backend_config=...)`。
 
-DeerMem runs with **zero `backend_config`** (defaults: storage at
-`$DEERMEM_DATA_DIR` / `~/.deermem/`, no LLM so non-LLM ops work; set `model` to
-enable memory extraction). See `deermem_manager.yaml`.
+DeerMem 可在零 `backend_config` 下运行（默认存储 `$DEERMEM_DATA_DIR` 或 `~/.deermem/`，未配置模型时只支持非 LLM 操作）。
 
-## Proof
+## 验证
 
-`tests/test_deermem_self_contained.py::test_portability_vendor_to_other_agent`
-copies `backends/deermem/` into a temp package, repoints the one ABC import to
-a minimal vendored `manager.py`, imports it, and runs an `import_memory` ->
-`get_context` round-trip -- with **zero deer-flow dependency at runtime**.
+`tests/test_deermem_self_contained.py::test_portability_vendor_to_other_agent` 把后端复制到临时包、改指向内置契约、完成 `import_memory → get_context` 往返，运行时零 DeerFlow 依赖。
 
-## Sample config
+## 配置示例
 
-`deermem_manager.yaml`:
+`deermem_manager.yaml`：
+
 ```yaml
 manager_class: deermem
 backend_config:
-  storage_path: ~/.myagent/memory      # empty = $DEERMEM_DATA_DIR / ~/.deermem/
-  model:                               # memory-update LLM (empty = no LLM)
-    provider: openai                   # any langchain init_chat_model provider
+  storage_path: ~/.myagent/memory
+  model:
+    provider: openai
     model: gpt-4o-mini
     api_key: ${OPENAI_API_KEY}
     base_url: https://api.openai.com/v1
   debounce_seconds: 30
   max_facts: 100
-  # callbacks / should_keep_hidden_message: programmatic (cannot come from
-  # YAML); the host factory injects them via from_config. Set programmatically
-  # only if overriding the host defaults.
 ```
+
+`callbacks` / `should_keep_hidden_message` 由宿主 `from_config` 注入，不能来自 YAML。

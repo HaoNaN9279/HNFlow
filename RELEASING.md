@@ -1,156 +1,75 @@
-# Releasing DeerFlow
+# HNFlow 发布流程
 
-DeerFlow releases are **tag-driven**: pushing a `v*` git tag triggers the
-publishing workflows. There is no separate release script that bumps versions —
-the maintainer bumps the version sources, commits, and
-tags. The helper scripts below keep the version sources in lockstep, and CI
-gates the release on them agreeing with the tag.
+发布由 **git tag 驱动**：推送 `v*` tag 触发 GitHub Actions 构建与镜像发布。版本号源必须与 tag 完全一致，否则发布被阻断。
 
-## Version sources
+## 版本源
 
-A release version must appear, identically, in two places:
+| 文件 | 字段 |
+| --- | --- |
+| `backend/pyproject.toml` | `version = "X.Y.Z"` |
+| `frontend/package.json` | `"version": "X.Y.Z"` |
 
-| File                                   | Field                |
-| -------------------------------------- | -------------------- |
-| `backend/pyproject.toml`               | `version = "X.Y.Z"`  |
-| `frontend/package.json`                | `"version": "X.Y.Z"` |
+git tag `vX.Y.Z` 是最终标识。镜像按 tag 打标，不读取上述文件；版本门禁保证两者不漂移。
 
-Plus the git tag `vX.Y.Z` itself, which is the canonical release identifier.
+前端「关于」页在构建时读取 `frontend/package.json`，属于派生消费，不需要单独改。
 
-Container images are tagged from the git tag (not from these files), and the
-version is validated against the tag — so if any source lags the
-tag, the release is blocked (see [Version gate](#version-gate)).
+## 辅助脚本
 
-The frontend's in-app About page (Settings ▸ About) is a *derived* consumer, not
-a third source: it reads `frontend/package.json`'s version at build time, so it
-tracks the table above automatically with no bump needed. Nightly builds override
-it with the nightly string (`<base>-nightly.<YYYYMMDD>-<short_sha>`) via
-the `APP_VERSION` build-arg in `nightly.yaml`, so a nightly image's About page
-distinguishes it from a release.
+```bash
+scripts/bump_version.sh 2.1.0     # 同步所有版本源并自检
+scripts/verify_versions.sh 2.1.0  # 校验所有源等于指定版本
+```
 
-## Helper scripts
+- 不带参数运行 `verify_versions.sh` 时要求所有源彼此相等。
+- 脚本容忍前缀 `v`；不一致时非零退出。
 
-- `scripts/bump_version.sh <version>` — set all fields at once, then
-  self-verify. Tolerates a leading `v` (e.g. `v2.1.0`).
-  ```bash
-  scripts/bump_version.sh 2.1.0
-  ```
-- `scripts/verify_versions.sh [version]` — check that all sources agree. With
-  no argument it requires mutual equality; with an argument it requires every
-  source to equal it. Exits non-zero on mismatch. Run it locally before tagging
-  to catch drift early:
-  ```bash
-  scripts/verify_versions.sh 2.1.0
-  ```
+## 发布步骤
 
-## Release procedure
+1. 同步版本：
 
-1. **Bump the version** across all sources:
    ```bash
    scripts/bump_version.sh 2.1.0
    ```
-2. **Record release notes**: `CHANGELOG.md` is no longer maintained in this
-   repository; release notes are derived from `git log`. Review the commits
-   since the previous tag and include the highlights in the release commit
-   message (and later in the GitHub Release notes).
-3. **Commit** the version changes:
+
+2. 从 `git log` 整理发布说明；仓库不再维护 `CHANGELOG.md`。
+3. 提交版本变更：
+
    ```bash
    git add -A
    git commit -m "release: v2.1.0"
    ```
-4. **Tag and push**:
+
+4. 打 tag 并推送：
+
    ```bash
    git tag v2.1.0
    git push origin v2.1.0
    ```
-   Pushing the tag triggers the publishing workflows (below).
 
-## What CI publishes on a `v*` tag
+推送后触发 `.github/workflows/container.yaml`，构建并推送后端/前端镜像。
 
-- `.github/workflows/container.yaml` — builds and pushes `backend` and
-  `frontend` images to `ghcr.io`, tagged with the release version (and `latest`
-  on the default branch).
+## 版本门禁
 
-## Nightly builds
+发布工作流第一步调用 `.github/workflows/verify-versions.yml`，执行 `scripts/verify_versions.sh` 对比 tag（去掉 `v`）。任一版本源不匹配则门禁失败，所有发布任务跳过。
 
-`.github/workflows/nightly.yaml` runs on a schedule (and `workflow_dispatch`)
-to publish the same two images from unreleased `main`. It is
-**not** gated by the version check (there is no `v*` tag) and it does **not**
-touch the `latest` tag, which stays pinned to the last `v*` release. Every job
-is gated on `github.repository == 'bytedance/deer-flow'` (legacy upstream
-constraint), so it only runs on
-the upstream repo - a scheduled run or manual dispatch on a fork skips all jobs.
+预发布 tag（如 `v2.1.0-rc1`）走同一流程，版本源必须等于完整字符串。
 
-Artifacts (under the running repo's owner, where `<date>` is `YYYYMMDD`):
-
-- Images: `ghcr.io/<owner>/deer-flow-{backend,frontend}:nightly`
-  (rolling, overwritten each run) and `:nightly-<date>` (pinned to a day, but
-  mutable within it - a same-day re-dispatch overwrites it). For a truly
-  immutable pin, use `:sha-<short>`.
-
-## lark-cli sandbox images
-
-The two optional Lark sandbox runtime images — `lark-cli-init` (Pattern A) and
-`lark-cli-broker` (Pattern B) — are **not** part of the `v*` release. They track
-the upstream `larksuite/cli` version, so they publish independently via
-`.github/workflows/lark-cli-images.yaml`:
-
-- Trigger with `workflow_dispatch` (a `lark_cli_version` input, e.g. `v1.0.65`)
-  or by pushing a `lark-cli-v*` tag (the version is read from after the prefix).
-- Builds multi-arch (`linux/amd64,linux/arm64`) and pushes
-  `ghcr.io/<owner>/deer-flow-{lark-cli-init,lark-cli-broker}:<lark-cli-version>`.
-- Gated on `github.repository == 'bytedance/deer-flow'` (legacy upstream
-  constraint); not tied to the
-  `verify-versions` gate (its version is the lark-cli release, not the DeerFlow
-  release), and it never touches `latest`.
-
-## Version gate
-
-The publishing workflow calls `.github/workflows/verify-versions.yml` as its
-first job. It runs `scripts/verify_versions.sh` against the tag (minus the
-`v`). If any version source doesn't match the tag, the verify job
-fails and **all** publish jobs are skipped — no images.
-
-When it fails, the job annotation names the offending file and suggests the
-fix:
-
-```
-::error::frontend/package.json is '2.0.0' but expected '2.1.0'.
-Tip: run scripts/bump_version.sh 2.1.0 to align all sources.
-```
-
-## Pre-releases (RCs)
-
-Pre-release tags like `v2.1.0-rc1` are valid `v*` tags and trigger the same
-workflows. The version sources must equal the full pre-release string
-(`2.1.0-rc1`) — the gate compares exact strings. Use the same procedure with
-the rc version:
+## 门禁失败恢复
 
 ```bash
-scripts/bump_version.sh 2.1.0-rc1
-# record release notes in the commit, tag v2.1.0-rc1, push
+scripts/bump_version.sh <version>
+git commit ...
+git tag -d v2.1.0
+git tag v2.1.0
+git push origin :refs/tags/v2.1.0
+git push origin v2.1.0
 ```
 
-## Recovering from a failed gate
+门禁失败时不会发布任何产物，重新打 tag 是安全的。
 
-If the gate failed because a source was forgotten:
+## Nightly 与 Lark 镜像
 
-1. Run `scripts/bump_version.sh <version>` to align the sources.
-2. Amend or add a follow-up commit.
-3. Delete and re-create the tag, then push it:
-   ```bash
-   git tag -d v2.1.0
-   git tag v2.1.0
-   git push origin :refs/tags/v2.1.0
-   git push origin v2.1.0
-   ```
+- `.github/workflows/nightly.yaml` 从 `main` 发布 nightly 镜像，不受 `v*` 门禁约束，不覆盖 `latest`。
+- `.github/workflows/lark-cli-images.yaml` 独立发布 `lark-cli-init` / `lark-cli-broker` 镜像，版本跟随上游 `larksuite/cli`。
 
-Re-pushing the tag re-triggers the workflows. Because the gate blocks **all**
-artifacts when it fails, nothing was published under the bad tag, so re-tagging
-is safe — no images were pushed to overwrite.
-
-## Post-release
-
-Optionally draft a **GitHub Release** from the tag. `CHANGELOG.md` is no
-longer maintained in this repository; compose the release notes from `git log`
-between the tag and the previous one.
+两者目前仍保留上游仓库门禁（`github.repository == 'bytedance/deer-flow'`），迁移到 HNFlow 仓库时需同步调整。

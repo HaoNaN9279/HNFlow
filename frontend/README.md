@@ -1,153 +1,83 @@
-# HNFlow Frontend
+# HNFlow 前端
 
-Like the original HNFlow 1.0, we would love to give the community a minimalistic and easy-to-use web interface with a more modern and flexible architecture.
+Next.js App Router 界面：工作流画布、项目工作台、全局执行监视、Lead Agent 对话、模型档案、能力组目录、定时任务与工具页。
 
-## Tech Stack
+开发约束与架构细节见 [AGENTS.md](AGENTS.md)。
 
-- **Framework**: [Next.js 16](https://nextjs.org/) with [App Router](https://nextjs.org/docs/app)
-- **UI**: [React 19](https://react.dev/), [Tailwind CSS 4](https://tailwindcss.com/), [Shadcn UI](https://ui.shadcn.com/), [MagicUI](https://magicui.design/) and [React Bits](https://reactbits.dev/)
-- **AI Integration**: [LangGraph SDK](https://www.npmjs.com/package/@langchain/langgraph-sdk) and [Vercel AI Elements](https://vercel.com/ai-sdk/ai-elements)
+## 技术栈
 
-## Quick Start
+- Next.js 16（App Router）、React 19、TypeScript 5.8
+- Tailwind CSS 4、Shadcn UI、MagicUI、React Bits、Vercel AI Elements
+- LangGraph SDK、LangChain Core、TanStack Query
+- 测试：Rstest（单元）、Playwright（E2E）
 
-### Prerequisites
+## 环境要求
 
 - Node.js 22+
 - pnpm 10.26.2+
 
-### Installation
+## 安装与开发
 
 ```bash
-# Install dependencies
 pnpm install
-
-# Copy environment variables
 cp .env.example .env
-# Edit .env with your configuration
-```
-
-### Development
-
-```bash
-# Start development server
 pnpm dev
-
-# The app will be available at http://localhost:3000
 ```
 
-### Build & Test
+打开 <http://localhost:3000>。标准开发栈从仓库根执行 `make dev`，前端经 nginx（2026）访问后端。
+
+## 命令
+
+| 命令 | 说明 |
+| --- | --- |
+| `pnpm dev` | Turbopack 开发服务器 |
+| `pnpm build` | 生产构建 |
+| `pnpm start` | 启动生产服务器 |
+| `pnpm check` | ESLint + TypeScript 检查（提交前必跑） |
+| `pnpm lint` / `lint:fix` | 仅 ESLint |
+| `pnpm format` / `format:write` | Prettier 检查 / 修复 |
+| `pnpm test` | Rstest 单元测试 |
+| `pnpm test:e2e` | Playwright E2E（Chromium） |
+| `pnpm typecheck` | `tsc --noEmit` |
+| `pnpm perf:check` | 路由资源预算检查 |
+
+首次 E2E 需安装浏览器：
 
 ```bash
-# Type check
-pnpm typecheck
-
-# Check formatting
-pnpm format
-
-# Apply formatting
-pnpm format:write
-
-# Lint
-pnpm lint
-
-# Run unit tests
-pnpm test
-
-# One-time setup: install Playwright Chromium browser
 pnpm exec playwright install chromium
-
-# Run E2E tests (builds and starts production server automatically)
-pnpm test:e2e
-
-# Build for production
-pnpm build
-
-# Start production server
-pnpm start
 ```
 
-## Site Map
+## 环境变量
 
-```
-├── /                    # Landing page
-├── /chats               # Chat list
-├── /chats/new           # New chat page
-└── /chats/[thread_id]   # A specific chat page
-```
+标准 `make dev` / Docker 流程无需设置，Nginx 代理 `/api/langgraph/*` 与 `/api/*`：
 
-## Configuration
-
-### Environment Variables
-
-Key environment variables (see `.env.example` for full list):
-
-```bash
-# Backend API URL (optional, uses local Next.js/nginx proxy by default)
-NEXT_PUBLIC_BACKEND_BASE_URL="http://localhost:8001"
-# LangGraph-compatible API URL (optional, uses local Next.js/nginx proxy by default)
-NEXT_PUBLIC_LANGGRAPH_BASE_URL="http://localhost:8001/api"
+```text
+NEXT_PUBLIC_BACKEND_BASE_URL=http://localhost:8001
+NEXT_PUBLIC_LANGGRAPH_BASE_URL=http://localhost:8001/api
 ```
 
-## Project Structure
+非 localhost 开发需把主机加入 `DEER_FLOW_DEV_ALLOWED_ORIGINS`（逗号分隔），否则 HMR/字体等 `/_next/*` 请求被 403。
 
-```
-tests/
-├── e2e/                    # E2E tests (Playwright, Chromium, mocked backend)
-└── unit/                   # Unit tests (mirrors src/ layout)
-src/
-├── app/                    # Next.js App Router pages
-│   ├── api/                # API routes
-│   ├── showcase/           # Allowlisted public read-only demos
-│   ├── workspace/          # Main workspace pages
-│   └── mock/               # Mock/demo pages
-├── components/             # React components
-│   ├── ui/                 # Reusable UI components
-│   ├── workspace/          # Workspace-specific components
-│   ├── landing/            # Landing page components
-│   └── ai-elements/        # AI-related UI elements
-├── core/                   # Core business logic
-│   ├── api/                # API client & data fetching
-│   ├── artifacts/          # Artifact management
-│   ├── config/              # App configuration
-│   ├── i18n/               # Internationalization
-│   ├── mcp/                # MCP integration
-│   ├── messages/           # Message handling
-│   ├── models/             # Data models & types
-│   ├── settings/           # User settings
-│   ├── skills/             # Skills system
-│   ├── threads/            # Thread management
-│   ├── todos/              # Todo system
-│   └── utils/              # Utility functions
-├── hooks/                  # Custom React hooks
-├── lib/                    # Shared libraries & utilities
-├── server/                 # Server-side code
-│   └── better-auth/        # Authentication setup and session helpers
-└── styles/                 # Global styles
-```
+## 主要路由
 
-## Scripts
+| 路由 | 页面 |
+| --- | --- |
+| `/` | 重定向到 `/workspace/workflows` |
+| `/workspace/workflows` | 工作流目录 |
+| `/workspace/workflows/[id]` | 工作流画布编辑器 |
+| `/workspace/projects` | 项目列表 |
+| `/workspace/projects/[project_id]/workbenches` | 项目工作台列表 |
+| `/workspace/projects/[project_id]/workbenches/[workbench_id]` | 执行工作台 |
+| `/workspace/capability-groups` | VibeStack 能力组只读目录 |
+| `/workspace/model-profiles` | 模型档案 |
+| `/workspace/scheduled-tasks` | 定时任务 |
+| `/workspace/tools` | 工具目录 |
+| `/[lang]/docs/...` | 应用内文档 |
 
-| Command             | Description                             |
-| ------------------- | --------------------------------------- |
-| `pnpm dev`          | Start development server with Turbopack |
-| `pnpm build`        | Build for production                    |
-| `pnpm start`        | Start production server                 |
-| `pnpm test`         | Run unit tests with Rstest              |
-| `pnpm test:e2e`     | Run E2E tests with Playwright           |
-| `pnpm format`       | Check formatting with Prettier          |
-| `pnpm format:write` | Apply formatting with Prettier          |
-| `pnpm lint`         | Run ESLint                              |
-| `pnpm lint:fix`     | Fix ESLint issues                       |
-| `pnpm typecheck`    | Run TypeScript type checking            |
-| `pnpm check`        | Run both lint and typecheck             |
+Lead Agent 无独立路由，常驻于 Workspace 布局底部；右侧全局执行监视同样挂载在布局层。
 
-## Development Notes
+## 测试
 
-- Uses pnpm workspaces (see `packageManager` in package.json)
-- Turbopack enabled by default in development for faster builds
-- Environment validation can be skipped with `SKIP_ENV_VALIDATION=1` (useful for Docker)
-- Backend API URLs are optional; nginx proxy is used by default in development
-
-## License
-
-MIT License. See [LICENSE](../LICENSE) for details.
+- 单元测试在 `tests/unit/`，镜像 `src/` 结构；纯逻辑用 node 环境，渲染/DOM 用 `*.dom.test.*`。
+- E2E 在 `tests/e2e/`，通过 `page.route()` mock 后端。
+- 提交前运行 `pnpm check`。

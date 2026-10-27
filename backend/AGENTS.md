@@ -1,1684 +1,329 @@
-# AGENTS.md
+# AGENTS.md —— 后端
 
-This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth for this module.
+本文件是后端模块的唯一开发指引。用户安装见根 [Install.md](../Install.md)，产品概览见根 [README.md](../README.md)。
 
-## Project Overview
+## 1. 分层与边界
 
-DeerFlow is a LangGraph-based AI super agent system with a full-stack architecture. The backend provides a "super agent" with sandbox execution, persistent memory, subagent delegation, and extensible tool integration - all operating in per-thread isolated environments.
+| 层 | 目录 | 导入前缀 | 规则 |
+| --- | --- | --- | --- |
+| 扩展契约 | `packages/extension-api/` | `deerflow_extension_api.*` | 不得导入 `deerflow` |
+| Harness | `packages/harness/deerflow/` | `deerflow.*` | 不得导入 `app.*` |
+| Gateway | `app/` | `app.*` | 可导入 harness |
 
-**Architecture**:
-- **Gateway API** (port 8001): REST API plus embedded LangGraph-compatible agent runtime
-- **Frontend** (port 3000): Next.js web interface
-- **Nginx** (port 2026): Unified reverse proxy entry point
+边界测试：`tests/test_harness_boundary.py`。`deerflow.agents` / `deerflow.subagents` 包根使用惰性导入，内部模块应导入具体子模块，避免拉起重图。
 
-**Runtime**:
-- `make dev`, Docker dev, and production all run the agent runtime in Gateway via `RunManager` + `run_agent()` + `StreamBridge` (`packages/harness/deerflow/runtime/`). Nginx exposes that runtime at `/api/langgraph/*` and rewrites it to Gateway's native `/api/*` routers.
-- Gateway streams `write_file` and `str_replace` argument deltas in bounded batches when clients also subscribe to `values`; messages-only consumers retain the original per-chunk contract, while `values` preserves the complete tool call.
-- With `stream_subgraphs`, subgraph frames keep their namespace in the SSE event name (`values|<ns>`, LangGraph Platform style) instead of impersonating root frames — a delegated subagent inherits the parent checkpoint namespace, so publishing its `values` snapshot as bare `values` replaces the whole thread view in SDK clients (#4399). Root-only consumers (file-tool chunk batcher, subagent event persistence, LLM error-fallback detection) ignore namespaced frames. The web frontend does not request subgraph streaming; subtask progress rides root-namespace `task_*` custom events.
-- Background subagent identity is deliberately split: the provider `tool_call_id` remains the correlation key for `ToolMessage`, `task_*` SSE events, persisted lifecycle events, frontend cards, and the public `ExtensionData.scope_id` contract (stored as `SubagentResult.external_task_id`), while `SubagentExecutor.execute_async()` generates a full server-side `execution_id` for `SubagentResult.task_id`, the process-wide registry, polling, cancellation, timeout handling, and cleanup. Provider IDs are not globally unique across parent runs, so they must never become registry ownership keys; scheduler closures retain their own `SubagentResult` rather than resolving ownership again through the mutable registry. Terminal subagent token usage travels in the current run's `ToolMessage.additional_kwargs` and is attributed from message state, never through a process-global provider-ID cache.
-- Scheduled-task executions must reuse that same Gateway run lifecycle. The scheduler may decide *when* work runs, but it must dispatch through the existing run path rather than introducing a parallel execution stack.
-- Long-running MCP work uses a separate durable task runtime rather than keeping remote task IDs or status polling inside the Agent loop. `McpTaskService` claims due rows with leases, resolves a protocol-specific `McpTaskDriver`, and writes normalized snapshots back to `mcp_tasks`; expired leases are the restart-recovery mechanism, and a result returned after expiry must be discarded even when the owner token still matches. The database is the source of truth. `ThreadState` may receive only a bounded projection in later integration work, never the sole recoverable copy.
-- Scheduled-task dispatch enforces "at most one active run per task when `overlap_policy=skip`" at the DB layer via the partial unique index `uq_scheduled_task_run_active` (`scheduled_task_runs.task_id WHERE status IN ('queued','running')`). `ScheduledTaskService.dispatch_task`'s `has_active_runs` check is a non-atomic fast path (its own session, separated from the `create()` insert by `await` points), so two concurrent dispatches — a manual `POST /scheduled-tasks/{id}/trigger` racing the poller, a double-click, or a client retry — can both pass it; the index is the atomic arbiter, and the losing `create` surfaces as `ActiveScheduledRunConflict` (translated from `IntegrityError` in the repository) and collapses to the same outcome as the fast path (manual → 409 conflict, scheduled → a `"skipped"` tombstone). The scheduled-skip tombstone is created directly as terminal `"skipped"` (not a transient `"queued"`) so it never occupies the active slot the pre-existing run still holds. Sibling of the `runs` table's `uq_runs_thread_active` (PR #4003), which keys on `thread_id` and so does not cover the default `fresh_thread_per_run` context where every dispatch gets a new thread. Index is status-only, not `overlap_policy`-conditional (the policy is fixed to `"skip"` in the MVP).
-
-**Project Structure**:
-```
-deer-flow/
-├── Makefile                    # Root commands (check, install, dev, stop)
-├── config.yaml                 # Main application configuration
-├── extensions_config.json      # MCP servers and skills configuration
-├── backend/                    # Backend application (this directory)
-│   ├── Makefile               # Backend-only commands (dev, gateway, lint)
-│   ├── langgraph.json         # LangGraph Studio graph configuration
-│   ├── packages/
-│   │   ├── extension-api/     # public, host-independent extension contracts (import: deerflow_extension_api.*)
-│   │   └── harness/           # deerflow-harness package (import: deerflow.*)
-│   │       ├── pyproject.toml
-│   │       └── deerflow/
-│   │           ├── agents/            # LangGraph agent system
-│   │           │   ├── lead_agent/    # Main agent (factory + system prompt)
-│   │           │   ├── middlewares/   # middleware components (see Middleware Chain section)
-│   │           │   ├── memory/        # Memory extraction, queue, prompts
-│   │           │   └── thread_state.py # ThreadState schema
-│   │           ├── sandbox/           # Sandbox execution system
-│   │           │   ├── local/         # Local filesystem provider
-│   │           │   ├── sandbox.py     # Abstract Sandbox interface
-│   │           │   ├── tools.py       # bash, ls, read/write/str_replace
-│   │           │   └── middleware.py  # Sandbox lifecycle management
-│   │           ├── subagents/         # Subagent delegation system
-│   │           │   ├── builtins/      # general-purpose, bash agents
-│   │           │   ├── executor.py    # Background execution engine
-│   │           │   └── registry.py    # Agent registry
-│   │           ├── tools/builtins/    # Built-in tools (present_files, ask_clarification, view_image, review_skill_package)
-│   │           ├── mcp/               # MCP integration (tools, cache, client)
-│   │           ├── extensions/        # Python plugin loader, registry, placement, and isolation
-│   │           ├── models/            # Model factory with thinking/vision support
-│   │           ├── skills/            # Skills discovery, loading, parsing
-│   │           ├── config/            # Configuration system (app, model, sandbox, tool, etc.)
-│   │           ├── community/         # Community tools (search/fetch/scrape, image search, AIO sandbox)
-│   │           ├── reflection/        # Dynamic module loading (resolve_variable, resolve_class)
-│   │           ├── utils/             # Utilities (network, readability)
-│   │           └── client.py          # Embedded Python client (DeerFlowClient)
-│   ├── app/                   # Application layer (import: app.*)
-│   │   └── gateway/           # FastAPI Gateway API
-│   │       ├── app.py         # FastAPI application
-│   │   └── routers/       # FastAPI route modules (models, mcp, memory, skills, uploads, threads, artifacts, agents, workflows)
-│   ├── tests/                 # Test suite
-│   └── docs/                  # Documentation
-├── frontend/                   # Next.js frontend application
-└── skills/                     # Agent skills directory
-    ├── public/                # Public skills (committed)
-    └── custom/                # Custom skills (gitignored)
-```
-
-## Important Development Guidelines
-
-### Documentation Update Policy
-**CRITICAL: Always update README.md and AGENTS.md after every code change**
-
-When making code changes, you MUST update the relevant documentation:
-- Update `README.md` for user-facing changes (features, setup, usage instructions)
-- Update `AGENTS.md` for development changes (architecture, commands, workflows, internal systems).
-- Keep documentation synchronized with the codebase at all times
-- Ensure accuracy and timeliness of all documentation
-
-## Commands
-
-**Root directory** (for full application):
-```bash
-make check      # Check system requirements
-make install    # Install all dependencies (frontend + backend)
-make detect-thread-boundaries  # Inventory backend executor/thread/event-loop boundaries
-make dev        # Start all services (Gateway + Frontend + Nginx), with config.yaml preflight
-make start      # Start production services locally
-make stop       # Stop all services
-```
-
-**Backend directory** (for backend development only):
-```bash
-make install            # Install backend dependencies
-make dev                # Run Gateway API with runtime-safe reload (port 8001)
-make gateway            # Run Gateway API only (port 8001)
-make test               # Run offline backend tests (excludes live external-API tests)
-make test-live          # Explicitly run live DeerFlowClient tests with real APIs
-make test-blocking-io   # Run strict Blockbuster runtime gate on tests/blocking_io/
-make lint               # Lint with ruff
-make format             # Format code with ruff
-make migrate-rev MSG="..."  # Autogenerate a new alembic revision (see Schema Migrations section)
-```
-
-The backend `make dev` target pre-creates and excludes `DEER_FLOW_HOME`
-(default: `../hnflow-data`) and `backend/sandbox` from Uvicorn's reload
-watcher. Do not replace it with a bare `uvicorn --reload`: agent tasks write
-Python and other runtime files below `DEER_FLOW_HOME`, which would otherwise
-restart the Gateway during an active run.
-
-The root `detect-thread-boundaries` target statically inventories execution
-boundaries under `backend/app/` and `backend/packages/harness/deerflow/`. It
-prints a concise count by execution domain and writes the complete, versioned
-JSON payload to `.deer-flow/thread-boundary-inventory.json`. Every finding has
-a stable `boundary_kind`: `asyncio_default_executor`, `dedicated_executor`,
-`anyio_worker_thread`, `direct_event_loop_blocking`, `separate_event_loop`, or
-`unresolved_dynamic_boundary`.
-
-The AST inventory covers `asyncio.to_thread`, default and explicit
-`run_in_executor` submissions, imported aliases, simple same-module helper
-wrappers (after pre-registering dedicated executor targets), `set_default_executor`,
-`ThreadPoolExecutor` construction/submission,
-additional event loops, synchronous LangChain tools, and direct
-`BaseChatModel` fallback inheritance. It remains read-only and does not alter
-executor routing or sizing.
-
-To supplement the static scan with configured runtime types, run:
+## 2. 命令
 
 ```bash
-python scripts/detect_thread_boundaries.py \
-  --runtime-config config.yaml \
-  --json-output .deer-flow/thread-boundary-inventory.json
+make install                # 安装依赖
+make dev                    # Gateway（8001，runtime-safe reload）
+make gateway                # 仅 Gateway
+make test                   # 离线测试
+make test-live              # 显式 live 测试
+make test-blocking-io       # Blockbuster 运行时门禁
+make lint / format          # ruff
+make migrate-rev MSG="..."  # 生成 Alembic revision
 ```
 
-Runtime inspection imports configured tool objects and model classes so it can
-record concrete tool names/types/modules, sync functions, async coroutines,
-and `_agenerate`/`_astream` ownership. It does not invoke tools, instantiate
-models, or call external services; import failures remain in the JSON as
-`unresolved_dynamic_boundary` records. The detector implementation and focused
-coverage live in `tests/support/detectors/thread_boundaries.py` and
-`tests/test_detect_thread_boundaries.py`.
+不要用裸 `uvicorn --reload`：`HNFLOW_HOME` 下的运行时写入会触发重启，中断正在执行的 run。
 
-The `detect-blocking-io` target parses `app/`, `packages/harness/deerflow/`,
-and `scripts/` with AST. By default it reports only blocking IO candidates that
-are inside async code, reachable from async code in the same file, or reachable
-from sync-only `AgentMiddleware` before/after hooks that LangGraph can execute
-on the async graph path. It prints a concise summary and writes complete JSON
-findings to `.deer-flow/blocking-io-findings.json` at the repository root
-(both `make detect-blocking-io` from the repo root and `cd backend && make
-detect-blocking-io` resolve to the same repo-root path). JSON findings include
-`priority`, `location`, `blocking_call`, `event_loop_exposure`, `reason`, and
-`code` for model-assisted or manual review. `priority` is a deterministic
-review ordering from operation type, not proof of a bug. Bare-name same-file
-calls are resolved by function name, so duplicate helper names in one file can
-conservatively over-report async reachability. The call graph also resolves
-multi-hop `self.`/`cls.` attribute chains (`self.store.flush()`) and local
-variables or parameters traced back — within the same function only — to a
-`self.`/`cls.` attribute (`store = self.store; store.flush()`); both fall back
-to the same bare-method-name resolution as an unresolvable receiver, so they
-share its over-report risk rather than adding a new kind. Deeper cross-function
-or cross-module aliasing is out of scope and stays an unreported false
-negative.
+根目录另有 `make detect-thread-boundaries` / `make detect-blocking-io`，输出写入 `.deer-flow/*.json`。
 
-That same-function alias tracing is deliberately narrower than the symbolic
-names `dotted_name()` builds for blocking-call pattern matching elsewhere in
-this module: receiver/alias extraction uses a restricted extractor that only
-recognizes `Name`/`Attribute` chains, so a `Call` or `Subscript` result (e.g.
-`factory().flush()`, or `client = factory(); client.flush()` /
-`client = clients[0]; client.flush()`) is never treated as inheriting its
-base's alias-worthiness — including when the unsupported node is buried
-deeper in the chain (`factory().client.flush()`, `clients[0].client.flush()`):
-an unrecognized shape anywhere in the chain makes the whole receiver
-unresolved, it never falls back to just the chain's trailing attribute name,
-or that name alone could still collide with an unrelated traced parameter or
-local alias. Reassigning a traced name to a non-traceable value (anything
-other than a `self.`/`cls.` attribute or an already-traced name) kills its
-alias instead of leaving it traceable, so a stale alias from an earlier
-assignment cannot keep exposing an unrelated same-named method after the
-variable is reassigned to something else; the assignment's right-hand side is
-always analyzed against the alias state as it stood *before* this kill-or-add
-update, matching Python's own evaluate-then-bind order, so
-`client = client.flush()` still resolves that call against `client`'s prior
-(pre-reassignment) alias instead of the state after it's gone. `if`/`else`
-branches get isolated alias state — an alias added in one branch cannot leak
-into the other — and the state after the whole `if` is the union of what each
-branch produced (a conservative may-alias join), so the result no longer
-depends on which branch is textually `body` vs. `orelse`. This branch
-isolation is deliberately scoped to `ast.If` only; `ast.Try`/`ast.Match` have
-different, more complex control-flow semantics and keep the older unisolated
-traversal. Finally, a function's decorators and parameter defaults are
-analyzed in the *enclosing* scope rather than the new function's own, and
-parameter/return annotations get the same enclosing-scope treatment unless
-the module postpones annotation evaluation (`from __future__ import
-annotations`), in which case they are skipped entirely, in either scope —
-those expressions run at definition time, before the function has ever been
-called (or, when postponed, never run at all), so a call there is never
-attributed to the function being defined (it moves to whatever scope actually
-contains the `def`, e.g. the enclosing function, or disappears if that scope
-is module/class level and therefore never async-reachable). PEP 695
-type-parameter bounds are not visited in either scope: CPython evaluates each
-one lazily, in its own hidden function, only if something like `T.__bound__`
-is actually accessed, never as part of running the `def` statement itself.
-A `lambda`'s body and a bare generator expression's element/filters/later
-`for` clauses are excluded from traversal ONLY while walking another
-function's own definition-time expressions (decorators, parameter defaults/
-annotations, return annotation): there, we know structurally that the
-enclosing `def` statement is executing right now, and neither a lambda body
-nor a generator's element runs just because the lambda/generator object is
-created — only a lambda's own parameter defaults and a generator's
-outermost iterable are genuinely eager at that moment. This exclusion is
-absolute and has no exceptions: even a lambda that is immediately invoked at
-its own definition site (`(lambda: ...)()`), or a generator passed directly
-to an eager-consuming builtin, is still excluded when it appears inside
-another function's decorator/default/annotation — a narrow, intentional
-limitation given how rarely a definition-time expression contains an
-executed call at all, preferred over special-casing specific shapes there.
+## 3. 运行时总览
 
-Everywhere else — module level, class bodies, and ordinary function-body
-statements — a lambda body or generator expression's element is scanned
-unconditionally, the same conservative, over-report-rather-than-infer stance
-this file already takes for reachability elsewhere (the `ast.If` may-alias
-union, the bare-name call-graph resolution). This file does not attempt to
-distinguish a lambda that is invoked immediately, invoked later through a
-stored variable, passed as a callback, or never called at all, nor a
-generator that is consumed by an eager builtin (`list`, `sum`, `any`, etc.),
-wrapped in another lazy iterator (`map`, `filter`), or never consumed —
-telling these apart in the general case would mean inferring evaluation
-order and consumption across arbitrary code rather than reading a fixed,
-structural fact, so none of them are special-cased; all are scanned the
-same way. This is intentionally informational and is not run from CI in
-this round.
+- Gateway 启动时装配 `RunManager` + `run_agent()` + `StreamBridge`；Nginx 把 `/api/langgraph/*` 重写为 Gateway 原生 `/api/*`。
+- 单机单 worker 为默认部署（`GATEWAY_WORKERS=1`），SSE 由进程内 bridge 承担。多 worker 需要 `run_events.backend: db` 与 Redis stream bridge，启动门禁会拒绝不满足的组合。
+- 支持的流模式：`values`、`messages-tuple`、`updates`、`debug`、`tasks`、`checkpoints`、`custom`；`messages` / `events` 等未支持模式在 HTTP 前拒绝。
+- `Last-Event-ID` 早于保留水位或订阅者落后时，bridge 发送无 id 的 `gap` 控制帧；前端重载持久历史后从服务端保留尾部重新加入，run 不因 gap 结束。
+- 调度任务必须复用同一 run 生命周期，不引入平行执行栈。
+- 后台 subagent 的 `tool_call_id` 仅作关联键；`SubagentResult.task_id` 使用服务端生成的 `execution_id`。
+- 长时 MCP 任务由 `McpTaskService` 租约驱动，状态落 `mcp_tasks`，数据库为唯一真相。
+- 定时任务 `overlap_policy=skip` 由 `uq_scheduled_task_run_active` 部分唯一索引原子保证；服务层检查只是快速路径。
 
-For a diff-scoped view of the same findings, `scripts/scan_changed_blocking_io.py`
-(repo root) reports findings on the added lines of `git diff <base>...HEAD`
-plus findings new versus the merge base (so a new async caller exposing an
-untouched sync helper in the same file is still reported) — used by the
-`blocking-io-guard` skill (`.agent/skills/blocking-io-guard/`) as the
-deterministic scope step before routing each candidate to a fix and/or a
-`tests/blocking_io/` runtime anchor.
+### RunManager / RunStore
 
-Regression tests related to Docker sandbox behavior:
-- `tests/test_docker_sandbox_mode_detection.py` (mode detection from `config.yaml`)
+- `RunManager.get()` 为 async。
+- 历史批量查询默认 `user_id=AUTO`，无用户上下文时 fail-closed；管理/迁移显式传 `None`。
+- 有持久 Store 时历史 run 从 Store 水合，同 `run_id` 的内存记录优先。
+- `cancel()` 返回 `cancelled` / `not_active_locally` / `not_cancellable` / `unknown`。
+- 线程操作（`run` / `checkpoint_write` / `artifact_write`）共享持久活跃线程唯一约束；新操作类型必须走 `RunStore.create_thread_operation_atomic()`，不要新增锁。
+- Gateway 侧 checkpoint 写入必须走 `services.reserve_checkpoint_write()`。
+- 启动时用 `claim_for_takeover()` 接管孤儿活跃 run；Gateway 负责发布 `END_SENTINEL` 并清理流。
+- 线程 `goal` 在可见回合结束后由非 thinking 评估模型判定；未达成可追加隐藏 continuation，上限 8，连续 2 次无新增可见输出即停止。
+- 运行事件契约变更必须同步：生产者代码、`deerflow/constants.py`、`runtime/events/catalog.py`、`contracts/run_event_stream_contract.json`、`docs/RUN_EVENT_STREAM.md`、`tests/test_run_event_stream_contract.py`。
 
-Blocking-IO runtime gate (`tests/blocking_io/`):
-- Wraps every item under `tests/blocking_io/` with a strict Blockbuster
-  context scoped to `app.*` and `deerflow.*` (see
-  `tests/support/detectors/blocking_io_runtime.py`). Any sync blocking IO
-  call whose stack passes through DeerFlow business code while running on
-  the asyncio event loop raises `BlockingError` and fails the test.
-- Regression anchors live there: `test_skills_load.py` (locks the
-  `asyncio.to_thread` offload around `LocalSkillStorage.load_skills`, fix
-  for #1917); `test_sqlite_lifespan.py` (locks the offload around
-  SQLite path resolution plus `ensure_sqlite_parent_dir`, fix for #1912);
-  `test_jsonl_run_event_store.py` (locks `JsonlRunEventStore`'s async
-  API — including idempotent singleton-event writes — offloading its file IO
-  via `asyncio.to_thread`);   `test_run_journal_callbacks.py` (locks
-  `RunJournal.run_inline` tool callbacks to in-memory/event-loop-safe work);
-  `test_uploads_middleware.py` (locks `UploadsMiddleware.abefore_agent`
-  offloading the uploads-directory scan off the event loop);
-  `test_uploads_router.py` (locks Gateway upload/list/delete endpoints
-  offloading upload directory creation, staged writes, chmod/cleanup,
-  directory scans/deletes, and remote sandbox sync off the event loop);
-  `test_openviking_memory_backend.py` (locks the official OpenViking backend's
-  async add/context/search entrypoints offloading synchronous SDK and cursor
-  filesystem IO); and
-  `test_workspace_changes_recorder.py` (locks the offload around the snapshot
-  text cache lifecycle — roots resolution, `mkdtemp`, and the `shutil.rmtree`
-  on both the capture-failure branch and `record_workspace_changes`' `finally`).
-- `test_gate_smoke.py` is a meta-test asserting the gate actually catches
-  unoffloaded blocking IO and that the `@pytest.mark.allow_blocking_io`
-  opt-out works.
-- Coverage boundary: the gate only sees code that test execution actually
-  touches. Static AST coverage is a separate concern (out of scope for
-  this PR).
-- CI: runs on every PR via `.github/workflows/backend-blocking-io-tests.yml`,
-  hard-fail.
+## 4. Agent 系统
 
-Boundary check (harness → app import firewall):
-- `tests/test_harness_boundary.py` — ensures `packages/harness/deerflow/` never imports from `app.*`
+- 入口：`make_lead_agent(config)`，注册于 `langgraph.json`。
+- 模型：`create_chat_model()`，支持 thinking / vision / vLLM。
+- 工具：`get_available_tools()` 合并 sandbox、builtin、MCP、community、subagent。
+- 提示词：`apply_prompt_template()` 注入 skills、memory、subagent 说明。
+- `ThreadState` 在 `AgentState` 上增加 `sandbox`、`thread_data`、`title`、`artifacts`、`todos`、`uploaded_files`、`viewed_images`、`goal`、`promoted`、`delegations`、`skill_context`、`summary_text`，并定义对应 reducer。
+- 运行时配置：`thinking_enabled`、`model_name`、`is_plan_mode`、`subagent_enabled`、`max_concurrent_subagents`、`max_total_subagents`。
 
-Memory backend async boundary:
-- `MemoryMiddleware.aafter_agent` calls `MemoryManager.aadd`; network-backed
-  managers must override their `a*` methods to offload or use native async I/O.
-- The mem0 backend requires an HTTPS `base_url` by default because requests
-  carry an API token. Plain HTTP requires the explicit
-  `backend_config.allow_insecure_http: true` local-development opt-in.
-- Gateway memory routes offload the synchronous management contract with
-  `asyncio.to_thread`, so backend file or HTTP I/O does not run on the ASGI
-  event loop. Gateway startup and shutdown also resolve the manager off-loop,
-  because a backend's `from_config` may perform a fail-fast connectivity check.
-- A backend may set `requires_passive_writes_in_tool_mode = True` when tool-mode
-  search is supported but durable writes still depend on conversation-level
-  extraction. Such backends receive memory tools and retain `MemoryMiddleware`.
-- Prompt recall rethrows `MemoryManagerError` only when backend config declares
-  `failure_policy.read: fail_closed`; other recall errors preserve the existing
-  log-and-empty-context behavior.
+### 中间件链
 
-CI runs these regression tests for every pull request via [.github/workflows/backend-unit-tests.yml](../.github/workflows/backend-unit-tests.yml).
+共享基础链（`build_lead_runtime_middlewares`，subagent 复用大部分）：
 
-Agentic browser sessions are process-local. The Gateway startup safety gate rejects
-`GATEWAY_WORKERS > 1` when `browser_navigate` is configured, because ordinary
-uvicorn worker dispatch does not provide thread affinity for browser tools, REST
-navigation, and the Live WebSocket.
+1. `InputSanitizationMiddleware`
+2. `ToolOutputBudgetMiddleware`
+3. `ToolResultSanitizationMiddleware`
+4. `ThreadDataMiddleware`
+5. `UploadsMiddleware`
+6. `SandboxMiddleware`
+7. `DanglingToolCallMiddleware`
+8. `LLMErrorHandlingMiddleware`
+9. `SandboxAuditMiddleware`
+10. `ReadBeforeWriteMiddleware`（可选，默认开）
+11. `ToolProgressMiddleware`（可选）
+12. `ToolErrorHandlingMiddleware`
 
-Browser Live screenshots remain JPEG bytes inside the harness and the Gateway's
-bounded, drop-oldest frame queue. WebSocket clients that request
-`frame_format=binary` receive binary messages; control metadata remains JSON.
-The legacy no-parameter protocol still base64-encodes frames into JSON at the
-Gateway boundary for backward compatibility. Unknown `frame_format` values
-receive a JSON error and close code 1008.
+Lead 专属链（`build_middlewares` 追加）：
 
-## Architecture
+13. `DynamicContextMiddleware`
+14. `SkillActivationMiddleware`
+15. `SkillToolPolicyMiddleware`
+16. `DurableContextMiddleware`
+17. `SummarizationMiddleware`（可选）
+18. `TodoListMiddleware`（`is_plan_mode`）
+19. `TokenUsageMiddleware`（可选）
+20. `TitleMiddleware`
+21. `MemoryMiddleware`
+22. `ViewImageMiddleware`（vision 模型）
+23. `McpRoutingMiddleware`（可选）
+24. `DeferredToolFilterMiddleware`（可选）
+25. `SystemMessageCoalescingMiddleware`
+26. `SubagentLimitMiddleware`（可选）
+27. `LoopDetectionMiddleware`（可选）
+28. `TokenBudgetMiddleware`（可选）
+29. 程序化 custom middlewares
+30. `config.yaml` / `extensions_config.json` 声明的扩展中间件
+31. `TerminalResponseMiddleware`
+32. `ModelLengthFinishReasonMiddleware`
+33. `SafetyFinishReasonMiddleware`（可选）
+34. `ClarificationMiddleware`（必须最后）
 
-### Harness / App Split
+关键约束：
 
-The backend is split into two layers with a strict dependency direction:
+- 重复工具调用与结果质量由 `LoopDetectionMiddleware` 与 `ToolProgressMiddleware` 分工，二者互不读取内部状态。
+- `SkillToolPolicyMiddleware` 只对真实激活的 skill 生效；slash 激活抑制 `skill_context` 策略。
+- `DeferredToolFilterMiddleware` 必须位于 `McpRoutingMiddleware` 之后。
+- `ClarificationMiddleware` 拦截 `ask_clarification`，写入 `ToolMessage.artifact.human_input` 并通过 `Command(goto=END)` 中断。
 
-- **Harness** (`packages/harness/deerflow/`): Publishable agent framework package (`deerflow-harness`). Import prefix: `deerflow.*`. Contains agent orchestration, tools, sandbox, models, MCP, skills, config — everything needed to build and run agents.
-- **App** (`app/`): Unpublished application code. Import prefix: `app.*`. Contains the FastAPI Gateway API.
+## 5. 配置系统
 
-**Dependency rule**: App imports deerflow, but deerflow never imports app. This boundary is enforced by `tests/test_harness_boundary.py` which runs in CI.
+统一根：`HNFLOW_HOME`（默认 `hnflow-data/`，兼容 `DEER_FLOW_HOME`）。
 
-**Import conventions**:
-```python
-# Harness internal
-from deerflow.agents import make_lead_agent
-from deerflow.models import create_chat_model
-
-# App internal
-from app.gateway.app import app
-
-# App → Harness (allowed)
-from deerflow.config import get_app_config
-
-# Harness → App (FORBIDDEN — enforced by test_harness_boundary.py)
-# from app.gateway.routers.uploads import ...  # ← will fail CI
+```text
+hnflow-data/
+├── config.yaml / extensions_config.json / .env / frontend.env
+├── prompts/lead-agent.md
+├── skills/
+├── data/deerflow.db
+└── users/{user_id}/threads/{thread_id}/...
 ```
 
-Package import hygiene: the `deerflow.agents` and `deerflow.subagents` package
-roots expose heavyweight graph/executor entrypoints lazily. Internal modules
-that only need lightweight types, config, or registries should import the
-concrete submodule instead of adding eager package-root imports that pull in the
-tool graph or subagent executor during state/schema imports.
-
-### Agent System
-
-**Lead Agent** (`packages/harness/deerflow/agents/lead_agent/agent.py`):
-- Entry point: `make_lead_agent(config: RunnableConfig)` registered in `langgraph.json`
-- Dynamic model selection via `create_chat_model()` with thinking/vision support
-- Tools loaded via `get_available_tools()` - combines sandbox, built-in, MCP, community, and subagent tools
-- System prompt generated by `apply_prompt_template()` with skills, memory, and subagent instructions
-
-**ThreadState** (`packages/harness/deerflow/agents/thread_state.py`):
-- Extends `AgentState` with: `sandbox`, `thread_data`, `title`, `artifacts`, `todos`, `uploaded_files`, `viewed_images`, `goal`, `promoted`, `delegations`, `skill_context`, `summary_text`
-- Uses custom reducers: `merge_artifacts` (deduplicate), `merge_viewed_images` (merge/clear), `merge_goal` (preserve the active goal across ordinary state updates unless the goal writer replaces it), `merge_promoted` (catalog-hash-scoped deferred tool promotions), `merge_delegations` (append task delegation entries, same id latest wins, terminal status never downgraded, capped to the most recent entries), and `merge_skill_context` (dedupe active-skill references by path, keep the most recently read entries; entries store a name/path/description reference, not the SKILL.md body). `summary_text` is a LastValue channel updated by summarization and projected into model requests as durable context data instead of being stored as a `messages` item.
-- Delta-mode `merge_message_writes` normalizes the current message state once,
-  then folds normalized writes in order with message-ID position indexes and
-  deferred tombstone compaction. It preserves public `add_messages` behavior,
-  including duplicate IDs, replacement position, removal errors,
-  `REMOVE_ALL_MESSAGES`, null-write errors, and missing-ID allocation order,
-  without rescanning the accumulated state for every write. Keep this
-  full-parity contract covered by differential tests: LangGraph's private
-  `_messages_delta_reducer` is also linear, but intentionally omits some of
-  those public `add_messages` semantics and cannot be substituted directly.
-
-**Runtime Configuration** (via `config.configurable`):
-- `thinking_enabled` - Enable model's extended thinking
-- `model_name` - Select specific LLM model
-- `is_plan_mode` - Enable TodoList middleware
-- `subagent_enabled` - Enable task delegation tool
-- `max_concurrent_subagents` - Per-response `task` call concurrency limit (clamped by `SubagentLimitMiddleware`)
-- `max_total_subagents` - Optional per-run total delegation cap override (falls back to `subagents.max_total_per_run`, clamped to 1-50)
-  Gateway and `DeerFlowClient.stream()` always provide the runtime `run_id`; custom
-  graph integrations must do the same. If it is absent, enforcement deliberately
-  counts the thread's full delegation ledger (fail-restrictive) and emits a warning.
-
-### Middleware Chain
-
-Lead-agent middlewares are assembled in strict order across three functions: the shared base in `packages/harness/deerflow/agents/middlewares/tool_error_handling_middleware.py` (`_build_runtime_middlewares`, exposed via `build_lead_runtime_middlewares`), then the lead-only middlewares appended in `packages/harness/deerflow/agents/lead_agent/agent.py` (`build_middlewares`). Items marked *(optional)* are appended only when their config/runtime condition holds, so the live chain length varies.
-
-**Shared runtime base** (`build_lead_runtime_middlewares`; subagents reuse most of this via `build_subagent_runtime_middlewares`):
-
-1. **InputSanitizationMiddleware** - First, so it is the outermost `wrap_model_call` wrapper; every inner middleware (including LLM retries) sees sanitized messages. `additional_kwargs.original_user_content` is server-owned provenance: Gateway strips caller-supplied values for non-internal run requests, trusted IM calls may carry the string they captured before adding transport/file context, and the middleware replaces any non-string value before wrapping. Uploads and sanitization retain first-writer-wins only for validated strings.
-2. **ToolOutputBudgetMiddleware** - Caps tool output size (per app config) before it re-enters the model context. Oversized results are externalized to `tool_output.storage_subdir` (default `.tool-results`, shared constant `TOOL_RESULTS_DIRNAME`) under the thread outputs dir with a typed synopsis + `read_file` reference left in context; those files are process feedback, so the workspace-changes scanner excludes that directory and run delivery verification never counts them as produced artifacts
-3. **ToolResultSanitizationMiddleware** - Neutralizes framework/injection tags (e.g. `<system-reminder>`) and boundary markers in *remote-content* tool results (`web_fetch`/`web_search`/`image_search`/`web_capture`) so attacker-controlled fetched pages cannot forge trusted framework context. Mirrors `InputSanitizationMiddleware`'s user-input guardrail for the other untrusted-content entry point; sits inner of `ToolOutputBudgetMiddleware` (neutralizes the raw output, then the budget truncates). Local tool output (bash/read_file) is left untouched. Scope is a name-based allowlist, so MCP remote-content tools registered under other names (e.g. `fetch_url`) are not yet covered — a metadata-tagging follow-up is tracked in the middleware source
-4. **ThreadDataMiddleware** - Creates per-thread directories under the user's isolation scope (`hnflow-data/users/{user_id}/threads/{thread_id}/user-data/{workspace,uploads,outputs}`); resolves identity via `resolve_runtime_user_id(runtime)`, including Gateway runtime context and standalone LangGraph Server auth, then falls back to the request ContextVar / `"default"`
-5. **UploadsMiddleware** - Tracks and injects newly uploaded files into conversation (lead agent only); upload existence checks use the same runtime-resolved user bucket as thread-data creation
-6. **SandboxMiddleware** - Acquires sandbox, stores `sandbox_id` in state
-7. **DanglingToolCallMiddleware** - Injects placeholder ToolMessages for AIMessage tool_calls that lack responses (e.g., user interruption), preserving raw provider tool-call payloads in `additional_kwargs["tool_calls"]`; malformed tool-call names and arguments are sanitized in the model-bound request so strict OpenAI-compatible providers do not reject the next request
-8. **LLMErrorHandlingMiddleware** - Normalizes provider/model invocation failures into recoverable assistant-facing errors before later stages run
-9. **(removed) Authorization / GuardrailMiddleware** - The upstream pre-tool-call authorization/guardrail gate is removed in the single-user build. There is no `AuthorizationProvider` Layer 1 filtering and no `GuardrailMiddleware` in the chain.
-10. **SandboxAuditMiddleware** - Audits sandboxed shell/file operations for security logging before tool execution. Command classification is **defense-in-depth and audit, not a security boundary** — the sandbox itself is the isolation boundary. Command substitution is judged by *position*, not by the presence of `$(`: a substitution in **command position** (`$(curl url)`, `` `curl url` ``, the word after a `|`/`&&`/`;`, or any `eval`/`source` argument) executes fetched or interpreted content and is blocked, while **value position** (`x=$(curl url)`, `echo $(curl url)`, an argument, a `for` word list) only captures output and passes (#4611). `_HIGH_RISK_COMMAND_POSITION_PATTERNS` is therefore matched anchored against each split sub-command, never against the whole compound string, and `_split_compound_command(split_pipes=True)` supplies those sub-commands; rules that span a pipe (`| sh`, `base64 -d | ...`) still rely on `_classify_command`'s whole-command Pass 1. `_COMMAND_POSITION_PREFIX` extends the anchor over leading variable assignments and exec wrappers (`FOO=1 $(curl url)`, `env`/`command`/`builtin`/`exec`/`nohup`/`time`/`sudo`/`doas`), which are still command position; its assignment branch requires whitespace before the substitution, which is exactly what keeps `x=$(curl url)` in value position. Two execution contexts are deliberately **position-blind** and matched against the whole command in Pass 1, because they execute what they receive wherever they appear (including as an argument to something else, e.g. `xargs sh -c "$(curl url)"`): an `eval`/`source` argument, and an interpreter's **code-string flag** — `-c` (shells, `python`), `-e` (`perl`/`ruby`/`node`), `-p` (`perl`/`node`), `-r` (`php`) — plus the here-string (`<<<`) that reaches the same place through stdin. All three substitution spellings (`$(cmd`, `<(cmd`, `` `cmd ``) share one `_RISKY_SUBSTITUTION` opener so a rule cannot cover one spelling and miss another. An unquoted newline splits like `;`, because it separates statements the same way: leaving it joined let `echo hi\n$(curl url)` evade the anchored rules that its `;` spelling triggers. A heredoc body is data rather than statements, so `_split_compound_command` records headers (`<<EOF`, `<<-EOF`, `<<'EOF'`) and consumes their bodies verbatim at the newline that starts them — otherwise a body line beginning with `$(curl url)` would be promoted to a command position the shell never creates. Two things that look like headers must not open one, or a body that never terminates swallows every following statement: `<<<` is a here-string (both a lookahead and a lookbehind are needed, or the trailing `<<` of `<<< "text"` reads as a heredoc with delimiter `text`), and a `<<` inside `$(( ... ))` / `(( ... ))` is a bit shift, so arithmetic depth is tracked alongside the quote flags. That is a heuristic, not shell parsing: it exists only to avoid manufacturing command positions *and* to avoid destroying real ones. An unterminated body consumes the rest of the string; an unclosed `((` only disables heredoc detection, so newlines keep splitting and the failure direction stays towards seeing more command positions rather than fewer. Known, deliberate gaps: process substitution outside `eval`/`source` (`. <(curl u)`) is not detected — closing it would require real shell parsing, which is out of scope for this layer. Two-step forms (`x=$(curl u); eval "$x"`) are inherent rather than incidental: any rule that allows output capture allows the first statement, and connecting it to the later `eval` needs dataflow analysis, not pattern matching. There is currently no config gate: the middleware is appended unconditionally in `_build_runtime_middlewares`, so it applies to both the lead agent and subagents.
-11. **ReadBeforeWriteMiddleware** - *(optional, if `read_before_write.enabled`, default on)* Outermost write gate (issue #3857): `read_file` stamps a content hash onto its ToolMessage; `write_file` (append/overwrite-existing) and `str_replace` are blocked unless the newest mark for that path matches the file's current hash. Sits outside ToolProgressMiddleware and ToolErrorHandlingMiddleware so a blocked write returns immediately without consuming a ToolProgress slot. Blocked results call `normalize_tool_result` directly to stamp `deerflow_tool_meta` (`recoverable_by_model=True`) before returning, keeping the result well-formed for any outer consumer. Marks live on messages, so summarization dropping the read result invalidates the gate automatically; writes never refresh marks, forcing a re-read between consecutive edits. Gate check + tool execution are serialized per (thread, path) so same-turn parallel writes cannot reuse one stale mark; on sandboxes whose `read_file` reports failures as `"Error: ..."` strings instead of raising (AIO/E2B), uninspectable targets fail open (creation proceeds, no mark stamped)
-12. **ToolProgressMiddleware** - *(optional, if `tool_progress.enabled`)* State-machine-based stagnation guard (RFC #3177). Outer wrapper around ToolErrorHandlingMiddleware so its `wrap_tool_call` receives results already stamped with `deerflow_tool_meta`. Tracks per-(thread, tool) consecutive "no-new-info" calls across three error categories: (a) `recoverable_by_model=True` (no_results, not_found, permission, Jaccard-duplicate success): ACTIVE → WARNED (terminal — hint re-injected on each subsequent problem); (b) `recoverable_by_model=False, action≠stop` (rate_limited, transient): ACTIVE → WARNED → BLOCKED after `warn_escalation_count` more problems; (c) `recoverable_by_model=False, action=stop` (auth, config, internal): immediately BLOCKED on first occurrence. **Division of labor with LoopDetectionMiddleware:** ToolProgressMiddleware is a result-quality guard — fires after tool execution and blocks specific tools that stop producing new information; LoopDetectionMiddleware is a call-pattern guard — fires after the model responds and hard-stops the whole turn when the model repeatedly issues identical tool_calls. Both can inject HumanMessage hints in the same model call without conflict; neither reads the other's internal state.
-13. **ToolErrorHandlingMiddleware** - Receives `AppConfig`, converts tool exceptions into error `ToolMessage`s so the run can continue instead of aborting, stamps every result with `deerflow_tool_meta` (status / error_type / recoverable_by_model / recommended_next_action / source) via `tool_result_meta.normalize_tool_result`, stamps structured metadata for task exception wrappers, and stamps skill-read metadata for downstream durable-context capture. Task tool result text is generated from the same status/result/error inputs as the structured metadata so callers do not hand-write a second protocol string.
-
-Authorization identity plumbing is removed in the single-user build. The Gateway strips server-owned identity keys (`is_internal`, `authz_attributes`, `channel_user_id`, `user_role`, `oauth_*`, `langgraph_auth_user*`) from client-supplied `body.config` and always stamps `user_id = DEFAULT_USER_ID` ("default") onto the run context. There is no Principal, RBAC, or tool filtering; the tool set is the full configured set (aside from deferred `tool_search` handling and skill policy).
-
-Gateway route permission gating is a no-op in the single-user build: `app/gateway/permissions.py::require_permission` is a pass-through decorator (kept so route declarations still document the resource/action and a future authorization layer can re-attach), and `require_admin_user` always permits. There is no provider resolution or route permission set.
-
-Before changing a later authorization phase, read the [authorization RFC](../docs/plans/2026-07-10-pluggable-authorization-rfc.md) and its [implementation notes](../docs/plans/2026-07-10-pluggable-authorization-implementation-notes.md). The notes are the cumulative handoff record for merged PR behavior, reviewer feedback, trust-boundary decisions, deferred scope, and required regression coverage.
-
-**Lead-only middlewares** (`build_middlewares`, appended after the base):
-
-14. **DynamicContextMiddleware** - Injects the current date (and optionally memory) as a `<system-reminder>` into the first HumanMessage, keeping the base system prompt fully static for prefix-cache reuse
-15. **SkillActivationMiddleware** - Detects strict `/skill-name task` syntax on the latest real user message and also honors `runtime.context.active_skills` selected from the Lead Agent menu; resolves only enabled and runtime-allowed skills, injects the `SKILL.md` body as hidden current-turn context, activates once per run, and records a `middleware:skill_activation` audit event
-16. **SkillToolPolicyMiddleware** - Applies `allowed-tools` only after real activation; passive enabled skills and a custom agent's configured skill allowlist do not clamp the lead toolset. A run-scoped slash activation is authoritative and suppresses `skill_context` as a policy source, so reading another skill cannot widen the explicit skill's tools; without slash activation, skills captured after configured `read_file` loads retain the existing union semantics. The middleware filters model-visible schemas and blocks unauthorized execution, resolving canonical paths against the live enabled/agent-allowed registry on every model call, then stores a versioned, JSON-safe, middleware-token-bound decision signed by policy source plus active paths in run context for the resulting tool calls to reuse. The next model call always refreshes it, and malformed, foreign, stale, or unmatched decisions fall back to live resolution. `tool_search` and `describe_skill` remain framework-safe discovery tools under a restrictive policy; they may reveal or promote metadata, but a deferred business tool must still be declared by the active policy before its schema or execution can survive the policy middleware. The decision's owner token is authorization-sensitive, so its reserved context key is owned by `runtime.secret_context` and included in `REDACTED_CONTEXT_KEYS` for observable and persisted context copies. Registry load failures and a non-empty active set with no authorized skill fail closed to framework-safe tools; an individual stale path is skipped only when at least one valid active skill remains. This is best-effort behavioral scoping rather than a hard security boundary: alternate loads such as `bash cat` are not captured, and bounded autonomous `skill_context` can evict old entries. `task` is not framework-exempt, so a restricted skill cannot delegate around its policy. The middleware must remain immediately after `SkillActivationMiddleware` (which publishes the slash source through `runtime.secret_context`'s public path helpers authenticated by a required token shared only within the assembled middleware chain) and immediately before `DurableContextMiddleware`; assembly and compiled-graph tests pin ordering, token sharing, schema filtering, and execution blocking.
-17. **DurableContextMiddleware** - Captures `task` delegations into `ThreadState.delegations` (including in-progress dispatches and terminal result summaries) and loaded skill-file references (name/path/description, parsed in-memory - not the body) into `ThreadState.skill_context` before summarization can compact the paired tool-call/result messages, then projects durable context into each model request. Static authority rules are injected as a `SystemMessage`; untrusted field values (`summary_text`, delegation results, skill descriptions) are injected separately as a hidden `HumanMessage` data block so compressed history, delegated work, and which skills are active stay visible without being stored as `messages` or promoted to system-role instructions. `build_subagent_runtime_middlewares` also attaches this middleware immediately before subagent summarization so a compacted `summary_text` is projected ahead of a preserved assistant/tool tail instead of leaving strict providers with an assistant-first request.
-18. **SummarizationMiddleware** - *(optional, if enabled)* Context reduction when approaching token limits
-19. **TodoListMiddleware** - *(optional, if `is_plan_mode`)* Task tracking with the `write_todos` tool
-20. **TokenUsageMiddleware** - *(optional, if `token_usage.enabled`)* Records token usage metrics; subagent usage is read from terminal `ToolMessage.additional_kwargs` in the current run and merged back into the dispatching AIMessage by message position. The same state update marks the ToolMessage with `subagent_token_usage_attributed=true`, so checkpoint replay or middleware re-entry cannot add the cumulative snapshot twice; missing/malformed usage or a result with no matching dispatch remains unmarked and retryable.
-21. **TitleMiddleware** - Auto-generates the thread title after the first complete exchange and normalizes structured message content before prompting the title model. If a first-turn run is interrupted before this middleware can write a title, `runtime/runs/worker.py` keeps the run in a finalizing state, persists a local fallback title from the latest checkpoint or original run input, and then syncs it to `threads_meta.display_name`. Replacement runs admitted by `multitask_strategy="interrupt"` / `"rollback"` wait for older same-thread finalization before entering the graph; the interrupted run only skips the fallback title write once a later run has started and may have advanced the checkpoint.
-22. **MemoryMiddleware** - Queues conversations for async memory update (filters to user + final AI responses); captures the runtime-resolved user so standalone LangGraph Server reads and writes stay in the same bucket
-23. **ViewImageMiddleware** - *(optional, if the model supports vision)* Injects a hidden HumanMessage with base64 image data, identified by a reserved ID prefix plus a server-owned metadata marker, before the LLM call. Because `before_model`, `model`, and `after_model` are separate graph nodes, the `before_model` and `model` node checkpoints for that call still contain the payload; `after_model` / `aafter_model` then emits `RemoveMessage`, so subsequent checkpoints do not retain it
-24. **McpRoutingMiddleware** - *(optional, if `tool_search.enabled` and PR1 MCP routing metadata produce a routing index)* Auto-promotes matching deferred MCP tool schemas before the model call by writing a minimal `promoted` state update. It matches only the latest real `HumanMessage`, uses the global `tool_search.auto_promote_top_k` limit (default 3, clamped to 1..5), never executes tools, and must be installed before `DeferredToolFilterMiddleware`
-25. **DeferredToolFilterMiddleware** - *(optional, if `tool_search.enabled`)* Hides deferred (MCP) tool schemas from the bound model until `tool_search` or `McpRoutingMiddleware` promotes them (reads per-thread promotions from `ThreadState.promoted`, hash-scoped)
-26. **SystemMessageCoalescingMiddleware** - Merges every SystemMessage into a single leading SystemMessage per request; provider-agnostic fix for strict backends (vLLM/SGLang/Qwen/Anthropic) that reject non-leading system messages. Touches the per-request payload only (checkpoint state unchanged); on midnight crossings only the latest `dynamic_context_reminder` SystemMessage survives
-27. **SubagentLimitMiddleware** - *(optional, if `subagent_enabled`)* Truncates excess `task` tool calls to enforce both the per-response concurrency limit (`max_concurrent_subagents`, clamped to 1-4) and the per-run total delegation cap (`max_total_subagents` runtime override or `subagents.max_total_per_run`, default 6, clamped to 1-50). The total cap counts current-run entries in the durable delegation ledger (entries are tagged with `run_id` when captured), so repeated planning checkpoints in one run cannot keep launching legal-sized batches indefinitely, while later user turns in the same thread get a fresh run budget. If the cap is exhausted, the middleware strips remaining `task` calls, forces `finish_reason="stop"`, and appends a visible limit note so the run can synthesize existing results instead of ending with an empty tool-call response.
-28. **LoopDetectionMiddleware** - *(optional, if `loop_detection.enabled`)* Detects repeated tool-call loops; hard-stop clears both structured `tool_calls` and raw provider tool-call metadata before forcing a final text answer; stamps `loop_capped` via `consume_stop_reason` (#3875 Phase 2), symmetric to `TokenBudgetMiddleware`
-29. **TokenBudgetMiddleware** - *(optional, if `token_budget.enabled`)* Enforces per-run token limits
-30. **Custom middlewares** - *(optional)* Any `custom_middlewares` passed to `build_middlewares` are injected here, before config-declared extensions and the terminal-response/safety/clarification tail
-31. **Configured extension middlewares** - *(optional, if `extensions.middlewares` is set in `config.yaml` or `extensions_config.json`)* Zero-argument `AgentMiddleware` classes loaded from `module.path:ClassName` entries via `deerflow.reflection.resolve_class`. Missing packages, invalid classes, and broken modules fail loudly at agent creation. These run after built-ins/programmatic custom middleware and after the lead/subagent loop/token guards, but before the terminal-response/safety/clarification tail; subagents receive the same configured extension middleware class list before their safety tail. Treat these files as trusted operator config because middleware paths instantiate arbitrary code. Gateway skill/MCP toggle endpoints preserve this field through `to_file_dict()` but must not add a write path for `extensions.middlewares` without an explicit trust-boundary review. Lead-only vs subagent-only middleware lists and per-context constructor parameters are not expressible in this MVP.
-32. **TerminalResponseMiddleware** - When a provider returns an empty terminal `AIMessage` after tool execution, injects a hidden recovery prompt and retries the model once; a second empty response is replaced in checkpoint state by a visible error fallback marked for the run worker, so the run finishes as an error instead of a silent success
-33. **ModelLengthFinishReasonMiddleware** - Records `stop_reason=model_length_capped` when provider-specific length detectors match a terminal `AIMessage` without tool-call intent (`finish_reason=length` / `MAX_TOKENS`, or `stop_reason=max_tokens`), preserving the original assistant content and never reparsing textual tool-call-like envelopes
-34. **SafetyFinishReasonMiddleware** - *(optional, if `safety_finish_reason.enabled`)* Suppresses tool execution when the provider safety-terminated the response (e.g. `finish_reason=content_filter`); registered after terminal-response/custom/configured middlewares so LangChain's reverse-order `after_model` dispatch runs it first
-35. **ClarificationMiddleware** - Intercepts `ask_clarification` tool calls, writes a readable `ToolMessage.content` fallback plus structured `ToolMessage.artifact.human_input` request payload, and interrupts via `Command(goto=END)` (must be last). Payloads are versioned: legacy modes (`free_text` / `choice_with_other`) keep `version: 1` unchanged, while the v2 `form` mode (from `fields`) carries `version: 2` so older frontends reject the payload and degrade to the plain-text fallback. Field normalization is deterministic and lives in the middleware, not the tool schema — the middleware short-circuits before tool execution, so tool-arg typing alone provides no runtime validation. Validation is atomic: any structurally broken entry (non-dict, bad/duplicate name, a name colliding with a JS `Object.prototype` member like `__proto__`/`constructor`, exceeding the caps of 16 fields / 24 options per field / 200 chars per text, or the whole normalized definition exceeding `MAX_FORM_SERIALIZED_BYTES` = 16KB UTF-8 — the per-item caps alone admit forms whose IM text fallback would blow channel delivery limits and truncate away trailing fields) degrades the whole form to the legacy option/free-text modes, so a card can never render "complete" while silently missing a business field; benign issues keep local degradation (unknown types — including unhashable JSON like `type: []`, which must never raise from the membership probe — and option-less selects become `text`), and options are trimmed/deduped with blanks dropped (both form-level and top-level) because the frontend parser rejects blank option labels. Model-produced XML-to-dict option payloads are recursively flattened from dict/list containers in source order, scalar string/number leaves are retained, and residual XML tags are removed before the same trimming and deduplication. Checkbox fields are booleans that default to an explicit "no"; `required` on a checkbox means must-agree/consent semantics. The response protocol is deliberately unchanged (v1 `text`/`option` only): form cards submit a readable text summary as `response_kind: "text"`, so journal persistence and answered-card recovery need no new allowlist entries. Because this middleware can short-circuit tool execution before LangChain emits `on_tool_end`, `RunJournal` performs a root-run final reconciliation for allowlisted clarification `ToolMessage`s whose `tool_call_id` was produced by the current run, so human-input request cards remain recoverable from `run_events` after checkpoint compaction. Human Input Card replies are submitted as `hide_from_ui` `HumanMessage`s with `additional_kwargs.human_input_response`; `RunJournal` persists only allowlisted hidden response sources (currently `ask_clarification`) as `llm.human.input`, which preserves answered-card state after compaction without exposing generic internal hidden context.
-
-### Python Extension System (Runtime Slice)
-
-Third-party Python packages can expose an `install(registry, config)` function and be
-loaded, in deterministic order, from the startup-only top-level `plugins:` list in
-`config.yaml`. Keep this list out of `extensions_config.json`: the latter is writable
-through Gateway APIs, while importing Python entry points is an operator-controlled code
-execution boundary. A plugin marked `required: true` fails Gateway construction when it
-cannot load; optional plugins fail open with attributed diagnostics.
-
-The public package is `packages/extension-api/` and must never import `deerflow`. Its
-registry contract exposes exactly three contribution kinds: middleware contributors,
-task-lifecycle contributors, and system-model-call observers. Middleware contributions
-declare lead/subagent scope, stable order, and a semantic placement (`MODEL_LOGICAL`,
-`MODEL_PHYSICAL`, `TOOL_VISIBLE`, `TOOL_RAW`, or `STANDARD`) rather than a fragile list
-index. `extensions/stack.py` is the single final composition point; do not inject inside
-the shared base builder because the lead builder appends more middleware afterward.
-`extensions/ordering.py` owns host ordering invariants and validates the final composed
-stack. Nothing under `extensions/` may import `agents.middlewares` at module scope: the
-middleware layer calls into this one, so a module-scope reference points the dependency
-backwards and closes a cycle as soon as any middleware imports something under
-`extensions/` at module level. Both tables that need middleware classes therefore resolve
-on first use — `ordering.py::core_ordering_constraints()` and `stack.py::_anchors()` —
-which is `assert_ordering` / composition time, already inside the middleware builder.
-Defer by deferring the *call*; do not fake a resolved value with a lazy container
-subclass, which reports one answer when iterated and another when measured.
-
-Contributed middlewares are wrapped by `IsolatedMiddleware`: extension failures emit
-diagnostics and fail open without repeating a downstream model/tool side effect. The
-wrapper mirrors lifecycle hooks, tools, transformers, and state schema implemented by
-the inner middleware. LangChain treats each sync/async model or tool wrapper pair as one
-capability, so a single-sided wrapper receives a pass-through counterpart; implement
-both sides when the extension must observe both synchronous and asynchronous execution
-paths.
-
-Lead runs and subagents allocate an `ExtensionData` task store only when at least one of
-the three contribution kinds is registered. Middleware and system-call sites recover the
-live store through `EXTENSION_TASK_STORE_KEY` / `task_store_from_runtime()`; lifecycle
-contributors receive that same store directly. Each task resolves the immutable
-loaded-extension snapshot once and binds that same object through task-store allocation,
-hooks, and synchronous agent construction, so a concurrent singleton replacement cannot
-mix two extension generations without changing the LangGraph graph-factory ABI. The
-graph-build binding is a ContextVar scoped to synchronous construction, so it has already
-exited by the time the lead agent delegates; the run worker therefore also publishes the
-snapshot on runtime context under the host-internal `EXTENSION_SNAPSHOT_CONTEXT_KEY`,
-`task_tool` reads it back through `resolve_run_extensions()` (type-checked — runtime
-context is caller-mergeable), and `SubagentExecutor` binds it at construction. That key is
-written after the caller merge and popped when the run has none, so a caller-supplied value
-is never authoritative. Absent the key — embedded `DeerFlowClient`, standalone LangGraph
-Server — the executor keeps its `get_loaded_extensions()` fallback.
-
-The lead worker awaits `on_task_start` after the run has started and awaits `on_task_stop`
-after completion persistence/hooks but before clearing any active finalizing barrier or
-publishing the stream end. A subagent with a parent `run_id` wraps its execution with the
-same start/stop pair. Outcomes are conservative (`completed`, `aborted`, or `failed`),
-contributors run in registration order within one bounded budget, and notification failures
-are logged and fail open.
-
-Fail-open is decided by the *origin* of a failure, not by its base class, because
-`CancelledError` reaches a contributor's `except` for two unrelated reasons. Only a genuine
-cancellation of the host task increments `asyncio.Task.cancelling()`, so `_notify_each`
-propagates on that and contains everything else: a contributor that lets a `CancelledError`
-escape — an extension implementing an internal timeout with cancellation, say — must not
-skip its successors, and must not reach the worker's deferred-interrupt path, which would
-end an otherwise successful run as cancelled. `KeyboardInterrupt` / `SystemExit` still
-propagate.
-
-System-model-call observers cover DeerFlow-owned model invocations that do not pass
-through middleware model-call wrappers: goal evaluation, memory extraction, title
-generation, and summarization. They receive a request/result snapshot, duration, and the
-active task store when one exists; detached system work receives an isolated store. All
-three terminal paths are reported without changing the exception the host observes:
-success and failure are awaited inline, while cancellation — routine, since
-interrupt/rollback admission and shutdown both cancel the run task, with the provider
-tokens already spent — is submitted to the notify loop instead of awaited, because a
-repeated cancel would interrupt that await before any observer ran. A deployment with no
-registered notify loop drops the cancellation observation, exactly as the synchronous
-memory bridge does. `SystemModelRequest.messages` normalizes to a tuple at construction: goal and
-memory pass a message list while title and summarization pass one prompt string, and a
-bare `str` is already a `Sequence`, so without normalization an observer iterating it
-would walk characters. Normalizing also copies a live list, which is what makes the frozen
-snapshot immutable in fact rather than only by declaration. Gateway registers one canonical extension-notification loop. Awaited lifecycle
-hooks and async system observations are dispatched to that loop even when the caller is a
-subagent's isolated loop, while synchronous system callbacks submit fire-and-forget work
-there. Shutdown stops accepting detached observations before the memory shutdown flush and
-resets the loop only after in-flight run/subagent drain ordering is complete.
-
-The memory kind reaches those observers through a different shape, and the difference is
-deliberate rather than an oversight to be "aligned" away. DeerMem must stay vendorable and
-cannot import the extension API, so it reports through the `MemoryCallbacks.on_memory_llm_result`
-host hook, which the DeerFlow-side callbacks translate into an observation and submit
-without awaiting. It also guards its provider call with `BaseException` rather than
-`Exception`, which is safe precisely because that whole path runs on a worker thread — the
-debounce timer, or the executor `update_memory` offloads to — where cancelling the awaiting
-side never interrupts the running thread, so `CancelledError` cannot arrive there at all.
-The host hook wrapper around the callback stays at `Exception`: only the hook's own failures
-are non-fatal, and an observability path must not swallow `SystemExit` / `KeyboardInterrupt`.
-
-Gateway `create_app()` loads plugins once, stores the immutable registry on `app.state`
-and in the process-wide singleton, and installs one canonical live diagnostics list.
-Changing `plugins` requires a restart. Any future contribution kind must be added to the
-public contract and host runtime in the same slice; never accept a registration method
-that the current host silently ignores.
-
-### Configuration System
-
-**Unified user-data directory** (`HNFLOW_HOME`, default `{repo}/hnflow-data`):
-
-- `HNFLOW_HOME` is canonical; `DEER_FLOW_HOME` remains a compatibility alias. `DEER_FLOW_PROJECT_ROOT`, `DEER_FLOW_CONFIG_PATH`, and `DEER_FLOW_EXTENSIONS_CONFIG_PATH` remain explicit overrides.
-- `hnflow-data/` is entirely gitignored and contains `config.yaml`, `extensions_config.json`, `.env`, `frontend.env`, `prompts/lead-agent.md`, `skills/`, `data/deerflow.db`, and `users/{user_id}/threads/{thread_id}/...`.
-- Capability groups and tool packages live in the external VibeStack checkout (`vibestack.repository`, then `VIBESTACK_HOME` / `VIBESTACK_REPO`, then `~/.config/vibestack/config.json`). HNFlow never seeds or owns their content. Repository discovery supports both `capability-groups/core/<version>` and `capability-groups/domain/<name>/<version>`; the configured workspace is scanner-only and is not a data source.
-- Relative `database.sqlite_dir` values resolve under the unified root; the default is `data` (legacy `.deer-flow/data` is normalized to the same directory).
-- `make config` seeds only missing templates from `config-examples/` and deliberately does not create capability-group or tool directories; `make data-migrate` (or `DRY=1 make data-migrate`) copies legacy files into the new root without deleting them.
-- Project capability-group closures use the authoritative `vibe-stack resolve --json` contract (`capability_groups/resolve.py`); the CLI is located on `PATH`, in the repository `.venv`, or through `uv run --project`. A non-zero exit, timeout, schema mismatch, or invalid plan is a hard error when the project activates groups.
-- `project_run_metadata` carries the plan's MCP servers (`vibestack_mcp`) and fingerprint. `mcp/project.py` merges them over the operator's `extensions_config.json` in memory, loads the tools once per fingerprint + config digest, and the AI executor passes that tool map to `resolve_capability_tools`; do not persist VibeStack MCP entries into the global extensions config.
-- Tool packages under `<VibeStack>/tools/` are trusted local code imported into the Gateway process; do not add an untrusted upload path.
-- Workflow definitions, revisions, folders, specifications, model profiles, runs, checkpoints, human tasks, and undo records remain transactional rows in `hnflow-data/data/deerflow.db`; workspace/workflow instance files remain under `hnflow-data/users/`. File-backed projects live in their own project directory (`<root>/.hnflow/project.json` + `<root>/.hnflow/workbenches/*.workbench.json`). Project activation lives in `<root>/.vibestack/stack.json`; Core is fixed, and workbench add/save only upserts the groups a workflow needs without deleting unrelated entries. `workflow_workbenches` is only an internal mirror for run monitoring/legacy tooling. Legacy DB-only workbenches are deleted by migration `0026_projects`.
-
-**Main Configuration** (`config.yaml`):
-
-Setup: Run `make config` to seed `config-examples/` into `hnflow-data/`; the canonical file is `hnflow-data/config.yaml`.
-
-**Config Versioning**: `config.example.yaml` has a `config_version` field. On startup, `AppConfig.from_file()` compares user version vs example version and emits a warning if outdated. Missing `config_version` = version 0. Run `make config-upgrade` to auto-merge missing fields. When changing the config schema, bump `config_version` in `config.example.yaml`.
-
-**Config Caching**: `get_app_config()` caches the parsed config, but automatically reloads it when the resolved config path or file content signature changes. The signature includes file metadata and a content digest, so Gateway and LangGraph reads stay aligned with `config.yaml` edits even on object-store or network mounts where mtime can remain stale.
-
-**Config Hot-Reload Boundary**: Gateway dependencies route through `get_app_config()` on every request, so per-run fields like `models[*].max_tokens`, `summarization.*`, `title.*`, `memory.*`, `subagents.*`, `tools[*]`, and the agent system prompt pick up `config.yaml` edits on the next message. `AppConfig` is intentionally **not** cached on `app.state` — `lifespan()` keeps a local `startup_config` variable for one-shot bootstrap work and passes it to `langgraph_runtime(app, startup_config)`.
-
-Infrastructure fields are **restart-required**. The authoritative list lives in `packages/harness/deerflow/config/reload_boundary.py::STARTUP_ONLY_FIELDS` and is mirrored by the standardised `"startup-only:"` prefix on the corresponding `Field(description=...)` in `AppConfig`, so IDE hover on those fields surfaces the reason inline (no need to context-switch into this table). Currently registered: `plugins`, `database`, `checkpointer`, `run_events`, `stream_bridge`, `sandbox`, `log_level`, `logging`, `scheduler`, `mcp_tasks`, `apps`, `assets`. Adding a new restart-required field requires updating the registry; drift is pinned by `tests/test_reload_boundary.py`.
-
-**Persistence backend resolution**: the unified `database` section selects the
-Gateway's LangGraph checkpointer, LangGraph Store, and DeerFlow SQL repositories.
-The deprecated `checkpointer` section remains backward compatible and, when
-present, overrides `database` for the LangGraph checkpointer and Store only;
-application repositories continue to use `database`.
-
-Configuration priority:
-1. Explicit `config_path` argument
-2. `DEER_FLOW_CONFIG_PATH` environment variable
-3. `$HNFLOW_HOME/config.yaml` (canonical location in `hnflow-data/`)
-4. Legacy project-root/backend `config.yaml`
-
-Config values starting with `$` are resolved as environment variables (e.g., `$OPENAI_API_KEY`).
-`ModelConfig` also declares `use_responses_api` and `output_version` so OpenAI `/v1/responses` can be enabled explicitly while still using `langchain_openai:ChatOpenAI`.
-
-**Extensions Configuration** (`extensions_config.json`):
-
-MCP servers and skills are configured together in `hnflow-data/extensions_config.json`:
-
-Docker development mounts `hnflow-data/` at `/app/hnflow-data` and points
-`HNFLOW_HOME` / `DEER_FLOW_CONFIG_PATH` / `DEER_FLOW_EXTENSIONS_CONFIG_PATH`
-into that directory. Keep mutable config files behind a directory bind mount:
-single-file bind mounts can become stale or inaccessible when a host editor
-replaces a file on save.
-
-Configuration priority:
-1. Explicit `config_path` argument
-2. `DEER_FLOW_EXTENSIONS_CONFIG_PATH` environment variable
-3. `$HNFLOW_HOME/extensions_config.json` (canonical location in `hnflow-data/`)
-4. Legacy project-root/backend `extensions_config.json`
-
-Extensions are optional only in the fallback *search* mode (priority 3-4 above): `ExtensionsConfig.resolve_config_path()` returns `None` when neither an explicit `config_path` nor `DEER_FLOW_EXTENSIONS_CONFIG_PATH` is given and the search locations find nothing. An explicit `config_path` argument or a set `DEER_FLOW_EXTENSIONS_CONFIG_PATH` (priority 1-2) is an operator assertion that one particular file must be used, so a missing file in either of those modes raises `FileNotFoundError` instead — including when the file existed earlier and has since been deleted. The MCP tools cache's staleness check (`deerflow.mcp.cache._resolve_config_path`) is a narrow, deliberate exception to that rule: it catches that `FileNotFoundError` locally and treats it as "unconfigured" so a previously-valid config disappearing mid-run degrades the cache to serving its last-known-good tools instead of raising out of a per-request hot path (see the MCP System section below).
-
-### Gateway API (`app/gateway/`)
-
-FastAPI application on port 8001 with health check at `GET /health`. Set `GATEWAY_ENABLE_DOCS=false` to disable `/docs`, `/redoc`, and `/openapi.json` in production (default: enabled).
-
-CORS is same-origin by default when requests enter through nginx on port 2026. Split-origin or port-forwarded browser clients must opt in with `GATEWAY_CORS_ORIGINS` (comma-separated exact origins); Gateway `CORSMiddleware` and `CSRFMiddleware` both read that variable so browser CORS and auth-origin checks stay aligned. Those clients also need `CORS_EXPOSED_HEADERS` (`csrf_middleware.py`): run-creating routes return the run's id in `Content-Location`, which is not CORS-safelisted, so JS cannot read it unless it is exposed. The LangGraph SDK resolves run metadata from that header alone — withhold it and `useStream`'s `onCreated` never fires, a new thread keeps its placeholder route, and every action gated on an established thread (edit, regenerate, branch) stays hidden until the page is reloaded. Same-origin nginx deployments never hit this because CORS does not apply.
-
-Single-user deployment: there are no auth sessions, cookies, CSRF tokens, or OIDC callbacks. Requests carry no identity; the effective user is always `DEFAULT_USER_ID` ("default").
-
-Localhost persistence deliberately reads the direct request `Host` and ignores `Forwarded` / `X-Forwarded-Host`. Scheme and auth-origin reconstruction still consume forwarding headers. The bundled nginx sets `X-Forwarded-Proto`, but preserves an upstream HTTPS value and does not overwrite every forwarded header, so the outer trusted proxy must replace or strip client-supplied forwarding headers before traffic reaches DeerFlow.
-
-**Routers**:
-
-| Router | Endpoints |
-|--------|-----------|
-| **Models** (`/api/models`) | `GET /` - list models; `GET /{name}` - model details |
-| **Features** (`/api/features`) | `GET /` - report config-gated feature availability (`agents_api.enabled`, `browser_control.enabled`, `apps.enabled`, `environment.enabled`) for frontend UI gating |
-| **Environment** (`/api/environment`) | `GET /` - the N11 environment report (`?force=true` re-probes): the data-directory layout (existence/writability/purpose per directory) plus every declared requirement grouped by source (applications and enabled capability groups). Read-only and non-fatal: an unanswerable probe reports `unknown` in a 200, never a 5xx. A missing *optional* directory does not degrade the overall state |
-| **Backup** (`/api/backup`) | `GET /` - the N11b backup **plan**: what a backup of this machine would package (the N11 data directories, the SQLite database file when configured) and what it deliberately leaves out (`locks`/`retrieval`/`capability-groups`/`tools`, or the Postgres database, which `pg_dump` handles). Read-only: it plans, it does not archive. The archive itself is produced and restored by the CLI (`python -m deerflow.portability export\|inspect\|import`); there is no HTTP import endpoint because an import overwrites the database a running Gateway serves from |
-| **Apps** (`/api/apps`) | `GET /` - list the local-application registry (name/driver/description/available/**declared resources + license**); `GET /{name}/presence` - whether a *person* is using that application right now (N10b: idle/busy/human/unknown; `?force=true` bypasses the short-lived probe cache; an application that declares no probe answers `unknown`, never 5xx); `GET /resources` - N8 admission state (caps / in-use / queue depth / license pools; `enabled:false` when no cap is declared); `GET /sessions` - list instance records (durable `app_instances` rows on a SQL backend, with `?status=`/`?include_archived=`/`?include_orphaned=` filters; live in-memory sessions on the memory backend) each carrying its `holder`; `GET /sessions/{id}` - one instance; `POST /sessions/{id}/close` - stop the live session and persist `stopped`; `POST /sessions/{id}/release` - hand a machine-held instance back to a person **without** stopping it (N10b); `POST /sessions/{id}/archive` - archive a non-live instance (409 while live); `DELETE /sessions/{id}` - delete the record; `POST /sessions/cleanup` - sweep terminal records idle past the retention window (N4/N6/N8/N10b; management routes require a SQL backend and return 503 on `memory`) |
-| **Console** (`/api/console`) | Read-only cross-thread observability for the current user (the data layer for an operations dashboard or external monitoring): `GET /stats` - headline counters (runs/threads/agents/tokens/cost); `GET /runs` - paginated run history joined with thread titles (per-run cost); `GET /usage` - zero-filled daily token series + per-model breakdown with spend. Queries `runs`/`threads_meta` directly as a reporting layer (no new `RunStore` methods); requires a SQL database backend — returns 503 on `database.backend: memory`. Real-cost estimation reads optional `models[*].pricing` (`currency`, `input_per_million`, `output_per_million`, `input_cache_hit_per_million`; `ModelConfig` is `extra="allow"`, so no schema change) and prices each run from its `token_usage_by_model` input/output split. Pricing is **cache-aware**: `RunJournal` accumulates prompt-cache hits from `usage_metadata.input_token_details.cache_read` into a sparse `cache_read_tokens` bucket key (also threaded through `SubagentTokenCollector` → `record_external_llm_usage_records`), and cache-hit input tokens are billed at `input_cache_hit_per_million` (omitted → billed at the miss price, a conservative upper bound). All priced models must use one currency; mixed currencies disable cost reporting and leave cost/currency fields null instead of producing invalid aggregates. Legacy rows fall back to run-level totals at `model_name`; unpriced models yield `cost: null` and cost fields are null when no pricing is configured |
-| **MCP** (`/api/mcp`) | `GET /config` - get config; `PUT /config` - replace the full config with whole-payload stdio validation; `PATCH /config` - toggle one server while preserving the raw extensions config and validating only an enabled target; both writes reload config and reset the process-local MCP cache |
-| **Skills** (`/api/skills`) | `GET /` - list skills; `GET /{name}` - details; `PUT /{name}` - update enabled; `POST /install` - install from .skill archive (accepts standard optional frontmatter like `version`, `author`, `compatibility`); `POST /reload` - admin-only process-local prompt-cache invalidation after trusted external filesystem changes |
-| **Memory** (`/api/memory`) | `GET /` - memory data; `POST /reload` - force reload; `GET /config` - config; `GET /status` - config + data |
-| **Uploads** (`/api/threads/{id}/uploads`) | `POST /` - upload files (auto-converts PDF/PPT/Excel/Word); `GET /list` - list; `DELETE /{filename}` - delete |
-| **Threads** (`/api/threads/{id}`) | `DELETE /` - remove DeerFlow-managed local thread data after LangGraph thread deletion; `POST /branches` - create a new main-thread branch from a completed assistant turn checkpoint and, when an addressable pre-user replay checkpoint exists, materialize it into the branch namespace so the inherited response remains regeneratable. Workspace files are not checkpointed, so the branch only best-effort copies the current workspace when branching from the **latest** turn (`workspace_clone_mode="current_thread_best_effort"`); branching from an older/historical turn skips the copy (`workspace_clone_mode="skipped_historical_turn"`) so the branch never inherits files that only exist in a later timeline. Thread-scoped runtime channels (`sandbox`, `thread_data`) are not copied onto the branch: the parent's `sandbox_id` binds path mappings and the release lifecycle to the parent's workspace, so the branch lazily acquires its own sandbox instead. Branch creation also seeds the new thread's run-event feed from the branch checkpoint's visible messages (`history_seed_mode` in the response): the thread feed reads run_events, not checkpoints, so without the seed the inherited history disappears from the UI after the branch's first run (#4380). Seeded rows are grouped into one synthetic run per inherited turn (`branch-seed-{thread_id}-{n}`, a new turn opening at every persisted human message, including an allowlisted hidden `ask_clarification` reply) because `run_id` is a turn identity to the feed's consumers, not a provenance tag: regenerating an inherited answer supersedes that row's whole `run_id` in `GET /messages/page`, so one shared id for the entire seed deleted the complete inherited history on a branch's first regenerate (#4458); `GET /goal`, `PUT /goal`, `DELETE /goal` - read, set, and clear the active thread goal; `POST /compact` - manually summarize older active context into `summary_text` and retain the recent message window, blocked while a run is in flight; unexpected failures are logged server-side and return a generic 500 detail |
-| **Artifacts** (`/api/threads/{id}/artifacts`) | `GET /{path}` - stream regular text and binary artifacts with `FileResponse`, including byte-`Range` 206/416 behavior used by bounded text previews and media seeking; active content types (`text/html`, `application/xhtml+xml`, `image/svg+xml`) are always forced as download attachments to reduce XSS risk; `?download=true` still forces download for other file types. `PUT /{path}` atomically replaces an existing UTF-8 text file under `/mnt/user-data/outputs` when its expected SHA-256 still matches; active runs conflict, and non-mounted sandbox providers receive the same update explicitly. Atomic replacement applies the existing POSIX permission handling when descriptor-based APIs are available and otherwise keeps the platform-native temporary-file permissions (Windows). |
-| **Thread Runs** (`/api/threads/{id}/runs`) | `POST /` - create background run; `POST /stream` - create + SSE stream; `POST /wait` - create + block. Before the first journaled run, an empty run-event message feed is seeded from an existing checkpoint head so legacy checkpoint-only history receives earlier thread-global sequence numbers and remains visible after the new run; a thread with no checkpoint or an already-populated feed skips this compatibility path. `POST /regenerate/prepare` - prepare clean input + checkpoint metadata for regenerating the latest completed or interrupted assistant answer, carrying the latest non-empty thread title in graph input so resuming an older checkpoint cannot roll back a later manual rename (#4457); `POST /edit-regenerate/prepare` - prepare a checkpoint replay from the latest editable human turn with a replacement user message and edit replay metadata; it carries the current thread title the same way, but only when the replay base already has one — an untitled base belongs to a thread the title middleware has not named yet, so pinning the current title there would keep a name generated from the prompt the edit just replaced; `GET /` - list runs; `GET /{rid}` - run details; `POST /{rid}/cancel` - cancel; `GET /{rid}/join` - join SSE; `GET /{rid}/messages` - paginated per-run messages `{data, has_more}`; `GET /{rid}/events` - full event stream; `GET /{rid}/workspace-changes` - workspace/output file change summary and optional diffs; `GET /../messages` - legacy thread message array; `GET /../messages/page` - backward thread-global `seq` history page with middleware/subagent-AI/successful-regenerate/edit-replay filtering; subagent AI callbacks remain available through run events while parent `task` ToolMessages stay visible for card restoration; `GET /../token-usage`  - aggregate tokens plus an optional `context_usage` percentage. Context usage approximately counts messages from the latest materialized thread state through `build_thread_checkpoint_state_accessor`, so full and delta checkpoint modes expose the same input. The percentage uses the latest run's model and its configured `context_window`.  |
-| **Runs** (`/api/runs`) | `POST /stream` - stateless run + SSE; `POST /wait` - stateless run + block; `GET /{rid}/messages` - paginated messages by run_id `{data, has_more}` (cursor: `after_seq`/`before_seq`) |
-| **Workflows** (`/api/workflows`) | Definition CRUD (`workflow_routes.py`) + `GET /workflows/templates` (N14 §24.6b: the built-in collaboration templates — supervisor/review-loop skeletons from `workflow/patterns.py` — for the canvas to insert); `POST /workflows/{definition_id}/evaluate` (N14 §24.8: replay the definition's embedded `metadata.evals` suite offline — `ran:false` when it declares none, 422 for a malformed spec); runs of a saved definition (`workflow_run_routes.py`): `POST /{id}/runs`, `POST /{id}/runs/stream`, `POST /{id}/runs/wait`, `GET /{id}/runs/{rid}`, `POST /{id}/runs/{rid}/cancel`, `POST /{id}/runs/{rid}/continue` (W2B AI-node continuation), `GET /{id}/runs/{rid}/join`, `GET /{id}/runs/{rid}/state` (checkpoint channel values), `GET /{id}/runs/{rid}/cost` (N14 §24.10: prices that run's per-node `__token_usage` against `models[*].pricing`; 503 when the checkpointer is missing, `cost: null` for unpriced models) — plus the N10 pair: `POST /{id}/preview` (describe one node's mutation from explicit `params`/`inputs`) and `GET`/`POST /{id}/runs/{rid}/undo` (records + plan, then execute newest-first with `dry_run`). Undo needs a SQL backend (503 on `memory`). Human tasks (same HITL stack `human:task` / `human:review` use): `human_task_routes.py` → `/api/human-tasks` (`GET /` with `?status=`/`?kind=task\|review`, `POST /{tid}/submit` `/skip` `/reopen`) |
-| **Workflow Folders** (`/api/workflow-folders`) | Arbitrary-depth directory tree (`workflow_folder_routes.py`): `GET /` flat user-owned folders, `POST /` create under an optional parent, `PUT /{id}` rename/move (self/descendant cycles and duplicate sibling names rejected), `DELETE /{id}` (empty folders only). `workflow_definitions.folder_id` (nullable = root) is validated by the workflow create/update routes; deletion never cascades into workflows. |
-| **Model Profiles** (`/api/model-profiles`) | User-managed middle layer between AI nodes and actual LLMs (`model_profile_routes.py`): `GET /` list with resolved target health/usage, `POST /` create, `GET/PUT/DELETE /{id}`. A profile targets one `config.models[].name`, never another profile. Delete is blocked while any workflow node references it; disable instead. `GET /api/models` remains the read-only actual-model catalog. |
-| **Projects** (`/api/projects`) | File-backed project bundles (`project_routes.py`): `GET /` list registered projects, `POST /` create a `.hnflow/project.json`, `POST /open` register an existing project, `GET/DELETE /{id}` read/close (closing never deletes files). Project activation lives in `<project>/.vibestack/stack.json`; Core is fixed and workbench add/save upserts only the groups a workflow needs without deleting unrelated entries. Project-scoped workbenches: `GET/POST /{id}/workbenches`, `GET/PUT/DELETE /{id}/workbenches/{wid}`, member add/remove, and `POST /{id}/workbenches/{wid}/runs` (background launch with `on_disconnect="continue"`, including the stack snapshot). Deleting a workbench never rewrites the project stack. Workbench files are the source of truth; the SQL row is a mirror. The legacy `/api/workbenches` route is removed. |
-| **Workflow Monitor** (`/api/workflow-monitor`) | Read-only cross-workbench aggregation for the persistent right-hand monitor: `GET /runs` (`status=active|waiting_human|all`, optional `workbench_id`) returns active runs plus runs suspended on a pending human task, with definition/workbench names, current node, completed/total nodes, elapsed time, pending-task kinds and an error excerpt. Execution controls remain on the workbench; the monitor only surfaces state and human decisions. |
-| **Workspace Resources** (`/api/threads/{thread_id}/resource-changes`) | Conversation-scoped undo journal for Lead Agent resource edits (`workspace_resource_routes.py`): `GET` lists changes plus the latest undoable run group; `POST /undo` reverts the latest completed turn in reverse order, all-or-nothing. Mutations are written by `deerflow/workspace/service.py` through the same SQL transaction as their `workspace_resource_changes` snapshot; tools are `workspace_catalog`, `workspace_get`, `workflow_manage`, and `workspace_undo` (`tools/builtins/workspace_tools.py`). Workbench mutations are now rejected because workbenches are project-file managed; the tools are injected only for the Lead Agent, not for subagents. |
-| **Scheduled Tasks** (`/api/scheduled-tasks`) | `GET /` - list; `POST /` - create (schedule kinds `once`/`cron`/`file`/`event`/`idle`; target `agent`/`workflow`; `payload_template`; `max_attempts`); `GET/PATCH/DELETE /{id}`; `POST /{id}/pause` `/resume`; `POST /{id}/trigger` - manual override (`force`); `POST /{id}/requeue` - drain a `dead_lettered` task; `GET /{id}/runs`; `GET /threads/{tid}/scheduled-tasks` (N7; requires a SQL backend) |
-
-Thread identifiers use the shared `deerflow.utils.thread_id` contract
-`^[A-Za-z0-9_-]{1,64}$`. Caller-provided opaque IDs remain supported; UUIDs
-are generated only for `None`, while explicit empty strings fail validation.
-Gateway creation and state-producing request boundaries, embedded-client
-entry points, filesystem/upload/event-store consumers, and scheduled launches
-enforce the same contract before persistence
-or workspace initialization. Route-addressable legacy IDs remain accepted by
-pure reads and cleanup/control endpoints. Deleting a noncanonical legacy ID
-best-effort removes its metadata and checkpoints but deliberately skips local
-filesystem cleanup, so the raw value is never interpolated into a host path;
-new runs, workspace/sandbox operations, and other state-producing mutations
-remain blocked.
-
-**Workspace change review**: `packages/harness/deerflow/workspace_changes/`
-captures a pre-run and post-run snapshot of the thread-owned `workspace` and
-`outputs` directories. `runtime/runs/worker.py` performs the filesystem scan via
-`asyncio.to_thread` and writes a `workspace_changes` event with category
-`workspace` when changes exist. Uploads are intentionally excluded. Text diffs
-are size-limited; binary, large, and sensitive-looking paths are persisted as
-metadata only. Internal process-feedback directories never count as changes:
-the scanner's `EXCLUDED_DIR_NAMES` drops `BROWSER_FRAMES_DIRNAME` (transient
-browser screenshots) and `TOOL_RESULTS_DIRNAME` (the tool-output budget
-middleware's default externalization subdir, `constants.py` is the shared
-source of truth for both writers and the scanner), and the worker threads the
-configured `tool_output.storage_subdir` through the snapshot capture as an
-extra excluded dir name so custom storage locations stay excluded too.
-
-**Run delivery receipts**: `RunJournal` records each non-empty artifact update
-once per tool `Command` for the terminal `run.delivery` event. When a command
-contains multiple messages, a unique tool name resolved from matching
-`ToolMessage` entries supplies attribution; additional command messages do not
-duplicate artifact paths or counts. If multiple different tool names resolve
-for one flat artifact update, the paths remain counted but unattributed because
-the command does not carry a per-path mapping. `RunJournal` callbacks set
-`run_inline=True`: they do only in-memory bookkeeping or schedule async writes,
-and staying on the run's event-loop thread serializes parallel tool callbacks
-before terminal delivery recording and flushing. Each worker creates a separate
-journal per run before cancellable/fallible preflight work, so checkpoint
-compatibility failures and cancellation while waiting for prior finalization
-still emit a zero-delivery receipt. The worker flushes ordinary journal events,
-idempotently persists the run-scoped receipt, and only then persists the staged
-terminal run status. A receipt failure is retried on a short bounded schedule
-while the owning worker still knows the real outcome. The
-worker derives delivery requirements from the run's workspace snapshots rather
-than a client request option: every regular file created or modified under
-`/mnt/user-data/outputs` is a candidate produced artifact. Internal
-process-feedback files are not candidates: the snapshot capture excludes the
-scanner's `EXCLUDED_DIR_NAMES` (including the default tool-output
-externalization subdir) plus the configured `tool_output.storage_subdir`, so a
-run that only externalized oversized tool outputs does not fail delivery. At
-least one candidate must be covered by a path attributed by the journal to
-`present_files`; presenting only an unrelated pre-existing path does not
-satisfy delivery.
-Receipts for such runs add `produced_paths`, `presented_paths`, `matched_paths`,
-`verification`, `stage`, and `satisfied` to the Slice 1 fact fields. Missing a
-matching presentation becomes a run error; a successful presentation is also
-downgraded to error if its receipt cannot be durably verified. Runs without
-changed outputs preserve ordinary chat behavior and the original receipt shape.
-Orphan recovery first
-atomically claims a stale active row, then uses the same singleton write to
-backfill a zero-delivery receipt. This ordering prevents a stale recovery scan
-from overwriting a live run's later detailed receipt; an event-store outage
-does not undo the terminal takeover. An existing detailed receipt is preserved
-when a worker crashed after writing it. Event stores
-serialize `put_if_absent` with ordinary thread writers: memory and JSONL provide
-the documented single-process guarantee, while the DB store adds per-thread
-in-process locks and PostgreSQL advisory locks for cross-process writers.
-Moving journal construction ahead of preflight is receipt-only on early failure
-paths: a separate boundary flag preserves the previous completion-data
-semantics, so checkpoint incompatibility or cancellation while waiting for an
-older finalizing run does not persist an empty completion snapshot. Worker tests
-pin one accumulated receipt across multiple goal-continuation `_stream_once`
-calls; journal tests drive LangChain's real async callback dispatcher against a
-single journal to pin serialized, deduplicated parallel tool callbacks.
-Multi-worker deployments therefore require `run_events.backend: db` for shared,
-ordered delivery events; the startup gate rejects process-local memory and
-JSONL event stores when `GATEWAY_WORKERS > 1`.
-
-**RunManager / RunStore contract**:
-- LangGraph-compatible run requests validate their supported subset before creating a run. `runtime/stream_modes.py` is the shared backend contract for public stream modes and the worker's `graph.astream` mapping; the public `messages-tuple` mode maps to LangGraph's internal `messages` mode, while public `messages`, `events`, and other unsupported modes are rejected instead of being dropped or replaced with `values`. `app/gateway/run_models.py::RunCreateRequest` is shared by HTTP and internal scheduled launch paths, retains only truthful compatibility defaults for unimplemented options (`if_not_exists="create"` plus `None` placeholders), returns 422 for unsupported values including `on_completion="complete"`, `on_completion="continue"`, and `multitask_strategy="enqueue"`, and forbids undeclared SDK options so fields such as `checkpoint_during` and `durability` cannot be silently discarded. A placeholder must still accept the stock SDK's own default: `langgraph_sdk` drops only `None` from its run payload, so `stream_resumable=False` reaches every request and means "non-resumable", which is what DeerFlow serves — rejecting it 422'd every IM channel run (#4466). `tests/test_run_request_validation.py::test_gateway_accepts_langgraph_sdk_default_payload` pins the real SDK payload against this boundary; channel tests mock the SDK client and cannot catch this class of drift.
-- `RunManager.get()` is async; direct callers must `await` it.
-- The history batch helpers `list_successful_regenerate_sources()`, `list_edit_regenerate_runs()`, and `get_many_by_thread()` default to `user_id=AUTO`: they resolve the request user and fail closed when no user context exists. Migration/admin callers that intentionally need an unscoped read must pass `user_id=None` explicitly.
-- Edit-and-rerun visibility is derived from edit replay runs (`metadata.replay_kind="edit"` plus `regenerate_from_run_id`) by `RunManager.list_edit_replay_visibility()`: the newest attempt for each source run is authoritative. Pending/running/success attempts hide the original source run; failed, timed-out, or interrupted attempts hide only the failed attempt so the original conversation reappears.
-- When a persistent `RunStore` is configured, `get()` and `list_by_thread()` hydrate historical runs from the store. In-memory records win for the same `run_id` so task, abort, and stream-control state stays attached to active local runs.
-- Thread metadata status switches to `running` only after `RunManager.try_start()` succeeds. Pending-cancelled runs therefore skip the old `running` projection, while clients may observe the prior thread status during the short worker-startup window.
-- `cancel()` returns a :class:`~deerflow.runtime.CancelOutcome` enum: `cancelled` (local cancel), `not_active_locally` (no in-memory run on this single worker — the 409 path), `not_cancellable` (terminal state), or `unknown` (not found in memory or store). `create_or_reject(..., multitask_strategy="interrupt"|"rollback")` persists interrupted status through `RunStore.update_status()`, matching normal `set_status()` transitions.
-- Interrupt/rollback admission registers the replacement before its best-effort persistence of locally interrupted predecessors. If the admitting caller is cancelled during that post-registration await, `RunManager` drains a shielded replacement cleanup before propagating `CancelledError`, including across repeated cancellation. The cleanup normally persists `interrupted`; if that best-effort transition fails, it retries the active-to-`interrupted` store transition strictly and verifies the result with the replacement's captured owner identity. A concurrent peer terminal transition wins and is synchronized back into the local record rather than being overwritten or deleted.
-- Store-only hydrated runs are readable history and are not cancellable on this worker: `cancel()` returns `not_active_locally` (409). The single-user build has no durable cross-worker cancellation channel (no `request_cancel` / `finalize_if_not_cancelled` / `renew_lease`).
-- Startup orphan reconciliation claims stale active rows left by a previous process with `RunStore.claim_for_takeover()`, not a plain `update_status()`; the conditional claim re-checks `status` and lease expiry atomically. Single-worker runs carry a NULL lease, so every inflight row is reclaimed — the crash-recovery path.
-- Run admission and independent writes are first-class thread operations. `runs.operation_kind` distinguishes user-visible `run` rows from internal `checkpoint_write` and `artifact_write` reservations, while every active kind shares the existing durable active-thread uniqueness constraint. New operation kinds must go through `RunStore.create_thread_operation_atomic()` and `RunManager.reserve_thread_operation()` rather than adding another lock or metadata marker. Reservation bodies are attached to their caller task so a cancellation cancels the writer; the context manager translates that cancellation to `ConflictError` after cleanup so Gateway mutation routes return a retryable 409 instead of dropping the HTTP request. The cleanup scope begins immediately after durable admission, including the await that attaches the caller task, so cancellation cannot strand a pending reservation. Reservations are excluded from run history/reporting and from run-only helpers such as `list_by_thread()` and `has_inflight()`, release uses the captured owner rather than ambient user context, and local cleanup still runs when the best-effort store delete fails. `RunStore.create_run_atomic()` remains a deprecated compatibility shim for external stores that only admit normal runs; new stores must implement `create_thread_operation_atomic()` to support internal operation kinds.
-- Gateway checkpoint mutations outside run execution must use `services.reserve_checkpoint_write()`, which composes the process-local thread lock with the durable `checkpoint_write` reservation. Manual compaction, `POST /threads/{id}/state`, and both goal mutation routes (`PUT` / `DELETE /threads/{id}/goal`, including creation of a missing goal checkpoint) use this boundary, so an existing run blocks the write and the reservation blocks new reject/interrupt/rollback runs across workers.
-- `POST /wait` (both thread-scoped and `/api/runs/wait`) drains the stream bridge via `wait_for_run_completion()` instead of bare `await record.task`, so it honours the run's `on_disconnect` setting and cancels the background run on real client disconnect rather than returning a stale checkpoint (issue #3265).
-- The `StreamBridge` is the in-process memory implementation: it retains only `stream_bridge.queue_maxsize` data events. A syntactically valid `Last-Event-ID` older than the retained watermark, or a live subscriber that falls behind it, yields `StreamGap` before any partial replay. `sse_consumer` maps that control item to an id-less SSE `gap` payload (`stream_replay_gap`) and intentionally leaves the run active; internal `/wait` consumers resume from its latest retained ID because they only need terminal completion. Malformed cursor behavior is limited to the memory bridge's rules: a syntactically numeric cursor below its watermark is treated conservatively as a gap even when the evicted timestamp can no longer be verified; unknown ids at or above the watermark retain the legacy replay-from-earliest policy.
-- Startup orphan recovery drives one Gateway stream-terminalization path: after `RunManager` durably marks a run `error` with `stop_reason=orphan_recovered`, Gateway publishes `END_SENTINEL` and schedules stream cleanup. Store retries have bounded attempts/backoff; an individual operation still relies on the database driver/pool timeout. `RunManager.shutdown()` gives active user runs priority within its shared deadline. Gateway tracks delayed recovered-stream cleanups and converts unfinished delays to immediate deletes before closing the bridge. Startup recovery, before the runtime yields to requests, projects the latest affected thread to `error`. Store-only SSE and `/wait` consumers wait for the bridge's real END marker after an ordinary durable terminal status, because status persistence can precede tail events. The explicit `orphan_recovered` signal is the liveness fallback: its publisher is known to be gone, so it supplies the boundary if END publication fails. Keep cross-component recovery orchestration in Gateway; do not introduce a harness-to-app dependency.
-- Thread-scoped run creation accepts `checkpoint` / `checkpoint_id`; Gateway validates the checkpoint belongs to the request thread before writing `checkpoint_id` / `checkpoint_ns` into `config.configurable` for LangGraph branching. In `delta` checkpoint mode the worker rewrites that fork into a linear head write before the graph starts (see "A delta-mode run cannot fork" under Checkpoint Channel Modes), because delta state for a fork replays the abandoned sibling's writes.
-- Thread-scoped Gateway runs evaluate an active `ThreadState.goal` after the visible turn completes. `runtime/goal.py` asks a non-thinking evaluator model to judge only visible conversation evidence and return a typed blocker; the evaluator model is created once per run and reused across hidden continuation checks. The evaluator runs after the graph root's tracing scope has already closed, so `create_goal_evaluator_model`/`evaluate_goal_completion` attach their own model-level tracing callbacks (`attach_tracing=True`) and inject Langfuse trace metadata (`thread_id`/`user_id`/`deerflow_trace_id`) directly onto the `ainvoke` call — the same standalone-caller pattern as `oneshot_llm.run_oneshot_llm` and `MemoryUpdater` (see Tracing System below). Satisfied goals are cleared; every non-satisfied evaluation — continuable or stand-down — is persisted with `last_evaluation` (the blocker, reason, and evidence summary; outcomes that stop the loop additionally record a `stand_down_reason` for observability), but only `goal_not_met_yet` evaluations are streamed as hidden `HumanMessage` continuations, and only when a durable assistant end-of-turn checkpoint exists, the run has not been aborted, the thread did not change during evaluation, and the no-progress breaker has not fired. The continuation cap is 8 — a hard maximum in the `0`–`8` range; callers requesting more are clamped (`set_goal`) or rejected with 422 (`PUT /goal`). The no-progress breaker keys on the latest visible assistant evidence (not the evaluator's free-text reason, which an LLM rewords every turn), so two consecutive continuations that add no new visible assistant output stop the loop after 2 attempts. Model-response cleanup helpers such as think-block stripping and code-fence stripping live in `deerflow.utils.llm_text` so `runtime/goal.py` and other standalone callers share the same JSON-prep behavior.
-- Run event stream changes must keep producer code, `deerflow/constants.py`, `runtime/events/catalog.py`, `contracts/run_event_stream_contract.json`, `backend/docs/RUN_EVENT_STREAM.md`, and `tests/test_run_event_stream_contract.py` in sync. The dependency-free constants module owns the persisted envelope limits (`event_type` 32 characters, `category` 16) and cross-layer workspace event identity; the catalog owns validated runtime definitions and categories. Dynamic middleware tags are limited to 21 characters after the `middleware:` prefix. The JSON contract owns payload schemas, backend-specific storage semantics, legacy aliases, and compatibility rules; conformance tests require both views and all producer groups to agree. `run.end.content` remains opaque and may retain nested Python values in memory while JSONL/database stores stringify non-JSON nested values, so consumers must not assume backend-identical nested output representations.
-
-Proxied through nginx: `/api/langgraph/*` → Gateway LangGraph-compatible runtime, all other `/api/*` → Gateway REST APIs.
-
-**Branch/regenerate checkpoint invariant**: `app/gateway/checkpoint_lineage.py`
-walks `parent_config` rather than globally ordered checkpoint history so replay
-anchors stay on the selected lineage after regenerations create sibling branches.
-New conversation branches persist the pre-user replay anchor before their visible
-head through the state mutation graph, which preserves materialized state in both
-full and delta checkpoint modes. Only an explicitly absent legacy parent link may
-use chronological compatibility lookup; cycles, dangling links, and depth-limit
-exhaustion fail closed. Existing single-checkpoint branches are never repaired by
-copying a raw checkpoint because delta state is not self-contained in one tuple.
-Both lookups additionally require the replay base to be a **settled** checkpoint
-(`has_pending_tasks` — no scheduled `next` tasks). A checkpoint with pending tasks
-is a mid-run snapshot: resuming from it replays the writes of the node that was
-about to run. Message ids alone cannot exclude those, because middleware may
-rewrite a message's id inside the run that produced it — `DynamicContextMiddleware`
-moves the first user turn to `{id}__user` and gives `{id}` to the injected
-reminder, so every checkpoint written before it holds the same prompt under an
-unmatched id. Selecting one of those re-added the original prompt *after* the
-edited one, and the model answered the question the edit was replacing (#4531).
-`next` is not derivable on the degraded raw-checkpoint read path, which reports no
-tasks; absence of evidence stays permissive there rather than failing closed.
-Edit replay resolves its base through the same lineage-first path as regenerate;
-it must pass `head_checkpoint` or it silently degrades to the chronological scan
-that cannot tell sibling branches apart.
-
-### Sandbox System (`packages/harness/deerflow/sandbox/`)
-
-**Interface**: Abstract `Sandbox` with `execute_command(command, env=None)`, `read_file`, `write_file`, `list_dir`, `glob`, and `grep`. `grep` accepts either one text file or a directory tree. The optional `env` injects per-call environment variables (request-scoped secrets — see Request-Scoped Secrets below); `LocalSandbox` merges it via `subprocess.run(env=...)` and `AioSandbox` routes env-bearing commands through the `bash.exec(env=...)` API on a fresh session.
-**Provider Pattern**: `SandboxProvider` with `acquire`, `acquire_async`, `get`, `release` lifecycle. Async agent/tool paths call async sandbox lifecycle hooks so Docker sandbox creation, discovery, cross-process locking, readiness polling, and release stay off the event loop.
-**Environment policy** (`sandbox/env_policy.py`): `execute_command` no longer inherits the full `os.environ`. `build_sandbox_env()` scrubs secret-looking names (`*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASS*`/`*CREDENTIAL*`) from the inherited environment before layering injected request secrets on top, so platform credentials (e.g. `OPENAI_API_KEY`) never leak into skill subprocesses. Benign vars (`PATH`, `HOME`, `LANG`, `VIRTUAL_ENV`, ...) are preserved.
-**Implementations**:
-- `LocalSandboxProvider` - Local filesystem execution. `acquire(thread_id)` returns a per-thread `LocalSandbox` (id `local:{thread_id}`) whose `path_mappings` resolve `/mnt/user-data/{workspace,uploads,outputs}` and `/mnt/acp-workspace` to that thread's host directories, so the public `Sandbox` API honours the `/mnt/user-data` contract uniformly with AIO. `acquire()` / `acquire(None)` keeps the legacy generic singleton (id `local`) for callers without a thread context. Per-thread sandboxes are held in an LRU cache (default 256 entries) guarded by a `threading.Lock`. Public, custom, legacy, and managed integration skill mappings point at stable enabled-only projection roots rather than raw skill directories.
-- `AioSandboxProvider` (`packages/harness/deerflow/community/`) - Docker-based isolation. Active-cache and warm-pool entries are checked with the backend during acquire/reuse; definitively dead containers are dropped from all in-process maps so the thread can discover or create a fresh sandbox instead of reusing a stale client. Backend health-check failures are treated as unknown, not dead; local discovery likewise treats an unverifiable container as not adoptable and falls through to create rather than failing acquire. `get()` remains an in-memory lookup for event-loop-safe tool paths — it never touches the ownership store (that would be blocking IO on the event loop); ownership is published on acquire/reclaim and refreshed off the event loop by the dedicated renewal thread (`_renew_owned_leases`). `uses_thread_data_mounts` defaults to backend detection (`LocalContainerBackend=True`), while the optional `sandbox.thread_data_mounts` boolean takes precedence for deployments that guarantee the Gateway and sandbox share the same thread user-data directories. Setting it `true` skips upload-time sandbox acquire/sync; a false positive leaves uploads unavailable to the sandbox. Local-container mounts use the same stable skill projection roots. Readiness probes and `agent_sandbox` clients classify loopback/private IPs, single-label cluster hosts, and Docker/Podman internal hostnames as direct control-plane destinations and set `trust_env=False`; external FQDNs and public IPs retain environment proxy support.
-- `E2BSandboxProvider` (`packages/harness/deerflow/community/e2b_sandbox/`) provides E2B remote isolation.
-  New sandboxes receive a one-shot upload from the enabled-only public, custom,
-  legacy, and managed integration projections. Existing E2B VMs keep their
-  creation-time snapshot because E2B has no shared host mount.
-  Acquire and release share a per-user and thread lock. The provider lock does
-  not cover remote IO. `burst_limit` adds capacity only for the `burst` policy.
-  The `wait` policy fails the turn after `acquire_timeout`. The runtime does not
-  retry the turn automatically. E2B acquisition uses a bounded executor.
-  Waiting calls do not consume the default asyncio executor. The `reject`
-  policy can evict one warm VM before it returns an error. With memory
-  ownership, `replicas` limits one Gateway process. Redis ownership shares one
-  `<ownership.key_prefix>:e2b-capacity` Hash, making the limit (plus a bounded
-  burst) deployment-wide. Lua atomically manages VM and in-flight-create
-  entries; missing or unavailable state fails closed. E2B reservation metadata
-  repairs interrupted creates. Inventory replacement is revision-CAS guarded,
-  and incomplete inventories never remove entries; complete omissions get a grace period.
-  Uncertain cleanup keeps a tombstone slot. Shutdown tracks owned remote
-  operation IDs. Discovery can find a VM from another Gateway. Shutdown closes
-  an unowned discovery client without destroying its VM. Release ends its
-  transition count when the VM enters the warm pool. Local client cleanup does
-  not consume a second slot. A create that returns after shutdown retries one
-  failed kill through a new client. An unconfirmed remote ID stays tracked.
-  `reset()` uses full shutdown semantics. It destroys tracked active and warm
-  VMs. It wakes capacity waiters. Callers cannot reuse the old provider
-  instance. A background startup pass and periodic reconciliation list
-  provider-tagged remote sandboxes within page/item/time budgets, probe every
-  candidate until a healthy canonical sandbox is found, adopt only through the
-  shared ownership store, and reap duplicates/orphans only after their
-  configured grace/TTL and an atomic `del:` claim. Lease renewal is independent
-  of reconciliation. Failed canonical adoption clears both its capacity
-  reservation and acquire-intent marker even if a peer takes ownership between
-  the initial claim and bootstrap cleanup. Shutdown kills only IDs whose leases
-  are owned by this provider instance; peer-owned clients are merely closed.
-  - **Cross-instance ownership store** (`aio_sandbox/ownership/`, #4206): gateway instances sharing a container backend coordinate container ownership through a pluggable lease store, selected by `sandbox.ownership.type` (`memory` | `redis`) and resolved from the env escape hatch (`DEER_FLOW_SANDBOX_OWNERSHIP_REDIS_URL`; a set `DEER_FLOW_STREAM_BRIDGE_REDIS_URL` also implies a multi-instance deployment and infers `redis`). `memory` is single-instance only and declares `supports_cross_process = False`.
-    - **A lease answers "who reaps this container", not "who may use it".** That splits the interface in two: `take()` transfers ownership on the **acquire** path (a container is deterministic per user/thread, so consecutive turns legitimately land on different instances — a conditional claim there would strand the thread until the previous lease expired), while `claim()` succeeds only if the container is unowned or already ours and gates every **adopt/reap** path. `release()` never clears a peer's lease.
-    - **A lease carries a state, and that is what makes the destroy window safe.** `own:` = responsible for this container; `del:` = tearing it down (`claim(..., for_destroy=True)`). `take()` is refused against a `del:` lease, so a container cannot be re-acquired between a destroy path's claim and its container stop. Without the two states an unconditional `take()` would silently overwrite the destroyer's claim and the peer's stop would land on a container the new owner had already handed to an agent — i.e. #4206 again. That pairing is what replaced the previous same-host `flock` guard, which is gone; Redis makes the scope genuinely multi-instance instead of same-host. A destroyer that dies mid-stop leaves a `del:` marker that lapses with the TTL. On the acquire path a refused take raises `SandboxBeingDestroyedError`: the reuse/reclaim paths drop the container and cold-start, and the discover path propagates (falling through to create would collide with the not-yet-removed container name).
-    - **The `del:` state has to be *held* for the stop, not just written before it.** The two states alone do not make `flock` redundant — a held lock cannot expire, whereas a lease can, and `claim(..., for_destroy=True)` writes the marker with the ordinary lease TTL. Nothing else refreshes it: `renew()` extends only `own:` and deliberately reports a teardown as `LOST`, and the destroy paths drop the sandbox from the maps `_renew_owned_leases` iterates. So a container stop that outlived the TTL let the marker lapse, a peer's `take()` succeeded against the still-running container, and the stop then landed on the turn that had just been handed it — the exact window `del:` exists to close, reopened by its own expiry. `_held_teardown_lease` wraps **every** `del:`-marked stop — `_destroy_warm_entry`, `destroy()`, and `_drop_unhealthy_sandbox` — and re-claims the marker every `renewal_interval_seconds` until the stop returns. `_drop_unhealthy_sandbox` needs it most: it untracks *before* claiming (under its `expected_info` TOCTOU guard), so `_renew_owned_leases` cannot see the id either. **The final release is the heartbeat's own last act, not the caller's** — a refresh `claim` still in flight when the context exits (the store's socket timeout bounds it, but it can be mid-round-trip) would otherwise land *after* a caller-side release and rewrite `del:` on a container whose stop already completed, stranding a fresh `take()` (or rolling back a fresh create) until the TTL. Releasing from inside the heartbeat, after its loop stops, sequences the release strictly after the last refresh, so no claim can follow it; the context join is bounded and, on a genuine wedge, defers the release to that thread rather than clearing the marker itself. This covers a **failed** stop too (the container is probably still up, and a marker left behind refuses its own thread's `take()` until the TTL lapses); `destroy()` still lets the error propagate out of the `with` — `shutdown()` logs per sandbox off it. `RedisOwnershipStore` sets a `socket_timeout` so no store round trip — and so no heartbeat refresh — can block unbounded, keeping that deferred release finite. This needs no abnormal backend: the schema bounds only `renewal_interval_seconds` (> 0) and `ttl_multiplier` (>= 2), so a legal config puts the TTL below a normal container stop. `LocalContainerBackend._stop_container` now passes a `timeout` to `subprocess.run` (`_STOP_TIMEOUT_SECONDS`) so a wedged daemon cannot block unbounded — that bounds the residual window independently of the ownership layer, for the case where the `del:` marker lapses mid-stop (a store outage longer than the TTL) and the stop then lands on a container a peer has been handed. A timed-out stop propagates rather than being swallowed like a `CalledProcessError`: the container is probably still running, so reporting a clean stop would drop the warm entry and leak it. The TTL stays finite on purpose — the heartbeat dies with the process, so a destroyer that crashes mid-stop still releases the container one TTL later instead of marking it undestroyable forever. Raising a separate teardown TTL instead would only be sufficient if it were bounded above every backend's real stop deadline.
-    - **Fail-closed both directions.** Establishment: a sandbox whose ownership cannot be published is never handed out (a just-created container is destroyed rather than leaked as an adoptable orphan) — acquiring raises `OwnershipBackendError`, matching the stream bridge's fail-hard v1 policy. Reaping: a store that cannot answer is treated as peer-owned, so an outage never turns live peer containers into orphans. **Renewal is the deliberate exception**: an unanswerable store there means *unknown*, not lost, so `_refresh_ownership` keeps the sandbox and retries — failing closed on that path would evict every live sandbox on every instance the moment the store blinked. The TTL still bounds how long a genuinely dead owner holds a lease. Both paths that stop a container they still track — `destroy()` and `_destroy_warm_entry` — claim **before** untracking, so a refused claim cannot leave a container running and untracked. (`_drop_unhealthy_sandbox` untracks first, under its `expected_info` TOCTOU guard, then claims before the stop; a refused claim there leaves the container to the next reconcile, which re-adopts it after the grace.)
-    - **A lease excludes peers, never ourselves — same-process exclusion is the provider's job.** `claim()` and `take()` both succeed against this instance's own `own:` lease by design (that is what lets a destroy path claim what it already owns), so `del:` says nothing to this process's *other* threads. Every reaper — idle checker, renewal, warm eviction, unhealthy drop — decides outside `self._lock`, because a store round trip must not be held under the lock that guards every acquire; so each one acts on a decision its own acquire path may already have invalidated. Two guards cover the two directions, and both live in `AioSandboxProvider`, not the store:
-      - **Reaping** (`_reserve_local_teardown` / `_local_teardown`): the reaper marks the id, and every promote path — `_reuse_in_process_sandbox`, `_reclaim_warm_pool_sandbox`, `_register_discovered_sandbox` — refuses a marked id exactly as it refuses a peer's `del:` (drop and cold-start). The "is this still reapable?" check runs **in the same critical section as the mark**, passed down as a `still_reapable` predicate rather than run by the caller beforehand: checking first and marking second *is* the window, not a narrower version of it. This matters most where the entry deliberately stays visible during the stop — both warm reapers defer their pop so a refused claim cannot lose the container — and where the maps are cleared first (`_drop_unhealthy_sandbox`), which leaves backend discovery as the open path. On `main` the mixin's `_evict_oldest_warm` / `_reap_expired_warm` popped under the lock, so the deferred pop is what made this reachable.
-      - **Forgetting** (`_acquire_epoch`): when `renew()` reports `LOST` the peer legitimately wins, so here the *promote* is the thing to detect. `_publish_ownership` bumps a per-id acquire epoch; `_renew_owned_leases` and `release()` snapshot it before the round trip and hand it to `_forget_lost_sandbox`, which skips the pop if it moved. Object identity is not enough: the reuse path re-publishes ownership while handing out the **same** tracked `AioSandbox`, so an identity check sees nothing and the pop closes a client mid-turn.
-      - **A guard must become visible no later than the transition it guards.** The epoch cannot satisfy that for `take()`: the takeover is durable before `take()` returns (redis has committed the SET while the reply is in flight), and the epoch can only be written afterwards, so a renewal holding an older `LOST` walks through the gap, drops the maps, and closes the client the acquire is about to hand back — acquire then returns an id whose `get()` is `None`. `_publish_ownership` therefore publishes an **intent mark** (`_acquire_inflight`) under `_lock` *before* the round trip; the epoch covers the other half, "an acquire completed since you decided". `_forget_lost_sandbox` honours the intent mark unconditionally, not only when an epoch is supplied — "no epoch" must not read as "no guard".
-      - **A reservation must cover the removal, not just the stop.** `_destroy_warm_entry` pops the warm entry itself, inside the reservation. Releasing the reservation when the stop returns and letting the caller pop afterwards leaves a gap where the container is stopped, the entry is still in `_warm_pool`, and nothing marks it — a reclaim there hands out a dead container. The pop stays deferred relative to the *stop* (a refused or failed stop keeps the entry), just no longer relative to the reservation.
-      - **A check taken before a round trip must be retaken after it.** `_reuse_in_process_sandbox` re-verifies both its map entry and the local teardown reservation, `_reclaim_warm_pool_sandbox` re-checks the reservation, and `_register_discovered_sandbox` re-checks before installing its client, all after publishing ownership. Before the intent mark is set a renewal's `LOST` is both current and correct, so the forget can legitimately remove the entry the acquire decided to hand out; independently, a local reaper can reserve an id while reuse is outside `_lock` for its health/store calls and deliberately leaves the map entry present until its destroy claim succeeds. Falling through re-discovers or cold-starts instead of returning/installing a client for either stale decision. The pre-round-trip checks remain as early-outs that skip backend and store work on an already-doomed entry.
-      - **Adoption is a promote too.** `_reconcile_orphans` honours the reservation: a container being torn down is untracked and still running, which is exactly the shape that loop adopts, and neither the claim (ours) nor the recovery grace (skipped entirely on `memory`, where `supports_cross_process` is `False`) excludes it.
-      - **Active and warm are exclusive, and only a promote can violate it.** Both register paths pop `_warm_pool` inside the same locked section that inserts into `_sandboxes`: a warm entry for an id is stale the moment that id becomes active, and leaving it gives the container *two* reapers — `_reap_expired_warm` judges it by the warm timestamp and never consults `_last_activity`, so it stops a container an agent is using while `_sandboxes` still hands out its client. Reachable because reconciliation adopts into the warm pool inside the register's publish → track window, and on `memory` it adopts on sight (`_adoptable_after_grace` short-circuits when `supports_cross_process` is `False`, so an id carrying this process's own lease reads as adoptable). On `main` the track was a single locked insert with nothing before it, so the window did not exist.
-      A non-destroy `claim()` is the one case the store does police against its own owner: it refuses to overwrite our own `del:`, because the stop it marks is already in flight and downgrading the marker would let a `take()` hand out a container about to die. Enforced in both backends (Lua and Python) so they cannot drift.
-    - **Renewal is independent of `idle_timeout`** (`_start_lease_renewal`, own daemon thread; TTL = `renewal_interval_seconds × ttl_multiplier`). Renewal used to ride on the idle checker, which `__init__` only starts when `idle_timeout > 0` — so `idle_timeout: 0` ("keep warm VMs until shutdown", a documented config) let every lease lapse. Liveness and reaping must not share a switch. Renewal covers warm entries as well as active ones; losing a lease drops the sandbox from this instance's maps **without touching the container** (`_forget_lost_sandbox`) — destroying it there would be the very cross-instance kill this store prevents.
-      - A warm teardown is the local exception to that forget rule: `_destroy_warm_entry` deliberately keeps the entry in `_warm_pool` until the backend stop succeeds, while its own `del:` marker makes ordinary `renew()` report `LOST`. `_forget_lost_sandbox` therefore honours `_local_teardown`; otherwise the renewal thread can pop the retained entry mid-stop and a failed stop leaves a running container untracked.
-    - **`renew()` distinguishes lapsed from lost** (`RenewOutcome`), and the two must not be collapsed. `LAPSED` means the lease is simply absent — nobody took it — so `_refresh_ownership` re-establishes it; `LOST` means a peer holds it and it is never re-taken. Treating an absent lease as lost meant a Redis restart without persistence (every key gone) evicted every in-flight sandbox on every instance at once.
-      - Renewal's fail-open rule covers both store round trips. If `renew()` returns `LAPSED` but the follow-up `claim()` cannot answer, ownership is still unknown rather than lost, so the provider keeps the sandbox and retries. The ordinary `_claim_ownership` helper remains fail-closed for adopt/reap callers and is intentionally not used for this re-claim.
-    - **Teardown join budget covers refresh plus release.** Redis bounds each ownership operation at five seconds, and context exit can catch the heartbeat in one final refresh before its `finally` performs the final release. `_TEARDOWN_JOIN_TIMEOUT_SECONDS` is therefore 12 seconds — greater than both sequential operation bounds — so a normal pair of socket timeouts does not emit the deferred-release warning; a still-running heartbeat continues to own the release safely.
-    - **An absent lease means the same thing on both paths, and reconciliation must say so too.** The `LAPSED` rule above only covers an owner renewing its *own* lease; on its own it does not make state loss safe, because reconciliation reads the same absent key as "orphan, adopt". After a Redis flush (restart without persistence, or eviction under `maxmemory`) every owner is alive and merely pre-renewal-tick, so whichever instance reconciles first would adopt every live container, each real owner's next renewal would report `LOST`, and it would drop a sandbox mid-turn for the adopter to idle-destroy — #4206 through the back door. `_adoptable_after_grace` closes it: an untracked container must be seen unowned (`owner()`, a read-only peek — the atomic `claim()` is still what actually gates adoption) across a full lease TTL before it can be adopted, tracked per container in `_unowned_since`. That rebuilds the delay the flush erased — a live owner republishes within one renewal interval, shorter than the TTL by construction (`ttl_multiplier >= 2`) — while a genuinely crashed owner never republishes, so its containers are still adopted one grace later rather than leaking. A republished lease **resets** the grace; a pausing-only timer would still expire over a live owner's lease. The grace is skipped when `supports_cross_process` is `False`: no peer can hold a lease such a store would show us, so single-instance deployments keep instant orphan cleanup, and a grace could not help a multi-worker gateway on `memory` anyway (peers are invisible to each other's leases with or without it).
-    - **The `memory` store is single-instance only** and says so via `supports_cross_process = False`; the provider logs a warning at startup when the configured store cannot see peers. A multi-worker gateway on `memory` has no cross-process coordination at all — same contract as the in-process stream bridge. The ownership factory infers `redis` from `DEER_FLOW_SANDBOX_OWNERSHIP_REDIS_URL` (or `DEER_FLOW_STREAM_BRIDGE_REDIS_URL`) so a container deployment can opt into cross-instance coordination via the env without editing config.yaml.
-    - `get()` stays a pure in-memory lookup and must never call the store (that is blocking filesystem/network IO on the event loop); anchored by `tests/blocking_io/test_aio_sandbox_get.py`, which injects a deliberately-blocking probe store so the anchor keeps its teeth regardless of the configured backend. Tests: `tests/test_sandbox_ownership_store.py` (store contract, defined once for **both** backends — the redis tier is `@pytest.mark.integration`, uses `DEER_FLOW_TEST_REDIS_URL` when set, and otherwise self-skips without a reachable Redis. Backend CI provisions Redis, so the merge gate executes the real Lua tier; there is no fake-redis tier because a fake would not execute the Lua exclusions) and `tests/test_sandbox_orphan_reconciliation.py` (provider behaviour, two providers sharing one store).
-- `BoxliteProvider` (`packages/harness/deerflow/community/boxlite/`) - BoxLite micro-VM isolation. The `boxlite` runtime is optional (`deerflow-harness[boxlite]`) and lazy-imported only when this provider is selected. The provider owns one private asyncio event loop on a daemon thread because BoxLite handles are loop-affine; sync `Sandbox` calls marshal onto that loop with `run_coroutine_threadsafe`.
-  Boxes are named deterministically from `user_id:thread_id`, released into an in-process warm pool after each agent turn, and reclaimed only by the same user/thread. Warm-pool health checks use a short explicit timeout and forward that timeout through both BoxLite `exec(timeout=...)` and the private-loop `.result(timeout)` bridge so a hung VM cannot pin the per-thread acquire lock indefinitely.
-  `sandbox.replicas` caps active + warm VMs per gateway process; if capacity is exhausted, only warm-pool VMs are evicted. `sandbox.idle_timeout` stops idle warm VMs after the configured seconds. `reset()` is intentionally a lightweight registry clear for `reset_sandbox_provider()` and does not close boxes, stop the idle reaper, or close the private loop; full teardown remains `shutdown()`.
-- `TenkiSandboxProvider` (`packages/harness/deerflow/community/tenki/`) - Tenki cloud microVM isolation. The `tenki-sandbox` SDK is optional (`deerflow-harness[tenki]`) and lazy-imported (`_import_client`) only when this provider is selected. Unlike Boxlite, the SDK is synchronous, so the adapter calls it directly with no event-loop bridge. File transport uses Tenki's native `sandbox.fs` API (`read_text`/`read_stream`/`write_stream`/`mkdir`/`stat`) — binary-safe and streaming, no base64/shell hop; only directory/content *search* (`list_dir`/`glob`/`grep`) shells out to busybox-portable `find`/`grep`, parsed with the shared `deerflow.sandbox.search` helpers like `community/e2b_sandbox`. Sandboxes run as the unprivileged `tenki` user, so DeerFlow's `/mnt/user-data` prefix is remapped under a writable HOME (`_resolve_path`) and best-effort `sudo`-symlinked at bootstrap. Boxes are named deterministically from `sha256(user_id:thread_id)[:16]` (64-bit, matching E2B; the warm pool is keyed by this id alone with no full-seed fallback), released into an in-process warm pool, and reclaimed only by the same user/thread after a liveness check. A terminal session error (named SDK errors plus builtin `ConnectionError`/`BrokenPipeError`/`EOFError`) routes through `_invalidate_sandbox` to evict the dead microVM. Cross-process orphan reconciliation is a follow-up (single-process warm pool today).
-
-
-**Shared warm-pool lifecycle:** community sandbox providers that keep released sandboxes alive for fast reuse share `deerflow.community.warm_pool_lifecycle.WarmPoolLifecycleMixin`. The mixin owns the common `DEFAULT_IDLE_TIMEOUT=600`, `IDLE_CHECK_INTERVAL=60`, `DEFAULT_REPLICAS=3`, idle-checker loop, warm-pool expiry, oldest-warm eviction, replica counting, and soft-cap logging. Providers remain responsible for their own active registries, creation/discovery, health checks, and destroy hook (`_destroy_warm_entry`): AIO destroys `SandboxInfo` through its backend; Boxlite closes loop-affine `BoxliteBox` handles; Tenki closes the microVM session (`TenkiSandbox.close`, which terminates the remote sandbox). AIO keeps active-idle cleanup outside the mixin and delegates only warm-pool expiry to the shared helper.
-
-**Virtual Path System**:
-- Agent sees: `/mnt/user-data/{workspace,uploads,outputs}`, `/mnt/skills`
-- Physical: `hnflow-data/users/{user_id}/threads/{thread_id}/user-data/...`; built-in skill templates stay under `skills/public/` and are seeded into `hnflow-data/skills/public/`, while sandboxes read `hnflow-data/skills_view/public/` and `hnflow-data/users/{user_id}/skills_view/{custom,legacy,integrations}/`
-- Translation: `LocalSandboxProvider` builds per-thread `PathMapping`s for the user-data prefixes at acquire time; `tools.py` keeps `replace_virtual_path()` / `replace_virtual_paths_in_command()` as a defense-in-depth layer (and for path validation). AIO has the directories volume-mounted at the same virtual paths inside its container, so both implementations accept `/mnt/user-data/...` natively.
-- Detection: `is_local_sandbox()` accepts both `sandbox_id == "local"` (legacy / no-thread) and `sandbox_id.startswith("local:")` (per-thread)
-
-**Sandbox Tools** (in `packages/harness/deerflow/sandbox/tools.py`):
-- `bash` - Execute commands with path translation and error handling. For `LocalSandbox` (host bash), POSIX output is captured through bounded pipe-drain threads and stdin is `/dev/null`, so a backgrounded long-lived process (`server &`) returns immediately instead of blocking the turn on an inherited pipe, while unredirected background output is drained without growing anonymous temp files. Commands that read stdin get immediate EOF. The command runs in its own process group with a wall-clock timeout (`sandbox.bash_command_timeout`, default 600s); on timeout the whole group is killed and the agent gets a notice telling it to background long-lived processes. The bash tool description itself also instructs the model to background long-lived processes (e.g. servers) up front so it doesn't waste the turn waiting on a foreground server. See `LocalSandbox.execute_command` / `_run_posix_command` and `bash_tool`'s docstring.
-- `ls` - Directory listing (tree format, max 2 levels)
-- `glob` - Find files or directories below a root directory with bounded results
-- `grep` - Search one text file or recursively search a directory, with optional glob filtering and bounded line-level results
-- `read_file` - Read file contents with optional line range
-- `write_file` - Write/append to files, creates directories; overwrites by default and exposes the `append` argument in the model-facing schema for end-of-file writes; subject to the read-before-write gate when `read_before_write.enabled` (see Middleware Chain)
-- `str_replace` - Substring replacement (single or all occurrences); same-path serialization is scoped to `(sandbox.id, path)` so isolated sandboxes do not contend on identical virtual paths inside one process; subject to the read-before-write gate when `read_before_write.enabled` (see Middleware Chain)
-
-### Local Application Access Layer (`packages/harness/deerflow/apps/`) — N4/N5
-
-Drives local professional software (Blender / Unity / Photoshop / …) which is the HNFlow-defining execution target. The layer is **pluggable and host-side**: `driver.py` defines the `AppDriver` protocol (launch/attach, run_script, wait, collect, health, close), `drivers/{cli,mock}.py` ship two implementations (a generic subprocess driver and a deterministic test/demo driver), `registry.py` is a read-only view over the `apps` config section, and `session.py` owns the process-local instance/session map.
-
-- **Config**: `config.yaml -> apps` (`enabled`, `definitions: {name: AppDefinition}`, `on_human_conflict`, `environment`) via `deerflow.config.apps_config`. Startup-required (`STARTUP_ONLY_FIELDS["apps"]`); bump `config_version` when the schema changes (N10b added `on_human_conflict` / `presence_command` / `allow_preempt` → 39; N11 added `apps.environment` and `AppDefinition.requires` → 40). App names match `^[A-Za-z0-9_-]{1,64}$`.
-- **Host execution exception**: app driving runs on the host (GUI / long-lived processes cannot run in the command sandbox) — a deliberate, documented exception to the "commands must go through the sandbox" rule. `tool:bash` and the `sandbox` provider are unaffected.
-- **Workflow nodes** (N5): `app:launch` / `app:script` / `app:wait` / `app:collect`, executors in `workflow/executors/local_app.py` (named `local_app` to avoid a false harness/app import-boundary hit from a module named `app`). `app:launch` / `app:script` are non-idempotent and both crash-confirm gated and pending-review marked (`danger.py`, `registry._NON_IDEMPOTENT_TYPES`); `app:wait` / `app:collect` are idempotent. A session flows as a JSON dict on the `data`-typed `session` port (no new `PortType`). Driver calls are offloaded with `asyncio.to_thread`.
-- **Runtime sharing**: the run worker injects the process-wide manager under `APP_RUNTIME_CONTEXT_KEY` (`runtime/context_keys.py`); the executors fall back to `get_session_manager()`, and the tool gateway's `app` provider (`PROVIDER_APP`, built after sandbox/builtin so a builtin name always wins a collision) uses the same singleton. The gateway's `app` provider also exposes the read-only `check_app_presence` tool (N10b) — enforcement does not depend on it, because every acquisition is gated in the manager.
-- **Gateway**: `GET /api/apps` (registry + per-app availability); `GET /api/apps/{name}/presence` (N10b human presence); instance management under `/api/apps/sessions*` including `POST /sessions/{id}/release` (hand back without stopping, N10b) — see the Routers table. `/api/features` reports `apps.enabled`.
-- **Human/machine sharing (N10b)**: see the dedicated block under "Resource governance" below — `apps/presence.py`, `apps.on_human_conflict`, `presence_command` / `allow_preempt`, and `workflow/conflict.py`.
-- **Durable instances (N6)**: `persistence/app_instances/` owns the `app_instances` table (migration `0017_app_instances`; HEAD) and `AppInstanceRepository` (CRUD, conditional `set_status`, `archive`, `delete`, `cleanup`, `mark_orphaned`, `count_by_status`). Live sessions stay in the process-local manager; the executors write records through via `apps/persistence.py` (`record_launch`/`record_operation`/`record_status`), which is **best-effort** — a persistence failure is logged and swallowed, never failing the live op, and a missing repo (memory backend or `apps.persist_sessions: false`) is a no-op. The repo reaches the executors under `APP_INSTANCE_REPO_CONTEXT_KEY` (`runtime/context_keys.py`, injected by `_build_runtime_context` from `RunContext.app_instance_repo`); the tool gateway's `app` provider captures it via `resolve_capability_tools(..., instance_repo=..., user_id=...)` from the AI node's runtime context. Gateway startup calls `mark_orphaned()` — a `ready`/`busy` row left by a previous process becomes `orphaned` (no auto re-attach; that is N7). Per-instance cumulative counters (`scripts_run`/`artifacts`/`busy_seconds`/`last_error`) live in `resources`; N8 adds a `degraded` counter there. Config: `apps.persist_sessions` (default true) and `apps.session_retention_days` (default 30, swept only by the manual cleanup endpoint — no scheduled sweep, that is N7).
-- **Resource governance (N8)**: `deerflow/resources/governor.py::ResourceGovernor` is the admission gate for host-side work. It is **declared, not measured**: an application states what it occupies (`apps.definitions.<name>.resources` → `gpu`/`cpu`/`memory_mb`/`disk_mb`/`license`; an omitted dimension occupies nothing) and the operator states the caps (`apps.resources`, `None` = unlimited) plus license pools (`apps.licenses.<group>.slots`, default 1 = mutually exclusive). `governs()` makes an undeclared/uncapped demand a complete no-op, so an untouched configuration behaves exactly as before N8.
-  - **Two occupancy levels, one choke point**: `AppSessionManager` is the only path to a driver (both the `app:*` executors and the tool gateway's `app` provider call it), so admission lives there — an *instance* holds its license slot from `launch` to `close` (an `exclusive` re-attach does **not** take a second slot), and an *operation* (`run_script`/`wait`/`collect`) holds its numeric demand for its duration in a `try/finally` that also releases on driver failure. `get_session_manager()` builds the governor from the loaded apps config, which is why the tool-gateway path is governed without its own code path.
-  - **Atomic + FIFO**: all dimensions (and the license) are checked and reserved under one `threading.Condition`, so nothing is ever partially held and no lock-ordering deadlock is possible; waiters take a ticket and go FIFO, so a trickle of small demands cannot starve an earlier larger one. The governor is threading-based (not asyncio) precisely because the manager's methods are synchronous and are already invoked from worker threads via `asyncio.to_thread`.
-  - **Conflict policy** (`apps.on_conflict`): `wait` (default; queue, then `ResourceUnavailableError` after `apps.acquire_timeout_seconds`) / `fail` (immediate) / `degrade` (proceed without reserving, log a warning, and mark the result — `degraded_operations` on the session for an operation, `launch_degraded` for a launch, surfaced as a `degraded` counter delta in the instance record). The `app:*` executors translate the error into a `WorkflowExecutionError` naming the blocking dimension/license, which is what the N7 scheduler retry/DLQ layer acts on, and the tool-gateway tool returns `{"status": "resource_unavailable", ...}` as data so the agent can wait and retry. `flow:parallel` is deliberately unchanged — fan-out is limited by the gate, not by a new scheduler.
-  - **Cross-process locks**: `deerflow/locks/file_lock.py` provides the reentrant, cross-process `resource_lock(name, timeout=...)` / `acquire_many(names, ...)` primitive (in-process `threading.RLock` + `fcntl.flock` / `msvcrt.locking` on `{base_dir}/locks/<name>.lock`, `acquire_many` sorts names so two call sites cannot deadlock). Workflow nodes no longer take author lock names: `workflow/resource_access.py` derives stable keys from executor-declared resource access, and `workflow/resource_locking.py` holds write locks around the executor call after any step pause. Read-only access does not lock, and executors whose side effects cannot be declared (AI nodes, ambiguous `tool:invoke` providers, MCP tools) intentionally declare nothing. `skills/projection.py` keeps its own private lock (changing it would risk a skill-projection regression); the two share semantics, pinned by tests. Lock, app, and license names share the same grammar (`^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$`).
-  - **Scope/boundaries**: process-local (matching the scheduler's and the in-memory sandbox's single-process contract) — multi-worker global quota and real GPU measurement are explicit follow-ups. No migration: occupancy is in memory and the instance record's `resources` JSON carries the counters. `GET /api/apps/resources` exposes caps/occupancy/queue/license pools for ops.
-- **Human/machine sharing (N10b, §17/§21)**: a person working in the application and the engine driving it is a real conflict, and until N10b the engine could neither see it nor express what to do about it. Four parts, all at the same choke point:
-  - **Presence is a declared, optional driver capability** (`apps/presence.py` + `driver_supports_presence` / `driver_presence`, mirroring N10's undo double-condition: a `supports_presence` flag **and** a `probe_presence` method; neither joins the `AppDriver` protocol, because adding a method to a `runtime_checkable` protocol breaks every existing driver's `isinstance`). The `cli` driver probes only what the definition declares (`presence_command`, passed in the same position as a `run_script` script: exit 0 plus an `idle`/`busy`/`human`/`unknown` token as the first word of the first stdout line); the `mock` driver reads a `.mock-presence` marker so the sharing rules stay testable offline. Everything else — a missing command, a non-zero exit, a timeout, a banner on stdout — answers **`unknown`**, and it is normalized at the driver boundary so a broken probe can never claim the application is free.
-  - **The decision is a pure function** (`decide_access(report, policy, allow_preempt)`), like `is_trigger_due` (N7) and `make_preview` (N10): `idle` → proceed; `unknown` → **proceed** (the app is not blocked, but the decision records that it was made blind and callers surface it — failing closed on ignorance would make every application that cannot report presence permanently unusable, which is a lockout rather than safety); `busy`/`human` → `fail` (refuse, the default) / `wait` (queue, bounded by `apps.acquire_timeout_seconds`) / `preempt` (take over — **only** when the definition declares `allow_preempt: true`, otherwise the policy falls back to refusing: software is never silently taken away from a person). Node param `check_presence=true` opts an `app:script` into a per-operation check; it is off by default because a probe cannot attribute in-flight work, so an application whose probe reports generic busyness would refuse on the engine's own previous job.
-  - **Enforcement and bookkeeping live in `AppSessionManager`** (`probe_presence` with a short TTL cache, `check_access`, `acquire_access` for the `wait` loop, `release`). `launch` gates every acquisition it does not already hold — reusing the engine's own session never consults presence, there is nobody to arbitrate with — and records who held the application at acquisition time on the session (`holder`, `taken_over_from`, `taken_over_at`, additive on the `session` port), written through into the instance record's `resources` (best-effort, no migration). `release` hands control back without stopping the instance (it keeps its license slot: it still occupies the machine). `AppHumanPresentError` carries the observed state and the knob to change, so an N7 retry is informed.
-  - **Conflict detection** (`workflow/conflict.py`, engine-default): before an `app:script` node waits, the engine snapshots the application definition's declared **host** artifacts (content hash included �?a same-size same-second rewrite is exactly what an application produces), then re-inspects immediately before the mutation, refusing with `WorkflowConflictError` when something changed.  It is a guard, not a lock: one snapshot, one re-check.  It is always on and has no author parameter (`detect_conflicts` / `conflict_globs` are gone); applications that declare no `artifact_globs` produce an empty snapshot, which is a no-op.  Sandbox refs are reported as unverifiable rather than silently treated as unchanged, and there is deliberately no attribution heuristic: "this changed after we looked" is provable, "a human did it" is not.  `app:script` is where the engine actually waits, so it is the only executor wired to the guard.
-- **Agent surface**: the tool gateway's `app` provider adds `check_app_presence` (read-only, one call for all available applications) and reports `holder` in each per-app tool's result; a human-conflict refusal comes back as `status="human_present"` **data** with the observed presence, mirroring the N8 `resource_unavailable` shape so the agent can tell the user instead of treating it as a crash. Enforcement does not depend on the tool being called — the manager gates every acquisition.
-- **Boundaries**: presence and preemption are **process-local** (same single-process contract as the scheduler, the in-memory sandbox, and N8); cross-process exclusion remains N8's license slots plus `locks/file_lock.py`. No migration, no new table: sharing state lives on the live session and in the instance record's `resources` JSON. The frontend has no sharing UI yet.
-
-### Action Preview, Human Review & Undo (`packages/harness/deerflow/workflow/preview.py`, `review.py`, `compensation.py`, `undo.py`, `undo_service.py`)
-
-Dev plan §21 asks for irreversible operations (overwrite a file, delete a layer, publish) to be **previewed and confirmed**, with a compensation action attached. The current design keeps those as independent pieces over the N9 `AssetRef` identity.
-
-- **Preview is a pure function** (`workflow/preview.py`). `ActionPreview` — `node_id` / `node_type` / `action` / `summary` / `reversible` / `recovery` + `sources` and `targets` (each a `PreviewTarget{ref, observed}`) + `risks` + `required_confirmations`. It never mutates anything: the only I/O is fingerprinting. Previewers are registered next to their executor (`ExecutorRegistration.preview`) and reached through `CompileContext.previews`; the compiler itself does not run them. The read-only `POST /api/workflows/{definition_id}/preview` endpoint does.
-- **Human review is an explicit node** (`workflow/review.py` + `executors/review.py`). `human:review` declares `in`, `approved`, and `rejected` ports. It creates a `human_tasks` row with `kind="review"` and suspends through `interrupt()`; approval emits the reviewed value on `approved`, rejection emits the reviewer's continue prompt on `rejected`. The compiler routes `approved` forward and `rejected` back to the configured `ai:llm_agent` target's `continue_prompt`.
-  - **Per-visit identity without a migration.** A review can be visited repeatedly. The task row stores `inputs_snapshot.visit` and the executor round-trips the visit through `wf:<node>:__review_visit`; a resume reuses its own row while a later rejection creates `visit + 1`. The rejected count shown in the UI is `visit - 1`; there is deliberately no maximum (LangGraph's recursion limit is the final hard stop).
-  - **One intentional back-edge.** `validate_definition` excludes a review's `rejected` edge from generic cycle detection, then validates that it targets an upstream `ai:llm_agent` through `continue_prompt`. Every other cycle is still rejected. A rejected target may not be `flow:start`/`flow:end`/the review itself, may not use `model_profile`, and may not have an `output_schema` input because continue mode does not support them.
-  - **AI session first turn.** A review retry target is compiled with `__review_session=True`, which makes its first template turn use the checkpointer (same `{thread_id}:wfai:{node_id}` thread) so the rejection's `continue_prompt` genuinely continues the conversation instead of starting a fresh session.
-  - **No action preview on review.** Per-node `require_approval` / `on_reject` and `workflow/approval.py` are removed; review approves the data on its input, not a downstream action's file fingerprints. `crash_confirm` remains an independent executor-level gate.
-- **Compensation** (`workflow/compensation.py`). A mutating node that supports compensation snapshots the files it is about to touch (rollback is always enabled; there is no author switch) (`{base_dir}/undo/<run_id>/<node_id>/` — engine-private recovery material, deliberately *outside* `assets.roots` so an empty allow-list cannot disable rollback) and restores them if it then fails. A backup that cannot be taken aborts the node **before** it mutates anything. Recording is best-effort: a successful mutation must never fail because its bookkeeping did.
-- **Undo** (`workflow/undo.py` pure model + `undo_service.py` execution). `UndoRecord` (`kind` = `file_backup` | `app_undo`, `status` = `recorded` → `undone`/`skipped`/`failed`, `targets`, and `backup_paths` **aligned 1:1 with `targets`** where `None` means "did not exist before"). `plan_undo` returns the still-reversible records **newest first**; terminal records drop out so a repeated request cannot apply a compensation twice. `execute_run_undo` restores host files directly, resolves sandbox targets through a lazily acquired sandbox, and asks the application for `app_undo` steps — reporting `skipped` when the instance is gone instead of pretending it rolled back.
-- **Native app undo is opt-in and double-checked** (`apps/driver.py`): `driver_supports_undo` requires **both** a `supports_undo = True` declaration and a callable `undo`. `AppSessionManager.undo` goes through the same N8 admission choke point and requires a **live** session.
-- **Human task kinds**: `list_human_tasks` / `GET /api/human-tasks` accept `?kind=task|review`; review tasks cannot be skipped (the REST route and `skip_human_task` return 409). Existing historical rows are not migrated or special-cased.
-- **Endpoints**: `POST /api/workflows/{definition_id}/preview` (definition-level preview), `GET /api/workflows/{definition_id}/runs/{run_id}/undo` (records + plan), `POST …/undo` (`dry_run` supported). Dialogue side: `undo_workflow_run` drives the same `undo_service`.
-- **Boundaries**: the shared-workspace governance half of §21 (human-presence detection, preemption, conflict detection) is deliberately **not** here.
-**Single-step debugging** (`workflow/debug_step.py`, §25) is a run-level switch, not a node parameter: `WorkflowRunRequest.debug_step` reaches the worker (which sets `config["context"]["debug_step"]`) and the node wrapper pauses before *every* node with a `HumanTask` row (`kind="step"`), so an operator advances one node per resume.  The task declares one required boolean port `acknowledge` (`enum: [True]`) because LangGraph treats a *falsy* `Command(resume=...)` payload as "not resumed" and re-suspends; a skipped step continues with the node's outputs unset.  A resume run re-derives the flag from the task row's `inputs_snapshot.kind` in **both** resume paths (`human_task_routes._resume_workflow` and `dispatch.resume_workflow_run`), which is what makes stepping continue instead of falling back to normal execution.  There is no per-node `params.breakpoint` and no compile-time breakpoint validation: the engine only pauses when the run was launched in step mode.  Tests: `tests/test_workflow_step_mode.py`.
-
-**Engine-managed idempotency keys** (`workflow/reliability.py`) are not an author parameter: the compiler injects `__idempotency_key = "<run_id>:<node_id>"` into every node, and `tool:bash` / `tool:http` forward it as `DEERFLOW_IDEMPOTENCY_KEY` / `Idempotency-Key`.  An explicit tool-level env/header still wins; a stale `params.idempotency` is ignored.  Tests: `tests/test_workflow_reliability.py`.
-
-**Controlled dynamic handoff** (`workflow/handoff.py`, §24.6a) is the runtime-selection sibling of `flow:switch`, and its differences are the point. `params.candidates = [{value, node}, ...]` is a whitelist of **expert node ids registered in the same definition**, and the compiler builds the routing edges from that list — a definition edge leaving a `flow:handoff` node is a **compile-time error**, because params are the single source of routing truth. An unknown or missing selection is a `WorkflowRouteError`/`HandoffError`, never a default branch: a switch's default edge is exactly the silent wrong-branch behaviour a handoff must not have, and a "we are done" outcome belongs in a `flow:if` *before* the handoff. `params.max_handoffs` (default 8, 1..50) bounds how often one handoff node may route per run; the count round-trips through the reserved `wf:<node>:__handoffs` channel, so the executor (which receives its id via the compiler-injected `node_id`) can enforce it and a retry cannot double-spend. Every declared input other than `decision` is forwarded to the same-named output port — that is how a handoff carries its structured message (task / constraints / context references) alongside the routing decision. `_validate_handoff` also rejects a candidate targeting `flow:start`/`flow:end`/the handoff itself, and `candidates`/`max_handoffs` on any other node type. Tests: `tests/test_workflow_handoff.py`.
-
-**Rewind & re-run** (`workflow/rewind.py`, §25) is the third debugging capability and it reuses LangGraph's checkpoint resumption rather than adding a replay engine. Every node visit writes a checkpoint whose scheduled tasks (`snapshot.next`) are exactly the nodes about to run, so "the state before node X" **is** the checkpoint whose `next` contains X: `plan_rewind` (pure, newest-first candidates) picks the newest such checkpoint and `locate_rewind_point` reads the real graph history for it (the graph is compiled against the run's own checkpointer so the channel table matches the run's; the graph is only used to *read* history, so the default registry suffices). `POST /api/workflows/{id}/runs/{rid}/rewind` then admits a run on the **same thread** with `checkpoint_id`, and `run_workflow` passes it through `config["configurable"]` with `graph_input=None` — so the node and everything after it re-runs while upstream outputs stay in state. That is the point: an upstream side effect (`tool:bash`, `app:launch`) is never repeated. A rewind refuses a **live** run (409 — it is still writing the checkpoints a rewind replays), a missing checkpointer (503), and any node that was never scheduled (422, naming the rewindable nodes) — the pure planner raises `RewindError` rather than silently doing nothing, because a no-op rewind is indistinguishable from a successful one. `flow:start`/`flow:end` are refused as sentinels. Locked by `tests/test_workflow_rewind.py`, including an end-to-end proof that resuming the located checkpoint yields `a,b,c,b,c` (the upstream node does **not** re-run).
-
-### Assets & Cross-Software Contracts (`packages/harness/deerflow/assets/`) — N9
-
-The engine has two filesystem worlds: workflow data nodes read/write **sandbox** virtual paths (`/mnt/user-data/{workspace,uploads,outputs}/…`) while local-application drivers produce **host** absolute paths. Before N9 nothing tied them together, so an `app:collect` result could not feed a later `data:file` node and a sandbox artifact could not be handed back to the local software. N9 adds the missing channel plus a validated identity for what travels on it.
-
-- **Identity** (`assets/ref.py`): `AssetRef` — a small JSON-serialisable pydantic model with a canonical `asset://` URI (`asset://host/<abs>` for host, `asset://workspace/<rel>` for sandbox scopes), the scope-local usable `path`, and a fingerprint (`size` / `mtime` / optional `sha256` / `extension` / `media_type` / `contract` / `source`). It travels on a `data`-typed port as a plain dict — **no new `PortType`** (the N5 session-port precedent). `asset_uri`/`parse_asset_uri` are exact inverses; `scope_for_virtual_path` infers the scope of a `/mnt/user-data/<scope>/…` path; `ref_from_port`/`refs_from_port` coerce dicts, existing refs, `asset://` URIs and bare paths (a plain path with no virtual prefix is treated as host). `make_ref` never touches the filesystem, so a ref may name a file that does not exist yet; `fingerprint_file` is the one I/O helper (streamed, for callers that offload it to a worker thread).
-- **Contracts** (`assets/contracts.py`): `AssetContract` declares what several applications must agree on — accepted `extensions`, `media_type`, and the `unit` / `up_axis` / `axes` conventions the geometry is authored in — and `AssetConverter` declares one format conversion (`from` / `to` / `command` / `args` template / `timeout_seconds`; `args` must reference both `{in}` and `{out}`). `validate_asset_against_contract` raises `AssetContractError` carrying `expected`/`actual` so executors can name both. Unit/axis are declarative metadata only: N9 never converts units or axes.
-- **Config** (`config/assets_config.py`, `config.yaml -> assets`): `roots` (host directories allowed to exchange assets — **empty by default, which disables host transfer entirely**), `max_bytes` (single-file ceiling, default 512 MiB), `contracts`, `converters`. Startup-only (`STARTUP_ONLY_FIELDS["assets"]`, `config_version` 38). `AssetsConfig.allows_host_path` is a lexical containment check on normalised paths; the executor layers symlink rejection and a resolved-path re-check on top.
-- **Node** (`workflow/executors/asset.py`, `data:asset`): `inspect` (read-only identity — the primary use case, hence registered **idempotent**) / `import` (host → sandbox) / `export` (sandbox → host) / `convert` (declared converter over a sandbox asset). The three mutating operations require `params.crash_confirm=true` **internally** — exactly the `data:file` write-mode pattern — so the node type stays out of the pending-review "dangerous node" set while still refusing to run unconfirmed. `import`/`export`/`convert` share the node type's `out`/`asset`/`assets` output ports; `params.contract` validates against a declared contract; `params.hash` (default true for `inspect`) controls SHA-256.
-- **Boundaries**: host access requires `assets.roots` (three checks: lexical containment, symlink rejection on the source, and a post-`resolve()` re-check so a symlinked *parent* cannot smuggle a write out of the allow-list) and `max_bytes`. `export` stages a same-directory temporary file and `os.replace`s it (atomic); `import` writes through `Sandbox.update_file`. **Conversion commands run in the sandbox** (`Sandbox.execute_command`), the same rule `tool:bash` follows — the host-side app driver remains the only exception. `download_file`-based sandbox inspection necessarily materialises the file, so sandbox assets above `max_bytes` fail inspection with an explicit message (host-side inspection streams and is not bound by it).
-- **`app:collect` (N9 delta)**: the collected host artifact paths are now also reported as `assets` (one `AssetRef` per path, `scope="host"`, size/mtime and opt-in SHA-256 via `params.hash`) alongside the unchanged `artifacts` / `out` outputs, so an existing workflow behaves identically. Fingerprinting is best-effort — a rotated/deleted artifact is still reported, just without size/mtime.
-- **Frontend**: the node catalog gains a `data:asset` entry (`out`/`asset`/`assets` ports) and `app:collect` gains the `assets` output port; canvas validation is unchanged because it mirrors only the backend's structural/port-type checks (there is no per-node param validation there, same as `data:file`).
-- **No migration**: assets are not persisted — they live in the run's state (port values) and are re-derivable from the filesystem.
-
-### Environment Probing & Data Directories (`packages/harness/deerflow/environment/`) — N11
-
-Dev plan §22 asks for two things: **environment probing** (software versions, plugins, language runtimes, paths, bound to capability groups and validated on load) and a **single-machine data-directory convention** (definitions / checkpoints / assets / app sessions). N11 delivers both and deliberately stops there — backup/export/import (§22's third bullet) is N11b.
-
-- **The package splits like the rest of the engine**: `spec.py` (declared requirements + result vocabulary, pure data), `version.py` (parsing/comparison, pure), `evaluate.py` (the decision table, pure), `probe.py` (the only I/O), `requirements.py` (binding to sources), `report.py` (combining the two halves), `__main__.py` (CLI). Same shape as `scheduler/triggers.py::is_trigger_due`, `apps/presence.py::decide_access` and `workflow/preview.py::make_preview`: **judgement is a pure function; the I/O that feeds it lives elsewhere.**
-- **Requirement declarations** (`RequirementSpec`, `extra="forbid"`): `kind` ∈ `executable` / `version` / `path` / `runtime` / `plugin`, plus `name`, `command` (**argv list**, never a shell string — the N10b `presence_command` reasoning: no invented quoting/`PATHEXT`/backslash rules), `expect` (version constraint), `optional`. `command`/`expect` are rejected on existence kinds: a `path` spec carrying a command is a mistake about intent, not a harmless extra. `plugin` resolves a relative name against the application's `working_dir`; `path` resolves it against the process cwd — the one real semantic difference between them.
-- **Version comparison** (`version.py`): `>=` `>` `<=` `<` `==` `=` `!=` `^` `~` `*`, comma-separated conjunction, numeric (not lexicographic) comparison with zero padding, trailing prose tolerated (`"4.2.1 LTS"` → `4.2.1`). A bare version is an **exact** match, deliberately not npm's implicit caret. `version_satisfies` returns `True`/`False`/**`None`** — and `None` (unparsable either side) maps to the `unknown` outcome, never to a silent pass or a false accusation. No `packaging` dependency.
-- **Three-valued outcomes plus "we could not tell"**: `ok` / `missing` / `mismatch` / `unknown`. `unknown` is neither a pass nor a failure — the probe is best-effort (N10b's presence reasoning). Asymmetries are deliberate: a missing executable is `missing` (a complete answer), an unreadable version is `unknown`, a violated constraint is `mismatch`.
-- **Probing is read-only**: `probe.py` resolves executables (`shutil.which`, mirroring the `cli` driver's rule so an app's own check and an environment requirement cannot disagree), checks paths, and runs a declared version command with a timeout — never a shell, never an install, never an environment edit. `run_probe` never raises; a timeout, an `OSError`, a non-zero exit, or unparsable output all become `unknown` (a command that failed did not answer the question, even if it printed something version-like). Results are cached in-process for `apps.environment.cache_seconds` and re-stamped `source=cache`; `force=True` bypasses it. Nothing is persisted: a probe answer is a fact about *now*.
-- **Binding (§22's "bound to capability groups")**: applications declare `AppDefinition.requires` (plus the previously-dangling `AppDefinition.version_command`, now live — it is applied in the same argv position as a script/`presence_command` and reported as the app's detected version through `detect_app_version`); capability groups declare `requires:` in `SKILL.md` frontmatter, parsed fail-soft into `Skill.requirements` (`parse_required_secrets` pattern: a malformed entry is dropped with a warning, not turned into an unloadable package). Only **enabled** skills are collected — a package you have not enabled is not something your machine must be ready for. `collect_sources`/`validate_environment` group results by source (`app:<name>` / `skill:<name>`).
-- **Load-time validation, fail-open by default**: Gateway startup ensures the data layout and probes once (`app/gateway/app.py::_bootstrap_environment`, run off the event loop). `apps.environment.require_on_load: true` turns a *definitively failed required* item into a startup refusal; the default reports and logs, because an application that is installed but unused today must not be able to keep the whole service down. `unknown` never blocks, even under `require_on_load`.
-- **Data-directory convention** (`config/paths.py`): `Paths.data_dirs()` is the canonical ordered layout (`base`, `users`, `skills_view`, `integrations`, `prompts`, `capability-groups`, `tools`, `skills`, `backups`, `locks`, `undo`, plus `retrieval` when memory is on and `database` when a file SQLite is configured, plus the legacy `threads` root), each with `purpose`/`scope`/`required`; `check_data_dirs()` observes existence and writability **without creating anything**; `ensure_data_dirs()` creates only the required entries (idempotent). `capability-groups` and `tools` are optional external-repository roots and are never created by the application. The §22 four-kind mapping is stated there: **definitions, checkpoints and app sessions are rows in the SQL database**, assets live in operator-owned `assets.roots` — so a complete machine backup is a set of paths *plus* the database file. A missing **optional** directory (the derived retrieval index, the legacy threads root, or an external capability/tool repository) does not degrade the report: they are created or supplied by the operator on demand, and an always-on signal is not a signal.
-- **Surfaces**: `GET /api/environment` (`?force=true`; probing and directory checks run off the event loop; an unanswerable probe is data in a 200, never a 5xx) returns `{enabled, overall, require_on_load, requirements, data_dirs, blocking_problems}`; `GET /api/features` reports `environment.enabled`; `python -m deerflow.environment [--json] [--force]` prints the same report for setup scripts/CI with exit codes `0` (nothing required broken — `unknown` and optional failures stay `0`), `1` (a required item is definitively broken) and `2` (the check itself could not run).
-- **Boundaries**: no install/repair, no auto-download, no writes to the host outside `{base_dir}`'s own directories; `scripts/doctor.py` remains the *developer machine* check (python/node/pnpm/uv/nginx/config) and N11 is the *runtime* check — different questions, and `harness` cannot import root `scripts/` anyway. No migration, no new table; `apps.environment` rides the existing startup-only `apps` registration.
-
-### Backup, Export & Migration (`packages/harness/deerflow/portability/`) — N11b
-
-Dev plan §22's third bullet asks for **backup and migration** (export/import + data-directory copy). N11b delivers it on top of the N11 data-directory convention: `Paths.data_dirs()` is the layout, and this package decides what to package, how to package it safely, and how to restore it onto a different machine.
-
-- **The archive is a single zip with a root `manifest.json`.**  Logical layout — `dirs/<name>/…` (the N11 directory names), `database/<file>` (the SQLite file), `assets/<idx>/…` — never absolute host paths, so an archive taken with one `DEER_FLOW_HOME` restores under another.  `manifest.json` records the format version, the source's `config_version`/`schema_head`/platform, one entry per member (with count/size and, for the database, a SHA-256), and the exclusions.  :func:`deerflow.portability.spec.check_import_compatible` gates on the **format version** only; a `config_version`/`schema_head` drift is a warning (`make config-upgrade` / alembic handle it), not a refusal — otherwise the ordinary "restore an older backup after an upgrade" case would be blocked.
-- **Exclusions are stated, not silent.**  `select.plan_backup` leaves out `locks` (transient cross-process lock files), `retrieval` (the derived memory index), `capability-groups`, and `tools` (external repositories backed up through their own Git remotes) with a reason recorded in the manifest.  `base` is packaged **shallowly** — its own top-level files (`memory.json`, `USER.md`) but not its subdirectories, which are members in their own right; recursive packaging would nest the tree twice.
-- **The database is snapshotted, never copied.**  On SQLite, `snapshot.snapshot_sqlite` uses `sqlite3.Connection.backup()` against a read-only source, so a live, WAL-mode database is captured consistently while the Gateway serves — a plain file copy could catch a torn state (recent commits live in `-wal`).  Postgres is not packaged: the manifest records `database_included: false` and an exclusion telling the operator to use `pg_dump`.  A memory backend has no file.
-- **Export is online; import is offline.**  `export_backup` is safe against a live install.  `import_backup` overwrites the database file, so it is a **CLI-only** operation (`python -m deerflow.portability import`) — there is deliberately no HTTP import endpoint, because an HTTP import could overwrite the database the running Gateway is serving from.  A non-empty target is refused unless `--force`; `--dry-run` reports the plan without writing.  Assets are operator-owned paths outside the data root, so they are opt-in on export (`--include-assets`) and require an explicit `--assets-dest` on restore (a cross-machine absolute path cannot be guessed) — otherwise the restore reports them skipped.
-- **Extraction trusts nothing.**  `archive.extract_routes` re-checks every member name (relative, no `..`, no drive/UNC prefix) and refuses symlink entries; the writer builds names from the layout, so a weird file name in the data tree cannot escape the archive.
-- **Surfaces**: `python -m deerflow.portability export|inspect|import [--json]` with exit codes `0` (success), `1` (refused — incompatible format or non-empty target without `--force`; nothing changed) and `2` (the operation could not run: bad archive, unreadable paths, database file in use).  `GET /api/backup` is the read-only plan preview (members, exclusions, database mode) — it plans, it does not archive.
-- **Boundaries**: no encryption/signing/incremental/cloud-sync (supply-chain items were cut in §8); no new config section and no `config_version` bump (the archive carries its own `BACKUP_FORMAT_VERSION`); no migration and no new table; no frontend changes.
-
-### Subagent System (`packages/harness/deerflow/subagents/`)
-
-**Built-in Agents**: `general-purpose` (all tools except `task`) and `bash` (command specialist)
-**Benefit-based routing policy**: Enabling subagents exposes delegation as an optimization, not a default response to complexity. The lead prompt defaults to direct execution and permits `task` only when parallel latency, specialist capability, or context-isolation benefit clearly exceeds startup, duplicate-discovery, synthesis, state-conflict, and side-effect costs. Inter-agent output dependencies and overlapping mutable state are hard vetoes for parallel dispatch, while duplicate discovery and a cheap direct path remain costs rather than categorical vetoes; a bounded sequential chain may run in one subagent when specialist or context-isolation benefit clearly wins. Parallel scopes must be independent and non-overlapping, the lead uses the fewest useful subagents, and every later batch is re-evaluated while retaining any within-batch parallel benefit. When the enforced per-response limit is 1, the rendered prompt removes parallel and multi-batch benefit guidance and permits delegation only for material specialist or context-isolation benefit. Keep this policy aligned across `lead_agent/prompt.py`, the `task` tool description, and both built-in role descriptions; routing regressions are pinned in `tests/test_subagent_routing_prompt.py`, `tests/test_subagent_prompt_security.py`, and `tests/test_lead_agent_prompt.py`.
-**User-scoped Skills**: Subagents resolve their configured skills through `get_or_new_user_skill_storage(user_id)` using the parent runtime identity, with `DEFAULT_USER_ID` only when no identity is available. This keeps custom-skill shadowing and visibility aligned with the lead agent instead of reading the global-only catalog.
-**Execution**: Dual thread pool - `_scheduler_pool` (3 workers) + `_execution_pool` (3 workers)
-**Concurrency and total delegation cap**: `MAX_CONCURRENT_SUBAGENTS = 3` is enforced by `SubagentLimitMiddleware` (truncates excess tool calls in `after_model`; runtime `max_concurrent_subagents` is clamped to 1-4). The same middleware also enforces `subagents.max_total_per_run` (default 6, config schema 1-50, runtime override `max_total_subagents` clamped to the same range) against current-run entries in the durable delegation ledger, so a long lead-agent run cannot bypass concurrency limits by launching repeated legal-sized batches at each planning checkpoint, but historical delegations from previous runs in the same thread do not consume the new run's budget. The lead-agent prompt uses the same clamped values, so model-visible limits match enforcement. Gateway `run_agent()` and embedded `DeerFlowClient.stream()` both provide a per-invocation `run_id` in runtime context; `DeerFlowClient.stream()` also tags its input `HumanMessage` with that same id so durable-context capture can identify the current request boundary. Gateway resume paths may not append a new `HumanMessage`, so the worker also exposes the pre-run checkpoint's message ids in runtime context; durable-context capture uses that as the current-run boundary and never re-tags older task calls as the resumed run. When no delegation slots remain, task calls are stripped, provider raw tool-call metadata is synced, `finish_reason` is forced to `stop`, and a visible "subagent delegation limit" note is appended so the agent can synthesize already-collected results. Default subagent timeout `subagents.timeout_seconds=1800` (30 min) and built-in `general-purpose` `max_turns=150` (raised from 100/15-min so deep-research subtasks stop hitting `GraphRecursionError` out of the box)
-**Flow**: `task()` tool → `SubagentExecutor` → background thread → poll 5s → SSE events → result. `task_started` carries the resolved effective model name. The per-subagent `SubagentTokenCollector` publishes a cumulative usage snapshot to the shared `SubagentResult` after every completed LLM response; the next `task_running` event carries that snapshot, so collapsed workspace cards can update without re-accounting parent-run totals. Terminal ToolMessage metadata (`subagent_model_name`, `subagent_token_usage`) and the persisted `subagent.end` event retain the model/usage after reload; absent provider usage stays absent rather than being estimated as zero.
-**Events**: `task_started`, `task_running`, `task_completed`/`task_failed`/`task_timed_out`
-**Handled LLM failures**: `LLMErrorHandlingMiddleware` deliberately converts provider/model exceptions into an `AIMessage` so the graph can end cleanly, stamping `additional_kwargs.deerflow_error_fallback=true` plus error metadata. Clean graph termination does not imply subagent success: `SubagentExecutor` inspects the last assistant message at terminalization and maps a marked fallback to `SubagentStatus.FAILED`, which then emits `task_failed` and the existing structured `subagent_error`. Only the marker is authoritative — error-looking assistant prose without it remains a normal completed result, so neither the executor nor frontend parses display text as a status protocol.
-**Guardrail caps & `stop_reason` (#3875 Phase 2)**: three independent axes can end a subagent run early, and all now surface *why* through one additive field rather than a new status enum. **Turn axis**: `recursion_limit` on the subagent `run_config` equals `max_turns`, so exhausting the turn budget raises `GraphRecursionError` from `agent.astream`; `executor.py::_aexecute` catches it specifically (before the generic `except Exception`). **Token axis**: `TokenBudgetMiddleware` is attached per-agent via `build_subagent_runtime_middlewares` from `subagents.token_budget` (default `max_tokens` **coupled to `summarization.enabled`** — 1,000,000 when subagent summarization is on, 2,000,000 when off, warn at 0.7, hard-stop at 1.0; a user-set budget always wins regardless of the switch — #3875 Phase 3; a backstop against a subagent that burns tokens on trivial work). It does *not* raise: at the hard-stop threshold it strips the in-flight turn's tool calls, forces `finish_reason="stop"`, and lets the run complete naturally with a final answer. **Loop axis**: `LoopDetectionMiddleware` (attached at the same point) catches repeated identical tool-call sets — or one tool *type* called many times with varying args — and its hard-stop likewise strips `tool_calls` and forces a final answer without raising, recording `loop_capped`. Each guard exposes its cap on a per-`run_id` `consume_stop_reason(run_id)` accessor; `_aexecute` collects **every** middleware with that method (duck-typed via `hasattr`, so the executor has no import coupling to the guard classes) and surfaces the first non-`None` reason — adding a future guard needs no executor change. **Surfacing**: whichever axis fired, `_aexecute` stamps a normal status plus an additive reason — `completed` + `stop_reason=token_capped|turn_capped|loop_capped` when a usable final answer (or partial recovered from the last streamed chunk via `_extract_final_result` → `utils/messages.py::message_content_to_text`, returning a `"No response Generated"` sentinel when no text survived) was produced; `failed` + `stop_reason=turn_capped` when nothing usable survived. `SubagentResult.stop_reason` flows through `task_tool.py::_task_result_command` → `format_subagent_result_message` (renders `Task Succeeded (capped: ...)` / `Task failed (capped: ...)`) and `make_subagent_additional_kwargs`, which stamps the additive `subagent_stop_reason` key alongside the normal `subagent_status`. **Why additive, not an enum**: a new status value would break v1 consumers; an optional field is ignored by older frontends and ledger readers, so the cross-language contract (`contracts/subagent_status_contract.json` v2 + `subagents/status_contract.py` + `frontend/.../subtask-result.ts`, pinned by `test_status_values_match_contract` / `test_stop_reason_values_match_contract`) stays backward-compatible. The durable delegation ledger captures `stop_reason` onto the entry and renders model-facing guidance ("hit a guardrail cap with a partial result; reuse it, retry tighter, or raise the per-agent budget (`max_turns` / `token_budget`)") so the lead reuses a capped completion knowingly instead of mistaking it for a clean one. (Phase 1 shipped this surfacing as a `MAX_TURNS_REACHED` status enum in #3949; Phase 2 replaced that enum with the additive `stop_reason` field per the agreed design — the `max_turns_reached` status value and `SubagentStatus.MAX_TURNS_REACHED` are gone.)
-**Context compaction (#3875 Phase 3, #4039)**: subagents inherit `DeerFlowSummarizationMiddleware` via `build_subagent_runtime_middlewares`, gated on the **same** `summarization.enabled` switch the lead reads (one config covers both chains; trigger/keep/model/prompt come from the shared `summarization` config so they cannot drift). The subagent builder attaches `DurableContextMiddleware` immediately before summarization, using the same skills path/read-tool settings as the lead chain. Compaction stores the generated summary in `ThreadState.summary_text` rather than as a `messages` item; the durable-context wrapper therefore projects it into the next model request as guarded hidden human data. This is required when a message-count keep policy preserves only an assistant tool-call plus its tool results: without the injected summary the next request begins with assistant/tool history and strict OpenAI-compatible providers can reject it. Because `DurableContextMiddleware` inserts a second `SystemMessage(authority_contract)` after the subagent's leading system prompt, the builder also appends `SystemMessageCoalescingMiddleware` innermost (mirroring the lead chain, appended after the optional summarization middleware so it is unconditionally last) to merge every `SystemMessage` into one leading `system_message` — otherwise the durable fix would trade #4039's assistant-first HTTP 400 for a duplicate-system 400 on the same strict backends (#4040). The factory is called with `skip_memory_flush=True` on the subagent path: the lead's `memory_flush_hook` (attached when `memory.enabled`) flushes pre-compaction messages into durable memory keyed by `thread_id`, and subagents share the parent's `thread_id`, so without skipping the hook a subagent's internal turns would pollute the **parent** thread's durable memory. Placement differs from the lead chain (lead appends summarization *before* the guard trio; subagent appends it *after*) — benign because the middleware implements only `before_model` (compaction) with no `after_model`/`consume_stop_reason`, so it cannot disturb the Phase 2 guard-cap stop-reason channel. Compaction rewrites the messages channel via `RemoveMessage(id=REMOVE_ALL_MESSAGES)`, which shrinks `len(messages)` below the step-capture cursor mid-run; `capture_new_step_messages` (see Step capture below) resets the cursor to the new tail on contraction so steps appended after the compaction point are not silently dropped.
-**Step capture & persistence (#3779)**: `executor.py` captures both assistant turns (`AIMessage`) **and** tool outputs (`ToolMessage`) via `subagents/step_events.py::capture_new_step_messages`, which walks the *newly-appended tail* of each `stream_mode="values"` chunk (not just `messages[-1]`) so a multi-tool-call turn — where LangGraph's `ToolNode` appends several `ToolMessage`s in one super-step — keeps every tool output instead of dropping all but the last. `runtime/runs/worker.py::_SubagentEventBuffer` additionally persists these `task_*` custom events to the `RunEventStore` as `subagent.start`/`subagent.step`/`subagent.end` (`category="subagent"`, `task_id` in `metadata`). It **batches** writes via `put_batch` (flushing on a terminal `subagent.end`, at `FLUSH_THRESHOLD` events, and in the worker's `finally`) rather than one `put()` per step, since `put()` is a documented low-frequency path (per-thread advisory lock per call) and a deep subagent (`max_turns=150`) emits hundreds of steps on the hot stream loop. `subagent_run_event` rejects malformed chunks that lack a non-empty `task_id`; running chunks additionally require a non-negative integer `message_index` and a message object, so persisted records always satisfy the required lifecycle envelope. `build_subagent_step` caps both the per-step `text` and each tool call's serialized `args` at `SUBAGENT_STEP_MAX_CHARS` (flagged `truncated` / `args_truncated`) so a large `write_file`/`bash` payload can't produce an unbounded row. The dedicated category keeps them out of `list_messages` (the thread feed) while `list_events` returns them for the frontend's fetch-on-expand backfill. `list_events` accepts `task_id` (filters on `metadata["task_id"]` — SQL-side in `DbRunEventStore` via `event_metadata["task_id"].as_string()`, in-memory in the JSONL/memory stores) plus an `after_seq` forward cursor, so the card pages through one subagent's steps without the run-wide `limit` truncating the tail (no schema migration: the filter rides the existing run-scoped index). `step_events.py` is a pure, unit-tested layer (`build_subagent_step` / `subagent_run_event`). **History contraction (#3875 Phase 3)**: `capture_new_step_messages` assumes append-only growth, but `DeerFlowSummarizationMiddleware` rewrites the messages channel via `RemoveMessage(id=REMOVE_ALL_MESSAGES)`, shrinking `len(messages)` below the cursor mid-run. On contraction (`total < processed_count`) the cursor resets to the new tail; `capture_step_message`'s id/content dedup prevents re-emitting pre-compaction steps, so steps appended after the compaction point are still captured instead of being dropped until `total` overtakes the stale cursor.
-**Deferred MCP tools** (if `tool_search.enabled`): `SubagentExecutor._build_initial_state` applies the subagent name allow/deny list and assembly-time authorization before calling the shared `assemble_deferred_tools`, appends the `tool_search` tool, injects the `<available-deferred-tools>` section into the subagent's `SystemMessage`, and threads the setup to `_create_agent`, which attaches `McpRoutingMiddleware` (when PR1 routing metadata matches deferred tools) before `DeferredToolFilterMiddleware` through `build_subagent_runtime_middlewares(...)`. Runtime skill policy is intentionally later and dynamic: `tool_search` may disclose/promote catalog metadata, but `SkillToolPolicyMiddleware` still removes or blocks any promoted business tool omitted by the active skill. Subagents thus withhold full MCP schemas until promotion, same as the lead agent; each task run gets a fresh `ThreadState` so promotion is isolated per run
-**Checkpointer isolation**: Subagent graphs are compiled with `checkpointer=False` to avoid inheriting the parent run's checkpointer, since subagents are one-shot and never resume.
-**Checkpoint lineage / stream isolation**: `_aexecute` deliberately omits checkpoint-coordinate keys (`thread_id`, `checkpoint_ns`, `checkpoint_id`, `checkpoint_map`) from the child `RunnableConfig`. LangGraph must inherit those coordinates from the copied parent ContextVar so the delegated graph retains a non-root subgraph namespace; explicitly re-supplying even the same parent `thread_id` starts a new root lineage on LangGraph 1.2.6+ and can route child AI/tool frames into the parent `messages` stream. DeerFlow business components still receive the parent `thread_id` through `runtime.context`, which is the preferred lookup path for sandbox, middleware, and attribution code. Regression coverage in `tests/test_subagent_executor.py::TestSubagentCheckpointLineage` keeps the invocation-contract assertion active on every supported version and version-gates the production-shaped parent-stream test to LangGraph 1.2.6+, where the leak exists.
-
-**Isolated-loop callback boundary**: sync delegation from an active event loop and `execute_async()` copy the ambient ContextVars into the persistent subagent loop so checkpoint lineage, user identity, tracing context, tags, metadata, and LangGraph's namespaced message-stream handler survive. Before submission, `_copy_isolated_subagent_context()` copies the callback manager/list and removes only handlers marked `deerflow_loop_bound`; `RunJournal` carries that marker because it owns parent-loop tasks and a SQL store/pool. LangGraph merges inherited callbacks with the child run's explicit `SubagentTokenCollector`/tracing callbacks, so letting `RunJournal` cross loops causes duplicate accounting and `Future attached to a different loop` failures, while dropping the whole callback chain silently removes child token frames. Do not replace the boundary with a blank `Context`; the inherited checkpoint namespace and framework stream callback are required by the stream-isolation contract above.
-
-### Tool System (`packages/harness/deerflow/tools/`)
-
-`get_available_tools(groups, include_mcp, model_name, subagent_enabled)` assembles:
-1. **Config-defined tools** - Resolved from `config.yaml` via `resolve_variable()`
-2. **MCP tools** - From enabled MCP servers (lazy initialized, cached with resolved-path + content-signature invalidation)
-3. **Built-in tools**:
-   - `present_files` - Make output files visible to user (only `/mnt/user-data/outputs`); virtual paths use `resolve_runtime_user_id(runtime)` so validation resolves the same user-scoped outputs directory established by `ThreadDataMiddleware`
-   - `ask_clarification` - Request clarification (intercepted by ClarificationMiddleware, which preserves text fallback and adds `artifact.human_input` for Web UI Human Input Cards). Beyond free text and single choice, the request-side v2 protocol supports `fields` (structured form card collecting several values at once; field types: text/textarea/number/select/multi_select/checkbox/date, validated and normalized server-side in the middleware — invalid entries are dropped, unknown types degrade to `text`; a standalone multi-select question is a one-field form). Replies stay on the v1 response protocol (`text`/`option`): the form card submits a readable text summary
-   - `view_image` - Read image as base64 (added only if model supports vision)
-   - `setup_agent` - Bootstrap-only: persist a brand-new custom agent's `SOUL.md` and `config.yaml`. Bound only when `is_bootstrap=True`.
-   - `update_agent` - Custom-agent-only: persist self-updates to the current agent's `SOUL.md` / `config.yaml` from inside a normal chat (partial update + atomic write). Bound when `agent_name` is set and `is_bootstrap=False`.
-   - `generate_workflow` - Generate a workflow definition draft from natural language (`prompt` → LLM generation via `run_oneshot_llm` → `validate_definition` with ≤2 corrective retries → mark dangerous nodes pending review → persist through the harness save service)
-   - `edit_workflow` - Edit an existing workflow definition from a natural-language instruction (read the current definition + instruction → regenerate the complete definition → validate with the same retry loop → update the same `definition_id`)
-   - `workspace_catalog` / `workspace_get` / `workflow_manage` / `workspace_undo` — Lead-Agent-only resource tools (`workspace_tools.py`) backed by `deerflow/workspace/service.py`: category index and CRUD for workflows/folders/workbenches/members, structured node/edge patches, revision restore, and conversation-scoped undo. They are included by `get_available_tools(include_workspace_tools=True)` only on the Lead Agent path; subagents and the workflow tool gateway default to the same flag where AI nodes explicitly reference the capability group.
-   - **Workflow generation safety boundary** (`workflow_tools.py`, T17): a draft is saved only after passing `validate_definition` graph-structure checks — invalid output retries up to 2 times, then collapses to a structured `status="error"` ToolMessage; dangerous nodes (`tool:bash` / `tool:http`) carry a `pending_review` mark by default (`WorkflowMetadata.pending_review_nodes`, unless `crash_confirm=False`; runtime confirmation ships in T18); saving on `database.backend: memory` raises `WorkflowDefinitionSaveError` with an explicit SQL-backend requirement
-   - `run_workflow` - Start a workflow run from a saved definition (T18, `workflow_runtime_tools.py` + `workflow/dispatch.py`). With `wait=True` it polls to a terminal status (`success`/`error`/`interrupted`) and aggregates node progress (`completed_nodes`/`total_nodes` + `current_node` + `failed_node`/`failed_error`); `wait=False` returns immediately with `{run_id, status}`. Dangerous nodes still pending review block the start with `code=pending_review` (pre-flight interception only — the executor's `crash_confirm` gate remains the enforcement boundary). A failed run reports the failed node and error.
-   - `pause_workflow` / `cancel_workflow` - Interrupt a running workflow at its next cancellation point (single `interrupt` cancel action today; side-effects already executed are not rolled back). Kept as separate names so the agent can express either intent
-   - `get_workflow_run` - Report the run status plus the most recent node progress entries (`started`/`completed`/`failed`); the agent's progress-report query, call it repeatedly. Once a run has terminated it also carries an additive optional `token_usage` key (summed input/output/total + prompt-cache `cache_read_tokens` across every `ai:llm_agent` sub-agent, plus a per-node `nodes` breakdown) aggregated from the run's `run.end` event — absent for pending runs or legacy events without it (W1C, `tests/test_workflow_cache_observability.py`). A terminated run likewise carries an additive `node_timings` key (N14x: per-node execution milliseconds + `total_ms` + `slowest_node`, ties broken on the node id) read from the same `run.end` event (`tests/test_workflow_node_timings.py`)
-   - `list_human_tasks` - List the current user's human tasks (optional `status` filter, newest-first, compact per-task summary)
-   - `submit_human_task` - Validate a submission against the task's stored `output_spec` + `validation_rules` (fail-closed: rejected submissions leave the task untouched); on success transitions to `submitted` and best-effort fires a resume run
-   - `skip_human_task` - Transition to `skipped` and best-effort resume with `{"__skip": True}`, so the `human:task` node continues with output ports unset; review tasks are refused (409) because they require approve/reject
-   - **Workflow runtime dispatch** (`workflow_runtime_tools.py` + `workflow/dispatch.py`, T18): **dual-entry consistency** — every tool reads the Gateway run singletons (`RunManager` / `StreamBridge` / `RunContext` + optional `human_task_repo`) from `runtime.context[__workflow_runtime]` (injected by `runtime/runs/worker.py::_build_runtime_context`, key `WORKFLOW_RUNTIME_CONTEXT_KEY`), the same run lifecycle the canvas/chat entry uses — a tool path is never a parallel execution stack; standalone/embedded runs without the injection fail closed with `WorkflowDispatchUnavailableError`. The dispatch layer is the harness mirror of `app.gateway.services.start_workflow_run`/`human_task_routes._resume_workflow` (no `app.*` import, pinned by `tests/test_harness_boundary.py`); it admits runs via `RunManager.create_or_reject` + a background `run_workflow` task, one run per `wf-run-<uuid>` thread. HumanTask submit/skip resume reuses the T13 interrupted-run mechanism (`start_workflow_run(..., resume=Command(resume=...), origin_run_id=...)`); the resume value is derived from the transitioned row — a `submitted` task resumes with its recorded `submission` dict, otherwise the skip sentinel `{"__skip": True}`. Resume failures are logged and swallowed (recovered by T13-4 / operations, never change the submit/skip tool result). **AI-node token observability (W1C)**: `exec_llm_agent` aggregates `SubagentResult.token_usage_records` (the `SubagentTokenCollector` snapshot, including sparse `cache_read_tokens`) onto a reserved result key `__workflow_token_usage`; the compiler declares and writes a reserved `wf:<node_id>:__token_usage` state channel for `ai:llm_agent` nodes, the worker folds those channels into an additive `run.end.content["token_usage"]` aggregate, and `get_workflow_run` surfaces it as an optional `token_usage` field — no existing `run.end`/summary keys change, and a node with no provider usage emits neither key (absent stays absent, never zero). Tests: `tests/test_workflow_dispatch.py`, `tests/test_workflow_runtime_tools.py`, `tests/test_workflow_human_task_tools.py`, `tests/test_workflow_runtime_context.py`, `tests/test_workflow_runtime_integration.py`, `tests/test_workflow_cache_observability.py`
-4. **Subagent tool** (if enabled):
-   - `task` - Delegate to subagent (description, prompt, subagent_type)
-
-Scheduled-task runtime note:
-- Scheduled background runs set `context.non_interactive=true` and therefore exclude `ask_clarification` from the lead-agent tool list. This keeps scheduler-triggered runs from stalling on human confirmation mid-execution. `non_interactive` is an internal-only context key: it is merged from `body.context` only when the request authenticated as the process-internal user (the scheduler path), never from arbitrary HTTP/IM clients.
-
-### Scheduled Task Triggers (`deerflow/scheduler/` + `app/scheduler/`) — N7
-
-N7 extends the existing scheduled-task stack (cron/once agent runs) with condition-driven triggers, workflow targets, trigger idempotency, and retry/DLQ. It deliberately does **not** add an event bus, a second poller, or a parallel execution stack: time-based and condition-driven rows share one `claim_due_tasks` claim loop, one lease, and one `dispatch_task`.
-
-- **Schedule kinds**: `once` / `cron` fire at a persisted `next_run_at` (unchanged); `file` / `event` / `idle` have no future timestamp. `schedules.py` owns the kind sets (`TIME_BASED_SCHEDULE_TYPES` / `CONDITIONAL_SCHEDULE_TYPES` / `SUPPORTED_SCHEDULE_TYPES`) and `next_run_at` returns `None` for a conditional kind. `claim_due_tasks` admits a conditional row when `next_run_at IS NULL` (plus the usual time-based branch, which is how a backoff-delayed conditional retry re-enters), orders `next_run_at ASC NULLS LAST` so a steady stream of condition rows cannot starve deadlines, and shares the `max_concurrent_runs` budget.
-- **Pure decision + impure probe**: `deerflow/scheduler/triggers.py` holds `validate_schedule_spec` (structural validation for all four kinds), `is_trigger_due(schedule_type, spec, *, now, next_run_at, last_run_at, snapshot)` (returns `DueDecision(due, trigger_key, payload, reason)`), and `trigger_key_for`. The app-layer `app/scheduler/probe.py::TriggerProbe` builds the snapshot it decides on: filesystem scan for `file` (single file or directory + glob; `created` derives from `st_ctime`), terminal `app_instances` rows for `event` (`AppInstanceRepository.list_terminal_since`), and run activity for `idle` (`COUNT(status IN pending,running)` + `MAX(updated_at)` read directly from `runs`, the console router's reporting-layer precedent). An empty snapshot is never due, so a transient read failure cannot fabricate a trigger.
-- **Idle restarts its window on `last_run_at`**: the reference activity is `max(last_activity_at, last_run_at)`, so a fired idle trigger cannot retrigger on the same idle window.
-- **Dispatch targets**: `scheduled_tasks.target_kind` is `agent` (default; the original prompt-driven lead-agent run) or `workflow`, with `target_definition_id` + `payload_template`. `payload_template` values may use `{{payload}}`, `{{payload.<key>[.<sub>]}}`, and `{{now}}` (`deerflow/scheduler/payload.py::render_template`); an exact single placeholder keeps the payload value's type, a missing key raises `ValueError` (a silently-empty param would run with wrong inputs), and a templated `prompt` key wins for agent targets. Workflow targets launch through the injected `launch_workflow` → `app/gateway/services.py::launch_scheduled_workflow_run` → `start_workflow_run` (same run lifecycle as canvas/chat, `on_disconnect="continue"`, `scheduled_task_*` metadata for the completion hook). A missing launcher or definition fails the dispatch loudly so it is recorded against the task.
-- **Trigger idempotency**: `scheduled_task_runs.dedupe_key` holds the occurrence identity (`<path>:<mtime>`, `<session_id>:<status>`, `<scope>:<bucket>`; `NULL` for once/cron) under partial unique index `uq_scheduled_task_run_dedupe(task_id, dedupe_key) WHERE dedupe_key IS NOT NULL`. Condition rows are re-evaluated every poll, so the same physical trigger can be seen again; the DB is the atomic arbiter and the loser surfaces as `DuplicateTriggerConflict` → recorded as a skip **without** a second row (a `skipped` tombstone with the same key would conflict again). `ActiveScheduledRunConflict` keeps its existing tombstone path.
-- **Retry / DLQ**: `scheduled_tasks.max_attempts` (default **1** = no retry, so pre-N7 behavior is byte-identical: cron re-enabled, once failed) and `attempt`; `scheduled_task_runs.attempt` is the 1-based ordinal. A real run failure on a **scheduled** dispatch (manual triggers never consume the budget) re-arms with `delay = min(retry_backoff_seconds * 2**attempt, max_retry_backoff_seconds)`; an exhausted budget moves the task to the new terminal `dead_lettered` status, which `claim_due_tasks` cannot admit. `POST /api/scheduled-tasks/{id}/requeue` drains the DLQ (`attempt=0`, `enabled`, once → now + `min_once_delay_seconds`, condition → `next_run_at=None`). Successful runs reset `attempt` to 0. Config: `scheduler.retry_backoff_seconds` (60) / `max_retry_backoff_seconds` (3600), both restart-required like the rest of `scheduler`.
-- **API**: create/update accept the new kinds and target fields (a `workflow` target validates the definition exists → 404; `max_attempts` must be 1–10); `POST /{id}/trigger` is a human override and passes `force=True`, so a condition-driven task fires even when its condition is not met. The frontend still only creates once/cron; UI for the new kinds is a separate slice.
-
-**Community tools** (`packages/harness/deerflow/community/`): optional integrations, each in its own subpackage and wired through `config.yaml`. Documented examples:
-- `tavily/` - Web search (5 results default) and web fetch (4KB limit)
-- `jina_ai/` - Web fetch via Jina reader API with readability extraction
-- `firecrawl/` - Web scraping via Firecrawl API
-- `image_search/` - Image search via DuckDuckGo
-- `aio_sandbox/` - Docker-based isolation (`AioSandboxProvider`)
-- `browser_automation/` - Agentic browser control (stateful `navigate → observe → click/type` loop) via Playwright, distinct from the read-only `web_fetch`/`web_capture` tools. Tools: `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_get_text`, `browser_back`, `browser_screenshot`, `browser_close` (config `group: browser`). A process-local `BrowserSessionManager` owns one private, loop-affine Playwright event-loop thread (same pattern as the BoxLite provider) so a per-thread browser session survives across turns regardless of the caller's loop (Gateway / test). Each action returns a fresh page snapshot whose interactive elements are addressed by a stable numeric `[ref]` index (stamped as `data-df-ref` during snapshot), so the model acts on what it just observed instead of holding stale handles or guessing selectors. URLs are SSRF-screened via the shared `validate_public_http_url` (opt-out `allow_private_addresses` only for intentional internal targets). CDP attachment cannot install the request guard on an existing Chrome context, so `cdp_url` fails closed unless the operator explicitly sets `allow_unguarded_cdp: true` for a trusted local browser. Browser REST/Live access also requires an exact non-NULL thread owner, rather than the general legacy shared-thread policy, because retained pages may contain authenticated state. Session admission is a hard `max_sessions` cap: pinned Live/operation sessions are never evicted, and a new thread is rejected when no unpinned session can be closed; one Live viewer owns a session at a time. Optional dependency: `cd backend && uv sync --extra browser && uv run playwright install chromium`; `scripts/detect_uv_extras.py` preserves the extra when `config.yaml` enables `browser_navigate`, and Gateway startup fails fast if configured browser control cannot import Playwright. Tests: `tests/test_browser_automation.py` (mocked tools + a real-Chromium integration test guarded by `importorskip`); `tests/manual_browser_live_check.py` is a manual DeepSeek-driven end-to-end check (not collected by pytest).
-  Live UI input dispatch is kept independent from JPEG capture: non-move actions start a rate-limited background refresh loop, so pointer, wheel, or keyboard input stays responsive while continuous gestures still produce frames throughout the interaction.
-
-Additional providers also live here (`boxlite`, `brave`, `browserless`, `crawl4ai`, `ddg_search`, `e2b_sandbox`, `exa`, `fastcrw`, `groundroute`, `infoquest`, `searxng`, `serper`, `tenki`); see each subpackage for specifics. E2B bootstrap is required. If it fails, the provider kills and closes the unusable remote sandbox. New sandbox creation raises an error. Warm-pool reclaim and remote discovery discard the sandbox and continue acquisition. E2B mounts remain optional.
-
-E2B output sync records remote file versions and actual host file metadata in a thread-local manifest. The manifest binds to the remote sandbox ID. A complete output listing removes entries for deleted files. This avoids repeat downloads when the host filesystem rounds modification times. A single release-time sync pass is bounded by aggregate ceilings (`_MAX_SYNC_TOTAL_BYTES`, `_MAX_SYNC_FILES`, `_SYNC_DEADLINE_SECONDS`) on top of the per-file `_MAX_DOWNLOAD_SIZE` cap, so a pathological outputs tree cannot make release download unboundedly; a truncated pass logs what it dropped and leaves the manifest un-pruned (only entries observed in that pass are reconciled), so files it never reached are retried on the next release rather than being forgotten.
-
-**ACP agent tools**:
-- `invoke_acp_agent` - Invokes external ACP-compatible agents from `config.yaml`
-- ACP launchers must be real ACP adapters. The standard `codex` CLI is not ACP-compatible by itself; configure a wrapper such as `npx -y @zed-industries/codex-acp` or an installed `codex-acp` binary
-- Missing ACP executables now return an actionable error message instead of a raw `[Errno 2]`
-- Each ACP agent uses a per-thread workspace at `{base_dir}/users/{user_id}/threads/{thread_id}/acp-workspace/`. The workspace is accessible to the lead agent via the virtual path `/mnt/acp-workspace/` (read-only). In docker sandbox mode, the directory is volume-mounted into the container at `/mnt/acp-workspace` (read-only); in local sandbox mode, path translation is handled by `tools.py`
-
-### MCP System (`packages/harness/deerflow/mcp/`)
-
-- Uses `langchain-mcp-adapters` `MultiServerMCPClient` for multi-server management
-- **Long-running task foundation**: `mcp/tasks/` defines the protocol-neutral `McpTaskDriver` contract and normalized `TaskSnapshot` states (`submitted`, `working`, `input_required`, `completed`, `failed`, `cancelled`). `persistence/mcp_tasks/` owns the durable remote-handle mapping, poll schedule, notification state, lease owner, and a consecutive poll-error counter (incremented on failed polls, reset on any applied snapshot — the total `poll_attempt_count` grows on every claim and cannot distinguish failure streaks) for a later driver-layer backoff/terminal-failure policy; `app/mcp_tasks/McpTaskService` performs status calls outside the Agent/LLM loop. A status result is applied only when the worker still owns an unexpired lease, so a stale result cannot be written after expiry even before another worker reclaims the row. Poll timestamps and retry schedules are based on the remote call's completion time rather than the scan start. If submission succeeds but persistence fails, the service best-effort cancels the remote task and preserves the original persistence error if that compensation also fails. The exact `uq_mcp_tasks_user_server_remote` conflict is different: an existing durable row already owns the remote handle, so the conflict surfaces without cancelling that tracked task. Unexpected per-task poll failures are isolated from sibling claims and remain recoverable through lease expiry; Gateway shutdown cancels the poller so a hung external status call cannot block process exit. `input_required` and terminal states stop polling and become `notification_status=pending` for later Agent/UI delivery. Durable recovery requires a SQL database backend (`sqlite` or `postgres`); the in-memory backend leaves the repository/service unavailable. The runtime is startup-configured by `mcp_tasks` and disabled by default until a concrete driver is registered; this foundation does not alter ordinary MCP tool behavior on its own.
-- **Lazy initialization**: Tools loaded on first use via `get_cached_mcp_tools()`
-- **Cache invalidation**: Detects extensions-config changes by comparing the resolved config path and a `(mtime, size, sha256)` content signature against the values recorded at initialization, not a strict mtime `>` comparison. This catches same-second edits, mtime that stays put or moves backward (`git checkout`, `cp -p` / backup restore, `tar` / `rsync`, object-store / network mounts), and a switch to a different config file with an equal-or-older mtime. The signature helper (`config/file_signature.py::get_config_signature`) is shared with `config/app_config.py::get_app_config()` for the sibling runtime-editable config file, rather than each maintaining its own copy. `ExtensionsConfig.resolve_config_path()` raises `FileNotFoundError` for an explicit `config_path`/`DEER_FLOW_EXTENSIONS_CONFIG_PATH` that points at a missing file — an operator-asserted path going missing is a real misconfiguration, so this is intentionally loud for callers that load the config for actual use (e.g. `from_file()` via `get_mcp_tools()`); only the fallback search mode returns `None`. The MCP cache's own path resolution (`mcp/cache.py::_resolve_config_path`) is narrower: it catches that specific `FileNotFoundError` locally and treats it the same as "unconfigured", so this staleness check degrades to "not stale" instead of propagating an exception when a previously-valid explicit/env-var config disappears mid-run
-- **Transports**: stdio (command-based), SSE, HTTP
-- **Per-server tool-name prefixing**: `mcpServers.<server>.tool_name_prefix` defaults to `true`, preserving the collision-safe `<server_name>_` prefix. Servers whose tools already carry a stable namespace may set it to `false`; discovery then calls `langchain_mcp_adapters.tools.load_mcp_tools` with that server's flag. Source routing and stdio session-pool wrapping are based on the producing server and transport, never on whether the visible tool name starts with the server prefix.
-- **OAuth (HTTP/SSE)**: Supports token endpoint flows (`client_credentials`, `refresh_token`) with automatic token refresh + Authorization header injection
-- **Routing hints**: `extensions_config.json -> mcpServers.<server>.routing` and
-  `tools.<original_tool_name>.routing` are soft preference metadata. The effective
-  routing is resolved while `mcp/tools.py::get_mcp_tools()` still has both
-  `source_name` and the original MCP tool name, then stored on `tool.metadata`
-  under `deerflow_mcp_routing`. Prompt rendering uses
-  `tools/builtins/tool_search.py::get_mcp_routing_hints_prompt_section`, which
-  references `tool_search` when a hinted MCP tool is currently deferred; do not
-  add a parallel routing middleware for PR1-style preference hints.
-- **Stdio file outputs**: Persistent stdio sessions are scoped by `user_id:thread_id`. For stdio transports only, DeerFlow pins the subprocess default `cwd` to the thread workspace and `TMPDIR`/`TMP`/`TEMP` to `workspace/.mcp/tmp/`, unless the operator explicitly configured `cwd` or temp env values. SSE/HTTP transports skip this filesystem prep entirely.
-- **Stdio path translation**: MCP-returned local file references are not copied. If a `ResourceLink` or conservative free-text path resolves to an existing file inside the thread's mounted user-data tree, it is translated deterministically to `/mnt/user-data/...`; paths outside that tree remain unchanged.
-- **Runtime updates**: Gateway API saves to extensions_config.json; the Gateway-embedded runtime detects changes via the resolved-path + content-signature check above, so multi-worker / stale-mtime deployments still pick up an added/removed MCP server without a restart (`PUT /api/mcp/config` keeps whole-payload validation, while `PATCH /api/mcp/config` changes only one server's `enabled` field, normalizes the same `type`/MCP-spec `transport` alias as the runtime config model, and validates the target only when enabling it; either endpoint's reset clears the cache only in its own worker). MCP, skill, and embedded-client writers share `atomic_write_extensions_config()`, which writes and fsyncs a same-directory temporary file before `os.replace()` and preserves an existing file's mode and symlink target; failed serialization or replacement leaves the prior config intact and cleans up the temporary file.
-- **Stdio launch policy at the HTTP boundary** (`routers/mcp.py::_validate_mcp_update_request`, shared by `PUT` and the enable branch of `PATCH`): a config file may express anything, but the API is untrusted input, so an API-registered stdio server must (a) name a bare executable from the allowlist — `_DEFAULT_MCP_STDIO_COMMAND_ALLOWLIST` = `{npx, uvx}`, extended by `DEER_FLOW_MCP_STDIO_COMMAND_ALLOWLIST`, with path separators, whitespace, and shell metacharacters rejected in `command`; (b) carry no `args` flag in `_ARBITRARY_EXEC_ARGS`; and (c) set no `env` name in `_CODE_INJECTING_ENV_VARS`. Checks (b) and (c) exist because the command check alone names a binary without constraining what that binary runs. The `env` denylist applies to **every** allowlisted command, and both denylists match `--flag=value` as well as `--flag value`. The `args` denylist's **scope depends on the command**, because where a launcher stops parsing its own flags is what decides whether a token is an exec flag at all:
-
-  - For a **package launcher** in `_PACKAGE_LAUNCHERS` (`{npx, uvx}`) only the launcher's own **option region** is screened. `npx`/`uvx` stop parsing their flags at the package name and hand every later token to the spawned server's argv, where `-c` is routinely "config" and `-e` "env" — screening those rejected ordinary third-party servers while covering nothing. A bare `--` ends the region too: only the *first* token after it is the package name. Finding that boundary needs each launcher's option **arity**, since a value is not a positional — `npx -p <pkg> -c '<command>'` **runs** the command (`-p` is `npm exec`'s `--package`, so `<pkg>` is its value and npm keeps parsing), so ending the region at the first non-flag token would walk straight past it. `_NPX_BOOLEAN_ARGS` is generated from `@npmcli/config`'s definitions (npm 10.9.4) minus the `-p` exec override; `_UVX_VALUE_ARGS` comes from `uvx --help` (uv 0.11.1). Regenerate these against a newer launcher rather than hand-editing. The unknown-option default is deliberately **opposite** per launcher, following the exec set rather than symmetry: npx owns real exec flags (`-c`/`--call`), so an unknown option consumes a value and keeps the region open (npm errors on options it does not define, so this cannot reject a working invocation); uvx owns no string-eval flag at all, so its screen is a tripwire, an unknown option consumes nothing, and uv's large boolean surface cannot over-block. uvx's exec set also drops the short spellings, because `-c` is uv's `--constraints` and `-p` its `--python`.
-  - Every **other** command is screened whole, with two extra rules, because it is an interpreter rather than a package runner: `-p` counts as an exec flag there (node's `--print`), and single-dash short-option clusters are decomposed letter by letter so `node -pe` cannot pass a check that only splits on `=`.
-
-  Verdicts are pinned against the real launchers: for npx, every argument vector the validator rejects is one `npx` actually executes, and every vector it allows is one `npx` passes through to the server. `env` screening covers names that execute code **unconditionally** at process startup, e.g. `PYTHONPATH`/`PYTHONHOME`, which run a caller-controlled `sitecustomize.py` at interpreter startup under plain `uvx`. Caller-controlled **search paths** are a weaker, conditional class and are an accepted residual: `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` (conditional on the process loading a shadowable library, and legitimately set by native-dependency servers) and `NODE_PATH` (searched *after* the local `node_modules` chain, so it cannot shadow an installed dependency, and ignored entirely by ESM `import` — it can only supply a CJS module that would otherwise fail to resolve). Do not move a search path into the set: it would make the "unconditional" rule untrue, which is how a defense-in-depth list starts being mistaken for a boundary. Remote transports skip all three — they spawn nothing.
-  **This is defense in depth, not a trust boundary.** `npx`/`uvx` exist to fetch and execute remote packages, so an admin can still point one at a package they published; the boundary is admin authentication plus network reachability. Do not add a check here on the assumption that it makes MCP registration safe for untrusted admins — it does not, and the fix for that is not a bigger denylist.
-
-### Skills System (`packages/harness/deerflow/skills/`)
-
-> **Tools are a separate first-class layer.** A capability group only references tools through `group.json.tools`; it does not own tool definitions. Custom tool packages live at `<vibestack.repository>/tools/<name>/<version>/tool.json` (trusted local code) and are resolved by `deerflow/tools/registry.py` into `tool:<guid>@v<version>`. MCP tools are addressable as `mcp:<server>:<tool>` while their transport/credentials stay in `extensions_config.json`. `resolve_capability_tools` is fail-loud for explicitly declared but missing/unauthorized tools.
->
-> **Capability groups are not skills.** A capability group is a top-level versioned package under `<vibestack.repository>/capability-groups/<name>/<version>/group.json` that can contain rules, agents, commands, skills, references, templates, assets and evals. A skill is one child resource inside a group. The old skill-as-capability-group resolution was removed; use `/api/capability-groups` for the read-only all-version catalog. The `ai:capability_group` selector node is a compile-time selector over capability-group GUIDs/names (`params.groups`). Project activation is `.vibestack/stack.json`; Core is fixed, node selection defaults to Core only, and activation is additive. Run snapshots reject content that changes after a run starts.
-
-- **Location**: built-in public skill templates live under `skills/public/`; the runtime public root is `{HNFLOW_HOME}/skills/public/`; user-authored custom skills live under `{HNFLOW_HOME}/users/{user_id}/skills/custom/`; globally managed integration skills live under `{DEER_FLOW_HOME}/integrations/skills/{provider}/`; per-user integration credentials remain under `{DEER_FLOW_HOME}/users/{user_id}/integrations/{provider}/{config,data}`
-- **Format**: Directory with `SKILL.md` (YAML frontmatter: name, description, license, allowed-tools, required-secrets, and the N14 §5.5 capability contract `permissions` / `tool-schema-version` / `context-budget`, parsed fail-soft into `Skill.permissions`/`tool_schema_version`/`context_budget` and checkable via `skills/contract.py::validate_capability_contract`; N14 §24.12 adds `tool-permissions` as a `{tool_name: [fs, net, exec, secrets]}` mapping parsed into `Skill.tool_permissions`)
-- **Tool-level permission adjudication** (`skills/permission_policy.py`, N14 §24.12): the runtime half of the §5.5 `permissions` declaration. `resolve_capability_tools` resolves the groups' declared `tools` ids through `deerflow/tools/registry.py` and adjudicates each concrete tool against the capability groups' **union** of declared permissions plus per-tool `tool_permissions` overrides. An explicit tool that is missing or outside the declaration raises `ToolResolutionError` (fail-loud); it is never silently dropped. Three properties are deliberate: **opt-in** (a group declaring no permissions is not restricted — a package that never asked for least privilege must not silently lose its tools); **fail-closed on an unclassifiable tool** (the table in this module states the known families — sandbox fs/exec, `web_*`/`browser_*`/search-fetch `net`, the `app` provider `exec` — and anything else, MCP servers included, is denied rather than assumed harmless, with the denial naming `tool-permissions` as the knob that can declare it); and **declared, not inferred** (a per-tool `tool-permissions` override is how an opted-in group keeps an MCP or community tool, and it is unioned per tool name across `extends`). A denial never silently reduces a boundary: the node simply receives fewer tools, and when nothing survives, it gets none. Tests: `tests/test_skill_permission_policy.py`.
-- **Composition** (`skills/composition.py`, N14 §5.5): frontmatter `extends` (a group name or list) makes a package build on another's declaration, and `overlay: true` makes its own `allowed-tools` **replace** the inherited list instead of adding to it (the only way to *narrow* an inherited tool set). Merge rules: `allowed-tools`/`permissions`/`required-secrets`/`requirements` union, plus `tool_permissions` unioned **per tool name** (N14 §24.12 — dropping either side would ship a narrower requirement than its author declared); `tool-schema-version`/`context-budget` — own value, else the last base that declared one. Resolution is catalog-based (`resolve_declaration`/`resolve_allowed_tools`/`resolve_group_closure`), broken composition (unknown base, self-extension, cycle, depth overrun) raises `CompositionError`, and `validate_composition` reports every problem without raising (tooling/CI). Both fields parse **fail-loud** — like `dependencies`, a malformed composition declaration makes the file unloadable, because loading it without the inheritance would ship a package with fewer (or wider) capabilities than its author declared. Consumers: `workflow.tool_gateway.resolve_capability_tools` resolves the selected groups' declared `tools` ids through `tools/registry.py` (missing or unauthorized explicit tools raise `ToolResolutionError`), and `workflow.schema.collect_resolved_groups` folds the `extends` closure into a definition's resolved-group snapshot. Legacy skill-package composition remains available to skill policy paths.
-- **Loading**: `load_skills()` recursively scans public, per-user custom, global integration, and legacy custom locations for `SKILL.md`, parses metadata, and reads enabled state from extensions_config.json plus per-user skill state for non-public categories; that directory is a package boundary, so no nested `SKILL.md` is registered as a runtime skill. SkillScan has a deliberately narrower packaging rule: known eval fixtures are permitted as support data, while other nested `SKILL.md` files are reported as package defects. It parses runtime metadata and reads enabled state from extensions_config.json.
-- **External reload**: `POST /api/skills/reload` is an admin-only, process-local invalidation hook for trusted MinIO/NFS/CSI writes. `SkillStorage` instances do not cache a catalog — `load_skills()` scans on every call — so the route clears all `(app_config, user_id)` entries and the rendered prompt-section LRU, then waits up to the shared refresh timeout for the existing off-loop single-flight refresh. Each invalidation receives a generation-bound result handle; a successful scan atomically replaces the global enabled-skills cache, while a loader-level failure propagates to the HTTP waiter and preserves the last-known-good global cache. Per-user/config scans capture the refresh version and cannot repopulate shared caches if invalidation occurs while they are loading. A timed-out HTTP wait fails generically while the daemon refresh worker continues. Subsequent runs rescan after a successful reload; active runs keep their existing snapshot. Each Uvicorn worker/Kubernetes Pod must be targeted separately. Direct mount writes bypass install/edit validation, SkillScan, and history, so mounted roots are an operator-controlled trust boundary.
-- **Tool policy**: Agent `allowed-tools` declarations apply dynamically only to slash-activated skills and skills captured in `ThreadState.skill_context` through configured `read_file` loads; passive enabled skills and custom-agent/subagent skill allowlists remain discoverable without clamping the baseline toolset. Subagents render only skill discovery metadata at startup and reuse the same adjacent `SkillActivationMiddleware` + `SkillToolPolicyMiddleware` pair as the lead; their configured `skills` field limits discovery and activation instead of eagerly loading bodies or unioning policies. Slash policy is dominant for its run, preventing subsequently read skills from widening explicit authority; autonomous captured skills use the existing union only when no slash source exists. `tool_search` and `describe_skill` stay available as framework discovery infrastructure, while every discovered or promoted business tool still requires active-policy permission for schema visibility and execution; `task` likewise requires an explicit declaration. Each active model call intentionally reloads the full live registry so enable/disable changes, frontmatter edits, and custom/public name-shadow winners take effect without a stale TTL or unsafe direct-path cache; all tool calls produced by that model step reuse the resulting source-and-path-signed decision. Registry failures and all-invalid active sets fail closed, while stale individual paths are skipped when another valid skill remains. This is best-effort behavioral scoping, not a hard security boundary: alternate loading paths are not captured and bounded autonomous context may evict entries.
-- **Sandbox projection**: `skills/projection.py` materializes enabled-only trees at `{base_dir}/skills_view/public` and `{base_dir}/users/{user_id}/skills_view/{custom,legacy,integrations}`. It hardlinks files when possible and falls back to copies across filesystems. Storage writes, archive installs, deletes, and toggles rebuild under a cross-process lock; Gateway boot ensures only the shared public view, while each user view is repaired lazily on first sandbox acquire. Managed integration packages are global, but their projected category is per-user because enabled state is isolated. Rebuilds stage a complete tree and reconcile it with per-file atomic replacement, so unrelated enabled skills remain continuously visible; disable/delete paths remove only the affected package before mutating to preserve fail-closed behavior. User projection rebuilds re-read global enable state from disk instead of the process singleton, so a toggle handled by another Gateway worker is reflected on the next acquire. Gateway public-skill toggles take the public projection lock before the shared `extensions_config_write_lock`, re-read an existing config from disk, persist the full model shape, and rebuild before responding; keep this as one worker-owned critical section so MCP writes cannot interleave and request cancellation cannot release either lock while the worker still runs. The shared public steady-state signature check runs without the global projection lock; stale/error paths take the lock and re-check before rebuilding or clearing. User-scope checks remain serialized per user. Category root inodes remain stable so live bind mounts observe content changes without sandbox recreation. Projection failures clear the affected view before raising.
-- **Injection (legacy / default)**: Enabled skills are listed in the agent system prompt with full metadata and container paths (`<available_skills>` block). Controlled by `skills.deferred_discovery: false` (default).
-- **Deferred discovery** (`skills.deferred_discovery: true`): Skills are listed by name only in a compact `<skill_index>` block, keeping the system prompt prefix-cache friendly. The agent calls the `describe_skill` tool at runtime to fetch full metadata for skills it wants to use, then loads the SKILL.md via `read_file`. Two new modules support this path:
-  - `skills/catalog.py` — `SkillCatalog` (immutable, searchable; query forms: `select:a,b`, `+prefix`, free-text regex); `select:` returns all requested skills without a result cap; other modes cap at `MAX_RESULTS=5`.
-  - `skills/describe.py` — `build_describe_skill_tool(catalog)` builds the `describe_skill` tool as a closure; `build_skill_search_setup(skills, enabled, ...)` produces a `SkillSearchSetup(describe_skill_tool, skill_names)` that is wired into both the LangGraph agent factory (`agent.py`) and the embedded client (`client.py`).
-- **Slash / menu activation**: `/skill-name task` loads that enabled skill's `SKILL.md` for the current model call only. The Lead Agent menu sends the same explicit activation through `runtime.context.active_skills` (one skill per thread, persisted client-side); it is injected once per run and never exposed to subagents. Both paths reject disabled skills and skills outside a custom agent's whitelist; slash additionally rejects leading whitespace, missing separators, and reserved channel commands (`/new`, `/help`, `/bootstrap`, `/status`, `/models`, `/memory`, `/goal`).
-- **Installation**: `POST /api/skills/install` extracts .skill ZIP archive to custom/ directory
-- **Install-time eval gate (N14 §24.8, capability-package side)**: `skills/eval_gate.py` + `skills/eval_judge.py`. N14u gates a *workflow definition* on its embedded eval suite; this is the package half. Both install paths (`local_skill_storage` and `user_scoped_skill_storage`) call `enforce_skill_eval_gate(skill_dir, skill_name=...)` right after the security scan, so an install/upgrade verifies the package's own `evals/*.json` before it commits. Two bounds keep it honest: **only *trigger* cases are decided** (`should_trigger` + an utterance from `query`/`prompt`/`input`/`utterance`/`task`/`message`), because a behavioural expectation (an `assertions` list, an expected readiness) needs its own runner and is counted, never judged here; and **the opt-in is the author's**, exactly like N14u — a dict manifest carrying `"require_pass": true` gates its cases, while a bare `[{...}]` trigger list has nowhere to declare intent and therefore stays report-only. The default install path is consequently **free of any model call**: a judge is built only when a manifest actually requires a pass (`eval_judge.build_trigger_judge`, a standalone model call that owns its own tracing root, mirroring `security_scanner`). A required gate that **cannot be run** refuses the install (no judge buildable, or a judge that could not answer a case) — a declared gate that silently passes is worse than one that refuses — whereas a malformed manifest is a warning (matching the review package's `eval.invalid-json` severity), never a block. Manifest vocabulary is shared with the review analyzer through `skills/review/eval_schema.py::iter_manifest_cases` so a package can never be readable by one and invisible to the other. Tests: `tests/test_skill_eval_gate.py`.
-- **SkillScan**: `packages/harness/deerflow/skills/skillscan/` is the native deterministic scanner for `.skill` archives and agent-managed skill writes. It runs offline before the LLM scanner, emits structured findings (`rule_id`, `severity`, `file`, `line`, `message`, `remediation`, redacted `evidence` — category/analyzer are encoded in the `rule_id` prefix), blocks `CRITICAL`, and passes warning findings into `scan_skill_content()`. `scan_archive_preflight()` / `scan_skill_dir()` are pure sync functions (dispatch off the event loop); `enforce_static_scan()` applies the blocking policy and the `skill_scan.enabled` kill switch. The Python instance-client signal deliberately follows only a one-level, same-scope evidence chain (PR #4265 review): a proven imported constructor bound to a simple name, optional name-to-name alias propagation, rebinding invalidation, and a constructor-supported outbound method or context-manager use; bare canonical-looking names never fall back to module identity. Nested scopes never inherit client handles and inherit only constructor aliases proven stable by a binding-only enclosing-scope prepass. Comprehensions, walrus-bearing statements, annotations, executable expressions inside complex binding targets, unsupported operations, and ambiguous flows produce no finding from this signal; skipped constructs invalidate all names they may bind, while representative false negatives are pinned by `test_python_declared_false_negatives_stay_unreported`. Compound bodies are walked from isolated copies so wrapping code in `if True:` is not a bypass, while copied scope entries, binding-only prepasses, and AST visits consume a deterministic work budget and the walk stops after its first sink. Budget or recursion exhaustion skips only this best-effort signal and retains deterministic findings already collected for the file. Do not add Semgrep/OpenGrep or YAML rule-engine dependencies to the core path; Phase 1 rule specs live in Python constants next to their analyzers in `skillscan/orchestrator.py`.
-- **Skill Review Core**: `packages/harness/deerflow/skills/review/` provides read-only package snapshots, deterministic facts, resource/eval analysis, report rendering, and the CLI (`python -m deerflow.skills.review.cli`). It reuses the shared frontmatter helper and SkillScan; it must not import `app.*`, execute target scripts, install dependencies, or call networks. JSON contracts live in `contracts/skill_review/`. The `review_skill_package` built-in tool labels results with `review_subject_entry` and never `skill_context_entry`, so reviewing a target does not activate it, bind its `required-secrets`, or apply its `allowed-tools`. Its model-visible `ToolMessage.content` is a compact JSON payload with untrusted control tags neutralized; the full raw review payload, including Markdown renders, stays in `ToolMessage.artifact`. CI should run the CLI with `--fail-on error --fail-on-incomplete` so blocker/error findings and truncated/not-assessed packages fail the gate. The public `skills/public/skill-reviewer` skill owns semantic readiness review and suggestions only; mutation and runtime experiments remain owned by `skill-creator`.
-
-#### Request-Scoped Secrets (`required-secrets`)
-
-Lets a caller pass per-request, short-lived end-user credentials (e.g. an ERP token) to a skill's sandbox scripts without the value entering the prompt, tool arguments, the executed command string, or traces (issue #3861).
-
-- **Declare**: a skill lists the secrets it needs in `SKILL.md` frontmatter — `required-secrets:` as a string list or `{name, optional}` mappings. `name` is both the lookup key and the env var name exposed to scripts. Parsed by `skills/parser.py::parse_required_secrets` into `Skill.required_secrets` (`SecretRequirement`); malformed entries are dropped with a warning.
-- **Carry**: the caller sends values out-of-band in the run request's `context.secrets` mapping (never a message). `runtime/secret_context.py` owns the contract (`SECRETS_CONTEXT_KEY`, `extract_request_secrets`). The existing `context` passthrough carries it to `runtime.context` without mirroring into `configurable`. `build_run_config` still sets `configurable.thread_id` on the context path — the checkpointer requires it. MCP tool interceptors can read the same live carrier from `langgraph.config.get_config()["context"]["secrets"]`; see `docs/MCP_SERVER.md`.
-- **Admission and redaction ownership**: `services.py::start_run()` validates both legacy request mappings, `metadata.auth_token` and `config.metadata.auth_token`, before any run or thread persistence. `runtime/secret_context.py::redact_config_secrets()` also removes nested config metadata secrets from observable and persisted config copies; historical `RunResponse.kwargs` applies the same redaction non-mutatively, leaving stored `RunRecord` data unchanged. Keep callers on `config.context.secrets` rather than adding another credential carrier. Scheduled task definitions have no durable credential carrier: `ScheduledTaskService` supplies only `scheduled_task_id`, `scheduled_task_run_id`, and `scheduled_trigger` as run metadata.
-- **Bind (point A+)**: `SkillActivationMiddleware._resolve_secret_bindings` recomputes the injection set (`runtime.context[__active_skill_secrets]`) on every model call from two unioned sources, then REPLACES the key. (1) *Slash*: the run's most recent `/skill` activation, persisted as a source on the run context (only the activated skill's **canonical container path**, never its declared secrets) so the whole tool loop after the activation call keeps the binding; a new activation replaces it. Slash reads the genuine user text via `get_original_user_content_text`; `InputSanitizationMiddleware` preserves it (`ORIGINAL_USER_CONTENT_KEY`), so activation fires even after sanitization. (2) *In-context* (autonomous invocation): skills the model actually loaded in this thread — `ThreadState.skill_context` entries. **Both sources resolve the live registry skill by normalized container path on every call** (`_resolve_registry_skill`) and bind only that skill's own declared secrets — enabled + allowlist checked for both; the `secrets-autonomous: false` opt-out (malformed values fail closed to `false`) additionally gates the in-context path but exempts explicit slash. Resolving by registry — not by trusting the source's stored data — is what makes a caller-forged `__slash_skill_secret_source` harmless (`runtime.context` is caller-mergeable; the gateway also strips caller `__`-keys in `build_run_config`), #3938. Authorization is three-gated regardless of activation style: skill **enabled** by the operator × values **supplied per-request** by the caller (`context.secrets`) × names **declared** in frontmatter (∩ semantics). Because the set is recomputed per call, a skill evicted from `skill_context` (capacity) or a caller that stops supplying a value loses injection on the next call. The injected value always comes from the caller's request, never the host environment (scrubbed first — see below), so a declared name that also exists in the host env is safe: the caller's value wins and the host value is dropped (the #3861 per-user-key-overrides-shared-key case). Missing required secrets are logged once per binding change, not injected; binding changes are recorded as a `middleware:skill_secrets` journal event (skill and secret names only, never values).
-- **Inject**: `bash_tool` reads the injection set and passes it as `execute_command(env=...)`. Scope is the activation turn/run only — a run without `/skill` activation injects nothing.
-- **AIO image requirement**: on `AioSandbox` the env path uses the `bash.exec` API (`POST /v1/bash/exec`), which upstream all-in-one-sandbox only ships since `1.9.3` — older images (including a `latest` tag frozen on the `1.0.0.x` line) 404 the whole `/v1/bash/*` namespace. `AioSandbox` detects the 404, remembers the capability gap on the instance, and fails fast with an actionable upgrade error instead of letting the model retry raw 404s; there is deliberately **no** fallback through the legacy shell path because none keeps the secret values out of the command string (#3921). Regression tests: `tests/test_aio_sandbox.py::TestBashExecUnsupportedFailFast`.
-- **Inherited-env scrub**: `execute_command` no longer leaks the Gateway's `os.environ` to skill subprocesses — `env_policy.build_sandbox_env` drops secret-looking names (`*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASS*`/`*CREDENTIAL*`/`*DSN*` + a connection-string denylist like `DATABASE_URL`/`REDIS_URL`/`GH_PAT`, plus no-flag credential sources like `MYSQL_PWD`/`REDISCLI_AUTH`/`PGPASSFILE`/`PGSERVICEFILE`) so platform credentials never reach a skill; a skill that needs one must declare it.
-- **Leak surfaces sealed** (verified by a real-gateway e2e run — secret reaches the sandbox but none of these): prompt (value never in a message), trace (`tracing/metadata.py` never copies `context`), checkpoint (secrets live on `runtime.context`, not graph state), audit (journal records names only), stdout (`tools.py::mask_secret_values` redacts injected values from bash output), and **run-record persistence + run API** (`services.py::start_run` stores `redact_config_secrets(body.config)` so `runs.kwargs_json` and `RunResponse.kwargs` never carry the secret).
-- **Historical retention**: API response hiding prevents legacy `metadata.auth_token` and `config.metadata.auth_token` from being returned now; it does not delete values already retained in databases, run events, logs, snapshots, exports, or backups. Deployments that ever used either legacy carrier must rotate the credential and clean every retained copy under their retention policy. Restarting or upgrading DeerFlow performs neither action.
-- **Scope / non-goals**: no persistence/vaulting — values are request-scoped and never stored server-side, so long-lived use means the caller re-supplies `context.secrets` on each request while the skill stays in `skill_context`; subagents do not inherit the skill injection set. MCP interceptors may independently consume the same supported request-scoped carrier. Tests: `tests/test_skill_request_scoped_secrets.py`, `tests/test_mcp_session_pool.py`.
-
-### Model Profiles (`packages/harness/deerflow/workflow/model_profiles.py`)
-
-`ai:llm_agent` nodes reference the middle layer through `params.model_profile`
-(a stable profile id). Each user-owned `model_profiles` row points at exactly
-one actual `config.yaml -> models[]` name; profiles never chain.
-`resolve_model_profile` is the pure fail-loud resolver shared by compiler and
-executor: unknown/disabled profiles and missing target models reject the
-definition at save/compile time and the run at execution time. Model selection
-has no separate `model_policy`; the profile is the only selector. Session
-continuation rejects `model_profile` because an existing session must not
-silently switch models. The compiler folds referenced profile target/enabled/
-availability into its cache key, and `runtime_context.py` injects the user's
-profile map into every workflow run. Actual models remain operator config;
-Gateway exposes them read-only through `/api/models`.
-
-### Formal Verification (`workflow/spec.py`, `verification.py`, `verifiers/`)
-
-Formal verification is a graph-level process, not an AI-internal step.
-
-- **Specifications** are immutable revisions (`workflow_specifications` + `workflow_specification_revisions`; migration `0025_workflow_specifications`). `spec` ports carry a small `SpecRef` (`spec_id`, `revision`, `content_hash`, `language`); the full text is resolved from the exact revision. Freezing records `approved_by` / `approval_task_id`, and only frozen revisions may be referenced by a saved workflow.
-- **`data:spec`** supports `create` / `revise` / `freeze` / `resolve` / `lint`. It never silently writes around the approval fields.
-- **`verify:gate`** is a conditional node with exactly three branch outputs (`verified` / `failed` / `inconclusive`) and a `status` enum. All three branches must be wired; an unwired `inconclusive` is a compile error. Routing reads `wf:<node>:status`, never branch payload truthiness.
-- **Outcome semantics**: missing/unfrozen spec, missing ToolGateway, or an unresolved verifier is fail-loud (run error). A verifier proof failure is `failed`; timeout, abstention, crash, or malformed output is `inconclusive`. A verifier crash is never evidence that the implementation is wrong.
-- **Verifier tools** are builtin read-only tools (`spec_lint`, `dafny_verify`, `tla_model_check`, `lean_check`, `cel_evaluate`, plus `mock_verifier` for tests/authoring). They declare `side_effect=False`, `deterministic=True` and execute their CLI through the sandbox, not the host.
-- **Run summary**: worker folds `wf:<node>:__verification` into the additive `run.end.verification_summary` (`gates_total/passed/failed/inconclusive`, `specs_used`, `verifier_versions`, per-gate detail); `get_workflow_run` surfaces it optionally. No existing `run.end` key changes.
-- **AI binding**: an AI node may bind a `spec` input; the executor resolves the frozen revision and injects it as the `specification` prompt bucket. There is no `spec_ref` prompt magic and no AI-internal repair policy; repair is expressed with `flow:switch` / `flow:loop`.
-- **API**: `/api/specifications` provides list/create/revisions/get/freeze/lint. Tests: `tests/test_workflow_formal_verification.py`; frontend contract tests pin the `spec` port, `data:spec`, and `verify:gate` catalog entries.
-
-### Workflow AI Node Contract
-
-The current AI node contract is intentionally small:
-
-- `template_prompt` is the only task input for a fresh turn; `continue_prompt`
-  resumes the node's checkpointed session. No other task parameter is accepted.
-- `input_schema` and `output_schema` are `record` input ports fed by the same
-  compile-only `data:schema` node. The compiler resolves both and injects
-  `__input_schema` / `__output_schema`; `params.output_schema` is rejected.
-- AI nodes emit an **AI Result Envelope** on `out`:
-  `protocol/source_node/run_id + summary/status/content/artifacts/metadata/error + custom`.
-  AI-to-AI delivery is `sender.out → receiver.in`; both sides must bind the
-  identical `data:schema` node. No subagent or return edge is involved.
-- The schema payload is `{"version": 1, "max_repairs": 1, "custom_fields": [...]}`.
-  Common fields are fixed by HNFlow; custom fields are user-defined. The old
-  `fields: {name: type}` payload is not supported.
-- `template_prompt` references input values with `[schema.summary]` /
-  `[schema.custom.<name>]`. The engine resolves them before the model call;
-  unknown references fail loudly. Custom-field business handling belongs to the
-  user-authored template, while HNFlow injects the fixed common-field rules.
-- When no `output_schema` is bound, the raw text result is wrapped in a
-  common-only envelope; schema-bound nodes require/repair JSON output. Schema
-  mode is rejected for `continue_prompt` sessions.
-- `context_compression.py` derives a prompt budget from the effective model's
-  `context_window`. The executor installs the shared summarization middleware
-  with the built-in compression skill prompt; there is no node-level context
-  policy, no per-node enable flag, and no user-visible summary message.
-- AI nodes do not delegate to subagents (`task` is disallowed), do not receive a
-  token budget, and do not have node-level memory or knowledge retrieval.
-  Memory is the continue session history; knowledge is carried by capability
-  groups.
-- A target input port accepts one incoming edge. `flow:end` and `flow:loop`
-  are the deliberate exceptions (terminal sink and loop back-edge).
-- `rollback_on_failure` is no longer author-facing. Executors that support
-  compensation (`data:file`, `data:asset`, `app:script`) always prepare a
-  rollback snapshot and record undo metadata.
-
-### Model Factory (`packages/harness/deerflow/models/factory.py`)
-
-- `create_chat_model(name, thinking_enabled)` instantiates LLM from config via reflection
-- Supports `thinking_enabled` flag with per-model `when_thinking_enabled` overrides
-- Supports vLLM-style thinking toggles via `when_thinking_enabled.extra_body.chat_template_kwargs.enable_thinking` for Qwen reasoning models, while normalizing legacy `thinking` configs for backward compatibility
-- Supports `supports_vision` flag for image understanding models
-- Config values starting with `$` resolved as environment variables
-- Missing provider modules surface actionable install hints from reflection resolvers (for example `uv add langchain-google-genai`)
-
-### vLLM Provider (`packages/harness/deerflow/models/vllm_provider.py`)
-
-- `VllmChatModel` subclasses `langchain_openai:ChatOpenAI` for vLLM 0.19.0 OpenAI-compatible endpoints
-- Preserves vLLM's non-standard assistant `reasoning` field on full responses, streaming deltas, and follow-up tool-call turns
-- Designed for configs that enable thinking through `extra_body.chat_template_kwargs.enable_thinking` on vLLM 0.19.0 Qwen reasoning models, while accepting the older `thinking` alias
-- `cumulative_stream_usage` is an opt-in model setting (default `false`) for endpoints that repeat cumulative token totals on each streaming chunk. The provider converts snapshots to deltas only when a stable completion id is present, isolates interleaved streams by id, and leaves the original usage untouched otherwise. Per-model tracking is lock-protected and cleared on the trailing empty-`choices` frame whether or not that frame carries usage. A soft cap of 1024 ids evicts only entries idle for at least one hour; active streams may temporarily exceed the cap so eviction cannot corrupt their deltas. Regression coverage lives in `tests/test_vllm_provider.py`.
-
-### Memory System (`packages/harness/deerflow/agents/memory/`)
-
-**Components**:
-- `updater.py` - LLM-based memory updates with fact extraction, whitespace-normalized fact deduplication, optimistic revision checks, and repository change sets
-- `queue.py` - Debounced update queue (per-thread deduplication, configurable wait time); captures `user_id` at enqueue time so it survives the `threading.Timer` boundary
-- `prompt.py` - Prompt templates for memory updates
-- `storage.py` - File repository with one user-global summary JSON, agent-owned single-fact Markdown, target-only journaled changes, strict fact validation, shared-user plus per-fact optimistic revisions, lock-protected migration, deep-copy caching, and a RetrievalPort adapter boundary
-- `retrieval.py` - Built-in scope-aware SQLite FTS5/BM25 adapter; it stores only rebuildable derived data and can be disabled with an empty `retrieval_adapter`. Chinese jieba tokenization is optional via the backend `memory-zh` extra; without it the adapter uses SQLite unicode tokenization and the substring fallback. A corrupt persistent derived database is deleted and recreated once before falling back to substring retrieval. The Gateway closes the derived SQLite connection after its shutdown flush; reads and writes remain serialized by the adapter lock, with connection pooling deferred as a performance follow-up.
-- `tools.py` - Tool-driven memory mode (`memory_search`, `memory_add`, `memory_update`, `memory_delete`) using the same storage/update primitives
-
-**Per-User Isolation**:
-- Memory is stored per-user at `{base_dir}/users/{user_id}/memory.json`
-- Per-agent facts at `{base_dir}/users/{user_id}/agents/{agent_name}/facts/{sha256-prefix}/{fact-id}.md`, where the prefix is the first two hexadecimal characters of `SHA-256(fact_id)`; there is no per-agent `memory.json`
-- Custom agent definitions (`SOUL.md` + `config.yaml`) are also per-user at `{base_dir}/users/{user_id}/agents/{agent_name}/`. The legacy shared layout `{base_dir}/agents/{agent_name}/` remains read-only fallback for unmigrated installations
-- Middleware mode captures `user_id` via `resolve_runtime_user_id(runtime)` at enqueue time; tool mode resolves `user_id` and `agent_name` from `ToolRuntime.context` via the same helper so both Gateway and standalone LangGraph Server runs stay scoped to the authenticated user and active custom agent
-- The `/api/memory*` endpoints resolve the owner through `_resolve_memory_user_id(request)`, which returns `get_effective_user_id()` (`default` in the single-user build; there is no trusted-owner header)
-- In no-auth mode, `user_id` defaults to `"default"` (constant `DEFAULT_USER_ID`)
-- `storage_path` is the DeerMem root; memory always nests under the weak-isolation bucket (`{storage_path}/users/{uid}/memory.json`). There is no unscoped root layout — an omitted `user_id` resolves to the `default` bucket.
-
-**Data Structure**:
-- **User Context**: `workContext`, `personalContext`, `topOfMind` (1-3 sentence summaries)
-- **History**: `recentMonths`, `earlierContext`, `longTermBackground`
-- **Global JSON**: `{base_dir}/users/{user_id}/memory.json` stores only `version`, shared revision/time, `user`, and `history`; it never stores facts or a fact index
-- **Facts**: Schema-v2 Markdown documents under `agents/{agent_name}/facts/{sha256-prefix}/{fact-id}.md`; YAML front matter contains structure and the body contains the atomic fact
-- **Default agent compatibility**: DeerMem resolves an omitted `agent_name` to the reserved `__default__` fact bucket at the manager boundary. The sentinel is accepted only by DeerMem storage and is outside the custom-agent name grammar, so a real custom `lead-agent` remains isolated. Public agent identifiers are case-insensitive and canonicalized to lowercase before storage
-- **Compatibility view**: direct global storage reads return `facts: []`, while DeerMem Manager/API reads select the explicit agent or reserved default and return its facts, so existing Settings and embedded-client schemas remain stable. Markdown keeps structured `source` metadata internally; the manager projects it to the historical string field before returning a public document
-- **Incremental result contract**: `FileMemoryStorage.apply_changes()` returns `complete: false` plus `upsertedFacts`/`deletedFactIds`; it never presents a partial cache as a complete memory document. Public compatibility callers explicitly reload a fresh complete view only where their response contract requires it, including after successful disjoint-create rebases
-- **Repository**: `get/list/upsert/delete_fact`, `apply_changes`, summary operations, migration, index lifecycle/status, and scoped search. `apply_changes` and direct fact CRUD touch only target Markdown files; direct fact CRUD accepts separate expected user-memory and fact revisions. Supplied summary child keys merge over their persisted section, while import normalizes complete replacement sections first. Whole-document `load/save` remains for compatibility but validates the complete `facts` list and diffs it before persistence. An unscoped manager clear first migrates facts from unread legacy agent JSON without adopting potentially conflicting summaries, then removes the global summaries and every agent's canonical facts while preserving agent configuration; an explicit agent clear removes only that bucket's facts and preserves the shared summaries
-
-**Workflow**:
-- `memory.mode: middleware` (default) keeps the passive path: `MemoryMiddleware` filters messages (user inputs + final AI responses), captures `user_id` via `resolve_runtime_user_id(runtime)`, queues conversation with the captured `user_id`, and the debounced background thread invokes the LLM to extract context updates and facts using the stored `user_id`. `DynamicContextMiddleware` passes the same resolved identity to the memory read path. On standalone Agent Server runs, server-owned auth identity is also resolved during lead-agent construction, normalized through `make_safe_user_id` for DeerFlow storage, and explicitly reused for custom-agent config/SOUL, user skills, skill policy, and prompt assembly; ordinary client `user_id` values cannot override `langgraph_auth_user_id`. On the embedded Gateway path, `inject_authenticated_user_context` removes client-supplied `langgraph_auth_user` / `langgraph_auth_user_id` from both RunnableConfig sections before graph construction, so those reserved fields cannot impersonate Agent Server auth.
-- The optional `openviking` backend under
-  `packages/harness/deerflow/agents/memory/backends/openviking/` is a
-  remote-only adapter built on the maintained `langchain-openviking` package.
-  Select it with
-  `memory.manager_class: openviking` and keep `memory.mode: middleware`. It
-  uses one OpenViking USER API key bound to the configured DeerFlow
-  `owner_user_id`; another DeerFlow user is rejected before remote access.
-  DeerFlow owns the existing recall/capture timing, fixed injection query and
-  full-transcript suffix cursor. `langchain-openviking` owns SDK transport,
-  message conversion, tool-call preservation, batching, partial-write progress
-  and Session commits. One DeerFlow thread maps to one stable OpenViking
-  Session, with the default or named agent represented as its actor peer.
-  Bounded hash-only cursors live below `{storage_path}/openviking/sessions/`;
-  session locks are weakly cached, async entrypoints offload synchronous SDK
-  and file IO, and graceful shutdown drains active operations before closing
-  the recorder-owned client. The recorder receives an explicit empty
-  `extra_headers` mapping so `ovcli.conf` cannot add arbitrary transport
-  headers. Do not reintroduce a backend-local HTTP client,
-  explicitly configured trusted identity headers, root-key data access, or
-  imports of the OpenViking embedded runtime. Multi-user provisioning,
-  query-aware refresh policy and new lifecycle scheduling are separate changes,
-  not part of this backend.
-- The optional `honcho` backend under `packages/harness/deerflow/agents/memory/backends/honcho/` is a remote-only HTTP adapter for user-model memory (RFC #1898's user-dimension option). Select with `memory.manager_class: honcho`, keep `memory.mode: middleware` (tool mode also supported — it implements `search`). It writes filtered turns as Honcho messages (no local LLM calls; Honcho's deriver builds representations server-side), resolves one workspace per `user_id` (`workspace_overrides` else `workspace_prefix + collision-resistant sanitized id`; missing user fails closed to no memory), offloads sync HTTP in its `a*` overrides via `asyncio.to_thread`, and tool mode retains passive writes via MemoryMiddleware, mirroring mem0. `failure_policy.read: fail_closed` rethrows recall failures; default is log-and-empty.
-- `memory.mode: tool` skips `MemoryMiddleware` and registers `memory_search`, `memory_add`, `memory_update`, and `memory_delete` on the agent. The model decides when to search, add, update, or delete facts; this is opt-in/experimental and should not be described as better than middleware mode without eval evidence.
-- Both modes share `FileMemoryStorage`, per-user/per-agent isolation, manual CRUD primitives, and the updater backend. Injection is mode-aware: middleware mode injects global `user`/`history` summaries plus the selected agent's facts, while tool mode injects only the global summaries and leaves every agent fact behind `memory_search` to avoid duplicating automatically injected and retrieval-returned context. `memory.injection_enabled: false` suppresses the complete block in either mode.
-- Middleware extraction classifies proposed facts with extraction-only `scope`/`durability`/`authority` labels. `_apply_updates` accepts only `user` + `durable` + `descriptive` new/consolidated facts, accepts only wholly user-scoped summary prose with `authority=descriptive`, and rejects missing labels per item without aborting unrelated updates. Contradiction removals use object entries with `id`, `scope`, `reason`, and optional zero-based `replacementFactIndex`; task/project removals fail closed, and a paired removal runs only when the referenced replacement survives the scope/confidence gates, deduplication, and max-fact trim under another fact ID. The labels are not persisted, so no storage migration is required. Staleness removals retain their independent candidate/cap guardrails, while tool-mode CRUD remains outside this extraction gate. Custom `memory.backend_config.prompts_dir` templates (including per-agent overrides) must carry the same classification fields; an un-migrated template makes the fail-closed gate reject every extraction-driven write, observable only through `rejected_by_scope_gate` and the >60% fact-rejection warning.
-- Middleware mode queue debounces (30s default), batches updates, and commits global summaries plus the selected/default agent's fact delta through a user-level lock, optimistic user-memory revisions, per-fact revisions, and a recoverable target-file journal. Only explicitly marked point operations may rebase a stale shared revision, and only while every addressed fact still satisfies its original absent/revision precondition. Snapshot-derived clear/trim/consolidation operations instead reload the complete document and recompute their intent on a manifest conflict, with a bounded retry. Typed manifest/fact conflict subclasses keep that decision independent of exception text, and same-ID creates and stale same-fact writes fail. Scope-lock objects are weakly cached so inactive users do not grow a process-lifetime map. Cache validation does not scale with the fact-file count: its token combines the shared JSON's `(mtime_ns, size, revision)`, so the persisted revision invalidates stale caches even when a coarse-mtime filesystem reports identical metadata for same-size writes; direct out-of-band Markdown edits require `reload()`. Atomic replacement also syncs the parent directory on POSIX so the rename is durable. DeerMem translates private storage conflict/corruption exceptions to the backend-neutral MemoryManager contract; the Gateway maps them to HTTP 409 and a stable HTTP 500 response respectively. A normal default-manager read automatically migrates legacy facts from the global JSON into `__default__`; it also adopts the earlier implicit `lead-agent` fact bucket only when that directory has no custom-agent `config.yaml`, and rejects unexpected files instead of deleting them. The v1-to-v2 migration is one-way for the running application: operators must stop DeerFlow and snapshot the configured storage root before upgrade. Before any destructive v2 write, every migrated JSON source is durably retained as `{manifest_filename}.v1.bak`; a missing-write or mismatched existing backup aborts without modifying v1 data. Legacy per-agent JSON is deleted only after its non-empty summaries are safely adopted or confirmed identical; summary conflicts keep the source file and fail loudly.
-- **Proactive Markdown migration CLI**: from `backend/`, run `PYTHONPATH=. python scripts/migrate_memory_markdown.py --all-users --dry-run` to audit and omit `--dry-run` to migrate before serving traffic. Use repeated `--user-id` values when selecting exact original identities, especially standalone raw IDs containing `@` or other characters that are normalized in directory names; `--storage-path` selects a non-default DeerMem root. The CLI reuses `FileMemoryStorage.migrate`, is idempotent, continues across per-user failures, and exits non-zero if any user fails. It is optional because the first normal read still performs the same migration automatically.
-- `retrieval_adapter` owns indexing and retrieval. `fts5` is the DeerMem default and uses a persistent derived SQLite index under `.retrieval/`; an empty value disables the adapter and selects `substring_fallback`. File storage sends upsert/remove notifications for normal writes and both explicit and lazy migrations after releasing durable storage locks, then delegates search. Gateway startup schedules `DeerMem.warm_retrieval()` as a background full rebuild so readiness is not delayed, while a first search lazily rebuilds its exact scope until warm-up completes. Individual malformed facts are logged and skipped without triggering repeated full scans; only a fatal adapter rebuild failure keeps lazy retry enabled. During shutdown, the Gateway waits at most one second for this derived rebuild and leaves the full configured timeout to the canonical memory flush; if the rebuild is still active, its adapter remains open until process exit. Adapter failures mark the scope dirty and fall back to canonical substring search until rebuilding succeeds. `FileMemoryStorage` owns and closes the adapter so higher layers do not reach into private storage state.
-- Staleness pass (same LLM invocation as the regular updater, no extra API call): when `staleness_review_enabled` is `true` and at least `staleness_min_candidates` aged facts exist, `_select_stale_candidates` selects facts older than their individual review window (`expected_valid_days`, or the global `staleness_age_days` fallback) that are not in `staleness_protected_categories` (default: `correction`), surfaces them in the prompt with a `valid:Nd` annotation, and the LLM judges each as KEEP, REMOVE, or EXTEND. REMOVE entries go in `staleFactsToRemove`; EXTEND entries go in `staleFactsToExtend` with an `extend_by_days` value, which sets the fact's `expected_valid_days` to `min(days_since_created + extend_by_days, staleness_max_extension_days)`. The LLM assigns `expected_valid_days` when creating a fact; it is clamped at write time to `staleness_age_days × staleness_max_lifetime_multiplier` (creation cap). `_apply_updates` enforces the guardrail unconditionally at apply time: it intersects both the removal and extension sets with `_select_stale_candidates` output before applying the per-cycle cap (`staleness_max_removals_per_cycle`), so protected and non-aged facts can never be targeted regardless of model behavior or the feature flag setting. Facts the LLM proposed for removal are excluded from extension even if the per-cycle cap prevented their actual deletion that cycle. Extensions use an absolute ceiling (`staleness_max_extension_days`) rather than the creation multiplier so a deliberate review decision can advance the window beyond the initial cap while preventing `timedelta` overflow from a malformed `extend_by_days`.
-- Consolidation pass (same LLM invocation as the regular updater, no extra API call): when `consolidation_enabled` is `true` and at least one category holds `consolidation_min_facts` or more facts, `_select_consolidation_candidates` identifies fragmented categories and surfaces at most `consolidation_max_groups_per_cycle` of them (largest first) in the prompt. The LLM decides which groups to merge and proposes a synthesised fact per group. `_apply_updates` enforces guardrails: source IDs must exist and must not overlap across groups, group size is capped at `consolidation_max_sources`, the merged fact's confidence cannot exceed the source maximum, and facts below `fact_confidence_threshold` are not written. The merged fact carries the newest source's `createdAt` (so the staleness clock reflects the underlying information, not synthesis time) and inherits `expected_valid_days` set so the merged fact is re-reviewed at the earliest source review deadline (`min(createdAt + effective_lifetime)` across sources, where a source's effective lifetime is its `expected_valid_days` or the global `staleness_age_days` fallback for legacy facts without one - so a legacy source's default window is not swallowed by a long-lived sibling), relative to the merged `createdAt`, clamped to a minimal positive window if a source is already past its deadline, then capped at the creation-time `staleness_max_lifetime_multiplier`; this keeps a volatile or legacy sub-detail from inheriting a stable source's long window and escaping staleness review for years, while a merge of uniformly stable sources does not re-enter review prematurely.
-- Next interaction injects selected facts + context into `<memory>` tags in the system prompt when `injection_enabled` is true.
-
-**Run-level memory identity**:
-- Every Gateway run with an effective hidden memory block hashes the exact `HumanMessage.content`, including the `<memory>` wrapper, and records one `context:memory` event through its run-scoped `RunJournal`. Later runs and checkpoint-based branches reuse the frozen message without reloading memory; goal continuations are deduplicated to one event per run.
-- A first-run block is trusted only when it comes from `DynamicContextMiddleware`'s current update. A reused block must have existed in the checkpoint before the run, and the Gateway strips dynamic-context markers from untrusted input so a caller cannot forge the identity event by reusing a known message ID.
-- The production consumer is the existing debug/audit endpoint `GET /api/threads/{thread_id}/runs/{run_id}/events?event_types=context:memory`. Event content has exactly one field, `content_sha256`, which operators use to compare the effective memory identity across runs. The full memory text stays in checkpoint state and is not duplicated into `run_events`.
-
-**Token counting** (`packages/harness/deerflow/agents/memory/prompt.py`):
-- `_count_tokens` budgets the injection. In default `tiktoken` mode, the encoding is loaded lazily and cached.
-- Failed tiktoken loads are cached with a timestamp. During the fixed cooldown (`_TIKTOKEN_RETRY_COOLDOWN_S`, 600s), callers fall back to char estimation immediately instead of re-triggering the blocking BPE download; after the cooldown, transient outages can self-heal without a restart.
-- In-flight loads are cached as a LOADING sentinel so concurrent callers fall back instead of spawning more blocking threads.
-- Set `memory.token_counting: char` to skip tiktoken entirely and use the network-free CJK-aware char estimate.
-
-Focused regression coverage for the updater lives in `backend/tests/test_memory_updater.py`.
-
-**Configuration** (`config.yaml` → `memory`):
-- `enabled` / `injection_enabled` - Master switches
-- `mode` - Operation mode: `middleware` (default passive background extraction) or `tool` (experimental model-driven memory tools). Modes are mutually exclusive.
-- `storage_path` - DeerMem storage root; one global summary JSON lives under each user and Markdown facts remain under agent buckets
-- `storage_class` - `file` or a dotted `MemoryStorage` class; invalid persistent backends fail fast
-- `manifest_filename` - User-global summary JSON filename (kept for configuration compatibility)
-- `file_lock_timeout_seconds` - Scope-lock wait; Markdown facts and the recovery journal are required storage invariants rather than configurable modes
-- `retrieval_adapter` - `fts5` by default, empty to disable, or a dotted factory receiving `DeerMemConfig` and returning a retrieval-port implementation
-- `debounce_seconds` - Wait time before processing (default: 30)
-- `shutdown_flush_timeout_seconds` - Hard budget (seconds) reserved for draining the memory backend's pending-update buffer on Gateway graceful shutdown (default: 30; 1–300). Each pending item does one LLM call, so large batches may need more. The Gateway lifespan calls `MemoryManager.shutdown_flush(timeout)` after the scheduler stops and after waiting at most one additional second for the derived retrieval warm-up; the backend short-circuits on an idle buffer, so the host calls it unconditionally (no pending/processing gate). The retrieval wait does not reduce this canonical flush budget. The combined shutdown hooks, brief retrieval wait, flush budget, and scheduling margin must fit inside the pod's K8s `terminationGracePeriodSeconds` (gateway Helm chart default: 45s) or K8s SIGKILLs the drain mid-flight.
-- `model_name` - LLM for updates (null = default model)
-- `max_facts` / `fact_confidence_threshold` - Fact storage limits (100 / 0.7)
-- `max_injection_tokens` - Token limit for prompt injection (2000)
-- `token_counting` - Token counting strategy for the injection budget: `tiktoken` (default, accurate but may download BPE data from a public endpoint on first use — can block for a long time in network-restricted environments, see issues #3402/#3429) or `char` (network-free CJK-aware char estimate, never touches tiktoken)
-- `staleness_review_enabled` - Enable proactive staleness pruning of aged facts (default: `true`; only triggers when aged candidates exist)
-- `staleness_age_days` - Age in days before a fact becomes a staleness candidate (default: 90; range: 30–365)
-- `staleness_min_candidates` - Minimum aged candidates required to trigger a review cycle (default: 3; range: 1–50)
-- `staleness_max_removals_per_cycle` - Maximum facts removed in a single cycle; lowest-confidence entries are kept when the LLM requests more (default: 10; range: 1–50)
-- `staleness_protected_categories` - Fact categories that are never pruned by staleness review (default: `["correction"]`)
-- `staleness_max_lifetime_multiplier` - Creation-time cap multiplier for a fact's LLM-assigned `expected_valid_days`: stored value is clamped to `staleness_age_days × multiplier` so the model cannot defer first review indefinitely (default: 20.0; range: 1.0–100.0). Default 20.0 (90 × 20 = 1800 d ≈ 5 years) is generous enough to support the very-stable prompt tier without needing multiple review cycles to escape the cap.
-- `staleness_max_extension_days` - Absolute upper bound (in days) on `expected_valid_days` after a lifetime extension (`staleFactsToExtend`). Applied at write time as `min(days_since + extend_by, staleness_max_extension_days)`. Uses an absolute ceiling rather than the multiplier because extensions are deliberate review decisions; prevents `timedelta` overflow and LLM misfire from permanently deferring a fact (default: 3650 = 10 years; range: 90–36500).
-- `consolidation_enabled` - Enable memory consolidation (default: `true`; no extra API call — runs in the same LLM invocation as the normal memory update)
-- `consolidation_min_facts` - Minimum facts in a category to trigger consolidation review (default: 8; range: 3–30)
-- `consolidation_max_groups_per_cycle` - Maximum categories the LLM can merge in one cycle (default: 3; range: 1–10; also controls the LLM's prompt instruction)
-- `consolidation_max_sources` - Maximum source facts per merge group; prevents over-merging (default: 8; range: 2–20)
-- `watermark_max_keys` - Soft cap on the in-memory conversation-watermark cache (one entry per distinct thread/user/agent). A bounded LRU: when over capacity the least-recently-used entry is dropped, and a dropped key re-extracts one batch on that thread's next turn (same as a restart). Bounds memory in long-lived gateways handling many threads (default: 4096; 0 = unbounded)
-
-### Reflection System (`packages/harness/deerflow/reflection/`)
-
-- `resolve_variable(path)` - Import module and return variable (e.g., `module.path:variable_name`)
-- `resolve_class(path, base_class)` - Import and validate class against base class
-
-### Schema Migrations (`packages/harness/deerflow/persistence/migrations/`)
-
-DeerFlow's application tables (`runs`, `threads_meta`, `run_events`) are owned by alembic via a **hybrid bootstrap** strategy. LangGraph's checkpointer tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`, `checkpoint_migrations`) live in the same database but are owned by LangGraph and excluded from alembic's view via `migrations/_env_filters.py::include_object`. Upstream tables removed for the single-user local build are dropped by their own revisions — `users` by `0015_drop_users_table`, `feedback` by `0016_drop_feedback_table` — while `0001_baseline` still creates them (released revisions are never edited), so fresh databases reach the correct schema through the migration chain.
-
-**Convention**: every ORM model change (new column, new table, new index) MUST ship as an alembic revision under `migrations/versions/`. The Gateway runs `alembic upgrade head` automatically on startup; users do not run `alembic` manually in production.
-
-**Hybrid bootstrap** (`persistence/bootstrap.py::bootstrap_schema`, invoked from `persistence/engine.py::init_engine`):
-
-| DB state                                  | Action                                  |
-|-------------------------------------------|-----------------------------------------|
-| empty (no DeerFlow tables)                | `create_all` + `alembic stamp head`     |
-| legacy (DeerFlow tables, no `alembic_version`) | `create_all` (baseline tables only, backfill) + `alembic stamp 0001_baseline` + `upgrade head` |
-| versioned (`alembic_version` row exists)  | `alembic upgrade head`                  |
-
-The legacy branch handles pre-alembic databases that already have at least one DeerFlow-owned table. `create_all` runs first because stamping at `0001_baseline` makes alembic skip the baseline's own `create_table` DDL on the subsequent upgrade — so any baseline table introduced into `Base.metadata` after the user's DB was first provisioned would otherwise never be created, and the first request hitting that table would 500 with `no such table`. The backfill is **restricted to `_BASELINE_TABLE_NAMES`** so it does not also create tables that future revisions introduce — those revisions' own `op.create_table` would otherwise fail with `relation already exists`. A guard test pins `_BASELINE_TABLE_NAMES` against `0001_baseline.upgrade()`'s actual output, so editing 0001 to add or remove a table forces a matching update to the constant. Column-level shape (pre-#3658 vs post-#3658 vs manual-ALTER for `token_usage_by_model`) is answered by each `versions/*.py` revision via the idempotent helpers in `migrations/_helpers.py` (`safe_add_column` / `safe_drop_column`) which no-op when the change is already present and `logger.warning` on shape drift. **Adding a new ORM column / table only requires a new revision file — no edit to `bootstrap.py` is needed** *unless* the new revision adds a new baseline table (rare; only happens when a new model is part of the baseline rather than introduced by its own revision).
-
-The empty-DB path keeps using `create_all` because `Base.metadata` is the only authoritative schema source — `create_all` renders both SQLite (JSON, type affinity) and Postgres (JSONB, partial indexes) correctly without anyone having to keep a hand-written baseline in lockstep. `0001_baseline.upgrade()` is therefore almost never executed in practice; it exists as a stamp target + chain root.
-
-**Concurrency safety**: Postgres uses `pg_advisory_lock` to serialise concurrent Gateway instances. SQLite uses a per-engine `asyncio.Lock` for same-process startup and is best-effort across processes via SQLite's file-level write lock + `PRAGMA busy_timeout`; multi-instance deployments should use Postgres. Column revisions in `versions/` additionally use idempotent helpers (`_helpers.py::safe_add_column`, `safe_drop_column`) so repeated post-baseline changes and retries are no-ops when the change is already present.
-
-**Authoring a new revision**:
-```bash
-cd backend && make migrate-rev MSG="add foo column to runs"
-```
-This invokes `alembic revision --autogenerate` against the live ORM models. Review the generated file under `migrations/versions/` and switch raw `op.add_column` / `op.drop_column` calls to the idempotent helpers from `_helpers.py` before committing. There is no `make migrate` / `make migrate-stamp` target on purpose — the only execution path is Gateway startup, which keeps operational mistakes off the table.
-
-**Where things live**:
-- `migrations/env.py` — alembic env, delegates filter to `_env_filters.py`, sets `render_as_batch=True` for SQLite ALTER support
-- `migrations/_env_filters.py::include_object` — drops LangGraph checkpointer tables from alembic's view
-- `migrations/_helpers.py` — `safe_add_column` / `safe_drop_column`
-- `migrations/versions/0001_baseline.py` — chain root, matches the schema `create_all` produces from `Base.metadata`
-- `migrations/versions/0002_runs_token_usage.py` — fixes issue #3682
-- `migrations/versions/0004_run_ownership.py` — `runs` multi-worker ownership + the `uq_runs_thread_active` partial unique index, with a `_dedupe_active_runs_per_thread()` pre-step so `CREATE UNIQUE INDEX` cannot fail on a field DB that already has duplicate active rows per thread
-- `migrations/versions/0007_scheduled_run_active_index.py` — the `uq_scheduled_task_run_active` partial unique index (at most one queued/running `scheduled_task_runs` row per `task_id`), with a `_dedupe_active_scheduled_runs_per_task()` pre-step (keeps the newest active row per task, supersedes the rest to `interrupted` with an explanatory `error` + `finished_at`) mirroring 0004; chains after `0006_agents`
-- `migrations/versions/0008_thread_operation_kind.py` — adds `runs.operation_kind` for durable non-run thread reservations; chains after `0007_scheduled_run_active_index`
-- `migrations/versions/0010_run_cancel_request.py` — adds the nullable `runs.cancel_action` / `cancel_requested_at` handoff used by non-owning workers; chains after `0009_webhook_dedupe`
-- `migrations/versions/0017_app_instances.py` — creates the `app_instances` table (N6 durable local-application instance records) + `ix_app_instances_{user_id,status}`; `has_table`-idempotent; chains after `0016_drop_feedback_table`
-- `migrations/versions/0018_scheduled_task_triggers.py` — adds the N7 trigger/target/retry columns (`scheduled_tasks.target_kind`/`target_definition_id`/`payload_template`/`max_attempts`/`attempt`, `scheduled_task_runs.dedupe_key`/`attempt`) + partial unique index `uq_scheduled_task_run_dedupe`; idempotent via `safe_add_column` + an index-existence check; chains after `0017_app_instances`
-- `migrations/versions/0019_human_task_kind_and_undo.py` — adds the N10 `human_tasks.kind` column (NOT NULL, server default `'task'` — the one case that needs a server default, because it is an ALTER on an existing table) and creates `workflow_undo_records` + `ix_workflow_undo_records_run_id`; table creation is `has_table`-idempotent (the empty-DB bootstrap path already ran `create_all`) and the new table's columns carry **no** server defaults, which is what the schema-drift guard (`test_persistence_bootstrap::test_create_all_and_alembic_upgrade_produce_same_schema`) enforces; chains after `0018_scheduled_task_triggers`
-- `migrations/versions/0021_workflow_workbenches.py` — creates `workflow_workbenches` / `workflow_workbench_members` and adds the nullable, indexed `runs.workbench_id` launch-provenance column; idempotent across the empty/legacy bootstrap paths (`safe_add_column` + table/index existence checks); chains after `0020_workflow_definition_revisions`
-- `migrations/versions/0022_workflow_folders.py` — creates `workflow_folders` + `workflow_definitions.folder_id`, and deliberately clears old workflow content (definitions, revisions, workbench memberships, human tasks, undo records) because the directory hierarchy is a clean-slate change; chains after `0021_workflow_workbenches`
-- `migrations/versions/0023_model_profiles.py` — creates `model_profiles` (user-scoped name uniqueness, `target_model`, enabled flag) for the AI-node → profile → actual-LLM middle layer; idempotent `has_table` guard; chains after `0022_workflow_folders`
-- `migrations/versions/0024_workspace_resource_changes.py` — creates `workspace_resource_changes`, the conversation-scoped before/after snapshot journal used by Lead Agent Undo; user/thread/run indexes plus `(thread_id, seq)` ordering; chains after `0023_model_profiles`
-- `migrations/versions/0026_projects.py` - creates the `projects` registry, adds `workflow_workbenches.project_id`, and deletes legacy DB-only workbench rows (no migration); chains after `0025_workflow_specifications`
-- `persistence/bootstrap.py` — `bootstrap_schema(engine, backend=...)`, the three-branch decision + locking
-- Tests: `tests/test_persistence_bootstrap.py` (branches), `tests/test_persistence_bootstrap_concurrency.py` (concurrency), `tests/test_persistence_bootstrap_regression.py` (issue #3682), `tests/test_persistence_migrations_env.py` (filter), `tests/blocking_io/test_persistence_bootstrap.py` (asyncio.to_thread anchor), `tests/test_migration_0004_run_ownership_dedupe.py` + `tests/test_migration_0007_scheduled_run_active_dedupe.py` (dedupe-before-unique-index pre-steps)
-
-### Checkpoint Channel Modes (`full` / `delta`)
-
-Checkpointer storage runs in one of two channel modes, selected by `checkpoint_channel_mode` in `config.yaml` (default `full`). `delta` mode adopts LangGraph 1.2's `DeltaChannel` for `messages`: checkpoints store a sentinel + per-step writes instead of the full message list, so storage/serde grows O(N) instead of O(N²) in turns. All checkpointer backends (memory/sqlite/postgres) serve both modes unchanged — the semantics live in the compiled graph's channel table, not in the saver.
-
-**Mode is process-frozen and restart-required.** `make_lead_agent` and the embedded `DeerFlowClient` freeze the resolved mode (`runtime/checkpoint_mode.py::freeze_checkpoint_channel_mode`) before compiling the graph with the mode-matched schema (`agents/thread_state.py::get_thread_state_schema`, plus `adapt_state_schema_for_mode` / `normalize_middleware_state_schemas` for middleware state). Adapted middleware schemas are cached by schema, mode, and resolved snapshot frequency so a pre-freeze ephemeral graph cannot leave a stale default-frequency schema behind. A second, different mode or frequency in the same process raises `CheckpointModeReconfigurationError`. To switch: edit config, restart.
-
-**Delta snapshot cadence is configurable but frozen with the mode.** `database.checkpoint_delta.snapshot_frequency` (default `10`) sets the `DeltaChannel` snapshot cadence. It is frozen alongside the mode (`freeze_checkpoint_snapshot_frequency`; non-positive direct inputs raise `ValueError`, while a frozen-value mismatch raises `CheckpointModeReconfigurationError`), restart-required, and must match across every process sharing one checkpoint database — the cadence lives in each compiled graph's channel table and is deliberately NOT stamped into checkpoint metadata, so the mode-compatibility marker and full -> delta migration semantics are unchanged. Schema helpers resolve it explicit-arg -> frozen -> default, and every schema/graph cache (`_delta_thread_state_schema`, `_adapt_state_schema_for_delta`, the client agent-config key, the gateway accessor-graph cache) keys on the resolved value.
-
-**Compiled-graph cache cap is configurable and hot-reloadable.** `database.checkpoint_graph_cache.accessor_graph_max` (default `64`) bounds the gateway accessor-graph cache, which clears wholesale at the cap. The cap is re-read on every eviction check (`resolve_checkpoint_graph_cache_max`), so a config.yaml reload takes effect without a restart — a size change never affects graph semantics, only eviction timing.
-
-**Compatibility is asymmetric and fail-closed.** Every checkpoint written in delta mode carries metadata marker `deerflow_checkpoint_channel_mode: "delta"` (injected via `inject_checkpoint_mode`; absence of marker = full, so pre-feature checkpoints need no migration). Before any state read/write, `ensure_checkpoint_mode_compatible` rejects a full-mode process opening a delta thread with `CheckpointModeMismatchError` (surfaced as HTTP 409 with the cause and thread id by the threads router; `CheckpointModeReconfigurationError` maps to 503) — a full-mode raw read of a delta blob would silently return empty/partial `messages`. The reverse direction is allowed: delta-mode processes read full checkpoints transparently (old full checkpoints seed the delta channel), so full → delta is the smooth migration path; delta → full requires materializing/converting the data first. Detection also honors upstream's `counters_since_delta_snapshot.messages` metadata, and an explicit config marker takes precedence over any ambient context value.
-
-**Never bypass `CheckpointStateAccessor` (`runtime/checkpoint_state.py`) for thread-state access.** It is the single choke point binding graph + checkpointer + mode: it injects the mode marker into configs, runs the compatibility check before every `get`/`update`/`history`, and returns materialized state (delta checkpoints lack `channel_values.messages` — raw `get_tuple` reads see a sentinel). Gateway `services.py` builds and passes the accessor; thread-owned reads (state/history/regeneration) must use `build_thread_checkpoint_state_accessor` so the recorded assistant's middleware schema materializes every channel. `history(limit)` semantics: `0` means zero items (explicit empty), `None` means unlimited — do not pass `limit=0` through to `graph.get_state_history`. Assistant metadata lookup is fail-closed for mutation accessors so a store outage cannot silently select the default schema and discard extension channels. In `full` mode the read path degrades to a raw checkpointer read (`_RawCheckpointReadAccessor`) when the agent factory cannot build the graph (bad model config, MCP outage) — full checkpoints carry complete `channel_values`, so reads don't need the graph; degraded snapshots take `created_at` from the standard checkpoint `ts` field, falling back to metadata only for compatibility. The delta gate still applies on the degraded path; `next`/`tasks` degrade to empty and thread status falls back to the stored status because task presence is not derivable, while delta mode has no fallback (materialization needs the channel table).
-
-**Replay checkpoint lookup prefers lineage and degrades only for an explicitly missing legacy parent link.** Branch and regenerate paths first walk `parent_config`, which prevents a global chronological scan from selecting a sibling created by regeneration. `CheckpointParentMissingError` alone enables the bounded newest-first history fallback in `app/gateway/checkpoint_lineage.py`; cycles, dangling/non-addressable parents, target mismatches, and depth exhaustion raise `CheckpointLineageIntegrityError` and fail closed instead of selecting a sibling. The compatibility scans request 400 raw checkpoints so up to 200 duration-only entries do not consume the effective branch-history budget; the fallback scans oldest-to-newest internally, skips duration-only checkpoints, and accepts only checkpoints with an addressable id as the replay base. A source history with no discoverable pre-user checkpoint preserves the historical single-checkpoint branch behavior instead of rejecting the branch; regeneration remains unavailable for that inherited response. Existing single-checkpoint branches are not mutated by regenerate preparation, and no raw checkpoint tuple is copied across threads because delta state depends on ancestry and pending writes. Regenerate source-run lookup uses the current thread's exact event, then the server-stamped `run_id` on the copied human message, then verified RunManager content matching; it does not read parent-thread events. When an interrupted response was streamed but never checkpointed, regeneration accepts only the latest visible human message's server-stamped `run_id` after verifying that it belongs to the same thread and still has `interrupted` status. Storage or checkpoint-mode failures are not treated as a missing base and still fail closed.
-
-**A delta-mode run cannot fork; `runtime/runs/worker.py` linearizes the resume instead.** Resuming from an older checkpoint (regenerate, or any client-supplied `checkpoint`) forks the lineage, and delta state for a fork is not materializable: `BaseCheckpointSaver.get_delta_channel_history` — and the bespoke overrides in `InMemorySaver`/`PostgresSaver` — collect **every** `pending_writes` entry stored on each on-path ancestor, but a shared parent also carries the writes of the sibling child that was abandoned. Those writes replay into the fork, so the run starts from a message list still containing the answer it was supposed to replace (#4458: regenerating in a branched thread showed the superseded assistant message beside the new one after a reload; reproduced on postgres, sqlite, and the in-memory saver). Write-to-child ownership belongs to the upstream delta contract, so DeerFlow does not reimplement the walk: `_linearize_delta_checkpoint_resume` materializes the requested checkpoint's complete state and writes every channel onto the **current head** (which has no siblings) through the state mutation graph, using `Overwrite` for reducer channels and resetting newer head-only channels to their schema default (or `None` when no constructible default exists); it then drops the `checkpoint_id` selector and lets the run proceed linearly, while the abandoned turn stays in history as the rewritten head's ancestry. The worker holds `_checkpoint_thread_lock` across `_capture_rollback_point` and the optional linear rewrite, making the rollback snapshot and rewrite atomic with graph streaming and the preceding run's duration-metadata checkpoint write. Capture preserves the complete real pre-run state; cancel-with-rollback then linearly replaces the current delta head with that captured state rather than forking the now-shared pre-run checkpoint, so the abandoned turn is restored without replaying the resume sibling's writes. The worker also recomputes the current-run message boundary from the rewritten state and fails closed (an unreadable resume checkpoint raises rather than falling back to the corrupt fork). `full` mode keeps forking — its checkpoints carry complete `channel_values` and need no replay — so LangGraph branching semantics are unchanged there. Root namespace only; subgraph namespaces are left alone.
-
-**Wholesale state replacement uses a state-only mutation graph + `Overwrite`.** `update_state` values pass through channel reducers (`add_messages` merge in full, append in delta), so replacing reducer values requires `Overwrite` rather than an ordinary update. Full-mode rollback and context compaction replace `messages`; delta resume and delta rollback replace every materialized channel and reset current-head-only channels to their schema default (or `None`). These writes go through `build_state_mutation_graph(as_node, mode, state_schema)`, and `state_schema` MUST be the thread's effective schema (`graph_state_schema(assistant_graph)`), because the base-ThreadState fallback silently discards written channels contributed by custom `AgentMiddleware.state_schema`. Channels absent from a full-mode fork write inherit the parent's channel blobs, so middleware channels survive rollback/compaction (locked by `test_rollback_preserves_middleware_contributed_channels` and `test_compact_thread_context_preserves_middleware_contributed_channels`). The compiled mutation graph has one no-op node (entry = finish) whose checkpoint machinery (channels/versions/metadata) is identical to the agent graph's but schedules no pending tasks, so the restored/compacted head stays idle instead of re-triggering the agent. Never hand-write checkpoints via `checkpointer.aput` for this; raw writers elsewhere must preserve checkpoint parentage — severed ancestry breaks delta replay (see `runtime/runs/worker.py` writer parenting and `checkpoint_patches.py`).
-
-**Run rollback flow** (`runtime/runs/worker.py`): `_capture_rollback_point` materializes the complete pre-run state via the accessor and captures raw `pending_writes` via `aget_tuple` into an immutable `RollbackPoint` before the run starts — capture failure disables rollback (fail-closed), never restores partial state. In `full` mode, cancel-with-rollback forks from the pre-run checkpoint via the mutation graph and inherits non-message channels from that parent. In `delta` mode, forking is unsafe once the cancelled path has attached sibling writes to the pre-run checkpoint, so rollback replaces every captured channel on the current head, using `Overwrite` for reducers and schema defaults for current-head-only channels. Both modes reattach only the captured pre-run pending writes to the restored checkpoint. Edit replay runs (`metadata.replay_kind="edit"`) also restore the pre-run checkpoint on failed, timed-out, or interrupted completion and publish the restored `values` snapshot to the stream before `end`, so clients do not remain on a transient edited branch when the replay did not produce a successful replacement.
-
-**Where things live**:
-- `runtime/checkpoint_mode.py` — mode + snapshot-frequency freeze, marker injection, delta detection, compatibility gate, both error types
-- `runtime/checkpoint_state.py` — `CheckpointStateAccessor`, `build_state_mutation_graph`, `RollbackPoint`
-- `checkpoint_patches.py` (package root) — checkpoint-machinery patches: delta-history folding for `InMemorySaver` (delegating to the base walk), stable message IDs across materialization, upstream first-write drop fix, and `BinaryOperatorAggregate` unwrapping an `Overwrite` first write into an empty (MISSING) channel — Union-typed reducer channels (`sandbox`/`goal`/`todos`/`promoted`) have no constructible default, so a replace-style write into a fresh branch thread or a never-written channel stored the wrapper literally and crashed the next consumer (#4380; probe-guarded, stands down if upstream fixes it)
-- `agents/thread_state.py` — `ThreadState`/`DeltaThreadState`, `delta_messages_field` / `DELTA_MESSAGES_FIELD` (`DeltaChannel` at the configured `snapshot_frequency`, default 10), schema adaptation helpers
-- `runtime/context_compaction.py` — compaction via accessor + mutation graph (reference consumer)
-- `runtime/checkpoint_cache/` + `runtime/checkpointer/cached_saver.py` — delta-mode checkpoint history cache; checkpoint state reads MUST go through `CheckpointStateAccessor`, and the checkpointer may be a `CachedHistorySaver` wrapper — never rely on concrete saver types
-- Tests: `tests/test_checkpoint_mode.py` (freeze/detect/gate), `tests/test_checkpoint_state.py` (accessor/mutation graph), `tests/test_delta_channel_checkpointers.py` (saver parity), `tests/test_threads_checkpoint_mode.py`, `tests/test_gateway_checkpoint_mode.py` (dual-mode e2e parity), `tests/test_context_compaction.py` (mutation-graph write, no scheduling), `tests/test_run_worker_rollback.py`, `tests/test_cached_history_saver.py` + `tests/test_cached_history_saver_integration.py` (history cache)
-
-**Checkpoint channel benchmark**: `scripts/benchmark/checkpoint/bench_channels.py`
-runs paired `full`/`delta` message-only StateGraphs in a fresh child process per
-case, using sync `InMemorySaver` or `SqliteSaver` so reducer, serialization, and
-saver costs stay separate from Gateway/async scheduling. It reports deterministic
-correctness digests, write windows/percentiles, warm and graph-rebuilt cold reads,
-logical checkpoint/write bytes, SQLite DB/WAL/SHM footprint, reducer replay time,
-and peak RSS as versioned JSONL. The controller alternates mode order and rejects
-performance data when paired modes materialize different state. Its default 1 GiB
-estimated cumulative full-payload cap skips both modes of an oversized pair when
-`full` is selected, including every delta cadence in a `--snapshot-frequencies`
-sweep; intentional `--modes delta` diagnostics bypass this full-payload cap, so
-size those runs explicitly. Use `--allow-large-cases` only
-on a provisioned machine. Duplicate CSV matrix values are ignored with a warning;
-use `--repetitions` for repeated samples. Summarize paired successful repetitions
-with `scripts/benchmark/checkpoint/summarize_channels.py` (all ratios are
-`delta/full`). `--profile-dir /tmp/checkpoint-profiles` writes one cProfile
-artifact per case for attribution. Profiled rows carry `profiled: true`, and the
-summarizer automatically excludes them from baseline summaries with a warning.
-Storage-size collection relies on saver-specific diagnostic layouts; if those
-layouts change, the timing/correctness row remains successful while storage
-fields become `null` and `storage_stats_error` records the diagnostic failure.
-Example:
+- 主配置优先级：显式参数 → `DEER_FLOW_CONFIG_PATH` → `$HNFLOW_HOME/config.yaml` → 旧位置。
+- 扩展配置优先级：显式参数 → `DEER_FLOW_EXTENSIONS_CONFIG_PATH` → `$HNFLOW_HOME/extensions_config.json` → 旧位置。
+- `$VAR` 值解析为环境变量。
+- `config_version` 落后时启动告警；`make config-upgrade` 合并缺失字段。修改 schema 时同步提升版本。
+- `get_app_config()` 按路径 + 内容签名自动重载；Gateway 每次请求重新读取，因此模型、压缩、标题、memory、subagents、tools 等按 run 生效。
+- 仅启动期字段：`plugins`、`database`、`checkpointer`、`run_events`、`stream_bridge`、`sandbox`、`log_level`、`logging`、`scheduler`、`mcp_tasks`、`apps`、`assets`，权威列表在 `config/reload_boundary.py::STARTUP_ONLY_FIELDS`。
+- 能力组/工具包来自外部 VibeStack（`vibestack.repository` → `VIBESTACK_HOME` / `VIBESTACK_REPO` → `~/.config/vibestack/config.json`）；HNFlow 不播种、不写入。
+- 项目激活：`<project>/.vibestack/stack.json`；Core 固定，保存工作流只增量 upsert。
+- 项目运行元数据携带 VibeStack MCP 服务器与 fingerprint；`mcp/project.py` 在内存中合并到 `extensions_config.json`，不持久化。
+
+## 6. Gateway API
+
+端口 8001，健康检查 `GET /health`；`GATEWAY_ENABLE_DOCS=false` 可关闭 OpenAPI 文档。单用户构建：无登录/会话/CSRF/OIDC，有效用户固定为 `DEFAULT_USER_ID`（`"default"`）。
+
+CORS 默认同源；跨源部署需设置 `GATEWAY_CORS_ORIGINS`，并暴露 `Content-Location`（SDK 从该头解析 run）。
+
+主要路由：
+
+| 路由 | 作用 |
+| --- | --- |
+| `/api/models` | 只读实际模型目录 |
+| `/api/model-profiles` | AI 节点模型档案 CRUD |
+| `/api/features` / `/api/environment` | 功能开关 / 环境探测 |
+| `/api/backup` | 备份计划（只读；导入走 CLI） |
+| `/api/apps` | 本地应用注册、presence、资源与实例管理 |
+| `/api/console` | 跨线程统计、运行历史、用量 |
+| `/api/mcp` | MCP 配置读取/替换/切换 |
+| `/api/skills` | skills 列表、启停、安装、reload |
+| `/api/memory` | 记忆数据、配置、状态、reload |
+| `/api/threads/{id}/uploads` | 上传/list/删除 |
+| `/api/threads/{id}` | 清理、分支、goal、compact、资源撤销 |
+| `/api/threads/{id}/artifacts` | 产物下载与原子替换 |
+| `/api/threads/{id}/runs` | 创建/流式/等待 run、regenerate、edit-regenerate、历史、事件、workspace-changes、token usage |
+| `/api/runs` | 无状态 run |
+| `/api/workflows` | 定义 CRUD、模板、评测、运行、继续、状态、成本、预览、撤销 |
+| `/api/workflow-folders` | 任意层级目录树 |
+| `/api/workflow-monitor` | 跨工作台运行汇总（只读） |
+| `/api/human-tasks` | 待办查询、提交、跳过、打回 |
+| `/api/projects` | 文件化项目与工作台 |
+| `/api/scheduled-tasks` | 定时任务与运行历史 |
+| `/api/specifications` | 规约列表、revision、freeze、lint |
+
+运行相关：
+
+- `RunCreateRequest` 只接受真实支持的子集，未实现选项返回 422，不静默丢弃。
+- `POST /wait` 通过 `wait_for_run_completion()` 排空 bridge，尊重 `on_disconnect`。
+- 分支/重生成使用 `checkpoint_lineage.py` 沿 `parent_config` 查找，禁止按全局时间线选兄弟分支。
+- 工作区变更由 `workspace_changes/` 在 run 前后快照 `workspace`/`outputs`，排除 uploads、浏览器截图与工具输出外部化目录。
+
+## 7. 工作流子系统
+
+代码：`packages/harness/deerflow/workflow/`。
+
+### 定义层
+
+- `schema.py`：节点/边/端口/类型，Pydantic v2，不依赖 LangGraph。
+- `workflow_io.py`：`validate_definition`（无环、单起点单终点、端口类型、单入边、Schema/verify 边）与 `serialize`/`deserialize`。
+- 端口类型：`data/file/bool/enum/number/array/record/spec`。
+- 同一输入端口只允许一条入边；`flow:end`、`flow:loop` 例外。
+- `tool:bash` 必须走 sandbox；`app:*` 是宿主执行例外。
+- `verify:gate` 三分支 `verified/failed/inconclusive` 必须全部接线。
+
+### 编译层
+
+`compiler.py`：`WorkflowDefinition → StateGraph`。
+
+- 端口绑定到 state 字段 `wf:<node_id>:<port>`；节点执行函数与 state 解耦。
+- 生成节点生命周期事件；loop/try/handoff 展开；共享工作区；资源锁；编译缓存；verify 路由。
+- 编译前做嵌套深度限制（默认 ≤10）与全局依赖循环检测。
+- 运行使用准入时的定义快照，编辑不热更新当前 run。
+
+### 执行层
+
+- `worker.py`：run 编排、checkpointer、事件流、人工挂起/恢复、取消。
+- `runtime_context.py`：唯一 compile/runtime context 装配点。
+- `executors/`：`flow`、`data`、`asset`、`tool`、`local_app`、`human`、`review`、`ai`、`spec`、`verify`。
+- `prompts.py` / `prompt_preview.py`：identity / capability / capability_rules / capability_skills / specification / schema_contract / task / schema 桶。
+- `structured_output.py`：Schema 解析、校验、修复、Envelope。
+- `context_compression.py`：按模型 `context_window` 自动压缩。
+- `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `dispatch.py`：评测、回放、预算、成本、幂等、调度。
+
+### AI 节点契约
+
+- `params.model_profile` 是唯一模型选择器；profile 指向 `config.yaml -> models[]`，不可链式。
+- `template_prompt` 是本轮唯一任务输入；`continue_prompt` 续接节点会话。
+- `input_schema` / `output_schema` 都是 `record` 输入，来自同一个 `data:schema` 节点；编译器注入 `__input_schema` / `__output_schema`。
+- 输出为 AI Result Envelope：`protocol/source_node/run_id` + `summary/status/content/artifacts/metadata/error` + `custom`。
+- Schema payload：`{"version": 1, "max_repairs": 1, "custom_fields": [...]}`；旧 `fields` 格式不支持。
+- `template_prompt` 用 `[schema.summary]` / `[schema.custom.<name>]` 引用输入；未知引用 fail-loud。
+- 无 `output_schema` 时原文本包装为 common-only envelope；schema 模式不支持 continue。
+- AI 节点不委派 subagent、无 token 预算、无节点级记忆/知识检索。
+
+### 人工、验证、容错
+
+- `human:task`：挂起生成 `human_tasks` 行；提交校验后恢复，支持 skip/reopen。
+- `human:review`：`approved` 前向、`rejected` 回跳到上游 AI 的 `continue_prompt`；review 任务不可 skip。
+- `verify:gate`：冻结规约 + verifier 工具（`spec_lint`、`dafny_verify`、`tla_model_check`、`lean_check`、`cel_evaluate`、`mock_verifier`）；verifier 崩溃/超时为 `inconclusive`，不是失败证据。
+- `flow:handoff`：`params.candidates` 白名单，离开节点的定义边是编译错误；`max_handoffs` 默认 8。
+- `debug_step`：run 级单步开关，每节点前生成 `kind="step"` 待办。
+- 幂等键由编译器注入 `<run_id>:<node_id>`，`tool:bash`/`tool:http` 透传。
+- 补偿：`data:file`、`data:asset`、`app:script` 默认快照/回滚；undo 记录按最新优先恢复。
+- 重生成、编辑重跑、分支严格使用 checkpoint lineage。
+
+## 8. Sandbox
+
+接口：`execute_command` / `read_file` / `write_file` / `list_dir` / `glob` / `grep`。
+
+- Provider：`LocalSandboxProvider`、`AioSandboxProvider`（Docker）、`E2BSandboxProvider`、`BoxliteProvider`、`TenkiSandboxProvider`。
+- 虚拟路径：`/mnt/user-data/{workspace,uploads,outputs}`、`/mnt/skills`；物理目录在 `hnflow-data/users/{user_id}/threads/{thread_id}/`。
+- `env_policy.build_sandbox_env()` 清洗 `*KEY*`/`*SECRET*`/`*TOKEN*`/`*PASS*`/`*CREDENTIAL*`，再叠加请求级 secrets。
+- Bash 在独立进程组中运行，默认超时 600s（`sandbox.bash_command_timeout`），超时杀整个组。
+- 工具：`bash`、`ls`、`glob`、`grep`、`read_file`、`write_file`、`str_replace`。
+- `read_before_write.enabled` 时，写入前必须存在匹配的读取哈希。
+- AIO 跨实例容器所有权：`sandbox.ownership.type = memory | redis`；多实例必须 Redis。`memory` 明确单实例。
+- 新增 provider 必须实现异步 acquire/release、健康检查、清理与测试。
+
+## 9. MCP / Skills / Memory / Models
+
+### MCP
+
+- `deerflow/mcp/`：客户端、缓存、session pool、OAuth、`tool_search` 懒加载。
+- `DeerFlowClient` 与 Gateway 共用工具装配。
+- 配置写操作会重置进程级 MCP 缓存。
+- MCP 长任务与 Agent loop 解耦，由 `McpTaskService` 驱动。
+
+### Skills
+
+- 目录：内置 `skills/public/` 种子到 `hnflow-data/skills/public/`；用户/集成视图在 `hnflow-data/users/{user_id}/skills_view/`。
+- 发现、解析、启用、安装、安全扫描在 `deerflow/skills/`。
+- 只有激活的 skill 才应用 `allowed-tools`；`tool_search` / `describe_skill` 始终可用。
+- `/skill-name task` 与 Lead Agent 菜单的 `context.active_skills` 都会触发激活。
+
+### Memory
+
+- 后端可插拔：`deermem`（默认）、`noop`、`openviking`、`honcho`、`mem0`。
+- `mode: middleware` 为被动提取；`tool` 暴露 `memory_search` / `memory_add` / `memory_update` / `memory_delete`。
+- 存储按用户隔离：`users/{user_id}/memory.json` + `users/{user_id}/agents/{agent_name}/facts/`。
+- 网络后端必须实现 `a*` 异步方法或将 IO offload；mem0 默认要求 HTTPS。
+- 关闭时 `shutdown_flush(timeout)` 排空待写入。
+
+### Models
+
+- `create_chat_model()` 通过反射实例化；支持 `thinking_enabled`、`supports_vision`、`$ENV`。
+- vLLM 使用 `VllmChatModel`，保留 `reasoning` 字段与可选 `cumulative_stream_usage`。
+- 实际模型配置由运维维护；AI 节点只引用 model profile。
+
+## 10. 项目、应用、资产与迁移
+
+- `projects/`：文件化项目；`project.json` 与 workbench 文件是数据源，SQL 行只是镜像。
+- `apps/`：宿主应用驱动（CLI/mock）、presence、资源治理、实例持久化；`app:*` 节点走此层。
+- `assets/`：跨软件资产引用与 hash。
+- `environment/`：只读环境探测；无法回答时返回 `unknown`，不 5xx。
+- `portability/`：备份/导出/导入 CLI：`python -m deerflow.portability export|inspect|import`。
+- `workspace/`：Lead Agent 的会话级资源编辑与撤销。
+
+## 11. 持久化与迁移
+
+- 应用表（`runs`、`threads_meta`、`run_events`、工作流、待办、撤销等）由 Alembic 管理；LangGraph checkpointer 表由 LangGraph 管理并从 Alembic 视图中排除。
+- 新增 ORM 字段/表必须新增 `persistence/migrations/versions/` revision；Gateway 启动自动 `alembic upgrade head`。
+- Bootstrap 三分支：空库 `create_all + stamp head`；旧库 `create_all(baseline) + stamp 0001 + upgrade`；已版本化直接 upgrade。
+- 迁移使用 `safe_add_column` / `safe_drop_column` 幂等辅助；Postgres 用 advisory lock，SQLite 用进程锁 + busy timeout。
+- 生成 revision：`make migrate-rev MSG="..."`。
+- Checkpoint 模式：`full`（默认）/ `delta`；进程冻结、切换需重启，模式标记写入 checkpoint metadata，跨模式读取失败即 409/503。
+- 线程状态访问必须走 `CheckpointStateAccessor`，不要直接 `get_tuple`。
+- 多 worker 必须共享数据库与事件存储。
+
+## 12. 扩展系统
+
+- `config.yaml` 顶层 `plugins:` 是启动期、运维可控的代码执行边界；不得加入 API 可写的 `extensions_config.json`。
+- 公共契约在 `packages/extension-api/`，贡献类型：middleware、task lifecycle、system model-call observer。
+- 扩展中间件由 `IsolatedMiddleware` 包装，失败 fail-open 并记录诊断。
+- Gateway 只加载一次插件，变更需重启。
+
+## 13. 测试与代码风格
+
+**TDD 强制**：每个功能/修复必须带测试。
 
 ```bash
-cd backend
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/bench_channels.py \
-  --backends sqlite --updates 100,500,999,1000,1001 --payload-bytes 128 \
-  --repetitions 7 --output /tmp/checkpoint-bench.jsonl
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/summarize_channels.py \
-  /tmp/checkpoint-bench.jsonl
-```
-
-The production-shaped layer lives in
-`scripts/benchmark/checkpoint/bench_production.py`: per-case child processes
-run graph-level `ainvoke` turns through the real lead-agent graph (scripted
-deterministic model, real `AsyncSqliteSaver`), then measure
-`GET /threads/{id}/state` and `POST /threads/{id}/history` through the real
-Gateway route stack in the same event loop (httpx ASGITransport), split into
-cold/warm accessor-graph-cache samples. It sweeps `snapshot_frequency`
-(config: `checkpoint_delta.snapshot_frequency`, process-frozen like the mode),
-pairs every delta frequency against the same full row, and fails both
-rows of a pair when materialized or wire digests diverge. Each case must have
-more than the two discarded warm-up turns, and SQLite DB/WAL/SHM sizes are
-captured while the saver is still open so they represent the online storage
-footprint. Summarize with
-`scripts/benchmark/checkpoint/summarize_production.py` (ratios are
-`delta/full`; it also emits `snapshot_write_spike` and `cache_effect_ms`,
-the decision inputs for the production snapshot-frequency and accessor-cache
-defaults). Harness tests live in `tests/test_bench_checkpoint_production.py`
-and `tests/test_summarize_checkpoint_production.py`; timing thresholds are
-not CI gates. The matrix test pins that every `(repetition, turns)` group
-contains both modes and that their execution order flips between consecutive
-groups, including across repetition boundaries.
-
-Operational limits learned from the first runs (the default matrix is too
-large to run blindly):
-
-- The default `--timeout-seconds 900` is insufficient for delta mode at
-  `snapshot_frequency=1000` once turns reach 500 (measured: delta-500 takes
-  ~1100-1200s; delta-2000 takes ~45min). Pass an explicit
-  `--timeout-seconds` for any large matrix, and treat the turns=2000 corner
-  as practical only at small snapshot frequencies.
-- Full-mode 2000-turn runs produce a ~33GB sqlite DB. Point `TMPDIR` at real
-  disk, not tmpfs (the benchmark uses `tempfile.TemporaryDirectory`, which
-  honors `TMPDIR`), or the run dies mid-case.
-- The history route clamps `limit` to 100 (`le=100` on
-  `ThreadHistoryRequest.limit`), so `--history-limits` values above 100 are
-  measured and reported by their effective (clamped) limit.
-
-Example:
-
-```bash
-cd backend
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/bench_production.py \
-  --turns 10,100,500,1000,2000 --payload-bytes 128 \
-  --snapshot-frequencies 10,50,100,500,1000 \
-  --repetitions 7 --output /tmp/production-bench.jsonl
-PYTHONPATH=. uv run python scripts/benchmark/checkpoint/summarize_production.py \
-  /tmp/production-bench.jsonl
-```
-
-### Request Trace Context (`packages/harness/deerflow/trace_context.py`)
-
-Request trace correlation is controlled by `logging.enhance.enabled` at **both** entry points, gated through the shared helper `deerflow.config.app_config.is_trace_correlation_enabled` so the Gateway and embedded paths cannot drift:
-
-- **Gateway HTTP**: `app.gateway.trace_middleware.TraceMiddleware` binds one request-level trace id per HTTP request, inheriting inbound `X-Trace-Id` when present or generating a new id otherwise. A **valid** inbound header also marks the request so `runtime/runs/worker.py` prefers that id over `config.metadata.deerflow_trace_id`, keeping logs, response headers, Langfuse, and runtime context aligned when callers send both. The middleware writes the final value to every HTTP response at `http.response.start`, which covers SSE / streaming responses without consuming the body.
-- **Embedded / CLI**: `DeerFlowClient.stream()` mints (or inherits) a request-level trace id per turn only when the flag is on. When it is off, no fresh id is minted — a caller that explicitly wraps `stream()` in `request_trace_context(...)` still opts in, because the downstream `get_current_trace_id()` read propagates that value into Langfuse metadata regardless of the flag. Because `stream()` is a sync generator (which shares the caller's context), the id binding is set/reset around each `next()` step rather than around `yield from`: this keeps LangGraph node execution and its log records inside the binding, while returning control to the caller with the ContextVar restored — avoids cross-request leak between yields and `ValueError: <Token> was created in a different Context` on GC-driven close of an abandoned generator (regression pinned by `tests/test_client_langfuse_metadata.py::test_stream_does_not_leak_trace_id_to_caller_context_between_yields` and `::test_stream_abandoned_generator_close_does_not_raise_cross_context`).
-
-The same ContextVar value is injected into enhanced log records as `trace_id` and into Langfuse metadata as `deerflow_trace_id`.
-
-`logging` is registered as a **restart-required** field
-(`STARTUP_ONLY_FIELDS["logging"]`): `configure_logging()` installs the trace-context
-filter and enhanced formatter on root handlers only during app.py lifespan startup,
-and `TraceMiddleware` captures `logging.enhance.enabled` once when the FastAPI app
-is constructed (via `resolve_trace_enabled(get_app_config())` in `create_app()`,
-itself a thin alias for `is_trace_correlation_enabled`). This keeps the response
-`X-Trace-Id` header, log `trace_id` fields, and Langfuse `deerflow_trace_id`
-coherent — a runtime `config.yaml` edit to `logging.enhance.*` needs a Gateway
-restart to take effect. The `deerflow_trace_id` chain inherits this guarantee
-transitively because every injection point ultimately reads the same
-`trace_context` ContextVar that the middleware alone populates. `DeerFlowClient`
-reads its own `self._app_config` snapshot (captured at `__init__`) through the
-same helper for the embedded gate.
-
-`deerflow_trace_id` is a DeerFlow correlation metadata key, not Langfuse's native
-trace id and not a DeerFlow `run_id`. Keep the existing subagent `trace_id` field
-separate: that short id is still only for subagent execution logs/status.
-
-### Tracing System (`packages/harness/deerflow/tracing/`)
-
-LangSmith and Langfuse are both supported. The wiring lives in two layers:
-
-- `factory.py::build_tracing_callbacks()` — returns the LangChain `CallbackHandler` list for the providers currently enabled via env vars (`LANGSMITH_TRACING`, `LANGFUSE_TRACING`, etc.). The handlers are attached at the **graph invocation root** for in-graph runs (`make_lead_agent` and `DeerFlowClient.stream` both append them to `config["callbacks"]` before invoking the graph) so a single run produces one trace with all node / LLM / tool calls as child spans. Standalone callers — anything that invokes a model outside such a graph (e.g. `MemoryUpdater`) — keep `create_chat_model`'s default `attach_tracing=True`, which falls back to model-level callback attachment.
-- `metadata.py::build_langfuse_trace_metadata()` — builds the Langfuse-reserved trace attributes for `RunnableConfig.metadata`. The Langfuse v4 `langchain.CallbackHandler` lifts these onto the root trace (see its `_parse_langfuse_trace_attributes`), but only when it sees `on_chain_start(parent_run_id=None)` — which is why the callbacks have to live at the graph root, not the model.
-
-**Trace-attribute injection points**: both `runtime/runs/worker.py::run_agent` (gateway path) and `client.py::DeerFlowClient.stream` (embedded path) merge the metadata into `config["metadata"]` right before constructing the graph. `subagents/executor.py::_aexecute` does the same for every subagent run so subagent traces group under the parent thread's session card (carrying the parent `thread_id` → `langfuse_session_id`, the user_id captured at `task_tool` → `langfuse_user_id`, and a `subagent:<normalized-name>` trace name). Caller-supplied keys win via `setdefault`, so an external `session_id` override is preserved. Field mapping:
-
-| Langfuse field         | Source                                       |
-|-----------------------|----------------------------------------------|
-| `langfuse_session_id` | LangGraph `thread_id`                         |
-| `langfuse_user_id`    | `get_effective_user_id()` (`default` in no-auth); for subagents, captured from `runtime.context` at `task_tool` time via `resolve_runtime_user_id()` |
-| `langfuse_trace_name` | `RunRecord.assistant_id` / client `agent_name` (defaults to `lead-agent`); for subagents, `subagent:<name>` (lowercased, `_` → `-`) |
-| `langfuse_tags`       | `env:<DEER_FLOW_ENV>` + `model:<model_name>`  |
-| `deerflow_trace_id`   | Current request/entry trace id from `deerflow.trace_context`; matches `X-Trace-Id` for enhanced Gateway HTTP requests. Gated by `logging.enhance.enabled` in both gateway and embedded paths via `is_trace_correlation_enabled` — off by default; embedded callers can still opt in per-turn by wrapping `stream()` in `request_trace_context(...)` |
-
-Returns `{}` when Langfuse is not in the enabled providers — LangSmith-only deployments are unaffected. Set `DEER_FLOW_ENV` (or `ENVIRONMENT`) to tag traces by deployment environment. Tests live in `tests/test_tracing_factory.py`, `tests/test_tracing_metadata.py`, `tests/test_worker_langfuse_metadata.py`, `tests/test_client_langfuse_metadata.py`, and `tests/test_subagent_executor.py::TestSubagentTracingWiring`.
-
-**Monocle telemetry** is a third provider, structurally unlike LangSmith/Langfuse. It is **not** a LangChain callback: `tracing/monocle.py::setup_monocle_tracing_if_enabled()` calls `monocle_apptrace.setup_monocle_telemetry()` once, which installs a **process-global OTel `TracerProvider`**, patches span serialization, and auto-instruments the openai/langchain/langgraph clients. Because that is a one-time, process-global side effect (not a per-run callback), it is initialized from the **Gateway lifespan** (`app/gateway/app.py`) — never from `build_tracing_callbacks()` — and it is **off by default**. The setup call was deliberately moved out of `agents/__init__.py`, so `import deerflow.agents` must never start tracing (pinned by `tests/test_monocle_tracing.py::test_no_import_time_setup`). The Gateway lifespan is the **sole call site** (pinned by `test_gateway_lifespan_initializes_monocle`), so unlike LangSmith/Langfuse — which attach at the graph roots and cover every path — the embedded `DeerFlowClient` is not instrumented; embedded users who want Monocle traces call `setup_monocle_tracing_if_enabled()` themselves before running the agent.
-
-Unlike the Langfuse metadata above, DeerFlow injects **no** per-run fields into Monocle traces — the only attribute it sets is `workflow_name="deer-flow"`; every span attribute (`span.type`, `entity.*`, token usage, span inputs/outputs, `scope.agentic.session`) is produced by Monocle's own metamodel and auto-instrumentation, so there is no DeerFlow trace-attribute layer to maintain here.
-
-Config is env-driven like the others — `MonocleTracingConfig`, built in `get_tracing_config()` and gated by `is_monocle_tracing_enabled()`. `MONOCLE_TRACING` enables it; `MONOCLE_EXPORTERS` selects exporters (default `file` → trace JSON in `.monocle/`; also `console`, `okahu`, `s3`, `blob`, `gcs`, where `okahu` requires `OKAHU_API_KEY`). `setup_monocle_tracing_if_enabled()` stays a thin wrapper on purpose: `monocle_apptrace` already guards duplicate setup (`instrumentor.py::check_duplicate_setup`) and never force-overrides an existing global provider, so the wrapper only gates on config. Coexistence with Langfuse (v4, also OTel-based) is **verified**: whichever library initializes second reuses the existing global `TracerProvider` and attaches its own span processor, so neither side loses spans (pinned by `test_coexists_with_langfuse`). Both processors see all spans, so Monocle's exporters also capture Langfuse's spans when both are enabled. (LangSmith is a plain callback and coexists trivially.) Tests: `tests/test_monocle_tracing.py`.
-
-### Config Schema
-
-**`config.yaml`** key sections:
-- `models[]` - LLM configs with `use` class path, `supports_thinking`, `supports_vision`, provider-specific fields
-- `logging.enhance` - Optional request trace correlation (`enabled`, `format`) for Gateway `X-Trace-Id`, log `trace_id`, and Langfuse `deerflow_trace_id`
-- vLLM reasoning models should use `deerflow.models.vllm_provider:VllmChatModel`; for Qwen-style parsers prefer `when_thinking_enabled.extra_body.chat_template_kwargs.enable_thinking`, and DeerFlow will also normalize the older `thinking` alias
-- `tools[]` - Tool configs with `use` variable path and `group`
-- `tool_groups[]` - Logical groupings for tools
-- `sandbox.use` - Sandbox provider class path
-- `skills.path` / `skills.container_path` - Host and container paths to skills directory
-- `skills.deferred_discovery` - When `true`, replaces the full-metadata `<available_skills>` prompt block with a compact `<skill_index>` (names only) and registers the `describe_skill` tool so the agent fetches metadata on demand. Defaults to `false` (legacy full-metadata injection)
-- `title` - Auto-title generation (enabled, max_words, max_chars, model_name; null model_name uses fast local fallback, explicit model_name uses the prompt_template LLM path)
-- `summarization` - Context summarization (enabled, trigger conditions, keep policy)
-- `subagents.enabled` - Master switch for subagent delegation
-- `memory` - Memory system (enabled, storage_path, debounce_seconds, shutdown_flush_timeout_seconds, model_name, max_facts, fact_confidence_threshold, injection_enabled, max_injection_tokens, staleness_review_enabled, staleness_age_days, staleness_min_candidates, staleness_max_removals_per_cycle, staleness_protected_categories, staleness_max_lifetime_multiplier, staleness_max_extension_days)
-
-**`extensions_config.json`**:
-- `mcpServers` - Map of server name → config (enabled, type, command, args, env, url, headers, oauth, description, `routing`, `tools`, `tool_call_timeout`, `session_init_timeout`). `routing.mode="prefer"` emits `<mcp_routing_hints>` prompt guidance; if `tool_search` defers the hinted tool, `McpRoutingMiddleware` can also auto-promote matching deferred schemas before the model call. It does not hard-disable other tools. `session_init_timeout` (default `DEFAULT_MCP_SESSION_INIT_TIMEOUT` = 60s, `null` to disable) bounds server bring-up: tool discovery and persistent stdio session initialization, so a hung server cannot block agent construction indefinitely. `tool_call_timeout` bounds individual stdio tool calls.
-- `tool_search.auto_promote_top_k` - Global MCP routing auto-promote breadth. Default `3`, clamped to `1..5`; applies only when `tool_search.enabled=true` and only to deferred MCP tools with `routing.mode="prefer"` and non-empty keywords. For lead agents the deferred catalog is built from the full configured MCP set; auto-promotion never grants authority because an active skill's runtime policy still filters model-visible schemas, `tool_search` results, and execution.
-- `skills` - Map of skill name → state (enabled)
-- `middlewares` - Zero-argument `AgentMiddleware` class paths for lead and subagent runtime extension. `config.yaml -> extensions` can override these fields after validation; overrides are replace-per-field, not list concatenation.
-
-Gateway API endpoints and `DeerFlowClient` methods can modify MCP servers and skill state at runtime; their `extensions_config.json` writes use the shared atomic replacement helper, while `middlewares` remains an operator-controlled config-file extension point.
-
-### Embedded Client (`packages/harness/deerflow/client.py`)
-
-`DeerFlowClient` provides direct in-process access to all DeerFlow capabilities without HTTP services. All return types align with the Gateway API response schemas, so consumer code works identically in HTTP and embedded modes.
-
-**Architecture**: Imports the same `deerflow` modules that Gateway API uses. Shares the same config files and data directories. No FastAPI dependency.
-
-**Agent Conversation**:
-- `chat(message, thread_id)` — synchronous, accumulates streaming deltas per message-id and returns the final AI text
-- `stream(message, thread_id)` — subscribes to LangGraph `stream_mode=["values", "messages", "custom"]` and yields `StreamEvent`:
-  - `"values"` — full state snapshot (title, messages, artifacts); AI text already delivered via `messages` mode is **not** re-synthesized here to avoid duplicate deliveries; serialized `ToolMessage` entries preserve a non-`None` native `artifact`
-  - `"messages-tuple"` — per-chunk update: for AI text this is a **delta** (concat per `id` to rebuild the full message); tool calls and tool results are emitted once each, and tool results preserve a non-`None` native `artifact`
-  - `"custom"` — forwarded from `StreamWriter`; DeerFlow-built-in custom events are dual-emitted through `deerflow.utils.custom_events`, so `astream_events(version="v2")` consumers also receive one `on_custom_event` with `name=payload["type"]` and the unchanged payload as `data`
-  - `"end"` — stream finished (carries cumulative `usage` counted once per message id)
-- **Custom-event invariant** — production DeerFlow emitters must use `emit_custom_event` / `aemit_custom_event`, not call `StreamWriter` alone. Every built-in payload must carry a non-empty string `type`; typeless payloads remain writer-only and are intentionally absent from `astream_events`. The writer runs first and remains authoritative for Gateway, Web UI, and embedded-client compatibility; callback dispatch is best-effort and must not break that path. Async graph hooks must await the async helper rather than invoking synchronous dispatch on a running event loop.
-- Agent created lazily via `create_agent()` + `build_middlewares()`, same as `make_lead_agent`
-- Supports `checkpointer` parameter for state persistence across turns
-- `reset_agent()` forces agent recreation (e.g. after memory or skill changes)
-- See [docs/STREAMING.md](docs/STREAMING.md) for the full design: why Gateway and DeerFlowClient are parallel paths, LangGraph's `stream_mode` semantics, the per-id dedup invariants, and regression testing strategy
-
-**Gateway Equivalent Methods** (replaces Gateway API):
-
-| Category | Methods | Return format |
-|----------|---------|---------------|
-| Models | `list_models()`, `get_model(name)` | `{"models": [...]}`, `{name, display_name, ...}` |
-| MCP | `get_mcp_config()`, `update_mcp_config(servers)` | `{"mcp_servers": {...}}` |
-| Skills | `list_skills()`, `get_skill(name)`, `update_skill(name, enabled)`, `install_skill(path)` | `{"skills": [...]}` |
-| Goals | `get_goal(thread_id)`, `set_goal(thread_id, objective, max_continuations=8)`, `clear_goal(thread_id)` | `{"goal": {...}}` or `{"goal": None}` |
-| Memory | `get_memory()`, `reload_memory()`, `get_memory_config()`, `get_memory_status()` | dict |
-| Uploads | `upload_files(thread_id, files)`, `list_uploads(thread_id)`, `delete_upload(thread_id, filename)` | `{"success": true, "files": [...]}`, `{"files": [...], "count": N}` |
-| Artifacts | `get_artifact(thread_id, path)` → `(bytes, mime_type)` | tuple |
-
-**Key difference from Gateway**: Upload accepts local `Path` objects instead of HTTP `UploadFile`, rejects directory paths before copying, and reuses a single worker when document conversion must run inside an active event loop. Artifact returns `(bytes, mime_type)` instead of HTTP Response. The new Gateway-only thread cleanup route deletes `hnflow-data/threads/{thread_id}` after LangGraph thread deletion; there is no matching `DeerFlowClient` method yet. `update_mcp_config()` and `update_skill()` automatically invalidate the cached agent.
-
-**Tests**: `tests/test_client.py` (offline unit tests including
-`TestGatewayConformance`), `tests/test_client_live.py` (live integration tests,
-requires a root `config.yaml`, valid API credentials, and explicit opt-in via
-`make test-live` or `DEER_FLOW_RUN_LIVE_TESTS=1`). The live suite calls real
-external APIs and may incur API costs or create local sandboxes, artifacts, and
-files. It is marked `live`, excluded from `make test`, and skipped in default
-CI.
-
-**Gateway Conformance Tests** (`TestGatewayConformance`): Validate that every dict-returning client method conforms to the corresponding Gateway Pydantic response model. Each test parses the client output through the Gateway model — if Gateway adds a required field that the client doesn't provide, Pydantic raises `ValidationError` and CI catches the drift. Covers: `ModelsListResponse`, `ModelResponse`, `SkillsListResponse`, `SkillResponse`, `SkillInstallResponse`, `McpConfigResponse`, `UploadResponse`, `MemoryConfigResponse`, `MemoryStatusResponse`.
-
-## Development Workflow
-
-### Test-Driven Development (TDD) — MANDATORY
-
-**Every new feature or bug fix MUST be accompanied by unit tests. No exceptions.**
-
-- Write tests in `backend/tests/` following the existing naming convention `test_<feature>.py`
-- Run the full offline suite before and after your change: `make test`
-- Tests must pass before a feature is considered complete
-- Windows compatibility: do not assume POSIX-only semantics. Symlink tests must skip on `OSError`/`NotImplementedError`; chmod/PWD assertions are POSIX-only; native-path expectations must use `Path(...).as_posix()` or separator normalization. Tests that invoke `sh`/`bash` skip when no usable POSIX shell exists (a WSL stub is not enough).
-- For lightweight config/utility modules, prefer pure unit tests with no external dependencies
-- If a module causes circular import issues in tests, add a `sys.modules` mock in `tests/conftest.py` (see existing example for `deerflow.subagents.executor`)
-
-```bash
-# Run all offline tests
-make test
-
-# Explicit live integration tests (requires config.yaml and credentials;
-# calls real APIs and may create local side effects)
-make test-live
-
-# Run a specific test file
+make test            # 离线全套
+make test-live       # 显式 live
 PYTHONPATH=. uv run pytest tests/test_<feature>.py -v
 ```
 
-Direct pytest collection or execution of `tests/test_client_live.py` remains
-skipped unless `DEER_FLOW_RUN_LIVE_TESTS=1` is set. Do not add that opt-in to
-default CI workflows.
+- 命名 `test_<feature>.py`，放 `backend/tests/`。
+- Windows：不要假设 POSIX；符号链接 `OSError`/`NotImplementedError` 跳过，chmod/PWD 断言仅 POSIX，路径用 `Path(...).as_posix()`；无 POSIX shell 时跳过 shell 测试。
+- 阻塞 IO：`tests/blocking_io/` 用 Blockbuster 包裹 `app.*` 与 `deerflow.*`；异步路径上的同步阻塞 IO 必须 offload。
+- 运行事件、工作流定义、Gateway 响应模型都有契约测试；改契约必须同步测试。
+- 风格：ruff，行宽 240，双引号，Python 3.12+ 类型标注。
 
-### Running the Full Application
+## 14. 文档索引
 
-From the **project root** directory:
-```bash
-make dev
-```
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/API.md](docs/API.md)
+- [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+- [docs/RUN_EVENT_STREAM.md](docs/RUN_EVENT_STREAM.md)
+- [docs/STREAMING.md](docs/STREAMING.md)
+- [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md)
+- [docs/PATH_EXAMPLES.md](docs/PATH_EXAMPLES.md)
+- [docs/MCP_SERVER.md](docs/MCP_SERVER.md)
+- [docs/BLOCKING_IO_DETECTION.md](docs/BLOCKING_IO_DETECTION.md)
+- [docs/REPLAY_E2E.md](docs/REPLAY_E2E.md)
+- [docs/summarization.md](docs/summarization.md)
 
-This starts all services and makes the application available at `http://localhost:2026`.
-
-**All startup modes:**
-
-| | **Local Foreground** | **Local Daemon** | **Docker Dev** | **Docker Prod** |
-|---|---|---|---|---|
-| **Dev** | `./scripts/serve.sh --dev`<br/>`make dev` | `./scripts/serve.sh --dev --daemon`<br/>`make dev-daemon` | `./scripts/docker.sh start`<br/>`make docker-start` | — |
-| **Prod** | `./scripts/serve.sh --prod`<br/>`make start` | `./scripts/serve.sh --prod --daemon`<br/>`make start-daemon` | — | `./scripts/deploy.sh`<br/>`make up` |
-
-| Action | Local | Docker Dev | Docker Prod |
-|---|---|---|---|
-| **Stop** | `./scripts/serve.sh --stop`<br/>`make stop` | `./scripts/docker.sh stop`<br/>`make docker-stop` | `./scripts/deploy.sh down`<br/>`make down` |
-| **Restart** | `./scripts/serve.sh --restart [flags]` | `./scripts/docker.sh restart` | — |
-
-**Nginx routing**:
-- `/api/langgraph/*` → Gateway embedded runtime (8001), rewritten to `/api/*`
-- `/api/*` (other) → Gateway API (8001)
-- `/` (non-API) → Frontend (3000)
-
-### Running Backend Services Separately
-
-From the **backend** directory:
-
-```bash
-# Gateway API
-make gateway
-```
-
-Direct access (without nginx):
-- Gateway: `http://localhost:8001`
-
-### Frontend Configuration
-
-The frontend uses environment variables to connect to backend services:
-- `NEXT_PUBLIC_LANGGRAPH_BASE_URL` - Defaults to `/api/langgraph` (through nginx)
-- `NEXT_PUBLIC_BACKEND_BASE_URL` - Defaults to empty string (through nginx)
-
-When using `make dev` from root, the frontend automatically connects through nginx.
-
-## Key Features
-
-### File Upload
-
-Multi-file upload with automatic document conversion:
-- Endpoint: `POST /api/threads/{thread_id}/uploads`
-- Supports: PDF, PPT, Excel, Word documents (converted via `markitdown`)
-- Rejects directory inputs before copying so uploads stay all-or-nothing
-- Reuses one conversion worker per request when called from an active event loop
-- Files stored in thread-isolated directories under the resolving user's bucket (`users/{user_id}/threads/{thread_id}/user-data/uploads`). HTTP/embedded callers resolve the owner from `get_effective_user_id()`
-- Duplicate filenames in a single upload request are auto-renamed with `_N` suffixes so later files do not truncate earlier files
-- Gateway HTTP uploads stage bytes as `.upload-*.part` files and atomically replace the destination only after size validation. These staging files are hidden from upload listings, agent upload context, and sandbox listing/search tools, and swept on Gateway startup if a hard crash leaves one behind.
-- Gateway HTTP upload/list/delete handlers offload filesystem work through `deerflow.utils.file_io.run_file_io`, a dedicated ContextVar-preserving file IO executor. Non-mounted sandbox uploads acquire sandboxes with `SandboxProvider.acquire_async()` and offload `read_bytes()` plus `sandbox.update_file()` together.
-- Mounted upload paths skip both sandbox acquisition and per-file synchronization. This requires an explicit, accurate `sandbox.thread_data_mounts: true`; omission preserves backend auto-detection.
-- Agent receives uploaded file list via `UploadsMiddleware`
-
-See [docs/FILE_UPLOAD.md](docs/FILE_UPLOAD.md) for details.
-
-### Plan Mode
-
-TodoList middleware for complex multi-step tasks:
-- Controlled via runtime config: `config.configurable.is_plan_mode = True`
-- Provides `write_todos` tool for task tracking
-- One task in_progress at a time, real-time updates
-
-See [docs/plan_mode_usage.md](docs/plan_mode_usage.md) for details.
-
-### Context Summarization
-
-Automatic conversation summarization when approaching token limits:
-- Configured in `config.yaml` under `summarization` key
-- Trigger types: tokens, messages, or fraction of max input
-- Keeps recent messages while summarizing older ones
-- Manual compaction uses `POST /api/threads/{id}/compact`, reuses the same
-  `DeerFlowSummarizationMiddleware`, writes a new checkpoint with updated
-  `messages` and `summary_text`, and bumps only those channel versions.
-  The route uses the shared `reserve_checkpoint_write()` boundary (also used by
-  manual state updates). Its short-lived `checkpoint_write` thread operation
-  shares the durable active-thread uniqueness constraint with run admission,
-  preventing either worker-local or cross-worker checkpoint-write races.
-
-See [docs/summarization.md](docs/summarization.md) for details.
-
-### Vision Support
-
-For models with `supports_vision: true`:
-- `ViewImageMiddleware` processes images in conversation
-- `view_image_tool` added to agent's toolset
-- Images are converted to base64 and injected into a hidden message carrying both a reserved ID prefix and a server-owned metadata marker for the model call; Gateway strips that marker from untrusted input, and the middleware requires both identifiers before removing the message. The `before_model` and `model` node checkpoints for that call still contain the payload; after `after_model` cleanup, subsequent checkpoints retain only lightweight `viewed_images` metadata, while client-chosen IDs survive
-
-## Code Style
-
-- Uses `ruff` for linting and formatting
-- Line length: 240 characters
-- Python 3.12+ with type hints
-- Double quotes, space indentation
-
-## Documentation
-
-See `docs/` directory for detailed documentation:
-- [CONFIGURATION.md](docs/CONFIGURATION.md) - Configuration options
-- [ARCHITECTURE.md](docs/ARCHITECTURE.md) - Architecture details
-- [API.md](docs/API.md) - API reference
-- [SETUP.md](docs/SETUP.md) - Setup guide
-- [FILE_UPLOAD.md](docs/FILE_UPLOAD.md) - File upload feature
-- [PATH_EXAMPLES.md](docs/PATH_EXAMPLES.md) - Path types and usage
-- [summarization.md](docs/summarization.md) - Context summarization
-- [plan_mode_usage.md](docs/plan_mode_usage.md) - Plan mode with TodoList
+用户可见变更同步根 `README.md`；架构、命令、约束变更同步本文件。

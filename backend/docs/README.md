@@ -1,58 +1,31 @@
-# Documentation
+# 后端文档
 
-This directory contains detailed documentation for the DeerFlow backend.
+开发约束与架构唯一来源是 [../AGENTS.md](../AGENTS.md)。本目录只保留专题文档。
 
-## Quick Links
+## 核心
 
-| Document | Description |
-|----------|-------------|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture overview |
-| [API.md](API.md) | Complete API reference |
-| [CONFIGURATION.md](CONFIGURATION.md) | Configuration options |
-| [SETUP.md](SETUP.md) | Quick setup guide |
+| 文档 | 内容 |
+| --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | 系统架构 |
+| [API.md](API.md) | API 参考 |
+| [CONFIGURATION.md](CONFIGURATION.md) | 配置项 |
+| [RUN_EVENT_STREAM.md](RUN_EVENT_STREAM.md) | 运行事件流契约（改契约需同步） |
+| [STREAMING.md](STREAMING.md) | 流式设计 |
 
-## Feature Documentation
+## 功能与运维
 
-| Document | Description |
-|----------|-------------|
-| [STREAMING.md](STREAMING.md) | Token-level streaming design: Gateway vs DeerFlowClient paths, `stream_mode` semantics, per-id dedup |
-| [RUN_EVENT_STREAM.md](RUN_EVENT_STREAM.md) | Persisted run event stream contract: envelope, producers, consumers, and known gaps |
-| [FILE_UPLOAD.md](FILE_UPLOAD.md) | File upload functionality |
-| [PATH_EXAMPLES.md](PATH_EXAMPLES.md) | Path types and usage examples |
-| [SANDBOX_MEMORY_PROFILING.md](SANDBOX_MEMORY_PROFILING.md) | Sandbox memory baseline and runtime comparison guide |
-| [summarization.md](summarization.md) | Context summarization feature |
-| [plan_mode_usage.md](plan_mode_usage.md) | Plan mode with TodoList |
-| [AUTO_TITLE_GENERATION.md](AUTO_TITLE_GENERATION.md) | Automatic title generation |
+| 文档 | 内容 |
+| --- | --- |
+| [FILE_UPLOAD.md](FILE_UPLOAD.md) | 文件上传与转换 |
+| [PATH_EXAMPLES.md](PATH_EXAMPLES.md) | 虚拟路径与映射 |
+| [MCP_SERVER.md](MCP_SERVER.md) | MCP 集成 |
+| [summarization.md](summarization.md) | 上下文压缩 |
+| [BLOCKING_IO_DETECTION.md](BLOCKING_IO_DETECTION.md) | 阻塞 IO 静态检测 |
+| [REPLAY_E2E.md](REPLAY_E2E.md) | 回放测试与重新录制 |
+| [APPLE_CONTAINER.md](APPLE_CONTAINER.md) | Apple Container 沙箱 |
+| `memory-settings-sample.json` | 记忆配置示例 |
 
-## Development
+## 约定
 
-| Document | Description |
-|----------|-------------|
-| [TODO.md](TODO.md) | Planned features and known issues |
-
-## Getting Started
-
-1. **New to DeerFlow?** Start with [SETUP.md](SETUP.md) for quick installation
-2. **Configuring the system?** See [CONFIGURATION.md](CONFIGURATION.md)
-3. **Understanding the architecture?** Read [ARCHITECTURE.md](ARCHITECTURE.md)
-4. **Building integrations?** Check [API.md](API.md) for API reference
-
-## Document Organization
-
-```
-docs/
-├── README.md                  # This file
-├── ARCHITECTURE.md            # System architecture
-├── API.md                     # API reference
-├── CONFIGURATION.md           # Configuration guide
-├── SETUP.md                   # Setup instructions
-├── FILE_UPLOAD.md             # File upload feature
-├── PATH_EXAMPLES.md           # Path usage examples
-├── summarization.md           # Summarization feature
-├── plan_mode_usage.md         # Plan mode feature
-├── STREAMING.md               # Token-level streaming design
-├── RUN_EVENT_STREAM.md        # Persisted run event stream contract
-├── AUTO_TITLE_GENERATION.md   # Title generation
-├── TITLE_GENERATION_IMPLEMENTATION.md  # Title implementation details
-└── TODO.md                    # Roadmap and issues
-```
+- 新增/修改运行事件、配置项、API 或工作流契约时同步对应文档与测试。
+- 一次性计划、RFC、任务清单不进入本目录。

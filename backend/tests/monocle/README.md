@@ -1,126 +1,46 @@
-# DeerFlow behavioural tests (Monocle Test Tools)
+# Monocle 行为测试
 
-Trace-based tests for DeerFlow. Monocle records each run as a structured trace
-(the agent invocation, every tool call, token usage, timings), and these tests
-assert against that trace with [Monocle Test Tools](https://github.com/monocle2ai/monocle).
+基于 trace 的 agent 行为测试：Monocle 记录每次运行的 agent/tool 调用、token、耗时，测试用 [Monocle Test Tools](https://github.com/monocle2ai/monocle) 对 trace 断言。
 
-## How this is meant to be used
+## 分层
 
-Instrument the agent with Monocle and run it against a question. Once it answers
-the way you expect and makes the agent and tool calls you expect, capture that
-run as a trace. That trace is a golden, labelled reference for the question: a
-record of correct behaviour, not just sample data. You turn it into assertions
-(the offline example shows how), and then you point those same assertions at the
-live agent for the same question, so every later run has to reproduce that
-behaviour. The offline test is where you pin down what good looks like; the live
-test is what enforces it against a real run.
+- **离线示例**（`test_assertion_api_example`）：从文件加载已录制 trace，展示完整断言 API。无需密钥与网络，验证 trace 格式与 asserter 接线。
+- **两个 live 测试**：端到端驱动 agent，对真实 trace 断言路由、工具选择、token 成本。默认跳过，需 `MONOCLE_LIVE_TESTS=1`。
 
-## Layers
+## 目录
 
-The suite has two:
+- `test_deerflow.py` —— 离线示例 + 两个 live 测试
+- `conftest.py` —— `run_agent` fixture（仅 live）
+- `_helpers.py` —— 路径与 `run_deerflow()`
+- `traces/` —— 离线示例加载的录制 trace
+- `requirements.txt` —— 独立依赖
 
-- **One offline example** (`test_assertion_api_example`) loads a recorded trace
-  from file and shows the full fluent vocabulary in one place. It needs no keys
-  and no network. Because it asserts against frozen JSON, it guards the trace
-  format and the asserter wiring, not DeerFlow's behaviour. Treat it as the
-  worked example for writing your own assertions.
-- **Two live tests** drive the agent end-to-end and assert on the trace the real
-  run emits. These are the behavioural guards: a change that alters routing, tool
-  selection, or token cost is caught here. They are explicit opt-in via
-  `MONOCLE_LIVE_TESTS=1` and skip by default, so a plain run never spends model
-  tokens or hits the network, even on a fully configured checkout.
+## 运行
 
-## Layout
-
-- `test_deerflow.py` — the offline example + two live tests
-- `conftest.py` — the `run_agent` fixture (live path only)
-- `_helpers.py` — paths and `run_deerflow()`
-- `traces/` — the recorded trace the offline example loads
-- `requirements.txt` — standalone dependencies
-
-## The committed trace
-
-`traces/web_research_ev_battery.json` is a full, unmodified recording of a real
-run, committed whole so the offline example parses a genuine trace. That means
-it embeds the DeerFlow system prompt as of the recording date and the content
-the run fetched from the web, alongside the span structure the assertions read.
-It contains no credentials.
-
-The offline assertions are pinned to this exact trace and to the
-`monocle_apptrace` 0.8.8 span shapes: the `LangGraph` agent span name, the tool
-names, and the input phrasing. A rename of any of those breaks the offline test
-even when behaviour is unchanged; re-record the trace when the prompt, tools, or
-model change.
-
-## Run
-
-`monocle_test_tools` hard-depends on the ML eval stack (torch, transformers,
-sentence-transformers), so it is a standalone `requirements.txt` install rather
-than a backend dependency. When it is absent (e.g. a plain backend venv) the
-whole suite skips cleanly via `pytest.importorskip`.
-
-Because that dependency is deliberately absent from the backend deps, **none of
-these tests run in CI** — `make test` collects and skips the whole module,
-including the offline example. This is an on-demand suite: install the
-requirements and run it locally (or wire a dedicated CI job with the
-requirements installed) when changing agent behaviour, tools, or routing.
+`monocle_test_tools` 依赖较重的 ML 栈（torch、transformers 等），不进入后端默认依赖；未安装时整套测试 `pytest.importorskip` 跳过。
 
 ```bash
-# from the repo root
 pip install -r backend/tests/monocle/requirements.txt
-
-# offline — no network, no keys; the live tests skip unless opted in
-pytest backend/tests/monocle/
-
-# opt in to the live behavioural tests (real model calls + web requests)
-MONOCLE_LIVE_TESTS=1 pytest backend/tests/monocle/
+pytest backend/tests/monocle/                       # 离线
+MONOCLE_LIVE_TESTS=1 pytest backend/tests/monocle/  # 含 live
 ```
 
-Or, following the backend convention (from `backend/`, with uv):
+使用 uv 时：
 
 ```bash
+cd backend
 uv pip install -r tests/monocle/requirements.txt
-uv run pytest tests/monocle/                          # offline
-MONOCLE_LIVE_TESTS=1 uv run pytest tests/monocle/     # + live
+uv run pytest tests/monocle/
+MONOCLE_LIVE_TESTS=1 uv run pytest tests/monocle/
 ```
 
-The live tests are opt-in by design: without `MONOCLE_LIVE_TESTS=1` they skip
-even on a checkout where credentials and `config.yaml` are present, so the
-default command can never spend tokens or write to a sandbox. When opted in,
-they still skip if the DeerFlow app is not importable or `config.yaml` is
-missing. Model credentials are validated by the configured model itself —
-`config.yaml` may select any provider (OpenAI, Anthropic, Gemini, and so on),
-so there is no hard-coded key requirement. DeerFlow's `web_search` is
-DuckDuckGo and needs no key of its own.
+## 录制新 trace
 
-The `monocle_trace_asserter` fixture is provided by `monocle_test_tools`' own
-pytest plugin, which registers automatically on install (a `pytest11` entry
-point); no `pytest_plugins` configuration is needed.
+1. 在 Monocle 下运行 agent，trace 默认写入 `.monocle/`。
+2. 离线用例：把 trace 放进 `traces/`，用 `with_trace_source("file", trace_path=...)` 加载。
+3. 行为用例：通过 `run_agent` 驱动，再用 `validator.test_workflow(...)` 断言。
+4. 断言 API：`called_agent`、`called_tool`、`contains_input`、`contains_any_output`、`under_token_limit`、`under_duration`。
 
-## Add your own test
+离线断言绑定 trace 与 `monocle_apptrace` 的 span 形状；提示词、工具或模型变化后需重新录制。
 
-1. Run DeerFlow under Monocle and capture a trace of a run you are happy with
-   (Monocle writes trace JSON to `.monocle/` by default).
-2. For an offline example, move it into `traces/` and load it with
-   `monocle_trace_asserter.with_trace_source("file", trace_path=path)`.
-3. For a behavioural test, drive the agent live via the `run_agent` fixture and
-   `monocle_trace_asserter.validator.test_workflow(run_agent, {"test_input": (...)})`.
-4. Assert with the fluent API: `called_agent(...)`, `called_tool(...)`,
-   `contains_input` / `contains_any_output(...)`, `under_token_limit(...)`,
-   `under_duration(..., span_type="workflow")`.
-
-## Evaluations (note)
-
-Structural assertions are the coverage here. Content/quality evaluations are
-**not** wired in this suite because, on the current `monocle_test_tools`, local
-evals do **not** compose with file-loaded traces:
-
-- Declarative `test_spans[].eval` (`comparer:"metric"`) is silently ignored by
-  `validator.validate()` — `_evaluate_span` has no call sites, so an assertion
-  that should fail (e.g. a required keyword that is absent) passes vacuously.
-- The fluent `check_eval()` path is wired for the Okahu eval-service signature
-  (`filtered_spans=`), which the local evaluators (`keyword_presence`, etc.) do
-  not accept — it raises `TypeError`.
-
-So local evals are omitted rather than added as vacuous no-ops. The Okahu eval
-layer (needs `OKAHU_API_KEY`) remains an option for content grading.
+内容质量评测未接入：当前 `monocle_test_tools` 的本地 evaluator 不能与文件 trace 组合，声明式 `eval` 会被静默忽略，fluent `check_eval()` 与本地 evaluator 签名不兼容。
