@@ -23,13 +23,13 @@ hnflow-data/
 ├── .env
 ├── frontend.env
 ├── prompts/lead-agent.md
-├── capability-groups/   # external VibeStack link/clone
-├── tools/               # external VibeStack link/clone
 ├── skills/
 ├── data/deerflow.db
 └── users/{user_id}/threads/{thread_id}/
 ```
 
-Capability groups and tool packages are managed in the external VibeStack repository and are not seeded by `make config`. `hnflow-data/` is ignored by Git. Workflow definitions and model profiles are
+`capability-groups/` and `tools/` are read from the external VibeStack checkout
+configured by `vibestack.repository`; they are not seeded into `hnflow-data/`.
+`hnflow-data/` is ignored by Git. Workflow definitions and model profiles are
 stored transactionally in `hnflow-data/data/deerflow.db`; the JSON/YAML files
 here are examples you can import or copy from.

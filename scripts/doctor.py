@@ -239,28 +239,50 @@ def check_config_exists(config_path: Path) -> CheckResult:
     )
 
 
-def check_external_repositories(data_home: Path) -> list[CheckResult]:
-    """Report the external capability-group/tool repositories without creating them."""
-    results: list[CheckResult] = []
-    for name, pattern in (("capability-groups", "group.json"), ("tools", "tool.json")):
-        path = data_home / name
-        if not path.exists():
-            results.append(
-                CheckResult(
-                    f"{name} repository",
-                    "warn",
-                    f"missing at {path}",
-                    fix=(f"Clone the VibeStack repository or link its sibling directory here:\n  {name} -> D:\\workspace\\work\\VibeStack\\{name}"),
-                )
+def check_external_repositories(config_path: Path) -> list[CheckResult]:
+    """Report the configured VibeStack capability-group/tool checkout."""
+    from types import SimpleNamespace
+
+    import yaml
+
+    from deerflow.capability_groups.vibestack import VibeStackError, default_core, resolve_repository
+    from deerflow.config.vibestack_config import VibeStackConfig
+
+    if not config_path.exists():
+        return [CheckResult("VibeStack repository", "skip", "config.yaml not found")]
+    try:
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        vibestack = VibeStackConfig.model_validate(raw.get("vibestack") or {})
+        repository = resolve_repository(SimpleNamespace(vibestack=vibestack))
+    except (OSError, ValueError, VibeStackError) as exc:
+        return [CheckResult("VibeStack repository", "fail", str(exc))]
+    if repository is None:
+        return [
+            CheckResult(
+                "VibeStack repository",
+                "warn",
+                "not configured",
+                fix="Set vibestack.repository in config.yaml or VIBESTACK_REPO.",
             )
-            continue
+        ]
+    results: list[CheckResult] = []
+    core = default_core(SimpleNamespace(vibestack=vibestack))
+    core_path = repository / "capability-groups" / core.name / core.version / "group.json"
+    results.append(
+        CheckResult(
+            "VibeStack Core",
+            "ok" if core_path.is_file() else "fail",
+            f"{core.name}@{core.version}",
+            fix=None if core_path.is_file() else f"Add {core_path} to the VibeStack checkout.",
+        )
+    )
+    for name, pattern in (("capability-groups", "group.json"), ("tools", "tool.json")):
+        path = repository / name
         if not path.is_dir():
-            results.append(CheckResult(f"{name} repository", "fail", f"not a directory: {path}"))
+            results.append(CheckResult(f"VibeStack {name}", "warn", f"missing at {path}"))
             continue
         count = sum(1 for child in path.rglob(pattern) if child.is_file())
-        link = path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)())
-        detail = f"{count} package(s)" + (f" via link -> {path.resolve()}" if link else "")
-        results.append(CheckResult(f"{name} repository", "ok" if count else "warn", detail))
+        results.append(CheckResult(f"VibeStack {name}", "ok" if count else "warn", f"{count} package(s) at {path}"))
     return results
 
 
@@ -787,7 +809,7 @@ def main() -> int:
     ]
     sections.append(("LLM Provider", llm_checks))
 
-    sections.append(("External repositories", check_external_repositories(data_home)))
+    sections.append(("External repositories", check_external_repositories(config_path)))
 
     # ── Web Capabilities ─────────────────────────────────────────────────────
     search_checks = [

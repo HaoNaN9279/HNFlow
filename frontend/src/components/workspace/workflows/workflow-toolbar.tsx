@@ -83,6 +83,8 @@ export function WorkflowToolbar() {
       void queryClient.invalidateQueries({
         queryKey: ["workflows", workflowId],
       });
+      void queryClient.invalidateQueries({ queryKey: ["capability-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["projects"] });
       toast.success(t.workflows.errors.saveSuccess);
       setErrors([]);
       markSaved();

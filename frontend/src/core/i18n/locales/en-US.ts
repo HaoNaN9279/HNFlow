@@ -197,7 +197,7 @@ export const enUS: Translations = {
     retry: "Retry",
     empty: "No capability groups installed",
     emptyHint:
-      "Add group.json under capability-groups/<name>/<version>/ in the external VibeStack repository or the project .vibestack/capability-groups/.",
+      "Configure vibestack.repository in config.yaml, then add group.json under capability-groups/<name>/<version>/.",
     loadingContents: "Loading contents...",
     loadContentsFailed: "Failed to load capability group contents",
     noFiles: "This capability group has no files to show",
@@ -207,7 +207,15 @@ export const enUS: Translations = {
     revealGroup: "Open capability group folder",
     revealFailed: "Failed to reveal file",
     revealed: "Revealed in file manager",
-    source: { public: "Global", user: "User", project: "Project" },
+    repositoryMissing: "VibeStack repository is not configured",
+    activeSummary: (active: number, total: number) =>
+      `${active} of ${total} groups are active in this project`,
+    core: "Core",
+    active: "Active",
+    inactive: "Inactive",
+    coreOnlyHint:
+      "No group selected: this node uses only the fixed Core group. Selecting an inactive group activates it in the project stack when the workflow is saved.",
+    source: { vibestack: "VibeStack" },
     categories: {
       rules: "Rules",
       agents: "Agents",

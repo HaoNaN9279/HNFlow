@@ -182,7 +182,13 @@ export interface Translations {
     revealGroup: string;
     revealFailed: string;
     revealed: string;
-    source: { public: string; user: string; project: string };
+    repositoryMissing: string;
+    activeSummary: (active: number, total: number) => string;
+    core: string;
+    active: string;
+    inactive: string;
+    coreOnlyHint: string;
+    source: { vibestack: string };
     categories: {
       rules: string;
       agents: string;

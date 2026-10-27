@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from deerflow.capability_groups.discovery import CapabilityGroupError
 from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
+from deerflow.capability_groups.vibestack import VibeStackError, VibeStackGroupRef, default_core
 from deerflow.config.agents_config import load_agent_config
 from deerflow.workflow.capability_group_nodes import CapabilityGroupWiringError, resolve_ai_capability_groups, validate_capability_group_wiring
 from deerflow.workflow.context_compression import estimate_tokens
@@ -139,7 +140,9 @@ def build_prompt_preview(
     node_id: str,
     *,
     user_id: str | None = None,
-    project_roots: tuple = (),
+    repository: Path | None = None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
 ) -> PromptPreview:
     """Assemble the static text prompt for one AI node."""
     node = next((candidate for candidate in definition.nodes if candidate.id == node_id), None)
@@ -156,10 +159,13 @@ def build_prompt_preview(
 
     input_schema = _schema_for_node(definition, node.id, INPUT_SCHEMA_PORT)
     output_schema = _schema_for_node(definition, node.id, OUTPUT_SCHEMA_PORT)
+    fixed_core = core or default_core()
+    if repository is None and capability_groups:
+        raise PromptPreviewError("capability groups require a configured VibeStack repository")
     try:
-        capability_rules = load_capability_rules(capability_groups, user_id=user_id, project_roots=project_roots)
-        capability_skills = load_capability_skills(capability_groups, user_id=user_id, project_roots=project_roots)
-    except (CapabilityContentError, CapabilityGroupError) as exc:
+        capability_rules = load_capability_rules(capability_groups, repository=repository, active=active, core=fixed_core)
+        capability_skills = load_capability_skills(capability_groups, repository=repository, active=active, core=fixed_core)
+    except (CapabilityContentError, VibeStackError) as exc:
         raise PromptPreviewError(str(exc)) from exc
 
     agent_config = load_agent_config(node.agent_name, user_id=user_id) if node.agent_name else None

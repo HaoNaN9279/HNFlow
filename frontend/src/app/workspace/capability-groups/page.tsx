@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   ChevronDownIcon,
@@ -19,7 +19,7 @@ import {
 } from "@/components/workspace/workspace-container";
 import {
   useCapabilityGroup,
-  useCapabilityGroups,
+  useCapabilityGroupCatalog,
   revealCapabilityGroup,
   revealCapabilityGroupFile,
 } from "@/core/capability-groups/hooks";
@@ -74,7 +74,9 @@ function categoryLabel(
 export default function CapabilityGroupsPage() {
   const { t } = useI18n();
   const labels = t.capabilityGroups;
-  const query = useCapabilityGroups();
+  const query = useCapabilityGroupCatalog();
+  const groups = query.data?.groups ?? [];
+  const activeCount = groups.filter((group) => group.active).length;
 
   return (
     <WorkspaceContainer>
@@ -86,6 +88,19 @@ export default function CapabilityGroupsPage() {
             <p className="text-muted-foreground text-sm">
               {labels.description}
             </p>
+            <p className="text-muted-foreground font-mono text-[11px]">
+              {query.data?.repository.path ?? labels.repositoryMissing}
+            </p>
+            {query.data && groups.length > 0 && (
+              <p className="text-muted-foreground text-xs">
+                {labels.activeSummary(activeCount, groups.length)}
+              </p>
+            )}
+            {query.data?.warnings.map((warning) => (
+              <p key={warning} className="text-xs text-amber-600">
+                {warning}
+              </p>
+            ))}
           </header>
 
           {query.isLoading ? (
@@ -107,11 +122,11 @@ export default function CapabilityGroupsPage() {
                 {labels.retry}
               </Button>
             </div>
-          ) : query.data && query.data.length > 0 ? (
+          ) : groups.length > 0 ? (
             <div className="flex flex-col gap-2">
-              {query.data.map((group) => (
+              {groups.map((group) => (
                 <CapabilityGroupRow
-                  key={`${group.source}:${group.guid}`}
+                  key={`${group.guid}@v${group.version}`}
                   group={group}
                 />
               ))}
@@ -132,7 +147,7 @@ function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
   const { t } = useI18n();
   const labels = t.capabilityGroups;
   const [open, setOpen] = usePersistedBoolean(
-    `deerflow.ui.capability-group.open.${group.guid}`,
+    `deerflow.ui.capability-group.open.${group.guid}.${group.version}`,
     false,
   );
   const detail = useCapabilityGroup(group.guid, group.version, open);
@@ -183,6 +198,15 @@ function CapabilityGroupRow({ group }: { group: CapabilityGroupSummary }) {
               </Badge>
               <Badge variant="secondary" className="text-[10px]">
                 {labels.source[group.source]}
+              </Badge>
+              {group.is_core && (
+                <Badge className="text-[10px]">{labels.core}</Badge>
+              )}
+              <Badge
+                variant={group.active ? "default" : "outline"}
+                className="text-[10px]"
+              >
+                {group.active ? labels.active : labels.inactive}
               </Badge>
             </div>
             {group.description && (

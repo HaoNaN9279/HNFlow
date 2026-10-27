@@ -97,14 +97,15 @@ AI 节点提示词不是单一作者手写，而是运行时按**身份 → 能�
 
 ### 能力组（Capability Group）
 
-能力组是 HNFlow 外部的版本化内容仓库，HNFlow 只读取和解析，不拥有内容：
+能力组和工具包都属于外部 VibeStack 仓库，HNFlow 只读取和解析，不拥有内容：
 
-- **全局仓库**：默认路径仍是 `hnflow-data/capability-groups/`，由用户 clone 或符号链接到 VibeStack 等独立仓库；
-- **工具同仓**：工具包位于同一仓库的 `tools/` 目录，默认路径 `hnflow-data/tools/` 同样由用户 clone 或链接；
-- **项目仓库**：项目级能力组默认在 `<project>/.vibestack/capability-groups/`，不放进 `.hnflow/`；
-- **项目声明**：`.hnflow/project.json` 的 `capability_groups.roots` 声明项目根目录，HNFlow 只做路径校验、发现和运行期解析；
-- **版本规则**：`<name>/<version>/group.json`，GUID 跨版本稳定，已发布版本目录不可修改；
-- **作用域**：项目 > 用户 > 全局；项目同名组覆盖全局组，同一作用域同名不同 GUID 直接报错。
+- **仓库地址**：`config.yaml -> vibestack.repository`；未配置时回退 `VIBESTACK_HOME` / `VIBESTACK_REPO` / `~/.config/vibestack/config.json`；
+- **能力组**：`<repo>/capability-groups/<name>/<version>/group.json`，面板列出仓库里的所有版本；
+- **工具包**：`<repo>/tools/<name>/<version>/tool.json`，能力组通过 `tool:<guid>@v<version>` 引用；
+- **项目激活**：`<project>/.vibestack/stack.json`；Core 固定加载，工作台添加/保存工作流时只增量写入所需能力组，不删除无关组；
+- **节点选择**：未选能力组时仅使用 Core；选择未激活组后保存工作流会同步写入项目 stack；
+- **版本规则**：GUID 跨版本稳定，已发布版本目录不可修改；
+- **只读面板**：`/workspace/capability-groups` 只列出仓库内容，不提供编辑/删除。
 
 ### 人工节点（HumanTask）
 
@@ -218,8 +219,6 @@ HNFlow 采用六层架构，核心是**定义层 + 编译层**新增，其余全
 hnflow-data/
 ├── config.yaml / extensions_config.json / .env / frontend.env
 ├── prompts/lead-agent.md
-├── capability-groups/   # 外部 VibeStack 仓库链接或 clone
-├── tools/               # 外部 VibeStack 仓库链接或 clone
 ├── skills/
 ├── data/deerflow.db
 └── users/{user_id}/threads/{thread_id}/...
@@ -233,16 +232,15 @@ make setup         # 或运行交互式向导（推荐）
 make data-migrate  # 旧布局迁移（DRY=1 预览；只复制不删除）
 ```
 
-案例模板在 `config-examples/`：主配置、扩展、Lead Agent 提示词、工作流和模型档案。能力组与工具包不再随 HNFlow 仓库分发；`make config` 不会创建或覆盖 `hnflow-data/capability-groups`、`hnflow-data/tools`。实际配置、能力组、工具、提示词、工作区/工作流实例和 SQLite 数据库都在 `hnflow-data/`，不纳入版本管理。
+案例模板在 `config-examples/`：主配置、扩展、Lead Agent 提示词、工作流和模型档案。能力组与工具包不再随 HNFlow 仓库分发，也不在 `hnflow-data/` 下创建链接。HNFlow 直接读取配置的 VibeStack checkout：
 
-接入 VibeStack（Windows 示例）：
-
-```powershell
-New-Item -ItemType Junction -Path hnflow-data\capability-groups -Target D:\workspace\work\VibeStack\capability-groups
-New-Item -ItemType Junction -Path hnflow-data\tools -Target D:\workspace\work\VibeStack\tools
+```yaml
+vibestack:
+  repository: D:/workspace/work/VibeStack
+  core: core@0.1.0   # 可选；默认取 VibeStack 全局配置或 core@0.1.0
 ```
 
-也可以直接把仓库 clone 到这两个目录。Docker 模式下，符号链接目标必须同时挂载进容器；最简单的方式是让 VibeStack 位于 `hnflow-data/` 内，或额外挂载其真实路径。
+Docker 模式下，请把 VibeStack 仓库额外挂载进容器，并把 `vibestack.repository` 指向容器内路径。
 
 规范根变量是 `HNFLOW_HOME`；`DEER_FLOW_HOME` 继续兼容。SQLite 相对目录按统一根解析，默认 `data`；skills 默认在 `hnflow-data/skills/`。`make doctor` 可随时校验配置并给出修复提示。
 

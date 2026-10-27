@@ -1,10 +1,10 @@
-"""Workflow tool gateway (minimal) — unified descriptors + provider dispatch (N1).
+"""Workflow tool gateway (minimal) 鈥?unified descriptors + provider dispatch (N1).
 
 Every tool an ``ai:llm_agent`` node may call is resolved through this gateway:
 the node's capability groups contribute an allowed-tools union, and the gateway
 maps each tool name to a concrete ``BaseTool`` via per-provider resolution.
 
-Design notes (dev plan §9):
+Design notes (dev plan 搂9):
 
 - The gateway normalizes *descriptors* and *dispatch*, it does **not** hide
   execution heterogeneity: a sandbox command, a local builtin, and a remote MCP
@@ -13,8 +13,8 @@ Design notes (dev plan §9):
 - This is the deliberate *minimal* slice: builtin + sandbox providers only.
   MCP / skill-script / app providers are additive follow-ups (P1) and register
   here without changing the node executor.
-- Resolution is order-stable (sorted tool ids) so the model-visible tool list —
-  and therefore the prompt prefix — is deterministic (cache friendly, §5.9).
+- Resolution is order-stable (sorted tool ids) so the model-visible tool list 鈥?
+  and therefore the prompt prefix 鈥?is deterministic (cache friendly, 搂5.9).
 
 The module is dependency-light: heavy tool/config imports happen inside
 :func:`build_default_tool_gateway`, not at module import time, so the workflow
@@ -25,12 +25,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from langchain.tools import BaseTool
 
-    from deerflow.capability_groups import CapabilityGroupRoot
+    from deerflow.capability_groups.vibestack import VibeStackGroupRef
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ logger = logging.getLogger(__name__)
 PROVIDER_BUILTIN = "builtin"
 PROVIDER_SANDBOX = "sandbox"
 PROVIDER_APP = "app"
-#: MCP tools (N1 §9: MCP is *a provider*, not part of the builtin pool).
+#: MCP tools (N1 搂9: MCP is *a provider*, not part of the builtin pool).
 PROVIDER_MCP = "mcp"
 
 
@@ -71,7 +72,7 @@ class ToolProvider(Protocol):
 
 @dataclass
 class StaticToolProvider:
-    """A provider backed by an in-memory ``name → BaseTool`` mapping."""
+    """A provider backed by an in-memory ``name 鈫?BaseTool`` mapping."""
 
     name: str
     tools: dict[str, BaseTool] = field(default_factory=dict)
@@ -113,10 +114,10 @@ class ToolGateway:
     def resolve(self, tool_id: str, *, provider: str | None = None) -> BaseTool | None:
         """Resolve one tool id to a ``BaseTool``; first provider wins.
 
-        ``provider`` restricts the search to that provider name (the §25
+        ``provider`` restricts the search to that provider name (the 搂25
         ``tool:invoke`` node's disambiguator when the same id exists in more
         than one provider).  An unknown provider name resolves nothing rather
-        than silently falling back — a typo must not pick a different tool.
+        than silently falling back 鈥?a typo must not pick a different tool.
         """
         for candidate in self._providers:
             if provider is not None and candidate.name != provider:
@@ -208,13 +209,13 @@ def _builtin_tools(*, model_name: str | None, app_config: Any) -> dict[str, Base
 
 
 def _mcp_tools() -> dict[str, BaseTool]:
-    """Tools from every enabled MCP server — the MCP provider (N1 §9).
+    """Tools from every enabled MCP server 鈥?the MCP provider (N1 搂9).
 
     Keeps the invariant the ``include_mcp=True`` assembly path established: each
     tool is tagged with its MCP metadata (``tag_mcp_tool``) so deferred-tool
     filtering keeps working for an AI node that resolves an MCP tool through its
     capability groups.  Fail-open (no configured servers, or the MCP extra not
-    installed → no MCP provider tools) exactly like the inline path it replaces.
+    installed 鈫?no MCP provider tools) exactly like the inline path it replaces.
     """
     try:
         from deerflow.config.extensions_config import ExtensionsConfig
@@ -245,9 +246,9 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
     """One tool per *available* registered local application (N5).
 
     Each tool runs one script command against the application's shared session
-    manager (launch/attach → run → collect), returning stdout and artifact
+    manager (launch/attach 鈫?run 鈫?collect), returning stdout and artifact
     paths as JSON.  Unavailable applications (driver cannot construct, command
-    missing) are skipped so the tool list stays truthful — fail-open per app.
+    missing) are skipped so the tool list stays truthful 鈥?fail-open per app.
     N6: when an instance repository is available it is written through
     best-effort (the tool runs outside the workflow node context, so the repo is
     captured at gateway-build time from ``runtime.context``).
@@ -292,7 +293,7 @@ def _app_tools(*, app_config: Any, instance_repo: Any = None, user_id: str | Non
                 # agent can wait and retry instead of seeing an opaque error.
                 return json.dumps({"app": app_name, "status": "resource_unavailable", "error": str(exc)}, ensure_ascii=False)
             except AppHumanPresentError as exc:
-                # N10b (§17): a person is using the application and the configured
+                # N10b (搂17): a person is using the application and the configured
                 # policy refused. Reported as data (like the quota case) so the
                 # agent can tell the user instead of treating it as a crash.
                 return json.dumps(
@@ -432,24 +433,31 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
 def _load_capability_group_closure(
     references: list[str],
     *,
-    user_id: str | None,
-    project_roots: tuple[CapabilityGroupRoot, ...] = (),
+    repository: Path | None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
 ) -> list[Any]:
-    """Load selected groups plus their ``extends`` bases, de-duplicated by GUID."""
-    from deerflow.capability_groups import CapabilityGroupError, load_capability_group_closure
+    """Load Core + selected groups and their ``extends`` bases."""
+    from deerflow.capability_groups.vibestack import VibeStackError, load_group_closure
     from deerflow.tools.registry import ToolResolutionError
 
+    if not references:
+        return []
+    if repository is None:
+        raise ToolResolutionError("capability groups require a configured VibeStack repository")
     try:
-        return load_capability_group_closure(references, user_id=user_id, project_roots=project_roots)
-    except CapabilityGroupError as exc:
+        return load_group_closure(repository, references, active=active, core=core, include_core=False, bases_first=False)
+    except VibeStackError as exc:
         raise ToolResolutionError(f"capability group is not available: {exc}") from exc
 
 
 def resolve_capability_tools(
     capability_groups: list[str],
     *,
+    repository: Path | None = None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
     user_id: str | None = None,
-    project_roots: tuple[CapabilityGroupRoot, ...] = (),
     model_name: str | None = None,
     app_config: Any = None,
     instance_repo: Any = None,
@@ -464,12 +472,9 @@ def resolve_capability_tools(
     package, MCP server/tool, or permission failure raises
     :class:`~deerflow.tools.registry.ToolResolutionError`.
     """
-    if not capability_groups:
-        return []
-
     from deerflow.tools.registry import ToolRegistry
 
-    groups = _load_capability_group_closure(capability_groups, user_id=user_id, project_roots=project_roots)
+    groups = _load_capability_group_closure(capability_groups, repository=repository, active=active, core=core)
     refs: list[str] = []
     permissions: list[str] = []
     overrides: dict[str, tuple[str, ...]] = {}
@@ -483,7 +488,7 @@ def resolve_capability_tools(
         return []
 
     gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
-    registry = ToolRegistry(gateway)
+    registry = ToolRegistry(gateway, package_root=(repository / "tools") if repository is not None else None)
     return registry.resolve(list(dict.fromkeys(refs)), permissions=tuple(permissions), overrides=overrides)
 
 

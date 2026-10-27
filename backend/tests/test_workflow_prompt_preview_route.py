@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -39,6 +40,7 @@ def _client(monkeypatch) -> TestClient:
         return SimpleNamespace(id="default")
 
     monkeypatch.setattr(workflow_routes, "get_optional_user_from_request", _user)
+    monkeypatch.setattr(workflow_routes, "resolve_repository", lambda: Path("repo"))
     app = FastAPI()
     app.include_router(workflow_routes.router)
     return TestClient(app)
@@ -47,11 +49,11 @@ def _client(monkeypatch) -> TestClient:
 def test_prompt_preview_returns_assembled_prompt(monkeypatch) -> None:
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None, project_roots=(): [],
+        lambda groups, **kwargs: [],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None, project_roots=(): [],
+        lambda groups, **kwargs: [],
     )
     response = _client(monkeypatch).post(
         "/api/workflows/wf-preview/prompt-preview",

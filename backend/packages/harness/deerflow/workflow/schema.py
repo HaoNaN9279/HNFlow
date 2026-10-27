@@ -312,42 +312,47 @@ def validate_capability_tool_refs(
     definition: WorkflowDefinition,
     *,
     user_id: str | None = None,
-    project_roots: tuple = (),
+    repository: Any | None = None,
+    active: dict[str, str] | None = None,
+    core: Any | None = None,
 ) -> list[str]:
-    """Validate tool ids declared by installed capability groups.
+    """Validate tool ids declared by the definition's effective groups.
 
-    Custom ``tool:`` refs are checked against the package registry at save time.
-    Provider refs (``mcp:`` / ``builtin:`` / ``sandbox:`` / ``app:``) are
-    validated at run time because availability depends on live config/servers.
-    Unknown capability groups stay fail-open here, matching the existing save
-    contract while the group is being authored.
+    Tool packages are resolved from the VibeStack ``tools/`` root. Provider
+    refs (``mcp:`` / ``builtin:`` / ``sandbox:`` / ``app:``) are validated at
+    run time because availability depends on live configuration.
     """
-    from deerflow.capability_groups import CapabilityGroupError, load_capability_group
+    from deerflow.capability_groups.vibestack import VibeStackError, default_core, load_group_closure
     from deerflow.tools.packages import ToolPackageError, load_tool_package
+    from deerflow.workflow.capability_group_nodes import collect_effective_groups
 
     errors: list[str] = []
-    for node in definition.nodes:
-        for reference in declared_capability_groups(node):
-            try:
-                group = load_capability_group(reference, user_id=user_id, project_roots=project_roots)
-            except CapabilityGroupError:
-                # Unknown groups are an existing fail-open authoring state.
-                continue
-            for tool_ref in group.tools:
-                prefix, _, value = tool_ref.partition(":")
-                if prefix == "tool":
-                    identifier, separator, version = value.rpartition("@v")
-                    if not separator or not identifier or not version:
-                        errors.append(f"node '{node.id}': capability group '{group.name}' has invalid tool reference '{tool_ref}' (expected tool:<guid>@v<version>)")
-                        continue
-                    try:
-                        load_tool_package(identifier, version=version)
-                    except ToolPackageError as exc:
-                        errors.append(f"node '{node.id}': capability group '{group.name}' references unavailable tool package '{tool_ref}': {exc}")
-                elif prefix == "mcp":
-                    server, separator, tool_name = value.partition(":")
-                    if not separator or not server or not tool_name or ":" in tool_name:
-                        errors.append(f"node '{node.id}': capability group '{group.name}' has invalid MCP tool reference '{tool_ref}' (expected mcp:<server>:<tool>)")
-                elif prefix not in {"builtin", "sandbox", "app"} or not value:
-                    errors.append(f"node '{node.id}': capability group '{group.name}' has invalid tool reference '{tool_ref}'")
+    references = collect_effective_groups(definition)
+    if not references:
+        return errors
+    if repository is None:
+        return ["capability groups require a configured VibeStack repository"]
+    try:
+        groups = load_group_closure(repository, references, active=active, core=core or default_core(), include_core=False)
+    except VibeStackError as exc:
+        return [str(exc)]
+    tool_root = repository / "tools"
+    for group in groups:
+        for tool_ref in group.tools:
+            prefix, _, value = tool_ref.partition(":")
+            if prefix == "tool":
+                identifier, separator, version = value.rpartition("@v")
+                if not separator or not identifier or not version:
+                    errors.append(f"capability group '{group.name}' has invalid tool reference '{tool_ref}' (expected tool:<guid>@v<version>)")
+                    continue
+                try:
+                    load_tool_package(identifier, version=version, root=tool_root)
+                except ToolPackageError as exc:
+                    errors.append(f"capability group '{group.name}' references unavailable tool package '{tool_ref}': {exc}")
+            elif prefix == "mcp":
+                server, separator, tool_name = value.partition(":")
+                if not separator or not server or not tool_name or ":" in tool_name:
+                    errors.append(f"capability group '{group.name}' has invalid MCP tool reference '{tool_ref}' (expected mcp:<server>:<tool>)")
+            elif prefix not in {"builtin", "sandbox", "app"} or not value:
+                errors.append(f"capability group '{group.name}' has invalid tool reference '{tool_ref}'")
     return errors

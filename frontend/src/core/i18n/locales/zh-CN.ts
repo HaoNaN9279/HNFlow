@@ -187,7 +187,7 @@ export const zhCN: Translations = {
     retry: "重试",
     empty: "暂无能力组",
     emptyHint:
-      "在外部 VibeStack 仓库的 capability-groups/<name>/<version>/ 或项目 .vibestack/capability-groups/ 下添加 group.json。",
+      "在 config.yaml 配置 vibestack.repository，并在仓库的 capability-groups/<name>/<version>/ 下添加 group.json。",
     loadingContents: "正在加载内容...",
     loadContentsFailed: "加载能力组内容失败",
     noFiles: "该能力组没有可展示的文件",
@@ -197,7 +197,15 @@ export const zhCN: Translations = {
     revealGroup: "打开能力组目录",
     revealFailed: "定位文件失败",
     revealed: "已在资源管理器中定位",
-    source: { public: "全局", user: "用户", project: "项目" },
+    repositoryMissing: "未配置 VibeStack 仓库",
+    activeSummary: (active: number, total: number) =>
+      `当前项目已激活 ${active}/${total} 个能力组`,
+    core: "Core",
+    active: "已激活",
+    inactive: "未激活",
+    coreOnlyHint:
+      "未选择能力组时，该节点仅使用固定的 Core 能力组。选择未激活组后，保存工作流会将所需能力组写入项目 stack。",
+    source: { vibestack: "VibeStack" },
     categories: {
       rules: "Rules",
       agents: "Agents",

@@ -58,6 +58,20 @@ def resolve_ai_capability_groups(definition: WorkflowDefinition, ai_node: Node) 
     return list(dict.fromkeys(groups))
 
 
+def collect_effective_groups(definition: WorkflowDefinition) -> list[str]:
+    """Return the effective group references of every AI node.
+
+    Group selectors feed the AI node's ``capability_groups`` input; an
+    unconnected selector is authoring-only and does not activate a project.
+    """
+    references: list[str] = []
+    for node in definition.nodes:
+        if node.type != NodeType.AI_LLM_AGENT:
+            continue
+        references.extend(resolve_ai_capability_groups(definition, node))
+    return list(dict.fromkeys(reference for reference in references if reference.strip()))
+
+
 def validate_capability_group_wiring(definition: WorkflowDefinition) -> None:
     """Validate selector params and the edges attached to selectors."""
     node_map = {node.id: node for node in definition.nodes}

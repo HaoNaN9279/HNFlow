@@ -43,7 +43,7 @@ def _ai_node(*, agent_name: str | None = None, capability_groups: list[str] | No
     )
 
 
-def _task_node(value: str = "请总结：{{in}}") -> Node:
+def _task_node(value: str = "璇锋€荤粨锛歿{in}}") -> Node:
     return Node(
         id="task",
         type=NodeType.DATA_ASSIGN,
@@ -122,7 +122,7 @@ async def test_missing_template_prompt_raises(fake_executor: dict[str, Any]) -> 
 
 @pytest.mark.asyncio
 async def test_compiled_graph_runs_and_exposes_prompt(fake_executor: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_executor["result"] = _completed("AI 完成")
+    fake_executor["result"] = _completed("AI 瀹屾垚")
     monkeypatch.setattr(
         "deerflow.workflow.executors.ai.load_agent_config",
         lambda name, user_id=None: AgentConfig(name=name, skills=["publish-skill"]),
@@ -134,7 +134,7 @@ async def test_compiled_graph_runs_and_exposes_prompt(fake_executor: dict[str, A
         {"configurable": {"thread_id": "t"}, "context": {"thread_id": "t", "user_id": "u1"}},
     )
 
-    assert state.get("wf:ai_step:out")["content"] == "AI 完成"
+    assert state.get("wf:ai_step:out")["content"] == "AI 瀹屾垚"
     assert "hello" in state.get("wf:ai_step:__prompt", "")
     cfg = fake_executor["kwargs"]["config"]
     assert "publisher" in (cfg.system_prompt or "")

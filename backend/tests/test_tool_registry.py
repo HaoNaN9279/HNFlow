@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.tools import BaseTool, tool
 
-from deerflow.capability_groups import discovery as group_discovery
 from deerflow.tools.mcp_metadata import tag_mcp_origin, tag_mcp_tool
 from deerflow.tools.registry import ToolRegistry, ToolResolutionError
 from deerflow.workflow import tool_gateway as tg
@@ -93,7 +92,7 @@ def _group(root: Path, *, name: str, guid: str, tools: list[str], permissions: l
         "tools": tools,
         **(extra or {}),
     }
-    _write(root / name / "0.1.0" / "group.json", json.dumps(manifest))
+    _write(root / "capability-groups" / name / "0.1.0" / "group.json", json.dumps(manifest))
 
 
 def test_registry_descriptors_include_packages_mcp_and_provider_tools(tmp_path: Path) -> None:
@@ -193,26 +192,23 @@ def test_registry_uses_group_permission_override_for_unknown_mcp_name() -> None:
 def test_resolve_capability_tools_loads_groups_and_extends(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="base", guid="b" * 32, tools=["builtin:beta"])
     _group(tmp_path, name="child", guid="c" * 32, tools=["builtin:alpha"], extends=["base"])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: FakeGateway(builtin={"alpha": alpha, "beta": beta}))
 
-    resolved = tg.resolve_capability_tools(["child"])
+    resolved = tg.resolve_capability_tools(["child"], repository=tmp_path)
 
     assert resolved == [alpha, beta]
 
 
 def test_resolve_capability_tools_fails_on_missing_declared_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="demo", guid="d" * 32, tools=["builtin:missing"])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: FakeGateway())
 
     with pytest.raises(ToolResolutionError, match="builtin tool 'missing' is not available"):
-        tg.resolve_capability_tools(["demo"])
+        tg.resolve_capability_tools(["demo"], repository=tmp_path)
 
 
 def test_resolve_capability_tools_returns_empty_without_refs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _group(tmp_path, name="demo", guid="e" * 32, tools=[])
-    monkeypatch.setattr(group_discovery, "_roots", lambda user_id=None, project_roots=(): [group_discovery._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
     monkeypatch.setattr(tg, "build_default_tool_gateway", lambda **kwargs: pytest.fail("gateway should not be built"))
 
-    assert tg.resolve_capability_tools(["demo"]) == []
+    assert tg.resolve_capability_tools(["demo"], repository=tmp_path) == []

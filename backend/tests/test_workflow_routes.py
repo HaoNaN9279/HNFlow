@@ -475,8 +475,9 @@ class TestCreateWorkflowResolvedGroups:
         call_kwargs = mock_repo.create.call_args[1]
         assert call_kwargs["metadata"] is expected_meta
 
-    def test_create_without_capability_groups_preserves_metadata_and_adds_lockfile(self):
-        """No capability_groups → user keys preserved, no resolved_groups, lockfile attached (C3)."""
+    def test_create_without_capability_groups_preserves_metadata_and_adds_lockfile(self, monkeypatch):
+        """No capability_groups in an unconfigured VibeStack → no resolved_groups, lockfile attached (C3)."""
+        monkeypatch.setattr(workflow_routes, "resolve_repository", lambda: None)
         mock_repo = MagicMock()
         mock_repo.create = AsyncMock(return_value={"id": "wf-abc", "name": "Test"})
         mock_repo.list_by_user = AsyncMock(return_value=[])

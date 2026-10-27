@@ -7,11 +7,23 @@ import {
   revealCapabilityGroupFile,
 } from "./api";
 
-export function useCapabilityGroups(projectId?: string) {
+export function useCapabilityGroupCatalog(projectId?: string) {
   return useQuery({
     queryKey: ["capability-groups", projectId ?? "global"],
     queryFn: () => loadCapabilityGroups(projectId),
   });
+}
+
+/** Array-shaped compatibility hook used by node editors. */
+export function useCapabilityGroups(projectId?: string) {
+  const query = useCapabilityGroupCatalog(projectId);
+  return {
+    ...query,
+    data: query.data?.groups,
+    repository: query.data?.repository,
+    core: query.data?.core,
+    warnings: query.data?.warnings ?? [],
+  };
 }
 
 export function useCapabilityGroup(

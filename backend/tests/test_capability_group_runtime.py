@@ -74,11 +74,11 @@ def test_rules_follow_base_then_derived_and_derived_wins(monkeypatch, tmp_path: 
         ),
     )
     monkeypatch.setattr(
-        "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, project_roots=(), bases_first=False: [base, derived],
+        "deerflow.capability_groups.runtime.load_group_closure",
+        lambda repository, refs, active=None, core=None, include_core=True, bases_first=False: [base, derived],
     )
 
-    rules = load_capability_rules(["derived"])
+    rules = load_capability_rules(["derived"], repository=Path("repo"))
 
     assert [rule.path for rule in rules] == ["rules/a.md", "rules/b.md"]
     assert rules[0].content == "DERIVED A"
@@ -99,11 +99,11 @@ def test_skills_load_only_metadata(monkeypatch, tmp_path: Path) -> None:
         files=(_file("skills/profile/SKILL.md", category="skills"),),
     )
     monkeypatch.setattr(
-        "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, project_roots=(), bases_first=False: [group],
+        "deerflow.capability_groups.runtime.load_group_closure",
+        lambda repository, refs, active=None, core=None, include_core=True, bases_first=False: [group],
     )
 
-    skills = load_capability_skills(["data"])
+    skills = load_capability_skills(["data"], repository=Path("repo"))
 
     assert len(skills) == 1
     assert skills[0].name == "profile"
@@ -131,12 +131,12 @@ def test_duplicate_skill_names_fail_loud(monkeypatch, tmp_path: Path) -> None:
         files=(_file("skills/shared/SKILL.md", category="skills"),),
     )
     monkeypatch.setattr(
-        "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, project_roots=(), bases_first=False: [first, second],
+        "deerflow.capability_groups.runtime.load_group_closure",
+        lambda repository, refs, active=None, core=None, include_core=True, bases_first=False: [first, second],
     )
 
     with pytest.raises(CapabilityContentError, match="duplicate capability skill"):
-        load_capability_skills(["first", "second"])
+        load_capability_skills(["first", "second"], repository=Path("repo"))
 
 
 def test_reader_reads_skill_and_rejects_traversal(monkeypatch, tmp_path: Path) -> None:
@@ -153,10 +153,10 @@ def test_reader_reads_skill_and_rejects_traversal(monkeypatch, tmp_path: Path) -
         files=(_file("skills/profile/SKILL.md", category="skills"),),
     )
     monkeypatch.setattr(
-        "deerflow.capability_groups.runtime.load_capability_group_closure",
-        lambda refs, user_id=None, project_roots=(), bases_first=False: [group],
+        "deerflow.capability_groups.runtime.load_group_closure",
+        lambda repository, refs, active=None, core=None, include_core=True, bases_first=False: [group],
     )
-    skill = load_capability_skills(["data"])[0]
+    skill = load_capability_skills(["data"], repository=Path("repo"))[0]
     tool = build_read_capability_skill_tool([skill])
 
     assert "FULL BODY" in tool.invoke({"name": "profile"})

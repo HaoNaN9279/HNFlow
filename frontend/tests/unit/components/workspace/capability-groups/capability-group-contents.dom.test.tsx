@@ -68,7 +68,7 @@ const group: CapabilityGroupDetail = {
   name: "demo",
   version: "0.1.0",
   description: "Demo group",
-  source: "public",
+  source: "vibestack",
   permissions: [],
   extends: [],
   tools: ["builtin:read_file", "mcp:github:search"],

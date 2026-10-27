@@ -15,9 +15,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
+from deerflow.capability_groups.vibestack import VibeStackError, VibeStackGroupRef, default_core, resolve_repository
 from deerflow.runtime.context_keys import (
     APP_INSTANCE_REPO_CONTEXT_KEY,
     APP_RUNTIME_CONTEXT_KEY,
@@ -140,26 +140,38 @@ def build_workflow_runtime_context(
         workbench = run_metadata.get("workbench")
         if isinstance(workbench, dict):
             context["workbench"] = workbench
-        raw_roots = run_metadata.get("capability_group_roots")
-        if isinstance(raw_roots, list):
-            from deerflow.capability_groups import CapabilityGroupRoot
-
-            roots = []
-            for item in raw_roots:
-                if not isinstance(item, dict) or not item.get("path"):
-                    continue
-                roots.append(
-                    CapabilityGroupRoot(
-                        path=Path(str(item["path"])),
-                        source=str(item.get("source") or "project"),
-                        project_id=item.get("project_id"),
-                        root_id=item.get("root_id"),
-                    )
-                )
-            context["capability_group_roots"] = tuple(roots)
+        repository_value = run_metadata.get("vibestack_repository")
+        if isinstance(repository_value, str) and repository_value:
+            context["vibestack_repository"] = repository_value
+        raw_stack = run_metadata.get("project_stack")
+        if isinstance(raw_stack, dict):
+            context["project_stack"] = raw_stack
         raw_snapshot = run_metadata.get("capability_group_snapshot")
         if isinstance(raw_snapshot, list):
             context["capability_group_snapshot"] = tuple(item for item in raw_snapshot if isinstance(item, dict))
+
+    if "vibestack_repository" not in context:
+        try:
+            repository = resolve_repository(app_config)
+        except VibeStackError:
+            repository = None
+        context["vibestack_repository"] = str(repository) if repository is not None else None
+
+    fixed_core = default_core(app_config)
+    active: dict[str, str] = {fixed_core.name: fixed_core.version}
+    raw_stack = context.get("project_stack")
+    if isinstance(raw_stack, dict):
+        core_data = raw_stack.get("core")
+        if isinstance(core_data, dict) and core_data.get("name"):
+            fixed_core = VibeStackGroupRef(name=str(core_data["name"]), version=str(core_data.get("version", "")))
+            active[fixed_core.name] = fixed_core.version
+        groups = raw_stack.get("groups")
+        if isinstance(groups, list):
+            for item in groups:
+                if isinstance(item, dict) and item.get("name"):
+                    active[str(item["name"])] = str(item.get("version", ""))
+    context["capability_group_core"] = fixed_core
+    context["capability_group_active"] = active
     if workflow_undo_repo is not None:
         from deerflow.workflow.compensation import UNDO_REPO_CONTEXT_KEY
 

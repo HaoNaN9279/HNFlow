@@ -141,22 +141,33 @@ def test_group_parses_tool_references_and_permission_overrides(tmp_path: Path, m
     assert group.summary_dict()["tools"] == ["builtin:read_file", "mcp:github:search"]
 
 
-def test_validate_capability_tool_refs_checks_custom_packages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_validate_capability_tool_refs_checks_custom_packages(tmp_path: Path) -> None:
     from deerflow.workflow.schema import Node, NodeType, WorkflowDefinition, validate_capability_tool_refs
 
-    group_dir = _make_group(tmp_path)
-    manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
-    manifest["tools"] = ["tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@v0.1.0", "builtin:read_file"]
-    (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
+    repo = tmp_path / "repo"
+    group_dir = repo / "capability-groups" / "demo" / "0.1.0"
+    group_dir.mkdir(parents=True)
+    (group_dir / "group.json").write_text(
+        json.dumps(
+            {
+                "guid": "b" * 32,
+                "name": "demo",
+                "version": "0.1.0",
+                "description": "demo",
+                "permissions": ["fs"],
+                "tools": ["tool:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@v0.1.0", "builtin:read_file"],
+            }
+        ),
+        encoding="utf-8",
+    )
     definition = WorkflowDefinition(
         id="wf",
         name="wf",
-        nodes=[Node(id="n", type=NodeType.DATA_ASSIGN, capability_groups=["demo"])],
+        nodes=[Node(id="n", type=NodeType.AI_LLM_AGENT, capability_groups=["demo"])],
         edges=[],
     )
 
-    errors = validate_capability_tool_refs(definition)
+    errors = validate_capability_tool_refs(definition, repository=repo)
 
     assert len(errors) == 1
     assert "unavailable tool package" in errors[0]

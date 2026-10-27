@@ -53,6 +53,8 @@ class ToolPackage:
     tool: str | None = None
     app: str | None = None
     model_name: str | None = None
+    run: dict[str, Any] | None = None
+    mcp: dict[str, Any] | None = None
 
     @property
     def ref(self) -> str:
@@ -61,7 +63,15 @@ class ToolPackage:
 
 
 def _root() -> Path:
-    """User-editable tool-package root (``{HNFLOW_HOME}/tools``)."""
+    """Tool-package root: the configured VibeStack ``tools/`` checkout."""
+    from deerflow.capability_groups.vibestack import VibeStackError, resolve_repository
+
+    try:
+        repository = resolve_repository()
+    except VibeStackError:
+        repository = None
+    if repository is not None:
+        return repository / "tools"
     return get_paths().tool_packages_dir
 
 
@@ -135,16 +145,18 @@ def _parse_package(manifest_path: Path, *, name_hint: str, version_hint: str) ->
     tool = raw.get("tool")
     app = raw.get("app")
     model_name = raw.get("tool_name") or name
+    run = raw.get("run") if isinstance(raw.get("run"), dict) else None
+    mcp = raw.get("mcp") if isinstance(raw.get("mcp"), dict) else None
     for field_name, value in (("entrypoint", entrypoint), ("server", server), ("tool", tool), ("app", app), ("tool_name", model_name)):
         if value is not None and (not isinstance(value, str) or not value.strip()):
             raise ToolPackageError(f"{manifest_path}: {field_name} must be a non-empty string when present")
 
     if provider == "python":
-        if not entrypoint:
-            raise ToolPackageError(f"{manifest_path}: python tools require entrypoint")
+        if not entrypoint and not run:
+            raise ToolPackageError(f"{manifest_path}: python tools require entrypoint or run")
     elif provider == "mcp":
-        if not server or not tool:
-            raise ToolPackageError(f"{manifest_path}: mcp tools require server and tool")
+        if not mcp and (not server or not tool):
+            raise ToolPackageError(f"{manifest_path}: mcp tools require an mcp block or server + tool")
     elif provider in {"builtin", "sandbox"}:
         if not tool:
             raise ToolPackageError(f"{manifest_path}: {provider} tools require tool")
@@ -166,6 +178,8 @@ def _parse_package(manifest_path: Path, *, name_hint: str, version_hint: str) ->
         tool=tool,
         app=app,
         model_name=model_name,
+        run=run,
+        mcp=mcp,
     )
 
 

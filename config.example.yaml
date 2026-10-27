@@ -14,7 +14,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 40
+config_version: 41
 
 # ============================================================================
 # Logging
@@ -1029,6 +1029,17 @@ tool_search:
   # matching deferred MCP tool schemas before a model call. This is the maximum
   # number of matched schemas promoted per model call. Valid range: 1..5.
   auto_promote_top_k: 3
+
+# ============================================================================
+# VibeStack
+# ============================================================================
+# External capability-group and tool-package repository. HNFlow reads
+# capability-groups/<name>/<version>/ and tools/<name>/<version>/ from this
+# checkout and never seeds or owns their content. When unset, HNFlow also
+# checks VIBESTACK_HOME / VIBESTACK_REPO and ~/.config/vibestack/config.json.
+vibestack:
+  repository: null # e.g. D:/workspace/work/VibeStack
+  core: null # optional fixed Core reference, e.g. core@0.1.0
 
 # ============================================================================
 # Tool Output Budget Protection

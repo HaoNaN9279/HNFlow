@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from deerflow.workflow.prompt_preview import build_prompt_preview
@@ -74,11 +75,11 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None, project_roots=(): [],
+        lambda groups, **kwargs: [],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None, project_roots=(): [],
+        lambda groups, **kwargs: [],
     )
     definition = _definition(
         selector=True,
@@ -88,7 +89,7 @@ def test_components_follow_prompt_order(monkeypatch) -> None:
         ],
     )
 
-    preview = build_prompt_preview(definition, "ai")
+    preview = build_prompt_preview(definition, "ai", repository=Path("repo"))
 
     assert [component.key for component in preview.components] == [
         "identity",
@@ -217,17 +218,17 @@ def test_rules_and_skill_descriptions_have_their_own_sources(monkeypatch) -> Non
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_rules",
-        lambda groups, user_id=None, project_roots=(): [rule],
+        lambda groups, **kwargs: [rule],
     )
     monkeypatch.setattr(
         "deerflow.workflow.prompt_preview.load_capability_skills",
-        lambda groups, user_id=None, project_roots=(): [skill],
+        lambda groups, **kwargs: [skill],
     )
     definition = _definition(
         selector=True,
     )
 
-    preview = build_prompt_preview(definition, "ai")
+    preview = build_prompt_preview(definition, "ai", repository=Path("repo"))
 
     rule_component = _by_key(
         preview,

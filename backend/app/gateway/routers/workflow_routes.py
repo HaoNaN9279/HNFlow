@@ -10,14 +10,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
 
-from app.gateway.deps import get_optional_user_from_request, get_workflow_definition_repo, get_workflow_folder_repo
+from app.gateway.deps import get_optional_user_from_request, get_project_service, get_workflow_definition_repo, get_workflow_folder_repo
 from app.gateway.permissions import require_permission
-from app.gateway.project_context import project_capability_group_roots
+from app.gateway.project_context import project_capability_scope
+from deerflow.capability_groups.vibestack import VibeStackGroupRef, default_core, resolve_repository
 from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.definition_evals import DefinitionEvalError, definition_has_evals, eval_gate_errors, evaluate_definition_evals, parse_definition_evals
 from deerflow.workflow.dependency_graph import find_dependency_cycles
@@ -97,7 +99,9 @@ async def _validate_semantics(
     definition: WorkflowDefinition,
     user: Any,
     *,
-    project_roots: tuple = (),
+    repository: Path | None = None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
 ) -> None:
     """Dry-run compile so semantic errors fail the save, not a later run.
 
@@ -108,7 +112,7 @@ async def _validate_semantics(
     from app.gateway.services import _build_workflow_template_resolver
     from deerflow.workflow.schema import validate_capability_tool_refs
 
-    tool_errors = validate_capability_tool_refs(definition, user_id=str(user.id), project_roots=project_roots)
+    tool_errors = validate_capability_tool_refs(definition, user_id=str(user.id), repository=repository, active=active, core=core)
     if tool_errors:
         raise HTTPException(status_code=422, detail={"errors": tool_errors})
 
@@ -151,7 +155,9 @@ def _resolve_workflow_metadata(
     metadata: dict[str, Any],
     *,
     user_id: str | None = None,
-    project_roots: tuple = (),
+    repository: Path | None = None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
 ) -> dict[str, Any]:
     """Populate ``metadata["resolved_groups"]`` and freeze the lockfile snapshot.
 
@@ -168,7 +174,34 @@ def _resolve_workflow_metadata(
     # The harness owns capability resolution + lockfile construction; the
     # Gateway only supplies caller metadata.  Keeping one implementation stops
     # the two save paths (HTTP vs. chat tool) from drifting.
-    return resolve_metadata(definition, metadata, user_id=user_id, project_roots=project_roots)
+    return resolve_metadata(definition, metadata, user_id=user_id, repository=repository, active=active, core=core)
+
+
+async def _capability_scope(request: Request, project_id: str | None, user_id: str) -> tuple[Path | None, dict[str, str], VibeStackGroupRef]:
+    if project_id:
+        scope = await project_capability_scope(request, project_id, user_id=user_id)
+    else:
+        repository = resolve_repository()
+        core = default_core()
+        scope = {
+            "repository": str(repository) if repository is not None else None,
+            "active": {core.name: core.version},
+            "core": core.to_dict(),
+        }
+    repository_value = scope.get("repository")
+    repository = Path(repository_value) if isinstance(repository_value, str) and repository_value else None
+    core_data = scope.get("core") if isinstance(scope.get("core"), dict) else {}
+    core = VibeStackGroupRef(name=str(core_data.get("name") or "core"), version=str(core_data.get("version") or "0.1.0"))
+    return repository, dict(scope.get("active") or {}), core
+
+
+async def _activate_definition_for_project(request: Request, project_id: str | None, definition: WorkflowDefinition, user_id: str) -> dict[str, Any] | None:
+    if not project_id:
+        return None
+    try:
+        return await get_project_service(request).activate_workflow_groups(project_id, definition, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001 - project errors carry the actionable message
+        raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
 
 
 async def _check_workflow_dependency_cycles(
@@ -267,8 +300,9 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
     await _validate_folder(request, body.folder_id, user)
-    project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
-    await _validate_semantics(request, model, user, project_roots=tuple(project_roots))
+    await _activate_definition_for_project(request, body.project_id, model, str(user.id))
+    repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
+    await _validate_semantics(request, model, user, repository=repository, active=active, core=core)
 
     # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
     await _run_embedded_eval_gate(model)
@@ -278,7 +312,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
     cycle_errors = await _check_workflow_dependency_cycles(request, repo, str(user.id), target_id, model)
     if cycle_errors:
         raise HTTPException(status_code=422, detail={"errors": [f"依赖环: {e}" for e in cycle_errors]})
-    metadata = _resolve_workflow_metadata(model, body.metadata, user_id=str(user.id), project_roots=tuple(project_roots))
+    metadata = _resolve_workflow_metadata(model, body.metadata, user_id=str(user.id), repository=repository, active=active, core=core)
     result = await repo.create(
         definition_id=target_id,
         user_id=str(user.id),
@@ -386,14 +420,16 @@ async def preview_workflow_prompt(definition_id: str, request: Request, body: Wo
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
-    project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
+    repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
     try:
         preview = await asyncio.to_thread(
             build_prompt_preview,
             model,
             body.node_id,
             user_id=str(user.id),
-            project_roots=tuple(project_roots),
+            repository=repository,
+            active=active,
+            core=core,
         )
     except PromptPreviewError as exc:
         raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
@@ -429,8 +465,9 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         errors = validate_definition(model)
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
-        project_roots = await project_capability_group_roots(request, body.project_id, user_id=str(user.id))
-        await _validate_semantics(request, model, user, project_roots=tuple(project_roots))
+        await _activate_definition_for_project(request, body.project_id, model, str(user.id))
+        repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
+        await _validate_semantics(request, model, user, repository=repository, active=active, core=core)
 
         # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
         await _run_embedded_eval_gate(model)
@@ -450,7 +487,9 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
             model,
             base_meta,
             user_id=str(user.id),
-            project_roots=tuple(project_roots),
+            repository=repository,
+            active=active,
+            core=core,
         )
 
     if body.name is not None:

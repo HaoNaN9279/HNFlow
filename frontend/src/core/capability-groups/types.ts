@@ -1,6 +1,17 @@
-export type CapabilityGroupSource = "public" | "user" | "project";
+export type CapabilityGroupSource = "vibestack";
 
 export type CapabilityGroupCounts = Record<string, number>;
+
+export interface CapabilityGroupRepository {
+  path: string | null;
+  configured: boolean;
+  exists: boolean;
+}
+
+export interface CapabilityGroupCore {
+  name: string;
+  version: string;
+}
 
 export interface CapabilityGroupSummary {
   guid: string;
@@ -8,13 +19,20 @@ export interface CapabilityGroupSummary {
   version: string;
   description: string;
   source: CapabilityGroupSource;
-  project_id?: string | null;
-  root_id?: string | null;
   permissions: string[];
   extends: string[];
   tools?: string[];
   tool_permissions?: Record<string, string[]>;
   counts: CapabilityGroupCounts;
+  is_core?: boolean;
+  active?: boolean;
+}
+
+export interface CapabilityGroupCatalog {
+  repository: CapabilityGroupRepository;
+  core: CapabilityGroupCore;
+  groups: CapabilityGroupSummary[];
+  warnings: string[];
 }
 
 export interface CapabilityGroupFile {

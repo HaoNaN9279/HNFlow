@@ -64,6 +64,8 @@ export function useCreateWorkbench(projectId: string) {
       void queryClient.invalidateQueries({
         queryKey: ["projects", projectId, "workbenches"],
       });
+      void queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
+      void queryClient.invalidateQueries({ queryKey: ["capability-groups"] });
       toast.success(t.workbenches.created);
     },
     onError: (error: Error) => {
@@ -126,6 +128,8 @@ export function useAddWorkbenchMember(projectId: string, workbenchId: string) {
       void queryClient.invalidateQueries({
         queryKey: ["projects", projectId, "workbenches"],
       });
+      void queryClient.invalidateQueries({ queryKey: ["capability-groups"] });
+      void queryClient.invalidateQueries({ queryKey: ["projects", projectId] });
       toast.success(t.workbenches.memberAdded);
     },
     onError: (error: Error) => {

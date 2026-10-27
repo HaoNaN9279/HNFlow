@@ -67,7 +67,7 @@ type WorkflowNodeFormProps = {
  *
  * Commits are local-draft + commit-on-blur/select; `onChange` fires with a new
  * immutable `WorkflowNode` produced by `applyNodeFormValues`. Saving stays the
- * toolbar's job — this form never calls the API directly.
+ * toolbar's job 鈥?this form never calls the API directly.
  */
 export function WorkflowNodeForm({
   node,
@@ -252,7 +252,7 @@ function AiAgentForm({
           }
         })
         .catch(() => {
-          // Backend unavailable —skip the existence hint.
+          // Backend unavailable 鈥攕kip the existence hint.
         });
     }
   };
@@ -406,6 +406,7 @@ function CapabilityGroupSelectorForm({
 }: WorkflowNodeFormProps) {
   const { t } = useI18n();
   const labels = t.workflows.properties;
+  const groupLabels = t.capabilityGroups;
   const workflow = node.data.workflow;
   const [values, setValues] = useState<NodeFormValues>(() =>
     parseNodeFormValues(workflow),
@@ -413,6 +414,7 @@ function CapabilityGroupSelectorForm({
   const searchParams = useSearchParams();
   const projectId = searchParams?.get("project") ?? undefined;
   const groupsQuery = useCapabilityGroups(projectId);
+  const groups = groupsQuery.data ?? [];
 
   useEffect(() => {
     setValues(parseNodeFormValues(node.data.workflow));
@@ -420,10 +422,23 @@ function CapabilityGroupSelectorForm({
   }, [node.id]);
 
   const selected = new Set(values.groups ?? []);
-  const toggle = (guid: string) => {
-    const nextGroups = selected.has(guid)
-      ? (values.groups ?? []).filter((item) => item !== guid)
-      : [...(values.groups ?? []), guid];
+  const latestByName = new Map<string, string>();
+  for (const group of groups) {
+    const current = latestByName.get(group.name);
+    if (
+      !current ||
+      group.version.localeCompare(current, undefined, { numeric: true }) > 0
+    ) {
+      latestByName.set(group.name, group.version);
+    }
+  }
+  const toggle = (reference: string, legacyGuid: string) => {
+    const isSelected = selected.has(reference) || selected.has(legacyGuid);
+    const nextGroups = isSelected
+      ? (values.groups ?? []).filter(
+          (item) => item !== reference && item !== legacyGuid,
+        )
+      : [...(values.groups ?? []), reference];
     const next = { ...values, groups: nextGroups };
     setValues(next);
     onChange(applyNodeFormValues(node.data.workflow, next));
@@ -441,44 +456,64 @@ function CapabilityGroupSelectorForm({
         <div className="text-destructive text-xs">
           {groupsQuery.error.message}
         </div>
-      ) : groupsQuery.data.length === 0 ? (
+      ) : groups.length === 0 ? (
         <div className="text-muted-foreground text-xs">
-          {labels.capabilityGroup.noGroups}
+          {groupsQuery.repository?.configured === false
+            ? groupLabels.repositoryMissing
+            : labels.capabilityGroup.noGroups}
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {groupsQuery.data.map((group) => (
-            <label
-              key={group.guid}
-              className="flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 text-xs"
-            >
-              <input
-                type="checkbox"
-                className="mt-0.5"
-                checked={selected.has(group.guid)}
-                disabled={readonly}
-                onChange={() => toggle(group.guid)}
-                aria-label={`${group.name} ${group.version}`}
-              />
-              <span className="min-w-0">
-                <span className="font-medium">{group.name}</span>
-                <span className="text-muted-foreground ml-1 font-mono">
-                  v{group.version}
-                </span>
-                {group.description && (
-                  <span className="text-muted-foreground block truncate">
-                    {group.description}
+          {groups.map((group) => {
+            const reference = `${group.guid}@v${group.version}`;
+            const legacySelected =
+              selected.has(group.guid) &&
+              (group.active === true ||
+                latestByName.get(group.name) === group.version);
+            const isSelected = selected.has(reference) || legacySelected;
+            const isCore = group.is_core === true;
+            return (
+              <label
+                key={reference}
+                className="flex cursor-pointer items-start gap-2 rounded border px-2 py-1.5 text-xs"
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5"
+                  checked={isCore || isSelected}
+                  disabled={readonly || isCore}
+                  onChange={() => toggle(reference, group.guid)}
+                  aria-label={`${group.name} ${group.version}`}
+                />
+                <span className="min-w-0">
+                  <span className="font-medium">{group.name}</span>
+                  <span className="text-muted-foreground ml-1 font-mono">
+                    v{group.version}
                   </span>
-                )}
-              </span>
-            </label>
-          ))}
+                  <span className="ml-1 text-[10px]">
+                    {isCore
+                      ? groupLabels.core
+                      : group.active
+                        ? groupLabels.active
+                        : groupLabels.inactive}
+                  </span>
+                  {group.description && (
+                    <span className="text-muted-foreground block truncate">
+                      {group.description}
+                    </span>
+                  )}
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
+      <p className="text-muted-foreground text-[11px]">
+        {groupLabels.coreOnlyHint}
+      </p>
     </div>
   );
 }
-
 function PromptPreviewForm({
   node,
   readonly,

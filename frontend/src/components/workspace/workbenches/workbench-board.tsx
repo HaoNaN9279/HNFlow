@@ -45,7 +45,7 @@ const STATUS_CLASSES: Record<string, string> = {
 };
 
 function formatElapsed(seconds: number | null): string {
-  if (seconds == null || !Number.isFinite(seconds)) return "—";
+  if (seconds == null || !Number.isFinite(seconds)) return "--";
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
@@ -217,7 +217,7 @@ export function WorkbenchBoard({
                           {t.workbenches.elapsed}:{" "}
                           {formatElapsed(latest.elapsed_seconds)}
                           {latest.current_node
-                            ? ` · ${t.runMonitor.currentNode}: ${latest.current_node}`
+                            ? ` 璺?${t.runMonitor.currentNode}: ${latest.current_node}`
                             : ""}
                         </span>
                         {latest.completed_nodes != null &&

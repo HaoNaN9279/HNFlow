@@ -59,7 +59,7 @@ def test_unknown_permission_is_rejected(tmp_path: Path) -> None:
 def test_missing_provider_fields_are_rejected(tmp_path: Path) -> None:
     _package(tmp_path, provider="mcp")
 
-    with pytest.raises(ToolPackageError, match="mcp tools require server and tool"):
+    with pytest.raises(ToolPackageError, match=r"mcp tools require an mcp block or server \+ tool"):
         load_tool_package("demo", root=tmp_path)
 
 

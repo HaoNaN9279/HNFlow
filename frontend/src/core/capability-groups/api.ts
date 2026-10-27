@@ -1,7 +1,7 @@
 import { fetch } from "@/core/api/fetcher";
 import { getBackendBaseURL } from "@/core/config";
 
-import type { CapabilityGroupDetail, CapabilityGroupSummary } from "./types";
+import type { CapabilityGroupCatalog, CapabilityGroupDetail } from "./types";
 
 function url(path: string, projectId?: string): string {
   const query = projectId ? `?project_id=${encodeURIComponent(projectId)}` : "";
@@ -23,13 +23,12 @@ async function readError(response: Response): Promise<string> {
 
 export async function loadCapabilityGroups(
   projectId?: string,
-): Promise<CapabilityGroupSummary[]> {
+): Promise<CapabilityGroupCatalog> {
   const response = await fetch(url("", projectId));
   if (!response.ok) {
     throw new Error(await readError(response));
   }
-  const data = (await response.json()) as { groups: CapabilityGroupSummary[] };
-  return data.groups;
+  return (await response.json()) as CapabilityGroupCatalog;
 }
 
 export async function loadCapabilityGroup(

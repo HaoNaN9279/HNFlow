@@ -112,6 +112,8 @@ class ToolRegistry:
         from langchain_core.tools import BaseTool
 
         entrypoint = package.entrypoint or ""
+        if package.run is not None and (not entrypoint or not (package.root / entrypoint.partition(":")[0]).is_file()):
+            return self._build_cli_tool(package)
         relative, separator, attribute = entrypoint.partition(":")
         if not separator or not relative or not attribute:
             raise ToolResolutionError(f"tool package {package.ref}: entrypoint must be '<file>:<attribute>'")
@@ -146,6 +148,45 @@ class ToolRegistry:
         else:
             raise ToolResolutionError(f"tool package {package.ref}: {entrypoint!r} is not a BaseTool or factory")
         return tool
+
+    def _build_cli_tool(self, package: ToolPackage) -> BaseTool:
+        """Expose a VibeStack CLI package as an argv-based tool."""
+        import asyncio
+        import shutil
+
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel, Field
+
+        class CliInput(BaseModel):
+            args: list[str] = Field(default_factory=list, description="Arguments forwarded to the VibeStack tool CLI.")
+
+        async def _run(args: list[str] | None = None) -> str:
+            executable = shutil.which("vibe-stack")
+            if executable is None:
+                raise ToolResolutionError(f"tool package {package.ref}: 'vibe-stack' is not installed")
+            process = await asyncio.create_subprocess_exec(
+                executable,
+                "tool",
+                "run",
+                package.ref,
+                "--",
+                *list(args or []),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await process.communicate()
+            text = stdout.decode("utf-8", errors="replace")
+            error = stderr.decode("utf-8", errors="replace")
+            if process.returncode != 0:
+                raise ToolResolutionError(f"tool package {package.ref} failed ({process.returncode}): {error.strip() or text.strip()}")
+            return text
+
+        return StructuredTool.from_function(
+            coroutine=_run,
+            name=package.model_name or package.name,
+            description=package.description or f"Run VibeStack tool {package.name}.",
+            args_schema=CliInput,
+        )
 
     def _package_tool(self, package: ToolPackage) -> BaseTool:
         if package.provider == "python":

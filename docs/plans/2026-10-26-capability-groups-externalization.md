@@ -1,7 +1,7 @@
 # 能力组与工具包外置化
 
 日期：2026-10-26
-状态：已实现
+状态：已被 `2026-10-27-vibestack-workbench-activation.md` 取代（项目 roots 方案废弃）
 
 ## 目标
 

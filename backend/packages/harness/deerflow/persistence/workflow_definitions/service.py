@@ -4,12 +4,12 @@
 through ``WorkflowDefinitionRepository`` using the configured persistence
 engine. It is used by harness-layer workflow tooling (T17); it deliberately
 mirrors the Gateway route logic (``app/gateway/routers/workflow_routes.py``)
-without importing any ``app.*`` module, keeping the harness → app dependency
+without importing any ``app.*`` module, keeping the harness 鈫?app dependency
 boundary intact (enforced by ``test_harness_boundary.py``).
 
 Behavior contract:
 
-- The definition MUST pass ``validate_definition`` before anything is saved —
+- The definition MUST pass ``validate_definition`` before anything is saved 鈥?
   an invalid definition raises ``WorkflowDefinitionSaveError`` carrying the
   validation error list (the "agent can only call registered capabilities"
   enforcement boundary, duplicated at the harness layer).
@@ -26,13 +26,16 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
-from deerflow.capability_groups import CapabilityGroupRoot, capability_group_content_hash, discover_capability_groups
+from deerflow.capability_groups import capability_group_content_hash
+from deerflow.capability_groups.vibestack import VibeStackError, VibeStackGroupRef, default_core, load_group_closure, resolve_repository
 from deerflow.config.app_config import get_app_config
 from deerflow.persistence.engine import get_session_factory, init_engine_from_config
 from deerflow.persistence.workflow_definitions import WorkflowDefinitionRepository
-from deerflow.workflow.schema import WorkflowDefinition, collect_resolved_groups, declared_capability_groups
+from deerflow.workflow.capability_group_nodes import collect_effective_groups
+from deerflow.workflow.schema import WorkflowDefinition
 from deerflow.workflow.spec import collect_spec_refs
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, validate_definition
 
@@ -48,47 +51,41 @@ def _resolve_workflow_metadata(
     metadata: dict[str, Any],
     *,
     user_id: str | None = None,
-    project_roots: tuple[CapabilityGroupRoot, ...] = (),
+    repository: Path | None = None,
+    active: dict[str, str] | None = None,
+    core: VibeStackGroupRef | None = None,
 ) -> dict[str, Any]:
-    """Populate ``metadata["resolved_groups"]`` from the definition's capability groups.
+    """Populate the capability snapshot from VibeStack-selected groups.
 
-    Only when any node declares ``capability_groups``; otherwise ``resolved_groups``
-    is left untouched.  Fail-open: a capability-group discovery failure leaves
-    metadata unchanged rather than rejecting the save.
-
-    Mirrors ``app.gateway.routers.workflow_routes._resolve_workflow_metadata`` —
-    logic duplicated here so the harness layer never imports ``app.*``.
+    Fail-open: a missing repository or unreadable group leaves the lockfile with
+    the best available information instead of rejecting a save. Runtime
+    activation itself is fail-loud in the project service.
     """
     result = dict(metadata)
-    if not any(declared_capability_groups(node) for node in definition.nodes):
-        result["lockfile"] = build_lockfile(definition, result)
-        return result
-
+    if repository is None and active is None:
+        try:
+            repository = resolve_repository()
+        except VibeStackError:
+            repository = None
+    fixed_core = core or default_core()
     try:
-        groups = discover_capability_groups(user_id=user_id, project_roots=project_roots)
-        by_reference = {group.name: group for group in groups}
-        by_reference.update({group.guid: group for group in groups})
-        resolved = collect_resolved_groups(definition, by_reference)
-        result["resolved_groups"] = resolved if resolved else None
-        by_snapshot = {f"{group.guid}@v{group.version}": group for group in groups}
-        snapshot = []
-        for reference in resolved or []:
-            group = by_snapshot.get(reference)
-            if group is None:
-                continue
-            snapshot.append(
-                {
-                    "guid": group.guid,
-                    "name": group.name,
-                    "version": group.version,
-                    "source": group.source,
-                    "project_id": group.project_id,
-                    "root_id": group.root_id,
-                    "content_hash": capability_group_content_hash(group),
-                }
-            )
-        result["capability_group_snapshot"] = snapshot
-        result["capability_group_roots"] = [root.to_dict() for root in project_roots]
+        references = collect_effective_groups(definition)
+        groups = load_group_closure(repository, references, active=active, core=fixed_core) if repository is not None else []
+        resolved = [f"{group.guid}@v{group.version}" for group in groups]
+        if resolved:
+            result["resolved_groups"] = resolved
+        result["capability_group_snapshot"] = [
+            {
+                "guid": group.guid,
+                "name": group.name,
+                "version": group.version,
+                "source": group.source,
+                "content_hash": capability_group_content_hash(group),
+            }
+            for group in groups
+        ]
+        if repository is not None:
+            result["vibestack_repository"] = str(repository)
     except Exception as e:  # noqa: BLE001 - fail-open by design
         logger.warning("Failed to resolve workflow capability groups: %s", e)
 
@@ -97,7 +94,7 @@ def _resolve_workflow_metadata(
 
 
 def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, Any]) -> dict[str, Any]:
-    """Freeze a reproducibility snapshot (§5.6) from the definition + resolved groups.
+    """Freeze a reproducibility snapshot (搂5.6) from the definition + resolved groups.
 
     Captures the capability-group snapshot plus the default model identity so a
     run can be reasoned about after the fact.  Model fields are read from the
@@ -110,7 +107,8 @@ def build_lockfile(definition: WorkflowDefinition, resolved_metadata: dict[str, 
         "workflow": {"id": definition.id, "version": definition.version},
         "capability_groups": list(groups),
         "capability_group_snapshot": list(resolved_metadata.get("capability_group_snapshot") or []),
-        "capability_group_roots": list(resolved_metadata.get("capability_group_roots") or []),
+        "vibestack_repository": resolved_metadata.get("vibestack_repository"),
+        "project_stack": resolved_metadata.get("project_stack"),
         "created_at": datetime.now(UTC).isoformat(),
     }
     try:
@@ -165,7 +163,7 @@ async def update_workflow_definition(
     """Validate and persist an edited definition under its existing id.
 
     Uses ``WorkflowDefinitionRepository.update`` so the original
-    ``definition_id`` is preserved — an edit never re-creates the row.
+    ``definition_id`` is preserved 鈥?an edit never re-creates the row.
 
     Raises:
         WorkflowDefinitionSaveError: the definition failed structural
