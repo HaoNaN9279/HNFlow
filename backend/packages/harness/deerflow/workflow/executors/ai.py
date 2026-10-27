@@ -138,7 +138,7 @@ def _aggregate_subagent_token_usage(records: list[dict[str, int | str | None]] |
     return totals
 
 
-def _resolve_node_tools(
+async def _resolve_node_tools(
     capability_groups: list[str],
     *,
     repository: Path | None,
@@ -148,6 +148,8 @@ def _resolve_node_tools(
     app_config: Any,
     instance_repo: Any = None,
     node_id: str | None = None,
+    project_mcp_servers: Any = None,
+    project_mcp_fingerprint: str | None = None,
 ) -> list[Any]:
     """Resolve the AI node's tool set from its capability groups (C1).
 
@@ -157,12 +159,18 @@ def _resolve_node_tools(
     ``instance_repo`` (N6) is forwarded so
     the gateway's ``app`` provider writes instance records through.
     """
-    if not capability_groups and repository is None:
+    if not capability_groups and repository is None and not project_mcp_servers:
         return []
     from deerflow.tools.registry import ToolResolutionError
     from deerflow.workflow.tool_gateway import resolve_capability_tools
 
     try:
+        mcp_tools = None
+        if project_mcp_servers:
+            from deerflow.mcp.project import get_project_mcp_tools
+
+            loaded = await get_project_mcp_tools(project_mcp_servers, fingerprint=project_mcp_fingerprint)
+            mcp_tools = {str(tool.name): tool for tool in loaded if getattr(tool, "name", "")}
         return resolve_capability_tools(
             capability_groups,
             repository=repository,
@@ -171,6 +179,7 @@ def _resolve_node_tools(
             user_id=user_id,
             app_config=app_config,
             instance_repo=instance_repo,
+            mcp_tools=mcp_tools,
         )
     except ToolResolutionError as exc:
         # An explicitly declared tool is part of the node's contract.  Silently
@@ -227,6 +236,8 @@ async def exec_llm_agent(
     instance_repo = context.get(APP_INSTANCE_REPO_CONTEXT_KEY)
     repository_value = context.get("vibestack_repository")
     repository = Path(repository_value) if isinstance(repository_value, str) and repository_value else None
+    project_mcp_servers = context.get("vibestack_mcp") or ()
+    project_mcp_fingerprint = context.get("vibestack_fingerprint")
     active_groups = dict(context.get("capability_group_active") or {})
     core_group = context.get("capability_group_core")
     if not isinstance(core_group, VibeStackGroupRef):
@@ -383,7 +394,7 @@ async def exec_llm_agent(
                 f"node '{node_id or 'ai:llm_agent'}': static prompt is ~{estimated} tokens, exceeding model '{compression.model_name}' input budget {compression.input_budget}; reduce capability rules or template_prompt"
             )
 
-    node_tools = _resolve_node_tools(
+    node_tools = await _resolve_node_tools(
         capability_groups,
         repository=repository,
         active=active_groups,
@@ -392,6 +403,8 @@ async def exec_llm_agent(
         app_config=app_config,
         instance_repo=instance_repo,
         node_id=node_id,
+        project_mcp_servers=project_mcp_servers,
+        project_mcp_fingerprint=project_mcp_fingerprint,
     )
     if capability_skills:
         node_tools.append(build_read_capability_skill_tool(capability_skills))

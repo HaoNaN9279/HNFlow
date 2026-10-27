@@ -26,7 +26,6 @@ from uuid import uuid4
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from deerflow.capability_groups import discover_capability_groups
 from deerflow.config import get_app_config
 from deerflow.persistence.model_profiles.model import ModelProfileRow
 from deerflow.persistence.workflow_definitions.model import WorkflowDefinitionRow
@@ -1591,7 +1590,15 @@ class WorkspaceResourceService:
 
     async def _capability_group_items(self) -> list[dict[str, Any]]:
         def load() -> list[dict[str, Any]]:
-            return [group.summary_dict() for group in discover_capability_groups(user_id=self._user_id)]
+            from deerflow.capability_groups.vibestack import VibeStackError, discover_repository_groups, resolve_repository
+
+            try:
+                repository = resolve_repository()
+            except VibeStackError:
+                return []
+            if repository is None:
+                return []
+            return [group.summary_dict() for group in discover_repository_groups(repository)]
 
         return await asyncio.to_thread(load)
 

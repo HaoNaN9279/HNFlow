@@ -245,6 +245,8 @@ def test_runtime_context_exposes_project_and_workbench():
             "vibestack_repository": "D:/work/VibeStack",
             "project_stack": {"schema_version": 1, "core": {"name": "core", "version": "0.1.0"}, "groups": []},
             "capability_group_snapshot": [{"guid": "a" * 32, "version": "0.1.0", "content_hash": "hash"}],
+            "vibestack_mcp": [{"name": "vibe_core_excel", "transport": "stdio", "command": ["npx", "excel-mcp"]}],
+            "vibestack_fingerprint": "fp-1",
         },
     )
     run_ctx = SimpleNamespace(app_config=None, checkpointer=None, spec_repo=None, app_instance_repo=None, agent_adapter=None)
@@ -254,3 +256,5 @@ def test_runtime_context_exposes_project_and_workbench():
     assert context["vibestack_repository"] == "D:/work/VibeStack"
     assert context["capability_group_active"]["core"] == "0.1.0"
     assert context["capability_group_snapshot"][0]["content_hash"] == "hash"
+    assert context["vibestack_mcp"][0]["name"] == "vibe_core_excel"
+    assert context["vibestack_fingerprint"] == "fp-1"

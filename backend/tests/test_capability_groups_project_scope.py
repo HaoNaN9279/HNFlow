@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.gateway import project_context
 from app.gateway.routers import capability_groups as capability_group_routes
-from deerflow.capability_groups.vibestack import ensure_project_stack, load_group_closure, read_project_stack, write_project_stack
+from deerflow.capability_groups.vibestack import discover_repository_groups, ensure_project_stack, load_group_closure, read_project_stack, write_project_stack
 from deerflow.config.database_config import DatabaseConfig
 from deerflow.persistence.engine import close_engine, get_session_factory, init_engine_from_config
 from deerflow.persistence.projects import ProjectRepository
@@ -22,8 +23,11 @@ from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.workflow.schema import WorkflowDefinition
 
 
-def _write_group(repository: Path, name: str, version: str, guid: str, *, extends: list[str] | None = None) -> None:
-    root = repository / "capability-groups" / name / version
+def _write_group(repository: Path, name: str, version: str, guid: str, *, extends: list[str] | None = None, category: str | None = None) -> None:
+    root = repository / "capability-groups"
+    if category is not None:
+        root = root / category
+    root = root / name / version
     root.mkdir(parents=True, exist_ok=True)
     (root / "group.json").write_text(
         json.dumps(
@@ -50,10 +54,38 @@ def _write_repository(tmp_path: Path) -> Path:
     return repository
 
 
+def test_repository_discovery_supports_core_and_domain_layouts(tmp_path: Path) -> None:
+    repository = tmp_path / "VibeStack"
+    _write_group(repository, "core", "0.1.0", "a" * 32)
+    _write_group(repository, "excel", "1.0.0", "d" * 32, category="domain")
+    _write_group(repository, "excel", "1.1.0", "e" * 32, category="domain")
+
+    groups = discover_repository_groups(repository)
+
+    assert [(group.name, group.version) for group in groups] == [
+        ("core", "0.1.0"),
+        ("excel", "1.0.0"),
+        ("excel", "1.1.0"),
+    ]
+
+
+def _fake_plan(root: Path, *, repository: Path, timeout: float = 30.0) -> SimpleNamespace:
+    stack = read_project_stack(root)
+    references = [f"{group.name}@{group.version}" for group in (stack.groups if stack is not None else ())]
+    groups = load_group_closure(repository, references)
+    return SimpleNamespace(
+        core=groups[0] if groups else None,
+        groups=tuple(groups[1:]),
+        closure=tuple(groups),
+        active_versions={group.name: group.version for group in groups},
+    )
+
+
 def _use_repository(monkeypatch: pytest.MonkeyPatch, repository: Path) -> None:
     monkeypatch.setattr(project_service_module, "resolve_repository", lambda: repository)
     monkeypatch.setattr(capability_group_routes, "resolve_repository", lambda: repository)
     monkeypatch.setattr(project_context, "resolve_repository", lambda: repository)
+    monkeypatch.setattr(project_context, "resolve_project_plan", _fake_plan)
 
 
 def _definition(definition_id: str, groups: list[str]) -> dict:

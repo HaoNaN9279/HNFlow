@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -205,7 +206,7 @@ async def test_exec_llm_agent_fails_loud_when_declared_tool_is_missing(monkeypat
 @pytest.mark.asyncio
 async def test_exec_llm_agent_passes_resolved_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     sentinel = [_tool("bash")]
-    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: sentinel)
+    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", AsyncMock(return_value=sentinel))
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
 

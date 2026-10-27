@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -84,7 +85,7 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     import deerflow.subagents as subagents_pkg
 
     monkeypatch.setattr(subagents_pkg, "SubagentExecutor", FakeExecutor)
-    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", AsyncMock(return_value=[]))
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
     monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
     monkeypatch.setattr("deerflow.workflow.prompts.load_agent_soul", lambda agent_name, user_id=None: None)

@@ -77,11 +77,14 @@ class ToolRegistry:
     def __init__(self, gateway: Any, *, package_root: Path | None = None) -> None:
         self._gateway = gateway
         self._package_root = package_root
-        self._mcp_index = self._build_mcp_index()
+        self._mcp_index: dict[str, BaseTool] = {}
+        self._mcp_by_server: dict[str, list[BaseTool]] = {}
+        self._build_mcp_index()
         self._package_cache: dict[str, ToolPackage] = {}
 
-    def _build_mcp_index(self) -> dict[str, BaseTool]:
+    def _build_mcp_index(self) -> None:
         index: dict[str, BaseTool] = {}
+        by_server: dict[str, list[BaseTool]] = {}
         for provider in getattr(self._gateway, "providers", ()):
             if getattr(provider, "name", None) != "mcp":
                 continue
@@ -94,7 +97,11 @@ class ToolRegistry:
                 # Accept the model-visible name as an alias.  The canonical
                 # reference remains server + original tool name.
                 index.setdefault(f"mcp:{server}:{name}", tool)
-        return index
+                server_tools = by_server.setdefault(server, [])
+                if tool not in server_tools:
+                    server_tools.append(tool)
+        self._mcp_index = index
+        self._mcp_by_server = by_server
 
     def _package(self, identifier: str, version: str | None) -> ToolPackage:
         cache_key = f"{identifier}@v{version}" if version else identifier
@@ -188,23 +195,55 @@ class ToolRegistry:
             args_schema=CliInput,
         )
 
-    def _package_tool(self, package: ToolPackage) -> BaseTool:
+    def _package_server(self, package: ToolPackage) -> str:
+        server = package.server
+        if server is None and package.mcp is not None:
+            candidate = package.mcp.get("name")
+            if isinstance(candidate, str) and candidate.strip():
+                server = candidate.strip()
+        if not server:
+            raise ToolResolutionError(f"tool package {package.ref}: MCP server name is missing")
+        if server in self._mcp_by_server:
+            return server
+        # VibeStack resolve keys prefix servers with ``vibe:<group>_``.  The
+        # tool package only knows its own server name, so accept a unique
+        # group-prefixed match.
+        matches = [name for name in self._mcp_by_server if name == server or name.endswith(f"_{server}")]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            raise ToolResolutionError(f"tool package {package.ref}: MCP server {server!r} is not available")
+        raise ToolResolutionError(f"tool package {package.ref}: MCP server {server!r} is ambiguous: {sorted(matches)}")
+
+    def _package_tools(self, package: ToolPackage) -> list[BaseTool]:
         if package.provider == "python":
-            tool = self._load_python_tool(package)
+            tools = [self._load_python_tool(package)]
         elif package.provider == "mcp":
-            ref = f"mcp:{package.server}:{package.tool}"
-            tool = self._resolve_mcp(ref)
+            server = self._package_server(package)
+            if package.tool:
+                tools = [self._resolve_mcp(f"mcp:{server}:{package.tool}")]
+            else:
+                tools = list(self._mcp_by_server.get(server, ()))
+                if not tools:
+                    raise ToolResolutionError(f"tool package {package.ref}: MCP server {server!r} exposes no tools")
         elif package.provider in {"builtin", "sandbox"}:
-            tool = self._resolve_provider(package.provider, package.tool or "")
+            tools = [self._resolve_provider(package.provider, package.tool or "")]
         elif package.provider == "app":
-            tool = self._resolve_app(package.app or package.tool or "")
+            tools = [self._resolve_app(package.app or package.tool or "")]
         else:  # pragma: no cover - manifest validation rejects this
             raise ToolResolutionError(f"tool package {package.ref}: unsupported provider {package.provider!r}")
 
-        if package.model_name and tool.name != package.model_name:
-            tool = copy.copy(tool)
+        if package.model_name and len(tools) == 1 and tools[0].name != package.model_name:
+            tool = copy.copy(tools[0])
             tool.name = package.model_name  # type: ignore[attr-defined]
-        return tool
+            tools = [tool]
+        return tools
+
+    def _package_tool(self, package: ToolPackage) -> BaseTool:
+        tools = self._package_tools(package)
+        if len(tools) != 1:
+            raise ToolResolutionError(f"tool package {package.ref}: resolves to {len(tools)} tools; use ToolRegistry.resolve()")
+        return tools[0]
 
     def _resolve_provider(self, provider: str, name: str) -> BaseTool:
         if not name:
@@ -227,36 +266,42 @@ class ToolRegistry:
             raise ToolResolutionError(f"MCP tool {ref!r} is not available (is the server enabled and the tool discovered?)")
         return tool
 
-    def resolve_ref(self, ref: str) -> ToolBinding:
-        """Resolve one canonical reference into a concrete tool binding."""
+    def _bindings_for_ref(self, ref: str) -> list[ToolBinding]:
         kind, value = _split_ref(ref)
         if kind == "tool":
             identifier, version = _parse_package_ref(value)
             package = self._package(identifier, version)
-            tool = self._package_tool(package)
-            return ToolBinding(
-                ref=ref,
-                provider=package.provider,
-                name=tool.name,
-                tool=tool,
-                permissions=package.permissions,
-                permissions_declared=package.permissions_declared,
-                package=package,
-            )
+            return [
+                ToolBinding(
+                    ref=ref,
+                    provider=package.provider,
+                    name=tool.name,
+                    tool=tool,
+                    permissions=package.permissions,
+                    permissions_declared=package.permissions_declared,
+                    package=package,
+                )
+                for tool in self._package_tools(package)
+            ]
         if kind == "mcp":
             server, separator, tool_name = value.partition(":")
             if not separator or not server or not tool_name:
                 raise ToolResolutionError(f"invalid MCP tool reference {ref!r}; expected mcp:<server>:<tool>")
             tool = self._resolve_mcp(f"mcp:{server}:{tool_name}")
-            return ToolBinding(ref=ref, provider="mcp", name=tool.name, tool=tool)
+            return [ToolBinding(ref=ref, provider="mcp", name=tool.name, tool=tool)]
         if kind == "app":
-            # ``app:<app>:<tool>`` is accepted for readability; the current app
-            # provider exposes one callable per application, named app_<app>.
             app_name = value.split(":", 1)[0]
             tool = self._resolve_app(app_name)
-            return ToolBinding(ref=ref, provider="app", name=tool.name, tool=tool)
+            return [ToolBinding(ref=ref, provider="app", name=tool.name, tool=tool)]
         tool = self._resolve_provider(kind, value)
-        return ToolBinding(ref=ref, provider=kind, name=tool.name, tool=tool)
+        return [ToolBinding(ref=ref, provider=kind, name=tool.name, tool=tool)]
+
+    def resolve_ref(self, ref: str) -> ToolBinding:
+        """Resolve one canonical reference into a concrete tool binding."""
+        bindings = self._bindings_for_ref(ref)
+        if len(bindings) != 1:
+            raise ToolResolutionError(f"tool reference {ref!r} resolves to {len(bindings)} tools; use ToolRegistry.resolve()")
+        return bindings[0]
 
     def descriptors(self) -> list[dict[str, Any]]:
         """Return the catalog of addressable tools (no package import executed)."""
@@ -321,32 +366,31 @@ class ToolRegistry:
             if canonical in seen_refs:
                 continue
             seen_refs.add(canonical)
-            binding = self.resolve_ref(canonical)
+            for binding in self._bindings_for_ref(canonical):
+                # A per-tool override or an explicit manifest declaration is
+                # authoritative even when empty ([] means "no permission needed").
+                # Only tools with no declaration fall back to the name table.
+                if canonical in override_map:
+                    required: tuple[str, ...] | None = override_map[canonical]
+                elif binding.permissions_declared:
+                    required = binding.permissions
+                else:
+                    required = None
 
-            # A per-tool override or an explicit manifest declaration is
-            # authoritative even when empty ([] means "no permission needed").
-            # Only tools with no declaration fall back to the name table.
-            if canonical in override_map:
-                required: tuple[str, ...] | None = override_map[canonical]
-            elif binding.permissions_declared:
-                required = binding.permissions
-            else:
-                required = None
+                if declared_set and required is not None:
+                    missing = set(required) - declared_set
+                    if missing:
+                        raise ToolResolutionError(f"tool {canonical!r} needs {sorted(missing)} but the capability group declares only {sorted(declared_set)}")
+                elif declared_set:
+                    decision = adjudicate(declared_set, binding.name, provider=binding.provider)
+                    if not decision.allowed:
+                        raise ToolResolutionError(decision.reason)
 
-            if declared_set and required is not None:
-                missing = set(required) - declared_set
-                if missing:
-                    raise ToolResolutionError(f"tool {canonical!r} needs {sorted(missing)} but the capability group declares only {sorted(declared_set)}")
-            elif declared_set:
-                decision = adjudicate(declared_set, binding.name, provider=binding.provider)
-                if not decision.allowed:
-                    raise ToolResolutionError(decision.reason)
-
-            previous = seen_names.get(binding.name)
-            if previous is not None and previous != canonical:
-                raise ToolResolutionError(f"tool name {binding.name!r} is declared by both {previous!r} and {canonical!r}")
-            seen_names[binding.name] = canonical
-            resolved.append(binding.tool)
+                previous = seen_names.get(binding.name)
+                if previous is not None and previous != canonical:
+                    raise ToolResolutionError(f"tool name {binding.name!r} is declared by both {previous!r} and {canonical!r}")
+                seen_names[binding.name] = canonical
+                resolved.append(binding.tool)
         return resolved
 
 

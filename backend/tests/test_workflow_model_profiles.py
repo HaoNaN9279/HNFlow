@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -166,7 +167,7 @@ def fake_executor(monkeypatch: pytest.MonkeyPatch) -> Any:
     import deerflow.subagents as subagents_pkg
 
     monkeypatch.setattr(subagents_pkg, "SubagentExecutor", FakeExecutor)
-    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", lambda *a, **k: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", AsyncMock(return_value=[]))
     monkeypatch.setattr("deerflow.workflow.prompts.load_agent_soul", lambda *a, **k: None)
     yield captured
 

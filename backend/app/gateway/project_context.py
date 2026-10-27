@@ -10,11 +10,11 @@ from fastapi import HTTPException, Request
 
 from app.gateway.deps import get_project_service
 from deerflow.capability_groups import capability_group_content_hash
+from deerflow.capability_groups.resolve import resolve_project_plan
 from deerflow.capability_groups.vibestack import (
     VibeStackError,
     active_versions,
     default_core,
-    load_group_closure,
     read_project_stack,
     resolve_repository,
 )
@@ -47,10 +47,14 @@ async def project_capability_scope(
     try:
         repository = resolve_repository()
         stack = read_project_stack(Path(root))
+        plan = await asyncio.to_thread(resolve_project_plan, Path(root), repository=repository) if repository is not None and stack is not None and stack.groups else None
     except VibeStackError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    core = stack.core if stack is not None and stack.core is not None else default_core()
-    active = active_versions(stack)
+    if plan is not None and plan.core is not None:
+        core = plan.core
+    else:
+        core = stack.core if stack is not None and stack.core is not None else default_core()
+    active = plan.active_versions if plan is not None else active_versions(stack)
     if core.name not in active:
         active[core.name] = core.version
     return {
@@ -58,8 +62,9 @@ async def project_capability_scope(
         "root_path": root,
         "repository": str(repository) if repository is not None else None,
         "stack": stack.to_dict() if stack is not None else None,
-        "core": core.to_dict(),
+        "core": {"name": core.name, "version": core.version},
         "active": active,
+        "_plan": plan,
     }
 
 
@@ -76,19 +81,8 @@ async def project_run_metadata(
         project = await service.get_project(project_id, user_id=user_id)
         repository = resolve_repository()
         stack = read_project_stack(Path(scope["root_path"]))
-        core = default_core()
-        references = [f"{group.name}@{group.version}" if group.version else group.name for group in (stack.groups if stack is not None else ())]
-        groups = (
-            await asyncio.to_thread(
-                load_group_closure,
-                repository,
-                references,
-                active=scope["active"],
-                core=core,
-            )
-            if repository is not None
-            else []
-        )
+        plan = scope.get("_plan")
+        groups = list(plan.closure) if plan is not None else []
     except VibeStackError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     snapshot = dict(project.get("manifest") or {})
@@ -107,6 +101,8 @@ async def project_run_metadata(
         "project_id": project_id,
         "project": snapshot,
         "vibestack_repository": str(repository) if repository is not None else None,
+        "vibestack_mcp": [server.to_dict() for server in getattr(plan, "mcp", ())] if plan is not None else [],
+        "vibestack_fingerprint": getattr(plan, "fingerprint", None) if plan is not None else None,
         "project_stack": stack.to_dict() if stack is not None else None,
         "capability_group_snapshot": group_snapshot,
     }

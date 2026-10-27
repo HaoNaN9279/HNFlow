@@ -134,6 +134,30 @@ def test_registry_loads_custom_python_package_and_renames(tmp_path: Path) -> Non
     assert binding.provider == "python"
 
 
+def test_registry_expands_server_level_mcp_package(tmp_path: Path) -> None:
+    _package(
+        tmp_path,
+        name="excel-mcp",
+        guid="5" * 32,
+        provider="mcp",
+        permissions=["net"],
+        mcp={"name": "excelMCP", "type": "local", "command": ["uvx", "excel-mcp-server", "stdio"]},
+    )
+    gateway = FakeGateway(
+        mcp={
+            "vibe:excel_excelMCP_read": _mcp_tool("vibe:excel_excelMCP_read", server="vibe:excel_excelMCP", original="read"),
+            "vibe:excel_excelMCP_write": _mcp_tool("vibe:excel_excelMCP_write", server="vibe:excel_excelMCP", original="write"),
+        }
+    )
+    registry = ToolRegistry(gateway, package_root=tmp_path)
+
+    resolved = registry.resolve([f"tool:{'5' * 32}@v0.1.0"], permissions=("net",))
+
+    assert [tool.name for tool in resolved] == ["vibe:excel_excelMCP_read", "vibe:excel_excelMCP_write"]
+    with pytest.raises(ToolResolutionError, match="resolves to 2 tools"):
+        registry.resolve_ref(f"tool:{'5' * 32}@v0.1.0")
+
+
 def test_registry_wraps_python_factory_failures(tmp_path: Path) -> None:
     package_dir = tmp_path / "demo" / "0.1.0"
     _write(

@@ -632,13 +632,18 @@ def _make_session_pool_tool(
     )
 
 
-async def get_mcp_tools() -> list[BaseTool]:
+async def get_mcp_tools(*, extensions_config: ExtensionsConfig | None = None) -> list[BaseTool]:
     """Get all tools from enabled MCP servers.
 
     Tools using stdio transport are wrapped with persistent-session logic so
     consecutive calls within the same thread reuse the same MCP session.
     HTTP/SSE tools are returned unwrapped to avoid cross-task TaskGroup
     cleanup errors.
+
+    Args:
+        extensions_config: Optional in-memory config. Project-scoped callers
+            merge VibeStack MCP servers into a copy instead of mutating the
+            on-disk extensions config.
 
     Returns:
         List of LangChain tools from all enabled MCP servers.
@@ -650,11 +655,11 @@ async def get_mcp_tools() -> list[BaseTool]:
         logger.warning("langchain-mcp-adapters not installed. Install it to enable MCP tools: pip install langchain-mcp-adapters")
         return []
 
-    # NOTE: We use ExtensionsConfig.from_file() instead of get_extensions_config()
-    # to always read the latest configuration from disk. This ensures that changes
-    # made through the Gateway API (which runs in a separate process) are immediately
-    # reflected when initializing MCP tools.
-    extensions_config = ExtensionsConfig.from_file()
+    # NOTE: We read from disk by default instead of using get_extensions_config()
+    # to always see the latest configuration. Project-scoped callers pass an
+    # explicit merged config instead.
+    if extensions_config is None:
+        extensions_config = ExtensionsConfig.from_file()
     servers_config = build_servers_config(extensions_config)
 
     if not servers_config:

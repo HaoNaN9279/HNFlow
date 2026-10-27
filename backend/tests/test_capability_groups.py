@@ -8,13 +8,13 @@ import pytest
 from deerflow.capability_groups import (
     CapabilityGroupError,
     build_capability_contents,
+    capability_group_content_hash,
     classify_capability_file,
-    discover_capability_groups,
-    load_capability_group,
     resolve_reveal_target,
     summarize_markdown,
 )
 from deerflow.capability_groups import discovery as discovery_module
+from deerflow.capability_groups.vibestack import discover_repository_groups
 
 
 def _write(path: Path, text: str) -> None:
@@ -34,6 +34,10 @@ def _make_group(root: Path, *, name: str = "demo", version: str = "0.1.0", guid:
     _write(group_dir / "skills" / "child" / "SKILL.md", "---\ndescription: Child skill\n---\n")
     _write(group_dir / "scripts" / "run.py", "print('ok')\n")
     return group_dir
+
+
+def _load(group_dir: Path, *, name: str = "demo", version: str = "0.1.0"):
+    return discovery_module._load_manifest(group_dir, name_hint=name, version_hint=version, source="vibestack")
 
 
 def test_summarize_markdown_prefers_frontmatter_description() -> None:
@@ -73,25 +77,11 @@ def test_build_capability_contents_groups_and_skips_manifest(tmp_path: Path) -> 
     assert next(item for item in files if item.path == "rules/style.md").summary == "Keep styles consistent"
 
 
-def test_discover_and_load_current_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _make_group(tmp_path, version="0.1.0")
-    _make_group(tmp_path, version="0.2.0")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
-
-    groups = discover_capability_groups()
-    assert len(groups) == 1
-    assert groups[0].version == "0.2.0"
-    loaded = load_capability_group("demo")
-    assert loaded.guid == "a" * 32
-    assert loaded.counts["skills"] == 1
-
-
-def test_detail_lists_dynamic_categories_after_builtins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_detail_lists_dynamic_categories_after_builtins(tmp_path: Path) -> None:
     group_dir = _make_group(tmp_path)
     _write(group_dir / "commands" / "nested" / "build.md", "# Build\n")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
-    group = load_capability_group("demo")
+    group = _load(group_dir)
     detail = group.detail_dict()
     categories = detail["categories"]
     assert isinstance(categories, list)
@@ -110,31 +100,24 @@ def test_resolve_reveal_target_supports_group_root(tmp_path: Path) -> None:
         resolve_reveal_target(root, "../outside.md")
 
 
-def test_malformed_group_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _make_group(tmp_path)
-    broken = tmp_path / "broken" / "0.1.0"
-    _write(broken / "group.json", "{not json")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
+def test_malformed_group_is_skipped_by_repository_discovery(tmp_path: Path) -> None:
+    repository = tmp_path / "VibeStack"
+    _make_group(repository / "capability-groups")
+    _write(repository / "capability-groups" / "broken" / "0.1.0" / "group.json", "{not json")
 
-    groups = discover_capability_groups()
+    groups = discover_repository_groups(repository)
+
     assert [group.name for group in groups] == ["demo"]
 
 
-def test_missing_group_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
-    with pytest.raises(CapabilityGroupError):
-        load_capability_group("missing")
-
-
-def test_group_parses_tool_references_and_permission_overrides(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_group_parses_tool_references_and_permission_overrides(tmp_path: Path) -> None:
     group_dir = _make_group(tmp_path)
     manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
     manifest["tools"] = ["builtin:read_file", "mcp:github:search", "builtin:read_file"]
     manifest["tool_permissions"] = {"mcp:github:search": ["net"]}
     (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
-    group = load_capability_group("demo")
+    group = _load(group_dir)
 
     assert group.tools == ("builtin:read_file", "mcp:github:search")
     assert group.tool_permissions == {"mcp:github:search": ("net",)}
@@ -173,13 +156,21 @@ def test_validate_capability_tool_refs_checks_custom_packages(tmp_path: Path) ->
     assert "unavailable tool package" in errors[0]
 
 
-def test_group_rejects_malformed_tool_permissions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_group_rejects_malformed_tool_permissions(tmp_path: Path) -> None:
     group_dir = _make_group(tmp_path)
     manifest = json.loads((group_dir / "group.json").read_text(encoding="utf-8"))
     manifest["tool_permissions"] = {"mcp:github:search": "net"}
     (group_dir / "group.json").write_text(json.dumps(manifest), encoding="utf-8")
-    monkeypatch.setattr(discovery_module, "_roots", lambda user_id=None, project_roots=(): [discovery_module._RootSpec(path=tmp_path, source="public", project_id=None, root_id=None, priority=0)])
 
-    groups = discover_capability_groups()
+    with pytest.raises(CapabilityGroupError, match="tool_permissions"):
+        _load(group_dir)
 
-    assert groups == []
+
+def test_content_hash_changes_when_package_changes(tmp_path: Path) -> None:
+    group_dir = _make_group(tmp_path)
+    group = _load(group_dir)
+    before = capability_group_content_hash(group)
+
+    _write(group_dir / "rules" / "style.md", "---\ndescription: Changed\n---\n")
+
+    assert capability_group_content_hash(_load(group_dir)) != before

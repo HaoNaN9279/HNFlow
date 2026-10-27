@@ -1,15 +1,12 @@
-"""Discover versioned capability groups from project, user, and public roots."""
+"""Parse capability-group manifests and hash concrete package contents."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import re
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from deerflow.capability_groups.contents import (
     CAPABILITY_CATEGORIES,
@@ -17,13 +14,7 @@ from deerflow.capability_groups.contents import (
     build_capability_contents,
     category_sort_key,
 )
-from deerflow.config.paths import get_paths
-from deerflow.runtime.user_context import get_effective_user_id
 from deerflow.skills.contract import CAPABILITY_PERMISSIONS
-
-logger = logging.getLogger(__name__)
-
-_ROOT_SOURCE_ORDER = {"project": 0, "user": 1, "public": 2}
 
 GUID_RE = re.compile(r"^[0-9a-f]{32}$")
 VERSION_RE = re.compile(r"^\d+(?:\.\d+)*$")
@@ -35,46 +26,8 @@ class CapabilityGroupError(ValueError):
 
 
 @dataclass(frozen=True)
-class CapabilityGroupRoot:
-    """One effective capability-group search root.
-
-    Project roots are supplied by the project service after validating
-    ``project.json``.  ``path`` is already resolved; symlinks/junctions are
-    intentionally transparent.
-    """
-
-    path: Path
-    source: str
-    project_id: str | None = None
-    root_id: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "path": str(self.path),
-            "source": self.source,
-            "project_id": self.project_id,
-            "root_id": self.root_id,
-        }
-
-
-@dataclass(frozen=True)
-class _RootSpec:
-    path: Path
-    source: str
-    project_id: str | None
-    root_id: str | None
-    priority: int
-
-
-@dataclass(frozen=True)
-class _Candidate:
-    group: CapabilityGroup
-    priority: int
-
-
-@dataclass(frozen=True)
 class CapabilityGroup:
-    """A discovery-time capability group (one concrete installed version)."""
+    """One concrete capability-group version parsed from ``group.json``."""
 
     guid: str
     name: str
@@ -214,221 +167,6 @@ def _load_manifest(
     )
 
 
-def _public_root() -> Path:
-    """Return the user-editable capability-group root (``{HNFLOW_HOME}/capability-groups``)."""
-    return get_paths().capability_groups_dir
-
-
-def _user_root(user_id: str) -> Path:
-    return get_paths().user_dir(user_id) / "capability-groups"
-
-
-def _dedupe_roots(roots: Iterable[_RootSpec]) -> list[_RootSpec]:
-    seen: set[str] = set()
-    result: list[_RootSpec] = []
-    for root in roots:
-        key = str(root.path.resolve(strict=False))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(root)
-    return result
-
-
-def _roots(
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-) -> list[_RootSpec]:
-    specs: list[_RootSpec] = []
-    priority = 0
-    for root in project_roots:
-        specs.append(
-            _RootSpec(
-                path=Path(root.path),
-                source=root.source or "project",
-                project_id=root.project_id,
-                root_id=root.root_id,
-                priority=priority,
-            )
-        )
-        priority += 1
-    specs.append(
-        _RootSpec(
-            path=_user_root(user_id or get_effective_user_id()),
-            source="user",
-            project_id=None,
-            root_id=None,
-            priority=priority,
-        )
-    )
-    priority += 1
-    specs.append(
-        _RootSpec(
-            path=_public_root(),
-            source="public",
-            project_id=None,
-            root_id=None,
-            priority=priority,
-        )
-    )
-    return _dedupe_roots(specs)
-
-
-def _iter_group_dirs(root: _RootSpec) -> list[tuple[Path, str, str]]:
-    if not root.path.is_dir():
-        return []
-    found: list[tuple[Path, str, str]] = []
-    for name_dir in sorted(root.path.iterdir(), key=lambda item: item.name.lower()):
-        if not name_dir.is_dir() or name_dir.name.startswith("."):
-            continue
-        version_dirs = [entry for entry in name_dir.iterdir() if entry.is_dir() and not entry.name.startswith(".")]
-        for version_dir in sorted(version_dirs, key=lambda item: _version_key(item.name) if VERSION_RE.fullmatch(item.name) else ()):
-            if not (version_dir / _GROUP_MANIFEST).is_file():
-                continue
-            found.append((version_dir, name_dir.name, version_dir.name))
-    return found
-
-
-def _candidates(
-    *,
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-) -> list[_Candidate]:
-    candidates: list[_Candidate] = []
-    for root in _roots(user_id, project_roots):
-        for group_dir, name_hint, version_hint in _iter_group_dirs(root):
-            try:
-                group = _load_manifest(
-                    group_dir,
-                    name_hint=name_hint,
-                    version_hint=version_hint,
-                    source=root.source,
-                    project_id=root.project_id,
-                    root_id=root.root_id,
-                )
-            except CapabilityGroupError as exc:
-                logger.warning("Skipping malformed capability group at %s: %s", group_dir, exc)
-                continue
-            candidates.append(_Candidate(group=group, priority=root.priority))
-    return candidates
-
-
-def _prefer(candidates: list[_Candidate], *, version: str | None = None) -> _Candidate:
-    if version is not None:
-        candidates = [item for item in candidates if item.group.version == version]
-    if not candidates:
-        raise CapabilityGroupError("capability group not found")
-    lowest_priority = min(item.priority for item in candidates)
-    preferred = [item for item in candidates if item.priority == lowest_priority]
-    return max(preferred, key=lambda item: _version_key(item.group.version))
-
-
-def _by_name(
-    candidates: list[_Candidate],
-    *,
-    version: str | None = None,
-) -> dict[str, _Candidate]:
-    result: dict[str, _Candidate] = {}
-    for candidate in candidates:
-        if version is not None and candidate.group.version != version:
-            continue
-        name = candidate.group.name
-        existing = result.get(name)
-        if existing is None:
-            result[name] = candidate
-            continue
-        if candidate.priority < existing.priority:
-            result[name] = candidate
-            continue
-        if candidate.priority > existing.priority:
-            continue
-        if candidate.group.guid != existing.group.guid:
-            raise CapabilityGroupError(f"capability group name {name!r} resolves to multiple GUIDs in the same scope: {existing.group.guid} and {candidate.group.guid}")
-        if _version_key(candidate.group.version) > _version_key(existing.group.version):
-            result[name] = candidate
-    return result
-
-
-def discover_capability_groups(
-    *,
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-) -> list[CapabilityGroup]:
-    """Return the effective version of every installed capability group.
-
-    Project roots take precedence over the user root, which takes precedence
-    over the shared public/global root.  A malformed package is skipped with a
-    warning; one broken package must not hide every healthy group from the
-    management page.
-    """
-    selected = _by_name(_candidates(user_id=user_id, project_roots=project_roots))
-    return sorted((candidate.group for candidate in selected.values()), key=lambda item: (item.name.lower(), _ROOT_SOURCE_ORDER.get(item.source, 9)))
-
-
-def load_capability_group(
-    identifier: str,
-    *,
-    version: str | None = None,
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-) -> CapabilityGroup:
-    """Load a group by GUID or name, optionally selecting an explicit version.
-
-    Name lookup follows the same project -> user -> public precedence as
-    discovery.  GUID lookup is scope-independent and therefore safe for
-    cross-project workflow definitions.
-    """
-    candidates = _candidates(user_id=user_id, project_roots=project_roots)
-    if GUID_RE.fullmatch(identifier):
-        matches = [item for item in candidates if item.group.guid == identifier]
-        if version is not None:
-            matches = [item for item in matches if item.group.version == version]
-        if not matches:
-            raise CapabilityGroupError(f"capability group {identifier!r} not found")
-        return _prefer(matches).group
-    selected = _by_name(candidates, version=version)
-    candidate = selected.get(identifier)
-    if candidate is None:
-        raise CapabilityGroupError(f"capability group {identifier!r} not found")
-    return candidate.group
-
-
-def load_capability_group_closure(
-    references: list[str],
-    *,
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-    bases_first: bool = False,
-) -> list[CapabilityGroup]:
-    """Load selected groups plus their ``extends`` bases, de-duplicated by GUID.
-
-    ``bases_first=False`` (the default) preserves the author-facing order used
-    by tool resolution: each selected group is visited before its bases.
-    ``bases_first=True`` returns a dependency order suitable for prompt
-    assembly, where a base's rules/skills are read before the group that
-    extends it.
-    """
-    ordered: list[CapabilityGroup] = []
-    seen: set[str] = set()
-
-    def visit(reference: str) -> None:
-        group = load_capability_group(reference, user_id=user_id, project_roots=project_roots)
-        if group.guid in seen:
-            return
-        seen.add(group.guid)
-        if bases_first:
-            for base in group.extends:
-                visit(base)
-        ordered.append(group)
-        if not bases_first:
-            for base in group.extends:
-                visit(base)
-
-    for reference in references:
-        visit(reference)
-    return ordered
-
-
 def capability_group_content_hash(group: CapabilityGroup) -> str:
     """Stable hash of every file in a concrete group directory."""
     digest = hashlib.sha256()
@@ -447,29 +185,3 @@ def capability_group_content_hash(group: CapabilityGroup) -> str:
             raise CapabilityGroupError(f"cannot hash capability group file {path}: {exc}") from exc
         digest.update(b"\0")
     return digest.hexdigest()
-
-
-def verify_capability_group_snapshot(
-    references: Iterable[str],
-    *,
-    user_id: str | None = None,
-    project_roots: Iterable[CapabilityGroupRoot] = (),
-    snapshot: Iterable[dict[str, Any]] = (),
-) -> None:
-    """Reject a run when its selected groups no longer match the run snapshot."""
-    expected = {f"{item.get('guid')}@{item.get('version')}": item.get("content_hash") for item in snapshot if isinstance(item, dict) and item.get("guid") and item.get("version")}
-    if not expected:
-        return
-    for group in load_capability_group_closure(
-        list(references),
-        user_id=user_id,
-        project_roots=project_roots,
-        bases_first=True,
-    ):
-        key = f"{group.guid}@{group.version}"
-        expected_hash = expected.get(key)
-        if expected_hash is None:
-            raise CapabilityGroupError(f"capability group {group.name}@{group.version} is not part of this run snapshot")
-        actual_hash = capability_group_content_hash(group)
-        if actual_hash != expected_hash:
-            raise CapabilityGroupError(f"capability group {group.name}@{group.version} changed after the run started")

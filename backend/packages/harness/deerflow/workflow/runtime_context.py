@@ -149,6 +149,12 @@ def build_workflow_runtime_context(
         raw_snapshot = run_metadata.get("capability_group_snapshot")
         if isinstance(raw_snapshot, list):
             context["capability_group_snapshot"] = tuple(item for item in raw_snapshot if isinstance(item, dict))
+        raw_mcp = run_metadata.get("vibestack_mcp")
+        if isinstance(raw_mcp, list):
+            context["vibestack_mcp"] = tuple(item for item in raw_mcp if isinstance(item, dict))
+        fingerprint = run_metadata.get("vibestack_fingerprint")
+        if isinstance(fingerprint, str) and fingerprint:
+            context["vibestack_fingerprint"] = fingerprint
 
     if "vibestack_repository" not in context:
         try:

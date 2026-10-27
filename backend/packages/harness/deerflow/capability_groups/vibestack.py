@@ -197,18 +197,30 @@ def parse_ref(value: str) -> VibeStackGroupRef:
 
 
 def _iter_group_dirs(repository: Path) -> list[tuple[Path, str, str]]:
+    """Yield ``(group_dir, name, version)`` for both repository layouts.
+
+    VibeStack mixes flat core packages (``capability-groups/core/<version>``)
+    with scoped domain packages (``capability-groups/domain/<name>/<version>``).
+    The group name always comes from the directory immediately above the
+    version directory, so a flat ``<name>/<version>`` keeps working.
+    """
     base = repository / "capability-groups"
     if not base.is_dir():
         return []
     found: list[tuple[Path, str, str]] = []
-    for name_dir in sorted(base.iterdir(), key=lambda item: item.name.lower()):
-        if not name_dir.is_dir() or name_dir.name.startswith("."):
+    for manifest in base.rglob("group.json"):
+        group_dir = manifest.parent
+        try:
+            parts = group_dir.relative_to(base).parts
+        except ValueError:
             continue
-        version_dirs = [entry for entry in name_dir.iterdir() if entry.is_dir() and not entry.name.startswith(".")]
-        for version_dir in sorted(version_dirs, key=lambda item: _version_key(item.name) if re.fullmatch(r"\d+(?:\.\d+)*", item.name) else ()):
-            if (version_dir / "group.json").is_file():
-                found.append((version_dir, name_dir.name, version_dir.name))
-    return found
+        if len(parts) not in {2, 3} or any(part.startswith(".") for part in parts):
+            continue
+        name, version = parts[-2], parts[-1]
+        if not re.fullmatch(r"\d+(?:\.\d+)*", version):
+            continue
+        found.append((group_dir, name, version))
+    return sorted(found, key=lambda item: (item[1].lower(), _version_key(item[2])))
 
 
 def discover_repository_groups(repository: Path) -> list[CapabilityGroup]:

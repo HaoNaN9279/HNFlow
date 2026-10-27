@@ -395,7 +395,14 @@ def _presence_tool(app_names: list[str]) -> BaseTool:
     )
 
 
-def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any = None, instance_repo: Any = None, user_id: str | None = None) -> ToolGateway:
+def build_default_tool_gateway(
+    *,
+    model_name: str | None = None,
+    app_config: Any = None,
+    instance_repo: Any = None,
+    user_id: str | None = None,
+    mcp_tools: dict[str, BaseTool] | None = None,
+) -> ToolGateway:
     """Build the gateway with the sandbox / builtin / MCP / app providers.
 
     Fail-open per provider: a provider that cannot be constructed (missing
@@ -418,7 +425,7 @@ def build_default_tool_gateway(*, model_name: str | None = None, app_config: Any
         logger.warning("Tool gateway: builtin provider unavailable: %s", e)
 
     try:
-        gateway.add_provider(StaticToolProvider(PROVIDER_MCP, _mcp_tools()))
+        gateway.add_provider(StaticToolProvider(PROVIDER_MCP, mcp_tools if mcp_tools is not None else _mcp_tools()))
     except Exception as e:  # noqa: BLE001 - fail-open provider
         logger.warning("Tool gateway: MCP provider unavailable: %s", e)
 
@@ -461,6 +468,7 @@ def resolve_capability_tools(
     model_name: str | None = None,
     app_config: Any = None,
     instance_repo: Any = None,
+    mcp_tools: dict[str, BaseTool] | None = None,
 ) -> list[BaseTool]:
     """Resolve an AI node's tool set from its capability groups.
 
@@ -487,7 +495,13 @@ def resolve_capability_tools(
     if not refs:
         return []
 
-    gateway = build_default_tool_gateway(model_name=model_name, app_config=app_config, instance_repo=instance_repo, user_id=user_id)
+    gateway = build_default_tool_gateway(
+        model_name=model_name,
+        app_config=app_config,
+        instance_repo=instance_repo,
+        user_id=user_id,
+        mcp_tools=mcp_tools,
+    )
     registry = ToolRegistry(gateway, package_root=(repository / "tools") if repository is not None else None)
     return registry.resolve(list(dict.fromkeys(refs)), permissions=tuple(permissions), overrides=overrides)
 
