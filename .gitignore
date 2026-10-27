@@ -76,3 +76,6 @@ config.yaml.bak
 
 # codegraph local index (never commit)
 .codegraph/
+
+#opencode
+.opencode/
