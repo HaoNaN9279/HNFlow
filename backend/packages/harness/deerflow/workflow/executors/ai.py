@@ -10,6 +10,7 @@ contract — ``(runtime, params, inputs) -> Awaitable[dict]`` — so the compile
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,13 @@ from deerflow.capability_groups.vibestack import (
 )
 from deerflow.config.agents_config import load_agent_config
 from deerflow.config.token_budget_config import TokenBudgetConfig
+from deerflow.project_content import (
+    ProjectContent,
+    ProjectContentError,
+    load_project_content,
+    merge_project_skills,
+    verify_project_content_snapshot,
+)
 from deerflow.runtime.context_keys import APP_INSTANCE_REPO_CONTEXT_KEY
 from deerflow.workflow.agent_port import get_agent_adapter
 from deerflow.workflow.capability_skills import build_read_capability_skill_tool
@@ -38,6 +46,7 @@ from deerflow.workflow.prompts import (
     BUCKET_ORDER,
     TEMPLATE_PROMPT_PORT,
     build_ai_node_buckets,
+    build_project_instructions_layer,
     build_schema_contract_layer,
     build_task_layer,
 )
@@ -138,6 +147,28 @@ def _aggregate_subagent_token_usage(records: list[dict[str, int | str | None]] |
     return totals
 
 
+def _project_root_from_context(context: dict[str, Any]) -> Path | None:
+    """Return the run's project root, when the run belongs to a project."""
+    project = context.get("project")
+    if not isinstance(project, dict):
+        return None
+    raw = project.get("root_path")
+    if isinstance(raw, str) and raw.strip():
+        return Path(raw)
+    return None
+
+
+async def _load_project_content(context: dict[str, Any], node_id: str | None) -> ProjectContent | None:
+    """Load the project content layer off the event loop, if this run has one."""
+    root = _project_root_from_context(context)
+    if root is None:
+        return None
+    try:
+        return await asyncio.to_thread(load_project_content, root)
+    except ProjectContentError as exc:
+        raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
+
 async def _resolve_node_tools(
     capability_groups: list[str],
     *,
@@ -150,6 +181,7 @@ async def _resolve_node_tools(
     node_id: str | None = None,
     project_mcp_servers: Any = None,
     project_mcp_fingerprint: str | None = None,
+    project_content: ProjectContent | None = None,
 ) -> list[Any]:
     """Resolve the AI node's tool set from its capability groups (C1).
 
@@ -157,9 +189,11 @@ async def _resolve_node_tools(
     union to concrete ``BaseTool`` objects.  A gateway/skill-storage failure
     fails the node instead of silently shrinking its declared tool set.
     ``instance_repo`` (N6) is forwarded so
-    the gateway's ``app`` provider writes instance records through.
+    the gateway's ``app`` provider writes instance records through, and
+    ``project_content`` contributes the project's own tool references.
     """
-    if not capability_groups and repository is None and not project_mcp_servers:
+    project_tool_refs = list(project_content.tool_refs) if project_content is not None else []
+    if not capability_groups and repository is None and not project_mcp_servers and not project_tool_refs:
         return []
     from deerflow.tools.registry import ToolResolutionError
     from deerflow.workflow.tool_gateway import resolve_capability_tools
@@ -180,6 +214,9 @@ async def _resolve_node_tools(
             app_config=app_config,
             instance_repo=instance_repo,
             mcp_tools=mcp_tools,
+            project_tool_root=project_content.tool_root if project_content is not None else None,
+            project_tool_refs=project_tool_refs,
+            allow_project_python_tools=bool(project_content.allow_python_tools) if project_content is not None else False,
         )
     except ToolResolutionError as exc:
         # An explicitly declared tool is part of the node's contract.  Silently
@@ -243,6 +280,8 @@ async def exec_llm_agent(
     if not isinstance(core_group, VibeStackGroupRef):
         core_group = default_core(app_config)
     capability_group_snapshot = tuple(context.get("capability_group_snapshot") or ())
+    project_content_snapshot = tuple(context.get("project_content_snapshot") or ())
+    project_content = await _load_project_content(context, node_id)
     thread_id = context.get("thread_id")
 
     raw_groups = params.get("capability_groups") or []
@@ -337,6 +376,12 @@ async def exec_llm_agent(
         except VibeStackError as exc:
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
 
+    if project_content is not None and project_content_snapshot:
+        try:
+            verify_project_content_snapshot(project_content, project_content_snapshot)
+        except ProjectContentError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
     capability_rules: list[Any] = []
     capability_skills: list[Any] = []
     try:
@@ -345,6 +390,22 @@ async def exec_llm_agent(
         capability_skills = load_capability_skills(capability_groups, repository=repository, active=active_groups, core=core_group)
     except (CapabilityContentError, VibeStackError) as exc:
         raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+
+    if project_content is not None and project_content.skills:
+        try:
+            capability_skills, shadowed_skills = merge_project_skills(
+                capability_skills,
+                project_content.skills,
+                shadow=project_content.skill_shadow,
+            )
+        except ProjectContentError as exc:
+            raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
+        if shadowed_skills:
+            logger.warning(
+                "node %r: project skills shadow capability skills: %s",
+                node_id,
+                ", ".join(shadowed_skills),
+            )
 
     checkpoint_thread_id: str | None = None
     if checkpoint_enabled:
@@ -369,6 +430,10 @@ async def exec_llm_agent(
         except StructuredOutputError as exc:
             raise WorkflowExecutionError(f"node '{node_id or 'ai:llm_agent'}': {exc}") from exc
         schema_contract = build_schema_contract_layer(input_schema, output_schema)
+        project_instructions = build_project_instructions_layer(
+            project_content.instructions if project_content is not None else (),
+            project_content.rules if project_content is not None else (),
+        )
         buckets = build_ai_node_buckets(
             agent_name=params.get("agent_name"),
             capability_groups=capability_groups,
@@ -378,6 +443,7 @@ async def exec_llm_agent(
             agent_skills=agent_skills,
             capability_rules=capability_rules,
             capability_skills=capability_skills,
+            project_instructions=project_instructions,
             schema_contract=schema_contract,
             specification=specification,
         )
@@ -405,6 +471,7 @@ async def exec_llm_agent(
         node_id=node_id,
         project_mcp_servers=project_mcp_servers,
         project_mcp_fingerprint=project_mcp_fingerprint,
+        project_content=project_content,
     )
     if capability_skills:
         node_tools.append(build_read_capability_skill_tool(capability_skills))

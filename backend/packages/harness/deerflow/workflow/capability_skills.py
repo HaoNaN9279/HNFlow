@@ -66,10 +66,10 @@ def build_read_capability_skill_tool(skills: Sequence[CapabilitySkill]) -> BaseT
         func=read_capability_skill,
         name="read_capability_skill",
         description=(
-            "Read a capability-group skill's full SKILL.md or one of its supporting files. "
-            "The system prompt lists skill names and descriptions only; call this tool when "
-            "you need the full instructions. Available skills: "
-            f"{names or '(none)'}."
+            "Read a skill's full SKILL.md or one of its supporting files. Skills may come from a "
+            "capability group or from the project's .hnflow/content/skills. The system prompt lists "
+            "skill names and descriptions only; call this tool when you need the full instructions. "
+            f"Available skills: {names or '(none)'}."
         ),
     )
 

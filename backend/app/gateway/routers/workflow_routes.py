@@ -177,9 +177,13 @@ def _resolve_workflow_metadata(
     return resolve_metadata(definition, metadata, user_id=user_id, repository=repository, active=active, core=core)
 
 
-async def _capability_scope(request: Request, project_id: str | None, user_id: str) -> tuple[Path | None, dict[str, str], VibeStackGroupRef]:
+async def _capability_scope(request: Request, project_id: str | None, user_id: str) -> tuple[Path | None, dict[str, str], VibeStackGroupRef, Path | None]:
+    project_root: Path | None = None
     if project_id:
         scope = await project_capability_scope(request, project_id, user_id=user_id)
+        raw_root = scope.get("root_path")
+        if isinstance(raw_root, str) and raw_root:
+            project_root = Path(raw_root)
     else:
         repository = resolve_repository()
         core = default_core()
@@ -192,7 +196,7 @@ async def _capability_scope(request: Request, project_id: str | None, user_id: s
     repository = Path(repository_value) if isinstance(repository_value, str) and repository_value else None
     core_data = scope.get("core") if isinstance(scope.get("core"), dict) else {}
     core = VibeStackGroupRef(name=str(core_data.get("name") or "core"), version=str(core_data.get("version") or "0.1.0"))
-    return repository, dict(scope.get("active") or {}), core
+    return repository, dict(scope.get("active") or {}), core, project_root
 
 
 async def _activate_definition_for_project(request: Request, project_id: str | None, definition: WorkflowDefinition, user_id: str) -> dict[str, Any] | None:
@@ -301,7 +305,7 @@ async def create_workflow(request: Request, body: WorkflowCreateRequest):
         raise HTTPException(status_code=422, detail={"errors": errors})
     await _validate_folder(request, body.folder_id, user)
     await _activate_definition_for_project(request, body.project_id, model, str(user.id))
-    repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
+    repository, active, core, _project_root = await _capability_scope(request, body.project_id, str(user.id))
     await _validate_semantics(request, model, user, repository=repository, active=active, core=core)
 
     # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).
@@ -420,7 +424,7 @@ async def preview_workflow_prompt(definition_id: str, request: Request, body: Wo
     if errors:
         raise HTTPException(status_code=422, detail={"errors": errors})
 
-    repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
+    repository, active, core, project_root = await _capability_scope(request, body.project_id, str(user.id))
     try:
         preview = await asyncio.to_thread(
             build_prompt_preview,
@@ -430,6 +434,7 @@ async def preview_workflow_prompt(definition_id: str, request: Request, body: Wo
             repository=repository,
             active=active,
             core=core,
+            project_root=project_root,
         )
     except PromptPreviewError as exc:
         raise HTTPException(status_code=422, detail={"errors": [str(exc)]}) from exc
@@ -466,7 +471,7 @@ async def update_workflow(definition_id: str, request: Request, body: WorkflowUp
         if errors:
             raise HTTPException(status_code=422, detail={"errors": errors})
         await _activate_definition_for_project(request, body.project_id, model, str(user.id))
-        repository, active, core = await _capability_scope(request, body.project_id, str(user.id))
+        repository, active, core, _project_root = await _capability_scope(request, body.project_id, str(user.id))
         await _validate_semantics(request, model, user, repository=repository, active=active, core=core)
 
         # N14 搂24.8: opt-in embedded eval gate (no-op unless require_pass is set).

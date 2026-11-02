@@ -18,6 +18,7 @@ from deerflow.capability_groups.vibestack import (
     read_project_stack,
     resolve_repository,
 )
+from deerflow.project_content import ProjectContentError, content_fingerprint, content_snapshot, load_project_content
 from deerflow.projects import ProjectError, ProjectNotFoundError
 
 
@@ -97,6 +98,11 @@ async def project_run_metadata(
         }
         for group in groups
     ]
+    try:
+        project_content = await asyncio.to_thread(load_project_content, Path(scope["root_path"]))
+    except ProjectContentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    content_snapshot_entries = content_snapshot(project_content)
     return {
         "project_id": project_id,
         "project": snapshot,
@@ -105,4 +111,7 @@ async def project_run_metadata(
         "vibestack_fingerprint": getattr(plan, "fingerprint", None) if plan is not None else None,
         "project_stack": stack.to_dict() if stack is not None else None,
         "capability_group_snapshot": group_snapshot,
+        "project_content": project_content.summary_dict(),
+        "project_content_snapshot": content_snapshot_entries,
+        "project_content_fingerprint": content_fingerprint(content_snapshot_entries),
     }

@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-PROJECT_SCHEMA_VERSION = 3
+PROJECT_SCHEMA_VERSION = 4
 WORKBENCH_SCHEMA_VERSION = 1
 
 _PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -56,6 +56,57 @@ class ProjectRoot(BaseModel):
         return normalized
 
 
+def _validate_relative_path(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized:
+        raise ValueError("path must be non-empty")
+    if "\x00" in normalized:
+        raise ValueError("path must not contain NUL")
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:", normalized):
+        raise ValueError(f"path must be project-relative; got {value!r}")
+    if any(part in {"", ".", ".."} for part in normalized.split("/")):
+        raise ValueError(f"path must not contain empty, '.' or '..' segments; got {value!r}")
+    return normalized
+
+
+class ProjectCapabilityConfig(BaseModel):
+    """Project-scoped content that lives beside capability groups.
+
+    This is deliberately *not* a capability group: content here has no GUID,
+    no version, and no ``extends``; the project repository is its source of
+    truth.  ``skill_shadow`` and ``allow_python_tools`` are the two explicit
+    trust decisions the project owner makes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    content_root: str = Field(default=".hnflow/content", description="Project-relative content root (rules/skills/tools).")
+    instructions: list[str] = Field(default_factory=list, description="Extra project-relative instruction files, in prompt order.")
+    tools: list[str] = Field(default_factory=list, description="Tool references declared by the project (tool:/mcp:/builtin:/sandbox:/app:).")
+    skill_shadow: Literal["deny", "allow"] = Field(default="deny", description="Whether a project skill may shadow a same-named capability-group skill.")
+    allow_python_tools: bool = Field(default=False, description="Trust switch for project-local python tool packages; they execute in the Gateway process.")
+
+    @field_validator("content_root")
+    @classmethod
+    def _validate_content_root(cls, value: str) -> str:
+        return _validate_relative_path(value)
+
+    @field_validator("instructions")
+    @classmethod
+    def _validate_instructions(cls, value: list[str]) -> list[str]:
+        return [_validate_relative_path(item) for item in value]
+
+    @field_validator("tools")
+    @classmethod
+    def _validate_tools(cls, value: list[str]) -> list[str]:
+        normalized = [item.strip() for item in value if item.strip()]
+        for item in normalized:
+            if not item.startswith(("tool:", "mcp:", "builtin:", "sandbox:", "app:")):
+                raise ValueError(f"tool reference must start with tool:/mcp:/builtin:/sandbox:/app:; got {item!r}")
+        return normalized
+
+
 class ProjectManifest(BaseModel):
     """The contents of ``<project>/.hnflow/project.json``."""
 
@@ -70,6 +121,7 @@ class ProjectManifest(BaseModel):
     mcp_allowlist: list[str] = Field(default_factory=list)
     secret_refs: list[str] = Field(default_factory=list)
     settings: dict[str, Any] = Field(default_factory=dict)
+    capability: ProjectCapabilityConfig = Field(default_factory=ProjectCapabilityConfig)
 
     @field_validator("project_id")
     @classmethod

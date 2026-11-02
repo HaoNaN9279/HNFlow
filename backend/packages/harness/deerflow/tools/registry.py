@@ -19,6 +19,7 @@ import copy
 import importlib.util
 import logging
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -72,11 +73,31 @@ def _parse_package_ref(value: str) -> tuple[str, str | None]:
 
 
 class ToolRegistry:
-    """Resolve capability-group tool references through a tool gateway."""
+    """Resolve capability-group tool references through a tool gateway.
 
-    def __init__(self, gateway: Any, *, package_root: Path | None = None) -> None:
+    ``package_roots`` is ordered, most specific first: a project-local package
+    root precedes the VibeStack ``tools/`` checkout, so a project can ship its
+    own tool package without forking the repository.  ``python_untrusted_root``
+    marks a root whose python packages execute in the Gateway process and
+    therefore require an explicit trust decision upstream.
+    """
+
+    def __init__(
+        self,
+        gateway: Any,
+        *,
+        package_root: Path | None = None,
+        package_roots: Sequence[Path | None] | None = None,
+        python_untrusted_root: Path | None = None,
+    ) -> None:
         self._gateway = gateway
-        self._package_root = package_root
+        ordered: list[Path] = []
+        for candidate in (package_root, *(package_roots or ())):
+            if candidate is not None and candidate not in ordered:
+                ordered.append(candidate)
+        self._package_roots: tuple[Path, ...] = tuple(ordered)
+        self._package_root = ordered[0] if ordered else None
+        self._python_untrusted_root = python_untrusted_root.resolve() if python_untrusted_root is not None else None
         self._mcp_index: dict[str, BaseTool] = {}
         self._mcp_by_server: dict[str, list[BaseTool]] = {}
         self._build_mcp_index()
@@ -103,17 +124,35 @@ class ToolRegistry:
         self._mcp_index = index
         self._mcp_by_server = by_server
 
+    def _check_package_trust(self, package: ToolPackage) -> None:
+        """Reject project-local python packages unless the project trusts them."""
+        if self._python_untrusted_root is None or package.provider != "python":
+            return
+        try:
+            inside = package.root.resolve().is_relative_to(self._python_untrusted_root)
+        except OSError:
+            inside = False
+        if inside:
+            raise ToolResolutionError(f"tool package {package.ref}: project-local python tools require capability.allow_python_tools")
+
     def _package(self, identifier: str, version: str | None) -> ToolPackage:
         cache_key = f"{identifier}@v{version}" if version else identifier
         cached = self._package_cache.get(cache_key)
         if cached is not None:
             return cached
-        try:
-            package = load_tool_package(identifier, version=version, root=self._package_root)
-        except ToolPackageError as exc:
-            raise ToolResolutionError(str(exc)) from exc
-        self._package_cache[cache_key] = package
-        return package
+        errors: list[ToolPackageError] = []
+        for root in self._package_roots or (None,):
+            try:
+                package = load_tool_package(identifier, version=version, root=root)
+            except ToolPackageError as exc:
+                errors.append(exc)
+                continue
+            self._check_package_trust(package)
+            self._package_cache[cache_key] = package
+            return package
+        if errors:
+            raise ToolResolutionError(str(errors[-1]))
+        raise ToolResolutionError(f"tool package {identifier!r} not found")
 
     def _load_python_tool(self, package: ToolPackage) -> BaseTool:
         from langchain_core.tools import BaseTool
@@ -306,16 +345,19 @@ class ToolRegistry:
     def descriptors(self) -> list[dict[str, Any]]:
         """Return the catalog of addressable tools (no package import executed)."""
         entries: dict[str, dict[str, Any]] = {}
-        for package in discover_tool_packages(root=self._package_root):
-            entries[package.ref] = {
-                "id": package.ref,
-                "name": package.model_name or package.name,
-                "provider": package.provider,
-                "description": package.description,
-                "permissions": list(package.permissions),
-                "source": "package",
-                "version": package.version,
-            }
+        for root in self._package_roots or (None,):
+            for package in discover_tool_packages(root=root):
+                if package.ref in entries:
+                    continue
+                entries[package.ref] = {
+                    "id": package.ref,
+                    "name": package.model_name or package.name,
+                    "provider": package.provider,
+                    "description": package.description,
+                    "permissions": list(package.permissions),
+                    "source": "package",
+                    "version": package.version,
+                }
 
         for provider in getattr(self._gateway, "providers", ()):
             provider_name = getattr(provider, "name", "")

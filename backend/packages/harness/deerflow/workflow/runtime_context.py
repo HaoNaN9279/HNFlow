@@ -149,6 +149,15 @@ def build_workflow_runtime_context(
         raw_snapshot = run_metadata.get("capability_group_snapshot")
         if isinstance(raw_snapshot, list):
             context["capability_group_snapshot"] = tuple(item for item in raw_snapshot if isinstance(item, dict))
+        raw_project_snapshot = run_metadata.get("project_content_snapshot")
+        if isinstance(raw_project_snapshot, list):
+            context["project_content_snapshot"] = tuple(item for item in raw_project_snapshot if isinstance(item, dict))
+        raw_project_content = run_metadata.get("project_content")
+        if isinstance(raw_project_content, dict):
+            context["project_content"] = raw_project_content
+        project_content_fingerprint = run_metadata.get("project_content_fingerprint")
+        if isinstance(project_content_fingerprint, str) and project_content_fingerprint:
+            context["project_content_fingerprint"] = project_content_fingerprint
         raw_mcp = run_metadata.get("vibestack_mcp")
         if isinstance(raw_mcp, list):
             context["vibestack_mcp"] = tuple(item for item in raw_mcp if isinstance(item, dict))

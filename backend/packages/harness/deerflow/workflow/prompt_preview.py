@@ -17,9 +17,10 @@ from typing import Any
 from deerflow.capability_groups.runtime import CapabilityContentError, load_capability_rules, load_capability_skills
 from deerflow.capability_groups.vibestack import VibeStackError, VibeStackGroupRef, default_core
 from deerflow.config.agents_config import load_agent_config
+from deerflow.project_content import ProjectContentError, load_project_content, merge_project_skills
 from deerflow.workflow.capability_group_nodes import CapabilityGroupWiringError, resolve_ai_capability_groups, validate_capability_group_wiring
 from deerflow.workflow.context_compression import estimate_tokens
-from deerflow.workflow.prompts import BUCKET_ORDER, TEMPLATE_PROMPT_PORT, build_ai_node_buckets, build_schema_contract_layer
+from deerflow.workflow.prompts import BUCKET_ORDER, TEMPLATE_PROMPT_PORT, build_ai_node_buckets, build_project_instructions_layer, build_schema_contract_layer
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
 from deerflow.workflow.structured_output import (
     INPUT_SCHEMA_PORT,
@@ -71,6 +72,7 @@ class PromptPreview:
     capability_groups: list[str]
     omitted_runtime_blocks: tuple[str, ...]
     components: tuple[PromptComponent, ...] = ()
+    project_content: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +83,7 @@ class PromptPreview:
             "capability_groups": list(self.capability_groups),
             "omitted_runtime_blocks": list(self.omitted_runtime_blocks),
             "components": [component.to_dict() for component in self.components],
+            "project_content": self.project_content,
         }
 
 
@@ -143,6 +146,7 @@ def build_prompt_preview(
     repository: Path | None = None,
     active: dict[str, str] | None = None,
     core: VibeStackGroupRef | None = None,
+    project_root: Path | None = None,
 ) -> PromptPreview:
     """Assemble the static text prompt for one AI node."""
     node = next((candidate for candidate in definition.nodes if candidate.id == node_id), None)
@@ -171,6 +175,27 @@ def build_prompt_preview(
     agent_config = load_agent_config(node.agent_name, user_id=user_id) if node.agent_name else None
     agent_skills = agent_config.skills if agent_config is not None else None
 
+    project_content = None
+    if project_root is not None:
+        try:
+            project_content = load_project_content(project_root)
+        except ProjectContentError as exc:
+            raise PromptPreviewError(str(exc)) from exc
+    project_instructions = build_project_instructions_layer(
+        project_content.instructions if project_content is not None else (),
+        project_content.rules if project_content is not None else (),
+    )
+    project_skills = project_content.skills if project_content is not None else ()
+    if project_skills:
+        try:
+            capability_skills, _shadowed = merge_project_skills(
+                capability_skills,
+                project_skills,
+                shadow=project_content.skill_shadow,
+            )
+        except ProjectContentError as exc:
+            raise PromptPreviewError(str(exc)) from exc
+
     buckets = build_ai_node_buckets(
         agent_name=node.agent_name,
         capability_groups=capability_groups,
@@ -181,6 +206,7 @@ def build_prompt_preview(
         preserve_placeholders=True,
         capability_rules=capability_rules,
         capability_skills=capability_skills,
+        project_instructions=project_instructions,
         schema_contract=build_schema_contract_layer(input_schema, output_schema),
     )
     if output_schema is not None:
@@ -237,14 +263,37 @@ def build_prompt_preview(
         )
 
     for skill in capability_skills:
+        guid = getattr(skill, "group_guid", None)
+        version = getattr(skill, "group_version", None)
+        key = f"capability_skill:{guid}@{version}:{skill.name}" if guid else f"project_skill:{skill.name}"
         add(
-            f"capability_skill:{skill.group_guid}@{skill.group_version}:{skill.name}",
+            key,
             "system",
             skill.source,
             f"{skill.name}: {skill.description}",
             f"- {skill.name}: {skill.description}",
             label=skill.label,
         )
+
+    if project_content is not None:
+        for instruction in project_content.instructions:
+            add(
+                f"project_instruction:{instruction.path}",
+                "system",
+                instruction.source,
+                f"{instruction.path} · {_summarize(instruction.content, 'Empty instruction')}",
+                instruction.content,
+                label=instruction.label,
+            )
+        for rule in project_content.rules:
+            add(
+                f"project_rule:{rule.path}",
+                "system",
+                rule.source,
+                f"{rule.path} · {_summarize(rule.content, 'Empty rule')}",
+                rule.content,
+                label=rule.label,
+            )
 
     schema_contract = buckets.get("schema_contract", "")
     if schema_contract:
@@ -306,6 +355,7 @@ def build_prompt_preview(
         capability_groups=capability_groups,
         omitted_runtime_blocks=tuple(omitted),
         components=tuple(components),
+        project_content=project_content.summary_dict() if project_content is not None else None,
     )
 
 

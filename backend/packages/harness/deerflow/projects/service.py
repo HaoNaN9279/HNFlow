@@ -17,6 +17,7 @@ from deerflow.capability_groups.vibestack import (
     resolve_repository,
 )
 from deerflow.persistence.projects import ProjectRepository, ProjectRootConflictError
+from deerflow.project_content import ProjectContentError, content_fingerprint, content_snapshot, load_project_content
 from deerflow.projects.capability_activation import activate_definition_groups, collect_definition_group_refs
 from deerflow.projects.schema import ProjectManifest, WorkbenchFile, WorkbenchMember
 from deerflow.projects.store import (
@@ -246,6 +247,26 @@ class ProjectService:
         _, root, _ = await self._load_project(project_id, user_id=user_id)
         return await asyncio.to_thread(_stack_status, root)
 
+    async def project_content(self, project_id: str, *, user_id: str) -> dict[str, Any]:
+        """Describe the project's own content layer (instructions/rules/skills/tools).
+
+        Read-only by design: the files are the source of truth and belong to the
+        project repository, so HNFlow must not write them behind the user's back.
+        """
+        _, root, _ = await self._load_project(project_id, user_id=user_id)
+        try:
+            content = await asyncio.to_thread(load_project_content, root)
+        except ProjectContentError as exc:
+            raise ProjectError(str(exc)) from exc
+        snapshot = content_snapshot(content)
+        payload = content.summary_dict()
+        payload["project_id"] = project_id
+        payload["root_path"] = str(root)
+        payload["exists"] = content.content_root is not None
+        payload["snapshot"] = snapshot
+        payload["fingerprint"] = content_fingerprint(snapshot)
+        return payload
+
     async def activate_workflow_groups(self, project_id: str, definition: WorkflowDefinition, *, user_id: str) -> dict[str, Any]:
         """Add/update the groups selected by *definition*; preserve unrelated entries."""
         _, root, _ = await self._load_project(project_id, user_id=user_id)
@@ -291,6 +312,7 @@ class ProjectService:
             "roots": [root.model_dump(mode="json") for root in manifest.roots],
             "mcp_allowlist": list(manifest.mcp_allowlist),
             "secret_refs": list(manifest.secret_refs),
+            "capability": manifest.capability.model_dump(mode="json"),
             "created_at": row.get("created_at"),
             "updated_at": row.get("updated_at"),
         }

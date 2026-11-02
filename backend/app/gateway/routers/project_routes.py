@@ -6,7 +6,9 @@ files inside the project; this router never writes the legacy DB-only path.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from pathlib import Path
 from typing import Any, NoReturn
 
 from fastapi import APIRouter, HTTPException, Request
@@ -17,6 +19,7 @@ from app.gateway.permissions import require_permission
 from app.gateway.project_context import project_run_metadata
 from app.gateway.routers.thread_runs import RunResponse, _record_to_response
 from app.gateway.services import start_workflow_run
+from deerflow.capability_groups import resolve_reveal_target, reveal_in_file_manager
 from deerflow.projects import (
     ProjectConflictError,
     ProjectError,
@@ -64,6 +67,10 @@ class WorkbenchRunRequest(BaseModel):
     params: dict[str, Any] = Field(default_factory=dict)
     debug_step: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProjectContentRevealRequest(BaseModel):
+    path: str = Field(default=".", min_length=1, description="Project-relative POSIX path; '.' reveals the project root")
 
 
 def _raise_service_error(exc: Exception) -> NoReturn:
@@ -120,6 +127,43 @@ async def get_project(project_id: str, request: Request):
         return await get_project_service(request).get_project(project_id, user_id=user_id)
     except Exception as exc:  # noqa: BLE001
         _raise_service_error(exc)
+
+
+@router.get("/{project_id}/content")
+@require_permission("workflows", "read")
+async def get_project_content(project_id: str, request: Request):
+    """Describe the project's own content layer (AGENTS.md, rules, skills, tools).
+
+    Read-only: the files live in the project repository and remain the source of
+    truth, so this endpoint never creates or rewrites them.
+    """
+    user_id = await _user(request)
+    try:
+        return await get_project_service(request).project_content(project_id, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001
+        _raise_service_error(exc)
+
+
+@router.post("/{project_id}/content/reveal")
+@require_permission("workflows", "read")
+async def reveal_project_content_file(project_id: str, request: Request, body: ProjectContentRevealRequest):
+    """Reveal one project content path in the host file manager."""
+    user_id = await _user(request)
+    try:
+        project = await get_project_service(request).get_project(project_id, user_id=user_id)
+    except Exception as exc:  # noqa: BLE001
+        _raise_service_error(exc)
+    try:
+        target = resolve_reveal_target(Path(project["root_path"]), body.path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"path not found: {body.path}")
+    try:
+        await asyncio.to_thread(reveal_in_file_manager, target)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"success": True, "path": body.path}
 
 
 @router.delete("/{project_id}")

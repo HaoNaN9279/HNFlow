@@ -469,12 +469,19 @@ def resolve_capability_tools(
     app_config: Any = None,
     instance_repo: Any = None,
     mcp_tools: dict[str, BaseTool] | None = None,
+    project_tool_root: Path | None = None,
+    project_tool_refs: list[str] | None = None,
+    allow_project_python_tools: bool = False,
 ) -> list[BaseTool]:
-    """Resolve an AI node's tool set from its capability groups.
+    """Resolve an AI node's tool set from its capability groups and project.
 
     Capability groups are references, not tool definitions: each group lists
     canonical tool ids in ``group.json.tools`` and this function resolves them
     through the unified :class:`~deerflow.tools.registry.ToolRegistry`.
+    ``project_tool_refs`` adds the project's own refs; its packages are looked
+    up in ``project_tool_root`` first.  Project-local python packages execute
+    in the Gateway process, so they require ``allow_project_python_tools``
+    (the manifest's ``capability.allow_python_tools`` switch).
 
     Explicitly declared tools are never silently dropped.  A missing group,
     package, MCP server/tool, or permission failure raises
@@ -492,6 +499,12 @@ def resolve_capability_tools(
         for ref, values in group.tool_permissions.items():
             overrides[ref] = tuple(dict.fromkeys((*overrides.get(ref, ()), *values)))
 
+    for ref in project_tool_refs or ():
+        canonical = str(ref).strip()
+        if canonical:
+            refs.append(canonical)
+    refs = list(dict.fromkeys(refs))
+
     if not refs:
         return []
 
@@ -502,8 +515,13 @@ def resolve_capability_tools(
         user_id=user_id,
         mcp_tools=mcp_tools,
     )
-    registry = ToolRegistry(gateway, package_root=(repository / "tools") if repository is not None else None)
-    return registry.resolve(list(dict.fromkeys(refs)), permissions=tuple(permissions), overrides=overrides)
+    repo_tools = (repository / "tools") if repository is not None else None
+    registry = ToolRegistry(
+        gateway,
+        package_roots=[project_tool_root, repo_tools],
+        python_untrusted_root=None if allow_project_python_tools else project_tool_root,
+    )
+    return registry.resolve(refs, permissions=tuple(permissions), overrides=overrides)
 
 
 __all__ = [
