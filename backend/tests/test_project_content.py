@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI
@@ -36,6 +38,8 @@ from deerflow.projects.schema import ProjectCapabilityConfig, ProjectRoot
 from deerflow.projects.service import ProjectService
 from deerflow.projects.store import create_project_files, read_manifest, write_manifest
 from deerflow.tools.registry import ToolRegistry, ToolResolutionError
+from deerflow.workflow.compiler import WorkflowRuntime
+from deerflow.workflow.executors import WorkflowExecutionError, exec_llm_agent
 from deerflow.workflow.prompts import build_ai_node_buckets, build_project_instructions_layer
 from deerflow.workflow.runtime_context import build_workflow_runtime_context
 
@@ -330,3 +334,65 @@ async def test_project_content_survives_without_vibestack_repository(tmp_path: P
     assert content["instructions"][0]["path"] == "AGENTS.md"
     assert content["content_root"] is None
     await close_engine()
+
+
+class _FakeSubagentExecutor:
+    """Capture the system prompt the AI node hands to its sub-agent."""
+
+    captured: dict = {}
+
+    def __init__(self, **kwargs: Any) -> None:
+        self.captured["kwargs"] = kwargs
+
+    async def _aexecute(self, task: str, result_holder: Any = None) -> Any:
+        return SimpleNamespace(status=SimpleNamespace(value="completed"), result="done", error=None)
+
+
+def _patch_ai_executor(monkeypatch: pytest.MonkeyPatch) -> dict:
+    import deerflow.subagents as subagents_pkg
+
+    captured: dict = {}
+    _FakeSubagentExecutor.captured = captured
+    monkeypatch.setattr(subagents_pkg, "SubagentExecutor", _FakeSubagentExecutor)
+    monkeypatch.setattr("deerflow.workflow.executors.ai._resolve_node_tools", AsyncMock(return_value=[]))
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_rules", lambda *args, **kwargs: [])
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [])
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_executor_injects_project_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _project(tmp_path)
+    _write(root / "AGENTS.md", "Project rule: use tabs.")
+    captured = _patch_ai_executor(monkeypatch)
+    runtime = WorkflowRuntime(context={"user_id": "u1", "thread_id": "t", "project": {"root_path": str(root)}})
+
+    await exec_llm_agent(runtime, {"node_id": "ai"}, {"in": "x", "template_prompt": "do the task"})
+
+    system_prompt = captured["kwargs"]["config"].system_prompt
+    assert "<project_instructions>" in system_prompt
+    assert "Project rule: use tabs." in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_executor_rejects_project_skill_shadow_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = _project(tmp_path)
+    _write(
+        root / ".hnflow" / "content" / "skills" / "deploy" / "SKILL.md",
+        "---\nname: deploy\ndescription: Project deploy.\n---\n\nbody",
+    )
+    capability_skill = SimpleNamespace(
+        name="deploy",
+        description="capability deploy",
+        group_name="core",
+        group_version="0.1.0",
+        group_guid="a" * 32,
+        skill_dir=tmp_path,
+        skill_file=tmp_path / "SKILL.md",
+    )
+    _patch_ai_executor(monkeypatch)
+    monkeypatch.setattr("deerflow.workflow.executors.ai.load_capability_skills", lambda *args, **kwargs: [capability_skill])
+    runtime = WorkflowRuntime(context={"user_id": "u1", "thread_id": "t", "project": {"root_path": str(root)}})
+
+    with pytest.raises(WorkflowExecutionError, match="shadows skill"):
+        await exec_llm_agent(runtime, {"node_id": "ai"}, {"in": "x", "template_prompt": "do the task"})
