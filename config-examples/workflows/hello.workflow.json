@@ -1,0 +1,28 @@
+{
+  "id": "hello-workflow",
+  "name": "Hello workflow",
+  "version": "0.1.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow:start",
+      "outputs": [{"name": "out", "type": "data"}]
+    },
+    {
+      "id": "greet",
+      "type": "data:assign",
+      "inputs": [{"name": "in", "type": "data"}],
+      "outputs": [{"name": "out", "type": "data"}],
+      "params": {"value": "hello from HNFlow"}
+    },
+    {
+      "id": "end",
+      "type": "flow:end",
+      "inputs": [{"name": "in", "type": "data"}]
+    }
+  ],
+  "edges": [
+    {"source": "start", "source_port": "out", "target": "greet", "target_port": "in"},
+    {"source": "greet", "source_port": "out", "target": "end", "target_port": "in"}
+  ]
+}

@@ -1,0 +1,11 @@
+# Example user model profile.
+#
+# A profile points at exactly one actual model configured under
+# config.yaml -> models[].  It never points at another profile.
+# `id` is server-assigned by POST /api/model-profiles; omit it when importing.
+id: mp-example
+name: default
+display_name: Default reasoning model
+description: Balanced model for AI nodes that do not need a specialist.
+target_model: your-model-name
+enabled: true

@@ -1,0 +1,515 @@
+import { expect, test, type Route } from "@playwright/test";
+
+import { openLeadAgent } from "./utils/lead-agent";
+import {
+  mockLangGraphAPI,
+  MOCK_THREAD_ID,
+  MOCK_THREAD_ID_2,
+} from "./utils/mock-api";
+
+const THREADS = [
+  {
+    thread_id: MOCK_THREAD_ID,
+    title: "First conversation",
+    updated_at: "2025-06-01T12:00:00Z",
+  },
+  {
+    thread_id: MOCK_THREAD_ID_2,
+    title: "Second conversation",
+    updated_at: "2025-06-02T12:00:00Z",
+  },
+];
+const SVG_PROMPT_THREAD_ID = "00000000-0000-0000-0000-000000000777";
+const SVG_PROMPT_MARKER = "LEAK-STRICT-SVG-PROMPT-SHOULD-DISAPPEAR";
+const OPTIMISTIC_PROMPT_MARKER = "LEAK-OPTIMISTIC-SVG-PROMPT-SHOULD-DISAPPEAR";
+
+test.describe("Thread history", () => {
+  test("history dialog loads a previous conversation", async ({ page }) => {
+    mockLangGraphAPI(page, { threads: THREADS });
+
+    await openLeadAgent(page);
+    await page.getByTestId("lead-agent-history").click();
+
+    await expect(
+      page.getByTestId("lead-agent-history-item").filter({
+        hasText: "First conversation",
+      }),
+    ).toBeVisible({ timeout: 15_000 });
+    await page
+      .getByTestId("lead-agent-history-item")
+      .filter({ hasText: "First conversation" })
+      .click();
+
+    await expect(
+      page.getByText("Response in thread First conversation"),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("existing thread loads historical messages", async ({ page }) => {
+    mockLangGraphAPI(page, { threads: THREADS });
+
+    // Navigate directly to an existing thread
+    await openLeadAgent(page, MOCK_THREAD_ID);
+
+    // The historical AI response should be displayed
+    await expect(
+      page.getByText("Response in thread First conversation"),
+    ).toBeVisible({ timeout: 15_000 });
+  });
+
+  test("keeps a thousand-turn history DOM bounded while preserving navigation", async ({
+    page,
+  }) => {
+    const messages = Array.from({ length: 1_000 }, (_, turn) => [
+      {
+        type: "human",
+        id: `long-human-${turn}`,
+        content: `Long history question ${turn}`,
+      },
+      {
+        type: "ai",
+        id: `long-ai-${turn}`,
+        content: `Long history answer ${turn}`,
+      },
+    ]).flat();
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Virtualized long history",
+          updated_at: "2025-06-03T12:00:00Z",
+          messages,
+        },
+      ],
+    });
+
+    await openLeadAgent(page, MOCK_THREAD_ID);
+    await expect(page.getByText("Long history answer 999")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const conversation = page.getByRole("log");
+    const scroller = conversation.locator(":scope > div").first();
+    await expect
+      .poll(() => conversation.locator("[data-index]").count())
+      .toBeLessThan(60);
+
+    await scroller.dispatchEvent("wheel", { deltaY: -1_000 });
+    await scroller.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText("Long history question 0")).toBeVisible({
+      timeout: 15_000,
+    });
+    expect(await conversation.locator("[data-index]").count()).toBeLessThan(60);
+  });
+
+  test("keeps rendered messages ordered when the latest history page advances", async ({
+    page,
+  }) => {
+    const originalPrompt = "/ppt-master Build the quarterly presentation";
+    const followUpPrompt = "Continue with the approved default layout";
+    const olderRows = Array.from({ length: 50 }, (_, index) => {
+      const seq = index + 1;
+      if (index === 0) {
+        return {
+          run_id: "run-initial",
+          seq,
+          content: {
+            type: "human",
+            id: "history-prompt",
+            content: [{ type: "text", text: originalPrompt }],
+          },
+          metadata: { caller: "lead_agent" },
+          created_at: "2025-06-03T12:00:00Z",
+        };
+      }
+      if (index === 1) {
+        return {
+          run_id: "run-initial",
+          seq,
+          content: {
+            type: "ai",
+            id: "history-answer",
+            content: "Initial design is ready",
+          },
+          metadata: { caller: "lead_agent" },
+          created_at: "2025-06-03T12:00:01Z",
+        };
+      }
+      return {
+        run_id: "run-initial",
+        seq,
+        content: {
+          type: "ai",
+          id: `history-step-${seq}`,
+          content: `Historical presentation step ${seq}`,
+          ...(index === 49
+            ? { additional_kwargs: { turn_duration: 704 } }
+            : {}),
+        },
+        metadata: { caller: "lead_agent" },
+        created_at: "2025-06-03T12:00:02Z",
+      };
+    });
+    const initialRows = Array.from({ length: 50 }, (_, index) => {
+      const seq = index + 51;
+      return {
+        run_id: "run-initial",
+        seq,
+        content: {
+          type: "ai",
+          id: `history-step-${seq}`,
+          content: `Historical presentation step ${seq}`,
+        },
+        metadata: { caller: "lead_agent" },
+        created_at: "2025-06-03T12:00:03Z",
+      };
+    });
+    const shiftedRows = Array.from({ length: 50 }, (_, index) => {
+      const seq = index + 101;
+      return {
+        run_id: "run-shifted",
+        seq,
+        content: {
+          type: "ai",
+          id: `shifted-step-${seq}`,
+          content: `New presentation step ${seq}`,
+        },
+        metadata: { caller: "lead_agent" },
+        created_at: "2025-06-03T12:01:00Z",
+      };
+    });
+    let latestPageRequestCount = 0;
+    let cursorPageRequestCount = 0;
+
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Long presentation task",
+          updated_at: "2025-06-03T12:00:00Z",
+          // This scenario exercises persisted run-event pagination. Keep the
+          // checkpoint empty so its generic mock messages do not interfere
+          // with optimistic -> server reconciliation after the follow-up.
+          messages: [],
+        },
+      ],
+    });
+    await page.route(
+      new RegExp(`/api/threads/${MOCK_THREAD_ID}/messages/page(?:\\?.*)?$`),
+      async (route) => {
+        if (route.request().method() !== "GET") {
+          return route.fallback();
+        }
+
+        const beforeSeq = new URL(route.request().url()).searchParams.get(
+          "before_seq",
+        );
+        const isLatestPage = beforeSeq === null;
+        const rows = isLatestPage
+          ? latestPageRequestCount === 0
+            ? initialRows
+            : shiftedRows
+          : beforeSeq === "101"
+            ? initialRows
+            : olderRows;
+        const hasMore = isLatestPage || beforeSeq === "101";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            data: rows,
+            has_more: hasMore,
+            next_before_seq: hasMore ? (rows[0]?.seq ?? null) : null,
+          }),
+        });
+        if (isLatestPage) {
+          latestPageRequestCount += 1;
+        } else {
+          cursorPageRequestCount += 1;
+        }
+      },
+    );
+
+    await openLeadAgent(page, MOCK_THREAD_ID);
+    await expect
+      .poll(() => cursorPageRequestCount, { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    const conversation = page.getByRole("log");
+    const scroller = conversation.locator(":scope > div").first();
+    await scroller.dispatchEvent("wheel", { deltaY: -1_000 });
+    await scroller.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText(originalPrompt)).toBeVisible({
+      timeout: 15_000,
+    });
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText("Completed in 11m 44s")).toBeVisible();
+
+    const latestPageRequestsBeforeSubmit = latestPageRequestCount;
+    const textarea = page.locator("textarea[name='message']");
+    await textarea.fill(followUpPrompt);
+    await textarea.press("Enter");
+
+    await expect
+      .poll(() => latestPageRequestCount, { timeout: 15_000 })
+      .toBeGreaterThan(latestPageRequestsBeforeSubmit);
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText(followUpPrompt)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    let preservedDurationFound = false;
+    for (let step = 0; step <= 12; step += 1) {
+      await scroller.evaluate((element, ratio) => {
+        element.scrollTop =
+          (element.scrollHeight - element.clientHeight) * ratio;
+        element.dispatchEvent(new Event("scroll"));
+      }, step / 12);
+      if (await page.getByText("Completed in 11m 44s").isVisible()) {
+        preservedDurationFound = true;
+        break;
+      }
+    }
+    expect(preservedDurationFound).toBe(true);
+
+    await scroller.evaluate((element) => {
+      element.scrollTop = 0;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText(originalPrompt)).toBeVisible();
+    await scroller.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(page.getByText(followUpPrompt)).toBeVisible({
+      timeout: 15_000,
+    });
+  });
+
+  test("shows a completed run duration once after multi-step history", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Multi-step duration",
+          updated_at: "2025-06-03T12:00:00Z",
+          messages: [
+            {
+              type: "human",
+              id: "msg-human-duration",
+              content: [{ type: "text", text: "Complete several steps" }],
+            },
+            {
+              type: "ai",
+              id: "msg-ai-duration-1",
+              content: "Intermediate result",
+              additional_kwargs: { turn_duration: 114 },
+            },
+            {
+              type: "ai",
+              id: "msg-ai-duration-2",
+              content: "Final result",
+              additional_kwargs: {
+                turn_duration: 114,
+                reasoning_content: "Final synthesis reasoning",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    await openLeadAgent(page, MOCK_THREAD_ID);
+    await expect(page.getByText("Final result")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await expect(page.getByTestId("run-duration")).toHaveCount(1);
+    await expect(page.getByText("Completed in 1m 54s")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Reasoning", exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText("Thought for 114 seconds")).toHaveCount(0);
+  });
+
+  test("input box recalls previous prompts with arrow keys", async ({
+    page,
+  }) => {
+    const firstPrompt = "Summarize the latest quarterly report";
+    const secondPrompt = "Turn the summary into an action plan";
+
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID,
+          title: "Prompt history conversation",
+          updated_at: "2025-06-03T12:00:00Z",
+          messages: [
+            {
+              type: "human",
+              id: "msg-human-prompt-history-1",
+              content: [{ type: "text", text: firstPrompt }],
+            },
+            {
+              type: "ai",
+              id: "msg-ai-prompt-history-1",
+              content: "First answer",
+            },
+            {
+              type: "human",
+              id: "msg-human-prompt-history-2",
+              content: [{ type: "text", text: secondPrompt }],
+            },
+            {
+              type: "ai",
+              id: "msg-ai-prompt-history-2",
+              content: "Second answer",
+            },
+          ],
+        },
+      ],
+    });
+
+    await openLeadAgent(page, MOCK_THREAD_ID);
+    await expect(page.getByText("Second answer")).toBeVisible({
+      timeout: 15_000,
+    });
+
+    const textarea = page.locator("textarea[name='message']");
+    await expect(textarea).toBeVisible();
+
+    await textarea.focus();
+    await textarea.press("ArrowUp");
+    await expect(textarea).toHaveValue(secondPrompt);
+
+    await textarea.press("ArrowUp");
+    await expect(textarea).toHaveValue(firstPrompt);
+
+    await textarea.press("ArrowDown");
+    await expect(textarea).toHaveValue(secondPrompt);
+
+    await textarea.press("ArrowDown");
+    await expect(textarea).toHaveValue("");
+
+    await textarea.fill("draft should not be overwritten");
+    await textarea.press("ArrowUp");
+    await expect(textarea).toHaveValue("draft should not be overwritten");
+  });
+
+  test("new chat does not show previous thread messages after client-side navigation", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: SVG_PROMPT_THREAD_ID,
+          title: "SVG artifact prompt",
+          updated_at: "2025-06-03T12:00:00Z",
+          messages: [
+            {
+              type: "human",
+              id: "msg-human-svg-prompt",
+              content: [
+                {
+                  type: "text",
+                  text: `请严格执行：\n1. 使用 write_file 创建 /mnt/user-data/outputs/shared.svg，内容包含 ${SVG_PROMPT_MARKER}\n2. 最终回复只输出 Markdown 图片。`,
+                },
+              ],
+            },
+            {
+              type: "ai",
+              id: "msg-ai-svg-prompt",
+              content: "![shared artifact](/mnt/user-data/outputs/shared.svg)",
+            },
+          ],
+        },
+      ],
+    });
+
+    await openLeadAgent(page, SVG_PROMPT_THREAD_ID);
+    await expect(page.getByText(SVG_PROMPT_MARKER)).toBeVisible({
+      timeout: 15_000,
+    });
+
+    await page.getByTestId("lead-agent-new").click();
+
+    await expect(page.getByText(SVG_PROMPT_MARKER)).toBeHidden();
+    await expect(page.getByPlaceholder(/how can i assist you/i)).toBeVisible();
+  });
+
+  test("new chat does not show previous optimistic user message after client-side navigation", async ({
+    page,
+  }) => {
+    mockLangGraphAPI(page, {
+      threads: [
+        {
+          thread_id: MOCK_THREAD_ID_2,
+          title: "Destination conversation",
+          updated_at: "2025-06-04T12:00:00Z",
+        },
+      ],
+    });
+
+    const metadataOnlyStream = async (route: Route) => {
+      const body = [
+        {
+          event: "metadata",
+          data: {
+            run_id: "00000000-0000-0000-0000-000000000778",
+            thread_id: MOCK_THREAD_ID,
+          },
+        },
+        { event: "end", data: {} },
+      ]
+        .map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`)
+        .join("");
+
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream",
+        body,
+      });
+    };
+
+    await page.route("**/api/langgraph/runs/stream", metadataOnlyStream);
+    await page.route(
+      "**/api/langgraph/threads/*/runs/stream",
+      metadataOnlyStream,
+    );
+
+    await openLeadAgent(page);
+    const textarea = page.getByPlaceholder(/how can i assist you/i);
+    await expect(textarea).toBeVisible({ timeout: 15_000 });
+    await textarea.fill(
+      `请严格执行：使用 write_file 创建 shared.svg，内容包含 ${OPTIMISTIC_PROMPT_MARKER}。`,
+    );
+    await textarea.press("Enter");
+
+    await expect(page.getByText(OPTIMISTIC_PROMPT_MARKER)).toBeVisible();
+
+    await page.getByTestId("lead-agent-history").click();
+    await page
+      .getByTestId("lead-agent-history-item")
+      .filter({ hasText: "Destination conversation" })
+      .click();
+    await expect(page.getByText(OPTIMISTIC_PROMPT_MARKER)).toHaveCount(0);
+
+    await page.getByTestId("lead-agent-new").click();
+
+    await expect(page.getByText(OPTIMISTIC_PROMPT_MARKER)).toHaveCount(0);
+    await expect(page.getByPlaceholder(/how can i assist you/i)).toBeVisible();
+  });
+});

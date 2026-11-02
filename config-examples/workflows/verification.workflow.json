@@ -1,0 +1,69 @@
+{
+  "id": "verify-workflow",
+  "name": "Formal verification workflow",
+  "version": "0.1.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow:start",
+      "outputs": [{"name": "out", "type": "data"}]
+    },
+    {
+      "id": "gate",
+      "type": "verify:gate",
+      "inputs": [{"name": "implementation", "type": "data", "required": true}],
+      "outputs": [
+        {"name": "status", "type": "enum"},
+        {"name": "verified", "type": "data"},
+        {"name": "failed", "type": "data"},
+        {"name": "inconclusive", "type": "data"},
+        {"name": "evidence", "type": "record"}
+      ],
+      "params": {
+        "spec_ref": {
+          "spec_id": "replace-with-a-frozen-spec-id",
+          "revision": 1,
+          "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+          "language": "dafny"
+        },
+        "verifier": "mock_verifier",
+        "mock_mode": "verified"
+      }
+    },
+    {
+      "id": "ok",
+      "type": "data:assign",
+      "inputs": [{"name": "in", "type": "data"}],
+      "outputs": [{"name": "out", "type": "data"}],
+      "params": {"value": "verified"}
+    },
+    {
+      "id": "bad",
+      "type": "data:assign",
+      "inputs": [{"name": "in", "type": "data"}],
+      "outputs": [{"name": "out", "type": "data"}],
+      "params": {"value": "failed"}
+    },
+    {
+      "id": "unknown",
+      "type": "data:assign",
+      "inputs": [{"name": "in", "type": "data"}],
+      "outputs": [{"name": "out", "type": "data"}],
+      "params": {"value": "inconclusive"}
+    },
+    {
+      "id": "end",
+      "type": "flow:end",
+      "inputs": [{"name": "in", "type": "data"}]
+    }
+  ],
+  "edges": [
+    {"source": "start", "source_port": "out", "target": "gate", "target_port": "implementation"},
+    {"source": "gate", "source_port": "verified", "target": "ok", "target_port": "in"},
+    {"source": "gate", "source_port": "failed", "target": "bad", "target_port": "in"},
+    {"source": "gate", "source_port": "inconclusive", "target": "unknown", "target_port": "in"},
+    {"source": "ok", "source_port": "out", "target": "end", "target_port": "in"},
+    {"source": "bad", "source_port": "out", "target": "end", "target_port": "in"},
+    {"source": "unknown", "source_port": "out", "target": "end", "target_port": "in"}
+  ]
+}

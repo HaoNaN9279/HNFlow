@@ -1,0 +1,302 @@
+import { RESERVED_SLASH_SKILL_NAMES, type Skill } from "@/core/skills";
+
+// Known placeholder tokens used in the welcome-mode quick-action prompt
+// templates defined in the i18n locale files (e.g. zh-CN.ts, en-US.ts). Update
+// this pattern whenever new placeholder tokens are added to templates.
+export const SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN =
+  /\[(?:主题|来源|topic|source)\]/i;
+
+/**
+ * Locates an unreplaced suggestion template placeholder in the given text.
+ *
+ * Returns the start/end character indices of the placeholder if found,
+ * or `null` if the text contains no known placeholder tokens.
+ */
+export function findSuggestionTemplatePlaceholder(
+  text: string,
+): { start: number; end: number } | null {
+  const match = SUGGESTION_TEMPLATE_PLACEHOLDER_PATTERN.exec(text);
+  if (!match) {
+    return null;
+  }
+  return {
+    start: match.index,
+    end: match.index + match[0].length,
+  };
+}
+
+export const MAX_SKILL_SUGGESTIONS = 6;
+
+// Mirror of the backend raw request limit (`ThreadGoalRequest.objective`
+// max_length and `MAX_GOAL_OBJECTIVE_CHARS` in backend goal.py). Kept here so
+// the composer can reject an over-length `/goal <objective>` before issuing the
+// PUT request and show a friendly error instead of surfacing a raw HTTP 422.
+export const MAX_GOAL_OBJECTIVE_CHARS = 4000;
+
+export function isGoalObjectiveTooLong(objective: string): boolean {
+  return objective.length > MAX_GOAL_OBJECTIVE_CHARS;
+}
+
+// The live composer counter stays hidden until the objective approaches the
+// limit, so it only surfaces when the user is at risk of being rejected rather
+// than adding permanent noise to the footer.
+export const GOAL_OBJECTIVE_COUNTER_VISIBLE_AT = Math.floor(
+  MAX_GOAL_OBJECTIVE_CHARS * 0.9,
+);
+
+export type GoalObjectiveCounter = {
+  length: number;
+  max: number;
+  overLimit: boolean;
+};
+
+// Derive the live counter for the composer footer from the same parsed
+// objective string sent to the API. Returns null unless the input is a
+// `/goal <objective>` set command whose raw length has reached the visibility
+// threshold, so the counter only appears for the case the limit actually
+// applies to.
+export function getGoalObjectiveCounter(
+  value: string,
+): GoalObjectiveCounter | null {
+  const command = parseGoalCommand(value);
+  if (command?.kind !== "set") {
+    return null;
+  }
+  const length = command.objective.length;
+  if (length < GOAL_OBJECTIVE_COUNTER_VISIBLE_AT) {
+    return null;
+  }
+  return {
+    length,
+    max: MAX_GOAL_OBJECTIVE_CHARS,
+    overLimit: length > MAX_GOAL_OBJECTIVE_CHARS,
+  };
+}
+
+export type SlashSuggestion = {
+  name: string;
+  description: string;
+  kind: "builtin" | "skill";
+};
+
+export type GoalCommand =
+  | { kind: "status" }
+  | { kind: "clear" }
+  | { kind: "set"; objective: string };
+
+export type InputSubmitAction =
+  | { kind: "goal"; command: GoalCommand }
+  | { kind: "compact" }
+  | { kind: "stop" }
+  | { kind: "empty" }
+  | { kind: "message" };
+
+export type GoalRequestState = {
+  controller: AbortController | null;
+  sequence: number;
+  threadId: string | null;
+};
+
+export type ActiveGoalRequest = {
+  controller: AbortController;
+  sequence: number;
+  threadId: string;
+};
+
+export function createGoalRequestState(): GoalRequestState {
+  return {
+    controller: null,
+    sequence: 0,
+    threadId: null,
+  };
+}
+
+export function beginGoalRequest(
+  state: GoalRequestState,
+  threadId: string,
+): ActiveGoalRequest {
+  state.controller?.abort();
+  const controller = new AbortController();
+  const request = {
+    controller,
+    sequence: state.sequence + 1,
+    threadId,
+  };
+  state.controller = controller;
+  state.sequence = request.sequence;
+  state.threadId = threadId;
+  return request;
+}
+
+export function abortGoalRequest(state: GoalRequestState): void {
+  state.controller?.abort();
+  state.controller = null;
+  state.sequence += 1;
+  state.threadId = null;
+}
+
+export function finishGoalRequest(
+  state: GoalRequestState,
+  request: ActiveGoalRequest,
+): void {
+  if (
+    state.controller === request.controller &&
+    state.sequence === request.sequence
+  ) {
+    state.controller = null;
+  }
+}
+
+export function isCurrentGoalRequest(
+  state: GoalRequestState,
+  request: ActiveGoalRequest,
+  threadId: string,
+): boolean {
+  return (
+    state.controller === request.controller &&
+    state.sequence === request.sequence &&
+    state.threadId === threadId &&
+    !request.controller.signal.aborted
+  );
+}
+
+export function isAbortError(error: unknown): boolean {
+  return (
+    (error instanceof DOMException && error.name === "AbortError") ||
+    (typeof error === "object" &&
+      error !== null &&
+      Reflect.get(error, "name") === "AbortError")
+  );
+}
+
+export function getLeadingSlashSkillQuery(value: string): string | null {
+  if (!value.startsWith("/")) {
+    return null;
+  }
+
+  const query = value.slice(1);
+  if (query.includes("/") || /\s/.test(query)) {
+    return null;
+  }
+
+  return query;
+}
+
+export function getMatchingSkillSuggestions(
+  skills: Skill[],
+  query: string,
+  builtinCommands: SlashSuggestion[],
+): SlashSuggestion[] {
+  const normalizedQuery = query.toLowerCase();
+  // A name the slash parsers refuse must not be offered here either. Both
+  // parsers drop `RESERVED_SLASH_SKILL_NAMES` (the shared contract), and the
+  // builtin commands own their own names in the composer, so a skill carrying
+  // either one is unreachable: submitting it either runs the command or
+  // reaches the model as literal text with nothing activated.
+  const reservedNames = new Set([
+    ...RESERVED_SLASH_SKILL_NAMES,
+    ...builtinCommands.map(({ name }) => name.toLowerCase()),
+  ]);
+
+  const builtinMatches = builtinCommands.filter(({ name, description }) => {
+    if (!normalizedQuery) {
+      return true;
+    }
+    return (
+      name.toLowerCase().includes(normalizedQuery) ||
+      description.toLowerCase().includes(normalizedQuery)
+    );
+  });
+
+  const skillMatches = skills
+    .map((skill, index) => ({
+      skill,
+      index,
+      name: skill.name.toLowerCase(),
+    }))
+    .filter(({ skill, name }) => {
+      if (!skill.enabled) {
+        return false;
+      }
+      if (reservedNames.has(name)) {
+        return false;
+      }
+      return !normalizedQuery || name.includes(normalizedQuery);
+    })
+    .sort((a, b) => {
+      const aStartsWith = a.name.startsWith(normalizedQuery);
+      const bStartsWith = b.name.startsWith(normalizedQuery);
+      if (aStartsWith !== bStartsWith) {
+        return aStartsWith ? -1 : 1;
+      }
+      return a.index - b.index;
+    })
+    .slice(0, MAX_SKILL_SUGGESTIONS)
+    .map(({ skill }) => ({
+      name: skill.name,
+      description: skill.description,
+      kind: "skill" as const,
+    }));
+
+  return [...skillMatches, ...builtinMatches].slice(0, MAX_SKILL_SUGGESTIONS);
+}
+
+export function parseGoalCommand(value: string): GoalCommand | null {
+  const trimmed = value.trim();
+  const match = /^\/goal(?:\s+|$)/i.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+
+  const args = trimmed.slice(match[0].length).trim();
+  if (!args) {
+    return { kind: "status" };
+  }
+  if (["clear", "reset", "off"].includes(args.toLowerCase())) {
+    return { kind: "clear" };
+  }
+  return { kind: "set", objective: args };
+}
+
+export function parseCompactCommand(value: string): boolean {
+  return /^\/(?:compact|context\s+compact)\s*$/i.test(value.trim());
+}
+
+export function getInputSubmitAction({
+  text,
+  fileCount,
+  status,
+}: {
+  text: string;
+  fileCount: number;
+  status: string;
+}): InputSubmitAction {
+  const goalCommand = parseGoalCommand(text);
+  if (goalCommand && fileCount === 0) {
+    return { kind: "goal", command: goalCommand };
+  }
+  if (parseCompactCommand(text) && fileCount === 0) {
+    return { kind: "compact" };
+  }
+  if (status === "streaming") {
+    return { kind: "stop" };
+  }
+  if (!text.trim() && fileCount === 0) {
+    return { kind: "empty" };
+  }
+  return { kind: "message" };
+}
+
+export async function readGoalResponseError(
+  response: Response,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string") {
+      return body.detail;
+    }
+  } catch {
+    // Fall through to generic message.
+  }
+  return `HTTP ${response.status}`;
+}

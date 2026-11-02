@@ -1,0 +1,86 @@
+# HNFlow 安装引导
+
+本文档面向编码智能体。如果 HNFlow 仓库尚未打开，请先克隆/打开仓库并进入**仓库根目录**；仓库已打开时从仓库根目录继续执行下面的步骤。
+
+## 目标
+
+在用户本机构建 HNFlow 本地开发环境，走**最稳妥路径**。
+
+默认优先级：
+
+1. Docker 开发环境
+2. 本地开发环境
+
+不要假设 API 密钥或模型凭据已存在。先把一切能安全准备的东西准备好，然后停下来，简明列出用户还需要提供什么。
+
+## 操作规则
+
+- **幂等**：重复执行本文档不应破坏已有环境。
+- **优先使用现有仓库命令**：能用 `make ...` 就不要临时写 shell 命令。
+- **不用 `sudo`、不装系统包**：除非用户明确批准。
+- **不覆盖已有配置**：除非用户要求，不改写已有的 `config.yaml` 等配置值。
+- **失败即停**：某一步失败就停止，说明阻塞点，给出最小下一步动作。
+- **多条路径可选时**：Docker 已可用则优先 Docker。
+
+## 成功标准
+
+满足以下全部条件才算搭建成功：
+
+- HNFlow 仓库已打开，当前工作目录是仓库根目录。
+- `config.yaml` 已存在。
+- Docker 路径：`make docker-init` 成功完成，Docker 前置条件就绪——但**不假定服务已运行**。
+- 本地路径：`make check` 通过或未报告缺失前置条件，且 `make install` 成功完成。
+- 用户收到**确切的下一条命令**来启动 HNFlow。
+- 用户还收到 `config.yaml` 中缺失的模型配置项或引用的环境变量**名称**——不打开密钥类文件看实际值。
+
+## 步骤
+
+- **确认根目录**：检查 `Makefile`、`backend/`、`frontend/`、`config.example.yaml`、`config-examples/` 都存在；缺任一文件则说明当前目录不是仓库根，停止并报告。
+- **检测 `hnflow-data/config.yaml`**：确认是否已存在；已存在则跳过生成步骤，直接进入下一步检测。
+- **生成配置**：若 `hnflow-data/config.yaml` 不存在，运行 `make config`。该命令从 `config-examples/` 播种到 gitignored 的 `hnflow-data/`，已存在时中止——不要重复运行。
+- **检测 Docker**：用 `docker info` 检查 Docker 是否可用、守护进程是否可达。`docker info` 失败即视为 Docker 不可用，转入本地路径。
+- **若 Docker 可用**：
+  - 运行 `make docker-init`。
+  - 这仅视为 Docker 前置准备，**不要声称**应用服务、compose 校验或镜像构建已经成功。
+  - 除非用户明确要求或本次安装请求明确包含启动验证，否则**不启动**长驻服务。
+  - 告诉用户推荐的下一条命令是 `make docker-start`。
+- **若 Docker 不可用**：
+  - 运行 `make check`。
+  - 若 `make check` 报告缺失系统依赖（如 `node`、`pnpm`、`uv`、`nginx`），停止并报告缺失工具，**不要尝试特权安装**。
+  - 前置条件满足后，运行 `make install`。
+  - 告诉用户推荐的下一条命令是 `make dev`。
+- **检查模型配置**：只检查 `hnflow-data/config.yaml` 中缺失的模型配置项或引用的环境变量占位符。**不要读** `hnflow-data/.env`、`hnflow-data/frontend.env` 或其他含密钥的文件。
+- 若未配置任何模型，告诉用户必须在 `hnflow-data/config.yaml` 的 `models` 下至少添加一项。
+- 若 `hnflow-data/config.yaml` 引用了 `$OPENAI_API_KEY` 之类的变量，告诉用户哪些变量名仍需真实值——但不要打开密钥类文件去核实。
+- 若仓库看起来已配置好，避免重复昂贵的准备工作，除非确有必要验证环境。
+
+## 验证
+
+用与所选路径匹配的最轻量验证。
+
+Docker 路径：
+
+- 确认 `make docker-init` 成功完成。
+- 确认 `hnflow-data/config.yaml` 存在。
+- 明确说明 Docker 服务**未启动**，`make docker-start` 仍是第一个真正的启动步骤。
+- 除非用户要求，不留后台服务运行。
+
+本地路径：
+
+- 确认 `make install` 成功完成。
+- 确认 `hnflow-data/config.yaml` 存在。
+- 除非用户要求，不留后台服务运行。
+
+## 最终报告格式
+
+返回简短状态报告，包含：
+
+1. 使用的路径：Docker 或本地
+2. 到达的层次：Docker 前置已准备 / 本地依赖已安装
+3. 已创建或检测到的文件：例如 `hnflow-data/config.yaml`
+4. 剩余用户动作：模型配置、环境变量值、认证文件，或没有
+5. 启动 HNFlow 的确切下一条命令
+
+## EXECUTE NOW
+
+完成上述步骤。结束后停在搭建边界，报告状态，不要继续做无关的项目工作。
