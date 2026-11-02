@@ -202,6 +202,27 @@ export interface Translations {
     };
   };
 
+  projectContent: {
+    title: string;
+    description: string;
+    contentRoot: string;
+    contentRootMissing: string;
+    noContentRoot: string;
+    empty: string;
+    instructions: string;
+    rules: string;
+    skills: string;
+    tools: string;
+    skillShadow: string;
+    pythonTools: string;
+    allow: string;
+    deny: string;
+    reveal: string;
+    selectProject: string;
+    selectProjectPlaceholder: string;
+    loadFailed: string;
+  };
+
   tools: {
     title: string;
     description: string;

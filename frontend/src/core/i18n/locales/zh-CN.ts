@@ -219,6 +219,28 @@ export const zhCN: Translations = {
     },
   },
 
+  projectContent: {
+    title: "项目内容",
+    description:
+      "项目自有内容：AGENTS.md、.hnflow/content 下的 rules、skills 与工具引用。它们比能力组更具体，但不会扩大节点权限。",
+    contentRoot: "内容根",
+    contentRootMissing: "未配置内容根",
+    noContentRoot: "无内容目录",
+    empty: "项目没有额外内容，仅使用 AGENTS.md 与已激活能力组。",
+    instructions: "项目指令",
+    rules: "项目规则",
+    skills: "项目技能",
+    tools: "项目工具",
+    skillShadow: "技能覆盖",
+    pythonTools: "Python 工具",
+    allow: "允许",
+    deny: "禁止",
+    reveal: "在资源管理器中定位",
+    selectProject: "项目",
+    selectProjectPlaceholder: "未选择项目（仅能力组）",
+    loadFailed: "加载项目内容失败",
+  },
+
   tools: {
     title: "工具集",
     description:

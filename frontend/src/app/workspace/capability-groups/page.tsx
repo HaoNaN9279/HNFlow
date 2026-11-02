@@ -12,6 +12,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ProjectContentPanel } from "@/components/workspace/capability-groups/project-content-panel";
 import {
   WorkspaceBody,
   WorkspaceContainer,
@@ -33,6 +34,9 @@ import type {
   CapabilityGroupSummary,
 } from "@/core/capability-groups/types";
 import { useI18n } from "@/core/i18n/hooks";
+import { revealProjectContentFile } from "@/core/project-content/api";
+import { useProjectContent } from "@/core/project-content/hooks";
+import { useProjects } from "@/core/projects/hooks";
 import { usePersistedBoolean } from "@/hooks/use-persisted-toggle";
 import { cn } from "@/lib/utils";
 
@@ -74,9 +78,30 @@ function categoryLabel(
 export default function CapabilityGroupsPage() {
   const { t } = useI18n();
   const labels = t.capabilityGroups;
-  const query = useCapabilityGroupCatalog();
+  const [projectId, setProjectId] = useState("");
+  const projects = useProjects();
+  const content = useProjectContent(projectId || undefined);
+  const [revealingContent, setRevealingContent] = useState(false);
+  const query = useCapabilityGroupCatalog(projectId || undefined);
   const groups = query.data?.groups ?? [];
   const activeCount = groups.filter((group) => group.active).length;
+
+  const revealContent = async (path: string) => {
+    if (!projectId) {
+      return;
+    }
+    setRevealingContent(true);
+    try {
+      await revealProjectContentFile(projectId, path);
+      toast.success(t.projectContent.reveal);
+    } catch (error) {
+      toast.error(
+        `${t.projectContent.loadFailed}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      setRevealingContent(false);
+    }
+  };
 
   return (
     <WorkspaceContainer>
@@ -102,6 +127,46 @@ export default function CapabilityGroupsPage() {
               </p>
             ))}
           </header>
+
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-xs">
+              <span className="text-muted-foreground">
+                {t.projectContent.selectProject}
+              </span>
+              <select
+                className="border-input bg-background h-8 rounded-md border px-2 text-xs"
+                value={projectId}
+                aria-label={t.projectContent.selectProject}
+                onChange={(event) => setProjectId(event.target.value)}
+              >
+                <option value="">
+                  {t.projectContent.selectProjectPlaceholder}
+                </option>
+                {(projects.data ?? []).map((project) => (
+                  <option key={project.project_id} value={project.project_id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {projectId && content.isLoading && (
+              <p className="text-muted-foreground text-xs">
+                {labels.loadingContents}
+              </p>
+            )}
+            {projectId && content.isError && (
+              <p className="text-destructive text-xs">
+                {t.projectContent.loadFailed}: {content.error.message}
+              </p>
+            )}
+            {projectId && content.data && (
+              <ProjectContentPanel
+                content={content.data}
+                onReveal={(path) => void revealContent(path)}
+                revealDisabled={revealingContent}
+              />
+            )}
+          </div>
 
           {query.isLoading ? (
             <div className="text-muted-foreground py-8 text-sm">

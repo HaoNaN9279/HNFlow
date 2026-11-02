@@ -229,6 +229,29 @@ export const enUS: Translations = {
     },
   },
 
+  projectContent: {
+    title: "Project content",
+    description:
+      "Project-owned content: AGENTS.md plus rules, skills and tool references under .hnflow/content. It is more specific than capability groups but never widens a node's tool permissions.",
+    contentRoot: "Content root",
+    contentRootMissing: "Content root is not configured",
+    noContentRoot: "No content directory",
+    empty:
+      "This project has no extra content; only AGENTS.md and active capability groups apply.",
+    instructions: "Project instructions",
+    rules: "Project rules",
+    skills: "Project skills",
+    tools: "Project tools",
+    skillShadow: "Skill shadowing",
+    pythonTools: "Python tools",
+    allow: "allowed",
+    deny: "denied",
+    reveal: "Reveal in file manager",
+    selectProject: "Project",
+    selectProjectPlaceholder: "No project selected (groups only)",
+    loadFailed: "Failed to load project content",
+  },
+
   tools: {
     title: "Toolset",
     description:
