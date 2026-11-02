@@ -79,7 +79,7 @@ HNFlow/
 - `model_profiles/` —— AI 节点模型中间层，profile 只指向 `config.yaml -> models[]`。
 - `context_compression.py` —— 按模型 `context_window` 自动压缩，复用 summarization middleware。
 - `executors/` —— `flow/data/asset/tool/local_app/human/review/ai/spec/verify`；`data:file`、`data:asset`、`app:script` 默认失败回滚。
-- `prompts.py` / `prompt_preview.py` —— identity / capability / capability_rules / capability_skills / specification / schema_contract / task / schema 提示词桶。
+- `prompts.py` / `prompt_preview.py` —— identity / capability / capability_rules / project_instructions / capability_skills / specification / schema_contract / task / schema 提示词桶。
 - `structured_output.py` —— AI Result Schema 解析/校验/修复、Envelope、`[schema.*]` 引用。
 - `patterns.py` / `handoff.py` / `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `breakpoint.py` / `delegate.py` / `dispatch.py` / `human_task_state.py` —— 模板、动态 handoff、评测、回放、预算、成本、幂等、断点、委派。
 - `compensation.py` / `undo.py` / `undo_service.py` —— 失败回滚与撤销。
@@ -89,6 +89,8 @@ HNFlow/
 ### 扩展与配置
 
 第三方扩展从 `config.yaml` 顶层 `plugins:` 加载。该列表会导致代码导入，因此刻意不放入 API 可写的 `extensions_config.json`。
+
+项目特有内容（`AGENTS.md` 与 `<project>/.hnflow/content/{rules,skills,tools}/`）属于项目仓库，HNFlow 只读不写；它与外部能力组在运行时按 core → groups → project 顺序合并，项目 skill 同名默认 fail-loud。
 
 ### 统一数据目录（`hnflow-data/`）
 

@@ -131,6 +131,7 @@ hnflow-data/
 - 仅启动期字段：`plugins`、`database`、`checkpointer`、`run_events`、`stream_bridge`、`sandbox`、`log_level`、`logging`、`scheduler`、`mcp_tasks`、`apps`、`assets`，权威列表在 `config/reload_boundary.py::STARTUP_ONLY_FIELDS`。
 - 能力组/工具包来自外部 VibeStack（`vibestack.repository` → `VIBESTACK_HOME` / `VIBESTACK_REPO` → `~/.config/vibestack/config.json`）；HNFlow 不播种、不写入。
 - 项目激活：`<project>/.vibestack/stack.json`；Core 固定，保存工作流只增量 upsert。
+- 项目内容：`<project>/.hnflow/content/{rules,skills,tools}/` 与 `AGENTS.md` / `AGENTS.local.md` 由 `project_content/` 装载，作为能力组之外的项目级来源（无 GUID、无版本、无 `extends`）。合并顺序 core → groups → project；项目 skill 同名默认 fail-loud，`capability.skill_shadow: allow` 才覆盖；项目 `python` 工具包需 `capability.allow_python_tools`。项目内容连同快照写入 run metadata，漂移即 fail-loud。
 - 项目运行元数据携带 VibeStack MCP 服务器与 fingerprint；`mcp/project.py` 在内存中合并到 `extensions_config.json`，不持久化。
 
 ## 6. Gateway API
@@ -161,7 +162,7 @@ CORS 默认同源；跨源部署需设置 `GATEWAY_CORS_ORIGINS`，并暴露 `Co
 | `/api/workflow-folders` | 任意层级目录树 |
 | `/api/workflow-monitor` | 跨工作台运行汇总（只读） |
 | `/api/human-tasks` | 待办查询、提交、跳过、打回 |
-| `/api/projects` | 文件化项目与工作台 |
+| `/api/projects` | 文件化项目与工作台；`/api/projects/{id}/content` 只读项目内容源 |
 | `/api/scheduled-tasks` | 定时任务与运行历史 |
 | `/api/specifications` | 规约列表、revision、freeze、lint |
 
@@ -199,7 +200,7 @@ CORS 默认同源；跨源部署需设置 `GATEWAY_CORS_ORIGINS`，并暴露 `Co
 - `worker.py`：run 编排、checkpointer、事件流、人工挂起/恢复、取消。
 - `runtime_context.py`：唯一 compile/runtime context 装配点。
 - `executors/`：`flow`、`data`、`asset`、`tool`、`local_app`、`human`、`review`、`ai`、`spec`、`verify`。
-- `prompts.py` / `prompt_preview.py`：identity / capability / capability_rules / capability_skills / specification / schema_contract / task / schema 桶。
+- `prompts.py` / `prompt_preview.py`：identity / capability / capability_rules / project_instructions / capability_skills / specification / schema_contract / task / schema 桶。
 - `structured_output.py`：Schema 解析、校验、修复、Envelope。
 - `context_compression.py`：按模型 `context_window` 自动压缩。
 - `evals.py` / `replay.py` / `budgets.py` / `costs.py` / `reliability.py` / `dispatch.py`：评测、回放、预算、成本、幂等、调度。
@@ -271,7 +272,7 @@ CORS 默认同源；跨源部署需设置 `GATEWAY_CORS_ORIGINS`，并暴露 `Co
 
 ## 10. 项目、应用、资产与迁移
 
-- `projects/`：文件化项目；`project.json` 与 workbench 文件是数据源，SQL 行只是镜像。
+- `projects/`：文件化项目；`project.json` 与 workbench 文件是数据源，SQL 行只是镜像。`project.json` 的 `capability` 块声明项目内容根、附加指令、项目工具、`skill_shadow` 与 `allow_python_tools`；内容本身在 `.hnflow/content` 与 `AGENTS.md`。
 - `apps/`：宿主应用驱动（CLI/mock）、presence、资源治理、实例持久化；`app:*` 节点走此层。
 - `assets/`：跨软件资产引用与 hash。
 - `environment/`：只读环境探测；无法回答时返回 `unknown`，不 5xx。

@@ -100,7 +100,7 @@ src/
 - `components/workspace/workflows/workflow-list.tsx`：任意层级文件夹树；列表不显示运行状态。
 - `core/workflows/editor-session.ts`：按标签页保存最后位置与脏草稿；保存/丢弃时清理。
 - `app/workspace/model-profiles/page.tsx` + `components/workspace/model-profiles/`：模型档案 CRUD；节点只存稳定 profile id。
-- `app/workspace/capability-groups/page.tsx`：只读 VibeStack 目录；Core 固定，项目内显示 active/inactive；保存工作流会 upsert 到 `.vibestack/stack.json`。
+- `app/workspace/capability-groups/page.tsx`：只读 VibeStack 目录；Core 固定，项目内显示 active/inactive；可切换项目查看项目内容源（AGENTS.md、rules、skills、tools 与两个信任开关）；保存工作流会 upsert 到 `.vibestack/stack.json`。
 - `core/workflows/human-tasks.ts`：人工任务协议；单步暂停用 `{acknowledge: true}` 恢复（空 payload 会被 LangGraph 视为未恢复）。
 - `components/workspace/messages/message-list.tsx`：human input 卡片的待答/最新/已回答门控。
 
@@ -108,7 +108,7 @@ src/
 
 - 定义是纯 JSON；画布只编辑定义、节点尺寸与标签。
 - `data:schema` 使用行式 AI Result Schema 编辑器；`core/workflows/canvas/ai-schema.ts` 负责规范化/校验。
-- `workflow-ai-prompt-composition.tsx` 通过 `POST /prompt-preview` 预览三层提示词来源。
+- `workflow-ai-prompt-composition.tsx` 通过 `POST /prompt-preview` 预览四层提示词来源。
 - 子工作流通过 URL 编码的面包屑进入；共享模板（全局保存）或 `save_mode: "local"` 内联快照。
 - 目录移动使用 `folder_id`；删除文件夹不级联删除工作流。
 - AI 节点只通过 `params.model_profile` 选模型；输入/输出 Schema 必须来自同一 `data:schema`。

@@ -44,15 +44,17 @@ HNFlow（**H**uman-**N**ode **Flow**）把 AI 产出、人工审核、修改迭�
 - AI 节点通过 `params.model_profile` 引用档案；档案指向 `config.yaml -> models[]` 中的实际模型。
 - 档案缺失、停用或被引用时删除会 fail-loud；`GET /api/models` 仍只读。
 
-### AI 节点三层提示词
+### AI 节点四层提示词
 
 ```
 身份层：agent_name 绑定的主身份（SOUL）
 能力层：能力组的 rules / skills / allowed-tools 并集
+项目层：项目 AGENTS.md 与 .hnflow/content 下的 rules / skills
 任务层：template_prompt（continue_prompt 走会话续接）
 ```
 
-- 一个 AI 节点 = 一个主身份 + 若干能力组，避免人格冲突。
+- 一个 AI 节点 = 一个主身份 + 若干能力组 + 项目内容，避免人格冲突。
+- 项目层比能力组更具体，冲突时优先；但它只提供约束，不扩大节点工具权限。
 - 输入/输出 Schema 来自同一个 `data:schema` 节点的 `input_schema` / `output_schema` 端口；AI→AI 交付两侧必须绑定同一 Schema 节点。
 - 输出统一为 **AI Result Envelope**：固定字段 `summary/status/content/artifacts/metadata/error` + `custom`。
 - 上下文超限自动压缩：预算来自模型档案的 `context_window`，使用内置压缩 skill，无节点参数。
@@ -64,8 +66,10 @@ HNFlow（**H**uman-**N**ode **Flow**）把 AI 产出、人工审核、修改迭�
   - 能力组：`<repo>/capability-groups/<name>/<version>/group.json`
   - 工具包：`<repo>/tools/<name>/<version>/tool.json`
 - 项目激活写入 `<project>/.vibestack/stack.json`；Core 固定加载，保存工作流时只增量写入所需组。
+- 项目自有内容放在 `<project>/.hnflow/content/<rules|skills|tools>/`，并自动识别项目根与各 root 下的 `AGENTS.md` / `AGENTS.local.md`；它是项目级来源，不是能力组，HNFlow 只读不写。
+- 项目 skill 默认不得与能力组 skill 同名；`capability.skill_shadow: allow` 才允许覆盖。项目内 `provider: python` 工具包需 `capability.allow_python_tools: true`（在 Gateway 进程执行）。
 - 统一工具 ID：`tool:<guid>@v<version>`、`mcp:<server>:<tool>`、`builtin:<name>`、`sandbox:<name>`、`app:<name>`。
-- `/workspace/capability-groups` 为只读目录面板，不提供编辑/删除。
+- `/workspace/capability-groups` 为只读目录面板，可切换项目查看项目内容，不提供编辑/删除。
 
 ### 人工节点与断点
 
