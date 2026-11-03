@@ -35,7 +35,8 @@ run 停在人工节点时，工具会自动弹问题卡（review 一张卡，tas
 `/workflow` 命令（宿主执行，不进模型上下文）：
 `run <name>`、`status <runId>`、`cancel <runId>`、`resume <runId>`、`tasks [runId]`、
 `submit <taskId>`、`ref list|add|remove|pin`、`asset list|new|import|delete`、
-`save asset <name>`、`override diff|reset`。
+`save asset <name> [--yes]`（不带 `--yes` 只给 diff）、`node <name> <nodeId> <json>`、
+`panel [name]`、`override diff|reset`。
 
 ## 节点与端口
 

@@ -27,7 +27,7 @@ export const USAGE = [
   '/workflow asset new <name> [--folder dir] — create an empty workflow asset',
   '/workflow asset import <path> [--name name] — import a workflow file as a new asset',
   '/workflow asset delete <assetId> — delete an unreferenced asset',
-  '/workflow save asset <name> — write the workspace override back to the asset (explicit, revision +1)',
+  '/workflow save asset <name> [--yes] — write the workspace override back to the asset (dry run + explicit --yes)',
   '/workflow override diff <name> — override vs asset',
   '/workflow override reset <name> — drop the workspace override',
   '/workflow node <name> <nodeId> <json> — set one node\'s params in the workspace override',
@@ -194,8 +194,19 @@ export function createWorkflowCommand(options) {
     if (head === 'ref') return await refCommand(rest, cwd)
     if (head === 'asset') return await assetCommand(rest, cwd)
     if (head === 'save') {
-      const [what, key] = rest
-      if (what !== 'asset' || key === undefined) throw commandError('usage', 'usage: /workflow save asset <name>')
+      const [what, key, ...flags] = rest
+      if (what !== 'asset' || key === undefined) throw commandError('usage', 'usage: /workflow save asset <name> [--yes]')
+      if (!flags.includes('--yes')) {
+        const stores = service.storesFor(cwd)
+        const resolved = await service.resolve(cwd, key)
+        if (resolved.source !== 'override') throw commandError('nothing-to-save', `${key} has no workspace override to save`)
+        const asset = await stores.assets.read(resolved.assetId)
+        return [
+          `this would write ${key} back to ${resolved.assetId}: r${resolved.currentRevision} → r${resolved.currentRevision + 1}`,
+          formatOverrideDiff({ assetId: resolved.assetId, baseRevision: resolved.currentRevision, definition: resolved.definition }, asset.definition),
+          'rerun with --yes to save',
+        ].join('\n')
+      }
       const saved = await service.saveAsset({ cwd, key, note: `saved from ${key}` })
       return [
         `saved ${saved.name} (${saved.assetId}) as revision ${saved.revision} (was r${saved.previousRevision})`,

@@ -215,12 +215,18 @@ test('ref pin moves or frees a reference', async () => {
   assert.match(bad.text, /invalid-pin/u)
 })
 
-test('save asset is the explicit path from workspace to asset', async () => {
+test('save asset is a dry run until --yes', async () => {
   const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'save asset publish' })
-  assert.equal(result.kind, 'success')
-  assert.match(result.text, /saved 发布流程 \(wf-1\) as revision 4 \(was r3\)/u)
-  assert.match(result.text, /ref list/u)
+
+  const dry = await handler({ rawInput: 'save asset publish' })
+  assert.equal(dry.kind, 'success')
+  assert.match(dry.text, /this would write publish back to wf-1: r3 → r4/u)
+  assert.match(dry.text, /rerun with --yes to save/u)
+
+  const saved = await handler({ rawInput: 'save asset publish --yes' })
+  assert.equal(saved.kind, 'success')
+  assert.match(saved.text, /saved 发布流程 \(wf-1\) as revision 4 \(was r3\)/u)
+  assert.match(saved.text, /ref list/u)
 
   const usage = await handler({ rawInput: 'save' })
   assert.equal(usage.kind, 'error')

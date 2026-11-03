@@ -167,3 +167,9 @@ test('the editor command carries the key, node, and raw JSON', () => {
   const { internals } = loadBundle()
   assert.equal(internals.nodeCommand('publish', 'greet', '{"value":"a  b"}'), '/workflow node publish greet {"value":"a  b"}')
 })
+
+test('writing back to the asset is a two-step command', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.saveAssetCommand('publish', false), '/workflow save asset publish')
+  assert.equal(internals.saveAssetCommand('publish', true), '/workflow save asset publish --yes')
+})

@@ -246,6 +246,16 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Build the two-step "write back to the asset" command.
+     * @param {string} key - workflow alias or asset id.
+     * @param {boolean} confirmed - whether the user confirmed the diff.
+     * @returns {string} command line.
+     */
+    function saveAssetCommand(key, confirmed) {
+      return confirmed ? `/workflow save asset ${key} --yes` : `/workflow save asset ${key}`;
+    }
+
+    /**
      * The composer-strip control.
      * @param {Record<string, unknown>} props - slot props plus the inject face.
      * @returns {unknown} React element or null when the mode is not HNFlow.
@@ -259,6 +269,7 @@ window.__ModuleLoader__.load({
       const [selectedKey, setSelectedKey] = react.useState(null);
       const [nodeId, setNodeId] = react.useState(null);
       const [draft, setDraft] = react.useState("");
+      const [confirmSave, setConfirmSave] = react.useState(false);
       const triggerRef = react.useRef(null);
       const [anchor, setAnchor] = react.useState(null);
       const menuId = react.useRef(null);
@@ -396,6 +407,42 @@ window.__ModuleLoader__.load({
         }
       };
 
+      /**
+       * Ask the host for the diff a save would apply (the dry run).
+       * @returns {Promise<void>} resolves once the diff is shown.
+       */
+      const previewSave = async () => {
+        if (selected === null) return;
+        setBusy(true);
+        try {
+          setText(await props.run(saveAssetCommand(selected.key, false)));
+          setConfirmSave(true);
+        } catch (error) {
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Write the workspace override back to the asset.
+       * @returns {Promise<void>} resolves once stored and reloaded.
+       */
+      const confirmSaveAsset = async () => {
+        if (selected === null) return;
+        setBusy(true);
+        try {
+          const message = await props.run(saveAssetCommand(selected.key, true));
+          setConfirmSave(false);
+          await loadPanel(selected.key);
+          setText(message);
+        } catch (error) {
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
       const body = h(
         "div",
         {
@@ -468,6 +515,20 @@ window.__ModuleLoader__.load({
                 h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void resetOverride() }, "撤销覆盖"),
               ),
             ),
+        confirmSave
+          ? h(
+              "div",
+              { style: styles.tabs },
+              h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void confirmSaveAsset() }, "确认写入资产"),
+              h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => setConfirmSave(false) }, "取消"),
+            )
+          : selected !== null && selected.source === "override"
+            ? h(
+                "div",
+                { style: styles.tabs },
+                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void previewSave() }, "保存回资产…"),
+              )
+            : null,
         text.length > 0 ? h("pre", { style: styles.body }, text) : null,
       );
 
@@ -511,7 +572,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand };
+    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand };
     return module.exports;
   },
 });

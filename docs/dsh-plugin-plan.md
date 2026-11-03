@@ -467,11 +467,14 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 菜单项 | 作用 | 确认 |
 | --- | --- | --- |
 | 运行 | 手动触发（输入表单来自 start 节点） | 否 |
-| 保存到工作区 | 写/更新 override | 否（工具 `save_override` / 面板） |
-| 保存回资产 | 资产 revision +1 | 是（**仅命令** `/workflow save asset`，工具面无此动作） |
-| 放弃覆盖 | 删除 override | 是 |
-| 更新引用 | 把 ref 固定到新 revision / 切换 follow | 是 |
-| 另存为新资产 | fork 成新资产 | 是 |
+| 保存到工作区 | 写/更新 override（面板节点编辑走 `/workflow node`） | 否 |
+| 保存回资产 | 资产 revision +1 | 是：`/workflow save asset` 先返回 diff，必须带 `--yes` 才写 |
+| 放弃覆盖 | 删除 override（面板「撤销覆盖」） | 是 |
+| 更新引用 | 把 ref 固定到新 revision / 切换 follow（`/workflow ref pin`） | 是 |
+| 另存为新资产 | fork 成新资产 | 是（未实现） |
+
+**已落地**：运行（命令/工具/问题卡）、保存到工作区、撤销覆盖、更新引用、保存回资产的**两步确认**
+（工具面依然没有写资产的动作；面板也只是把同一命令点两次）。
 
 ### 11.3 资产管理页
 
@@ -526,6 +529,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 资产库生命周期 | `/workflow asset new|import|delete`、`/workflow ref pin`；导入支持资产/引擎/裸定义三种形态，删除受当前工作区引用保护 |
 | 问题卡（M3 通道之一） | `hnflow` 在 `waiting_human` 时用 `ctx.userQuestions.ask()` 弹卡：review 一卡两选项，task 一端口一卡；未作答不提交；`interactive:false` 可关 |
 | 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层含工作流列表、只读 SVG 画布（`/workflow panel` 供数）、节点参数编辑（`/workflow node` → 覆盖）、撤销覆盖与命令按钮；仅 `hnflow` 模式渲染；`dsh plugin add` 后 boot 图里可见 `dsh-hnflow/client.js` |
+| 保存回资产（M4 验收项） | `/workflow save asset` 先给 diff 与 `rN → rN+1`，必须 `--yes` 才写；面板「保存回资产…」→「确认写入资产」是同一命令的两次点击；工具面仍无写资产动作 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
@@ -573,10 +577,10 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 验收：面板改参数 → 只改覆盖；显式保存 → 资产 revision +1。
 
 **已落地（面板 MVP）**：`client.js` 在 `conversation.input.left` 注册一个 HNFlow 控件（仅 `hnflow` 模式显示），
-弹层里是工作流列表 + 只读 SVG 画布 + 节点参数编辑器，另有「待办 / 资产 / 撤销覆盖」按钮。
+弹层里是工作流列表 + 只读 SVG 画布 + 节点参数编辑器，另有「保存到工作区 / 撤销覆盖 / 保存回资产」。
 数据来自 `/workflow panel` 一次调用，参数保存走 `/workflow node`（改一个节点 → 引擎校验 → 写覆盖），
-客户端不读文件、不直连引擎，资产不被隐式修改。
-**剩余**：拖拽与连线编辑、画布坐标保存、保存回资产的图形入口、`/workflow open` 深链。
+写资产走 `/workflow save asset`（先 diff，再 `--yes`），客户端不读文件、不直连引擎。
+**剩余**：拖拽与连线编辑、画布坐标保存、另存为新资产、`/workflow open` 深链。
 
 ### M5 模式、Agent 创作与模型桥（2 周）
 

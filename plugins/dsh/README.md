@@ -91,9 +91,10 @@ HNFlow 模式下，输入框左栏会出现一个 **HNFlow** 控件（`conversat
 否则用编辑器同款三列网格。点节点可编辑它的 `params`：
 
 - **保存到工作区** → `/workflow node <name> <nodeId> <json>`，宿主改一个节点 → 引擎校验 → 写工作区覆盖（资产不动）；
-- **撤销覆盖** → `/workflow override reset <name>`。
+- **撤销覆盖** → `/workflow override reset <name>`；
+- **保存回资产** → 先执行 `/workflow save asset <name>` 看 diff（`rN → rN+1`），再点「确认写入资产」执行 `--yes`。
 
-客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致；资产只能由 `/workflow save asset` 更新。
+客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致；写资产永远是两步。
 
 ## 数据布局
 
