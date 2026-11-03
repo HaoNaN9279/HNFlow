@@ -163,6 +163,20 @@ test('an empty definition still produces a drawable box', () => {
   assert.ok(layout.width > 0 && layout.height > 0)
 })
 
+test('the preset projection decides visibility in both shapes', () => {
+  const { internals } = loadBundle()
+
+  // The live projection is the preset id string, not an object.
+  assert.equal(internals.isHnflowPreset('hnflow'), true)
+  assert.equal(internals.isHnflowPreset('vibestack'), false)
+  assert.equal(internals.isHnflowPreset('standard'), false)
+  // The older object shape still works, and an unknown projection must not hide it.
+  assert.equal(internals.isHnflowPreset({ id: 'hnflow' }), true)
+  assert.equal(internals.isHnflowPreset({ id: 'standard' }), false)
+  assert.equal(internals.isHnflowPreset(null), true)
+  assert.equal(internals.isHnflowPreset(undefined), true)
+})
+
 test('the editor command carries the key, node, and raw JSON', () => {
   const { internals } = loadBundle()
   assert.equal(internals.nodeCommand('publish', 'greet', '{"value":"a  b"}'), '/workflow node publish greet {"value":"a  b"}')

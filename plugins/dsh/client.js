@@ -299,6 +299,22 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Whether the session runs the HNFlow preset.
+     *
+     * The `agentPreset` projection is the preset id as a plain string; an older
+     * shape carried `{ id }`. An absent projection means "not known yet", which
+     * must not hide the control.
+     * @param {unknown} preset - projection value.
+     * @returns {boolean} true when the control should render.
+     */
+    function isHnflowPreset(preset) {
+      if (preset === null || preset === undefined) return true;
+      if (typeof preset === "string") return preset === PRESET_ID;
+      if (typeof preset === "object" && typeof preset.id === "string") return preset.id === PRESET_ID;
+      return true;
+    }
+
+    /**
      * The composer-strip control.
      * @param {Record<string, unknown>} props - slot props plus the inject face.
      * @returns {unknown} React element or null when the mode is not HNFlow.
@@ -324,7 +340,7 @@ window.__ModuleLoader__.load({
         menuId.current = "hnflow-panel-" + panelSeq;
       }
 
-      if (preset !== null && preset !== undefined && preset.id !== PRESET_ID) return null;
+      if (!isHnflowPreset(preset)) return null;
 
       /**
        * Run a raw command and show its text.
@@ -709,7 +725,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand, parseInbox, taskTemplate, submitCommand };
+    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand, parseInbox, taskTemplate, submitCommand, isHnflowPreset };
     return module.exports;
   },
 });
