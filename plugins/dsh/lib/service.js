@@ -48,6 +48,9 @@ export class HnflowService {
     this.storesByCwd = new Map()
     /** @type {import('./engine.js').EngineClient | null} */
     this.engine = options.engine ?? null
+    /** @type {{complete: (payload: Record<string, any>) => Promise<{text: string}>} | null} */
+    this.llm = options.llm ?? null
+    if (this.engine !== null) this.wireEngine()
     /** @type {Map<string, {runId: string, cwd: string, key: string, alias: string, assetId: string, startedAt: string}>} */
     this.runs = new Map()
     this.disposed = false
@@ -90,7 +93,27 @@ export class HnflowService {
       models: this.config.models,
       logger: this.logger,
     })
+    // AI nodes may route their completion through the harness, where the model
+    // credentials live. The engine asks; this process answers.
+    this.wireEngine()
     return this.engine
+  }
+
+  /**
+   * Register the engine-request handlers on the current client.
+   *
+   * Called both when the service creates the client and when a caller injects
+   * one (tests, alternate transports), so the bridge is never silently missing.
+   * @returns {void}
+   */
+  wireEngine() {
+    if (this.engine === null || typeof this.engine.onRequest !== 'function') return
+    this.engine.onRequest('llm/complete', async (payload) => {
+      if (this.llm === null) {
+        throw new EngineError('llm-unavailable', 'this session has no DSH LLM service to complete with')
+      }
+      return await this.llm.complete(payload)
+    })
   }
 
   /**

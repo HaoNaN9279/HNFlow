@@ -595,6 +595,79 @@ def test_run_events_survive_a_restart() -> None:
     assert seqs == sorted(seqs)
 
 
+# ── model bridge ───────────────────────────────────────────────────────────────
+
+
+def test_the_bridge_model_forwards_to_the_harness() -> None:
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    from deerflow.workflow.rpc import llm_bridge
+
+    seen: list[dict[str, Any]] = []
+
+    async def transport(payload: dict[str, Any]) -> dict[str, Any]:
+        seen.append(payload)
+        return {"text": "hello from the harness"}
+
+    async def scenario() -> Any:
+        llm_bridge.set_transport(transport)
+        try:
+            model = llm_bridge.BridgeChatModel(provider="deepseek", model="deepseek-flash")
+            return await model.ainvoke([SystemMessage(content="be brief"), HumanMessage(content="hi")])
+        finally:
+            llm_bridge.set_transport(None)
+
+    message = asyncio.run(scenario())
+
+    assert message.content == "hello from the harness"
+    assert seen[0]["provider"] == "deepseek"
+    assert seen[0]["model"] == "deepseek-flash"
+    assert seen[0]["messages"] == [{"role": "system", "text": "be brief"}, {"role": "user", "text": "hi"}]
+
+
+def test_the_bridge_model_fails_loud_without_a_transport() -> None:
+    from langchain_core.messages import HumanMessage
+
+    from deerflow.workflow.rpc import llm_bridge
+
+    async def scenario() -> None:
+        llm_bridge.set_transport(None)
+        model = llm_bridge.BridgeChatModel(provider="deepseek", model="m")
+        await model.ainvoke([HumanMessage(content="hi")])
+
+    try:
+        asyncio.run(scenario())
+    except RuntimeError as exc:
+        assert "no harness LLM transport" in str(exc)
+    else:
+        raise AssertionError("the bridge must fail without a transport")
+
+
+def test_outbound_requests_resolve_and_time_out() -> None:
+    async def scenario() -> tuple[dict[str, Any], Any]:
+        server = RpcServer()
+        sent: list[dict[str, Any]] = []
+        server.set_emit(sent.append)
+
+        task = asyncio.create_task(server.call_client("llm/complete", {"model": "m"}, 500))
+        await asyncio.sleep(0.01)
+        request = sent[-1]
+        assert request["method"] == "llm/complete"
+        assert server.resolve({"jsonrpc": "2.0", "id": request["id"], "result": {"text": "ok"}})
+        resolved = await task
+
+        try:
+            await server.call_client("llm/complete", {}, 10)
+        except Exception as exc:  # noqa: BLE001 - asserted below
+            return resolved, exc
+        raise AssertionError("a client that never answers must time out")
+
+    resolved, error = asyncio.run(scenario())
+
+    assert resolved == {"text": "ok"}
+    assert getattr(error, "engine_code", "") == "client-timeout"
+
+
 # ── stdio transport ───────────────────────────────────────────────────────────
 
 

@@ -39,6 +39,8 @@ export class FakeChild extends EventEmitter {
     this.stdout = new FakeReadable()
     this.stderr = new FakeReadable()
     this.exited = false
+    /** @type {string[]} */
+    this.writes = []
     const respond = options.responder ?? defaultResponder
     this.stdin = {
       destroyed: false,
@@ -49,6 +51,7 @@ export class FakeChild extends EventEmitter {
        * @returns {void}
        */
       write: (payload, callback) => {
+        this.writes.push(String(payload))
         if (this.exited) {
           callback?.(new Error('EPIPE'))
           return

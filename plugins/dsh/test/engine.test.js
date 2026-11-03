@@ -125,6 +125,53 @@ test('the handshake carries the model catalog', async () => {
   }
 })
 
+test('the client answers an engine request', async () => {
+  /** @type {FakeChild | null} */
+  let child = null
+  const client = new EngineClient({
+    python: 'unused',
+    command: ['fake-engine'],
+    startupTimeoutMs: 5000,
+    spawn: () => {
+      child = new FakeChild()
+      return child
+    },
+  })
+  client.onRequest('llm/complete', async (params) => ({ text: `echo:${params.model}` }))
+  try {
+    await client.ensureStarted()
+    child?.reply({ jsonrpc: '2.0', id: 1, method: 'llm/complete', params: { model: 'm' } })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const answer = child?.writes.map((frame) => JSON.parse(frame)).find((message) => message.id === 1 && message.result !== undefined)
+    assert.deepEqual(answer.result, { text: 'echo:m' })
+  } finally {
+    client.stop()
+  }
+})
+
+test('an unknown engine request is answered with an error', async () => {
+  /** @type {FakeChild | null} */
+  let child = null
+  const client = new EngineClient({
+    python: 'unused',
+    command: ['fake-engine'],
+    startupTimeoutMs: 5000,
+    spawn: () => {
+      child = new FakeChild()
+      return child
+    },
+  })
+  try {
+    await client.ensureStarted()
+    child?.reply({ jsonrpc: '2.0', id: 2, method: 'nope/nope', params: {} })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const answer = child?.writes.map((frame) => JSON.parse(frame)).find((message) => message.id === 2 && message.error !== undefined)
+    assert.equal(answer.error.code, -32601)
+  } finally {
+    client.stop()
+  }
+})
+
 test('requests before start are rejected instead of hanging', async () => {
   const client = makeClient()
   await assert.rejects(client.request('engine/ping'), (error) => error.code === 'engine-not-started')

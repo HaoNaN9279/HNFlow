@@ -14,6 +14,7 @@ import threading
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from deerflow.workflow.rpc import llm_bridge
 from deerflow.workflow.rpc.describe import describe
 from deerflow.workflow.rpc.protocol import (
     INTERNAL_ERROR,
@@ -47,6 +48,43 @@ class RpcServer:
         self._host = RunHost(emit=self._notify, state_dir=state_dir)
         self._shutdown_requested = False
         self._initialized = False
+        self._outbound: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._outbound_seq = 0
+
+    # ── outbound requests (engine -> client) ───────────────────────────────
+
+    def resolve(self, message: dict[str, Any]) -> bool:
+        """Complete a pending outbound request from a client response."""
+        request_id = message.get("id")
+        if not isinstance(request_id, int):
+            return False
+        future = self._outbound.pop(request_id, None)
+        if future is None or future.done():
+            return False
+        future.set_result(message)
+        return True
+
+    async def call_client(self, method: str, params: dict[str, Any] | None = None, timeout_ms: int = 120000) -> Any:
+        """Ask the client to run ``method`` and await its answer.
+
+        Used by the LLM bridge: the harness owns model credentials, so a node
+        completion is executed by the plugin, not by the engine.
+        """
+        self._outbound_seq += 1
+        request_id = self._outbound_seq
+        future: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        self._outbound[request_id] = future
+        self._emit({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}})
+        try:
+            message = await asyncio.wait_for(future, timeout_ms / 1000)
+        except TimeoutError as exc:
+            self._outbound.pop(request_id, None)
+            raise EngineError("client-timeout", f"the plugin did not answer {method} in {timeout_ms}ms", {"method": method}) from exc
+        if "error" in message:
+            error = message["error"] if isinstance(message["error"], dict) else {}
+            data = error.get("data") if isinstance(error.get("data"), dict) else {}
+            raise EngineError(str(data.get("code") or "client-error"), str(error.get("message") or f"{method} failed"), data)
+        return message.get("result")
 
     # ── wiring ─────────────────────────────────────────────────────────────
 
@@ -243,6 +281,7 @@ async def serve() -> int:
     """Run the engine on stdin/stdout until EOF or ``engine/shutdown``."""
     server = RpcServer(state_dir=default_state_dir())
     await server.host.boot()
+    llm_bridge.set_transport(lambda payload: server.call_client("llm/complete", payload))
     loop = asyncio.get_running_loop()
     incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
     outgoing: asyncio.Queue[str | None] = asyncio.Queue()
@@ -281,6 +320,9 @@ async def serve() -> int:
         except RpcError as exc:
             enqueue({"jsonrpc": "2.0", "id": None, "error": exc.to_error()})
             return
+        if "method" not in message and "id" in message:
+            server.resolve(message)
+            return
         response = await server.dispatch(message)
         if response is not None:
             enqueue(response)
@@ -301,6 +343,7 @@ async def serve() -> int:
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
     finally:
+        llm_bridge.set_transport(None)
         await server.host.close()
         outgoing.put_nowait(None)
         await writer

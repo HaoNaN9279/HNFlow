@@ -52,7 +52,7 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  const service = new HnflowService({ config: rawConfig, logger })
+  const service = new HnflowService({ config: rawConfig, logger, llm: llmAdapter(ctx) })
   // The root row exists only so the client half is always available; it owns no
   // host behaviour and must not touch any session.
   if (service.config.host === false) return
@@ -182,6 +182,44 @@ export function apply(ctx, rawConfig) {
     service.dispose()
     return undefined
   }, 'hnflow: stop the workflow engine and drop cached state')
+}
+
+/**
+ * Adapt the harness LLM service to the engine's completion request.
+ *
+ * Stage 2 of the model bridge: an AI node configured with
+ * `use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel` sends its messages
+ * here, and this runs them on DSH's own provider route and credentials and
+ * returns the assembled text.
+ * @param {Record<string, any>} ctx - plugin context.
+ * @returns {{complete: (payload: Record<string, any>) => Promise<{text: string}>}} adapter.
+ */
+export function llmAdapter(ctx) {
+  return {
+    complete: async (payload) => {
+      const llm = ctx.get('llm')
+      if (typeof llm?.stream !== 'function') {
+        throw Object.assign(new Error('this session has no DSH LLM service to complete with'), { code: 'llm-unavailable' })
+      }
+      const messages = (Array.isArray(payload?.messages) ? payload.messages : []).map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
+        content: [{ type: 'text', text: String(message.text ?? '') }],
+      }))
+      /** @type {Record<string, any>} */
+      const request = { model: String(payload?.model ?? ''), messages }
+      if (typeof payload?.provider === 'string' && payload.provider.length > 0) request.provider = payload.provider
+      let text = ''
+      for await (const chunk of llm.stream(request)) {
+        if (typeof chunk?.text === 'string') text += chunk.text
+        else if (typeof chunk?.delta === 'string') text += chunk.delta
+        if (chunk?.kind === 'finish' && chunk.failure) {
+          const failure = chunk.failure
+          throw Object.assign(new Error(String(failure.message ?? 'the model call failed')), { code: String(failure.code ?? 'llm-error') })
+        }
+      }
+      return { text }
+    },
+  }
 }
 
 /**

@@ -53,8 +53,19 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 | `maxIndexEntries` | `20` | 系统提示里注入的工作流条数 |
 | `models` | `[]` | 引擎使用的模型目录；留空则用引擎自己的 `config.yaml` |
 
-AI 节点（`ai:llm_agent`）需要模型：既没有 `models` 也没在 `config.yaml` 里配过时，`run/start` 会直接返回
-`models-unavailable` 并列出 AI 节点，不会跑到一半才失败。条目就是 HNFlow 的模型配置：
+AI 节点（`ai:llm_agent`）需要模型，两种接法：
+
+1. **走 DSH 的模型与凭据（推荐）**——`use` 指向桥接类，凭据不用写进 HNFlow：
+
+```yaml
+models:
+  - name: work
+    use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel
+    model: deepseek-flash       # DSH 里的模型 id
+    provider: deepseek          # 可选，DSH 里的 provider 路由
+```
+
+2. **走 HNFlow 自己的 provider 配置**——`use` 指向真实 provider 类，此时 `api_base` / `api_key` 要写全：
 
 ```yaml
 models:
@@ -65,6 +76,8 @@ models:
     api_key: $VOLCENGINE_API_KEY
     context_window: 262144
 ```
+
+两条路都没有模型时，含 AI 节点的工作流在 `run/start` 就会返回 `models-unavailable` 并列出节点。
 
 ## 用法
 

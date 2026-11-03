@@ -71,6 +71,8 @@ export class EngineClient {
     this.pending = new Map()
     /** @type {Set<(message: Record<string, any>) => void>} */
     this.listeners = new Set()
+    /** @type {Map<string, (params: Record<string, any>) => Promise<any>>} */
+    this.requestHandlers = new Map()
     this.buffer = ''
     this.stderrTail = []
     this.nextId = 1
@@ -87,6 +89,18 @@ export class EngineClient {
   onNotification(listener) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
+  }
+
+  /**
+   * Handle a request the engine sends to the plugin (for example an AI node's
+   * completion, which must run where the model credentials live).
+   * @param {string} method - request method.
+   * @param {(params: Record<string, any>) => Promise<any>} handler - resolver.
+   * @returns {() => void} unsubscriber.
+   */
+  onRequest(method, handler) {
+    this.requestHandlers.set(method, handler)
+    return () => this.requestHandlers.delete(method)
   }
 
   /**
@@ -246,6 +260,10 @@ export class EngineClient {
       }
       return
     }
+    if (typeof message.method === 'string') {
+      void this.#handleRequest(message)
+      return
+    }
     const entry = this.pending.get(Number(message.id))
     if (entry === undefined) return
     this.pending.delete(Number(message.id))
@@ -256,6 +274,36 @@ export class EngineClient {
       return
     }
     entry.resolve(message.result)
+  }
+
+  /**
+   * Answer one engine request.
+   * @param {Record<string, any>} message - request frame.
+   * @returns {Promise<void>} resolves once the answer is written.
+   */
+  async #handleRequest(message) {
+    const handler = this.requestHandlers.get(message.method)
+    if (handler === undefined) {
+      this.#send({ jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `unknown engine request ${message.method}` } })
+      return
+    }
+    try {
+      const result = await handler(message.params && typeof message.params === 'object' ? message.params : {})
+      this.#send({ jsonrpc: '2.0', id: message.id, result: result ?? {} })
+    } catch (error) {
+      this.#send({ jsonrpc: '2.0', id: message.id, error: { code: -32000, message: String(error?.message ?? error), data: { code: error?.code ?? 'client-error' } } })
+    }
+  }
+
+  /**
+   * Write one frame to the engine.
+   * @param {Record<string, any>} message - JSON-RPC frame.
+   * @returns {void}
+   */
+  #send(message) {
+    const child = this.child
+    if (child === null || child.stdin.destroyed) return
+    child.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
   /**
