@@ -23,12 +23,12 @@ HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图�
 
 ## 工具与命令
 
-`hnflow` 工具：`list` / `get` / `run` / `status` / `cancel` / `assets`。
+`hnflow` 工具：`list` / `get` / `run` / `status` / `cancel` / `assets` / `task_list` / `task_submit`。
 `run` 必须显式给 `workflow`（别名或资产 id），不得猜测；`input` 是 start 节点端口值。
 
 `/workflow` 命令（宿主执行，不进模型上下文）：
-`run <name>`、`status <runId>`、`cancel <runId>`、`ref list|add|remove`、
-`asset list`、`override diff|reset`。
+`run <name>`、`status <runId>`、`cancel <runId>`、`tasks [runId]`、`submit <taskId>`、
+`ref list|add|remove`、`asset list`、`override diff|reset`。
 
 ## 节点与端口
 
@@ -43,10 +43,21 @@ HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图�
 
 ## 语义边界
 
-- 人工节点是**引擎的挂起**，不是 DSH 审批：`human:task` 生成待办，`human:review`
-  走通过/打回；当前版本引擎尚未接通任务桥（提交会明确报错）；
+- 人工节点是**引擎的挂起**，不是 DSH 审批：`human:task` 生成待办并让 run 进入
+  `waiting_human`，`human:review` 走通过/打回；答案用 `task_submit` / `/workflow submit`
+  提交，引擎从 checkpoint 继续；
 - run 的真相在引擎：会话只记录工具调用；
 - 修改定义时不要改 `flow:end` 的入边端口名，否则运行结果为空。
+
+## 人工任务
+
+```text
+/workflow tasks <runId>                列出待办（含字段与类型）
+/workflow submit <taskId> note=ok      提交并继续运行
+```
+
+工具等价：`action="task_list"`（带 `run_id`）、`action="task_submit"`（带 `task_id` 与 `input`）。
+重复提交返回 `task-not-pending`；字段不符返回 `task-invalid`；revision 变化返回 `task-revision-conflict`。
 
 ## 常见动作
 

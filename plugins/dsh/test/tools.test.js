@@ -6,7 +6,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { DEFAULT_RUN_WAIT_SECONDS, MAX_RUN_WAIT_SECONDS, clampWait, createWorkflowTool, formatRunStatus, formatWorkflowList } from '../lib/tools.js'
-
 /** A `defineTool` stand-in that keeps the spec addressable. */
 const defineTool = (spec) => spec
 
@@ -26,6 +25,8 @@ function fakeService(overrides = {}) {
     status: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [{ nodeId: 'greet', status: 'succeeded' }], result: { in: 'hello' } }),
     waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'hello' } }),
     cancel: async () => ({ runId: 'run-1', status: 'running', cancelled: true }),
+    tasks: async () => ({ tasks: [] }),
+    submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
     listAssets: async () => [{ id: 'wf-1', name: '发布流程', revision: 4, description: '发布' }],
     ...overrides,
   }
@@ -103,6 +104,48 @@ test('wait budgets clamp to the documented bounds', () => {
 
 test('run status text omits empty sections', () => {
   assert.equal(formatRunStatus({ runId: 'run-1', status: 'failed', error: 'boom', nodes: [], result: null }), 'run run-1: failed\nerror: boom')
+})
+
+test('run status shows the human task it is waiting on', () => {
+  const text = formatRunStatus({
+    runId: 'run-1',
+    status: 'waiting_human',
+    pendingTasks: [{ taskId: 'task-9', kind: 'task', nodeId: 'approve', description: 'confirm the release' }],
+  })
+  assert.match(text, /waiting on task task-9 \(task node approve\): confirm the release/u)
+})
+
+test('task_list renders fields and the empty case', async () => {
+  const empty = await makeTool(fakeService({ tasks: async () => ({ tasks: [] }) })).execute({ action: 'task_list', run_id: 'run-1' }, {})
+  assert.equal(empty, 'No pending human tasks.')
+
+  const service = fakeService({
+    tasks: async () => ({
+      tasks: [{ taskId: 'task-9', runId: 'run-1', nodeId: 'approve', kind: 'task', description: 'confirm', outputSpec: { ports: [{ name: 'note', type: 'data', required: true }] } }],
+    }),
+  })
+  const text = await makeTool(service).execute({ action: 'task_list', run_id: 'run-1' }, {})
+  assert.match(text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('task_submit needs an id, then reports the resumed run', async () => {
+  const bare = await makeTool(fakeService()).execute({ action: 'task_submit' }, {})
+  assert.match(bare, /^error task-id-required:/u)
+
+  /** @type {Record<string, any>[]} */
+  const submitted = []
+  const service = fakeService({
+    submitTask: async (input) => {
+      submitted.push(input)
+      return { taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }
+    },
+    waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }),
+  })
+  const text = await makeTool(service).execute({ action: 'task_submit', task_id: 'task-9', input: { note: 'lgtm' }, revision: 2 }, {})
+
+  assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { note: 'lgtm' }, revision: 2 })
+  assert.match(text, /^submitted task-9/u)
+  assert.match(text, /run run-1: succeeded/u)
 })
 
 test('an empty catalogue has a usable message', () => {

@@ -7,7 +7,7 @@
  */
 
 /** Actions the tool accepts. */
-export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'assets']
+export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'assets', 'task_list', 'task_submit']
 
 /** Default wait budget for `run`, in seconds. */
 export const DEFAULT_RUN_WAIT_SECONDS = 30
@@ -26,7 +26,24 @@ export function formatRunStatus(status) {
     lines.push(`nodes: ${status.nodes.map((node) => `${node.nodeId}=${node.status}`).join(', ')}`)
   }
   if (status.result !== null && status.result !== undefined) lines.push(`result: ${JSON.stringify(status.result)}`)
+  const tasks = Array.isArray(status.pendingTasks) ? status.pendingTasks : []
+  for (const task of tasks) lines.push(`waiting on task ${task.taskId} (${task.kind} node ${task.nodeId}): ${task.description}`)
   return lines.join('\n')
+}
+
+/**
+ * Render a pending-task list.
+ * @param {Record<string, any>[]} tasks - task summaries.
+ * @returns {string} model-facing summary.
+ */
+export function formatTasks(tasks) {
+  if (tasks.length === 0) return 'No pending human tasks.'
+  return tasks
+    .map((task) => {
+      const fields = (task.outputSpec?.ports ?? []).map((port) => `${port.name}:${port.type}${port.required ? '!' : ''}`).join(', ')
+      return `- ${task.taskId} (run ${task.runId}, node ${task.nodeId}, ${task.kind})${fields.length > 0 ? ` fields: ${fields}` : ''}${task.description ? ` — ${task.description}` : ''}`
+    })
+    .join('\n')
 }
 
 /**
@@ -109,6 +126,15 @@ export function createWorkflowTool(options) {
         return formatRunStatus(await service.status(requireRunId(args)))
       case 'cancel':
         return JSON.stringify(await service.cancel(requireRunId(args)))
+      case 'task_list':
+        return formatTasks((await service.tasks(requireRunId(args))).tasks)
+      case 'task_submit': {
+        const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
+        if (taskId.length === 0) return 'error task-id-required: pass task_id from action "task_list"'
+        const submitted = await service.submitTask({ taskId, payload: args.input ?? {}, revision: Number.isInteger(args.revision) ? args.revision : undefined })
+        const status = await service.waitFor(submitted.runId, 60000)
+        return `submitted ${taskId}\n${formatRunStatus(status)}`
+      }
       default:
         return `error invalid-action: expected one of ${WORKFLOW_ACTIONS.join(', ')}`
     }
@@ -117,12 +143,14 @@ export function createWorkflowTool(options) {
   return defineTool({
     name: 'hnflow',
     description:
-      'Run and inspect HNFlow workflows referenced by this workspace. Every action that addresses one workflow must pass its name (alias or asset id) from `list`; the tool never guesses. `run` accepts an `input` object matching the start node ports and waits for completion by default.',
+      'Run and inspect HNFlow workflows referenced by this workspace. Every action that addresses one workflow must pass its name (alias or asset id) from `list`; the tool never guesses. `run` accepts an `input` object matching the start node ports and waits for completion or for a human task. `task_list`/`task_submit` handle the human steps of a suspended run.',
     parameters: {
       action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
       workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
-      run_id: { type: 'string', description: 'Run id returned by run; required by status and cancel.' },
-      input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run.' },
+      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, and task_list.' },
+      input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
+      task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
+      revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },
       wait_seconds: { type: 'number', description: `How long run waits for completion (default ${DEFAULT_RUN_WAIT_SECONDS}, max ${MAX_RUN_WAIT_SECONDS}).` },
     },
     output: {

@@ -60,16 +60,40 @@ def _request(method: str, params: dict[str, Any] | None = None, request_id: int 
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params or {}}
 
 
-async def _await_terminal(server: RpcServer, run_id: str, timeout: float = 10.0) -> dict[str, Any]:
-    """Poll ``run/status`` until the run settles."""
+def _human_task_definition() -> dict[str, Any]:
+    """start → human:task → end, with one required output port."""
+    return {
+        "id": "approve-workflow",
+        "name": "Approve workflow",
+        "version": "0.1.0",
+        "nodes": [
+            {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
+            {
+                "id": "approve",
+                "type": "human:task",
+                "inputs": [{"name": "in", "type": "data"}],
+                "outputs": [{"name": "note", "type": "data", "required": True}],
+                "params": {"description": "confirm the release"},
+            },
+            {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
+        ],
+        "edges": [
+            {"source": "start", "source_port": "out", "target": "approve", "target_port": "in"},
+            {"source": "approve", "source_port": "note", "target": "end", "target_port": "in"},
+        ],
+    }
+
+
+async def _await_terminal(server: RpcServer, run_id: str, timeout: float = 10.0, wanted: set[str] | frozenset[str] = _TERMINAL) -> dict[str, Any]:
+    """Poll ``run/status`` until the run reaches one of ``wanted``."""
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
         response = await server.dispatch(_request("run/status", {"runId": run_id}))
         status = response["result"]
-        if status["status"] in _TERMINAL:
+        if status["status"] in wanted:
             return status
         if asyncio.get_running_loop().time() > deadline:
-            raise AssertionError(f"run {run_id} did not settle: {status}")
+            raise AssertionError(f"run {run_id} did not reach {sorted(wanted)}: {status}")
         await asyncio.sleep(0.02)
 
 
@@ -120,7 +144,7 @@ def test_initialize_returns_the_catalog() -> None:
 
     assert result["protocolVersion"] == PROTOCOL_VERSION
     assert result["engine"]["name"] == "hnflow-engine"
-    assert result["capabilities"]["humanTasks"] is False
+    assert result["capabilities"]["humanTasks"] is True
     assert result["workflow"]["schemaVersion"] == 1
     assert any(node["type"] == "ai:llm_agent" for node in result["workflow"]["nodeTypes"])
 
@@ -228,27 +252,96 @@ def test_run_events_honour_after_seq() -> None:
     assert all(event["seq"] > 2 for event in events["events"])
 
 
-def test_run_start_rejects_human_nodes_with_a_stable_code() -> None:
-    definition = _hello_definition()
-    definition["nodes"][1] = {
-        "id": "approve",
-        "type": "human:task",
-        "inputs": [{"name": "in", "type": "data"}],
-        "outputs": [{"name": "out", "type": "data"}],
-        "params": {"fields": [{"name": "note", "type": "data"}]},
-    }
-    definition["edges"] = [
-        {"source": "start", "source_port": "out", "target": "approve", "target_port": "in"},
-        {"source": "approve", "source_port": "out", "target": "end", "target_port": "in"},
-    ]
-
+def test_human_task_suspends_the_run_with_a_pending_task() -> None:
     async def scenario() -> dict[str, Any]:
-        return await RpcServer().dispatch(_request("run/start", {"definition": definition}))
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        return await _await_terminal(server, started["runId"], wanted={"waiting_human", "failed", "succeeded"})
+
+    status = asyncio.run(scenario())
+
+    assert status["status"] == "waiting_human"
+    assert len(status["pendingTasks"]) == 1
+    task = status["pendingTasks"][0]
+    assert task["nodeId"] == "approve"
+    assert task["kind"] == "task"
+    assert task["description"] == "confirm the release"
+    assert [port["name"] for port in task["outputSpec"]["ports"]] == ["note"]
+
+
+def test_task_list_returns_pending_tasks() -> None:
+    async def scenario() -> dict[str, Any]:
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        await _await_terminal(server, started["runId"], wanted={"waiting_human"})
+        return (await server.dispatch(_request("task/list", {"runId": started["runId"]})))["result"]
+
+    result = asyncio.run(scenario())
+
+    assert len(result["tasks"]) == 1
+    assert result["tasks"][0]["runId"].startswith("run-")
+
+
+def test_task_submit_resumes_the_run_to_completion() -> None:
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        waiting = await _await_terminal(server, started["runId"], wanted={"waiting_human"})
+        task_id = waiting["pendingTasks"][0]["taskId"]
+        submitted = (await server.dispatch(_request("task/submit", {"taskId": task_id, "payload": {"note": "looks good"}})))["result"]
+        assert submitted["taskId"] == task_id
+        return submitted, await _await_terminal(server, started["runId"])
+
+    submitted, final = asyncio.run(scenario())
+
+    assert submitted["status"] == "running"
+    assert final["status"] == "succeeded"
+    assert final["result"] == {"in": "looks good"}
+    assert final["pendingTasks"] == []
+
+
+def test_task_submit_refuses_a_duplicate_submission() -> None:
+    async def scenario() -> dict[str, Any]:
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        waiting = await _await_terminal(server, started["runId"], wanted={"waiting_human"})
+        task_id = waiting["pendingTasks"][0]["taskId"]
+        await server.dispatch(_request("task/submit", {"taskId": task_id, "payload": {"note": "first"}}))
+        await _await_terminal(server, started["runId"])
+        return await server.dispatch(_request("task/submit", {"taskId": task_id, "payload": {"note": "second"}}))
 
     response = asyncio.run(scenario())
 
-    assert response["error"]["data"]["code"] == "human-tasks-unavailable"
-    assert response["error"]["data"]["nodes"] == ["approve"]
+    assert response["error"]["data"]["code"] == "run-not-waiting"
+
+
+def test_task_submit_validates_the_declared_ports() -> None:
+    async def scenario() -> dict[str, Any]:
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        waiting = await _await_terminal(server, started["runId"], wanted={"waiting_human"})
+        task_id = waiting["pendingTasks"][0]["taskId"]
+        return await server.dispatch(_request("task/submit", {"taskId": task_id, "payload": {"typo": "x"}}))
+
+    response = asyncio.run(scenario())
+
+    assert response["error"]["data"]["code"] == "task-invalid"
+
+
+def test_cancelling_a_waiting_run_drops_its_tasks() -> None:
+    async def scenario() -> tuple[dict[str, Any], dict[str, Any]]:
+        server = RpcServer()
+        started = (await server.dispatch(_request("run/start", {"definition": _human_task_definition()})))["result"]
+        awaiting = await _await_terminal(server, started["runId"], wanted={"waiting_human"})
+        cancelled = (await server.dispatch(_request("run/cancel", {"runId": started["runId"]})))["result"]
+        tasks = (await server.dispatch(_request("task/list", {"runId": started["runId"]})))["result"]
+        assert awaiting["status"] == "waiting_human"
+        return cancelled, tasks
+
+    cancelled, tasks = asyncio.run(scenario())
+
+    assert cancelled["status"] == "cancelled"
+    assert tasks["tasks"] == []
 
 
 def test_run_cancel_stops_the_stream() -> None:

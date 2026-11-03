@@ -122,3 +122,53 @@ test('dispose stops the engine and clears caches', async () => {
   assert.equal(service.engine, null)
   assert.equal(service.storesByCwd.size, 0)
 })
+
+test('waitFor stops as soon as a run needs a human', async () => {
+  const calls = []
+  const { service } = await makeService(calls)
+  service.engine = {
+    stop: () => {},
+    request: async (method) => {
+      calls.push({ method })
+      return { runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-1' }] }
+    },
+  }
+
+  const status = await service.waitFor('run-1', 5000)
+
+  assert.equal(status.status, 'waiting_human')
+  assert.equal(calls.length, 1)
+})
+
+test('submitTask forwards the task id, payload, and optional revision', async () => {
+  const calls = []
+  const { service } = await makeService(calls)
+  const engine = {
+    ensureStarted: async () => ({}),
+    stop: () => {},
+    request: async (method, params) => {
+      calls.push({ method, params })
+      if (method === 'task/submit') return { taskId: params.taskId, runId: 'run-1', status: 'running', revision: 2 }
+      return {}
+    },
+  }
+  service.engine = engine
+
+  const submitted = await service.submitTask({ taskId: 'task-9', payload: { note: 'ok' } })
+  await service.submitTask({ taskId: 'task-9', payload: { note: 'ok' }, revision: 2 })
+
+  assert.equal(submitted.status, 'running')
+  assert.deepEqual(calls[0], { method: 'task/submit', params: { taskId: 'task-9', payload: { note: 'ok' } } })
+  assert.equal(calls[1].params.revision, 2)
+})
+
+test('tasks asks the engine for one run', async () => {
+  const calls = []
+  const { service } = await makeService(calls)
+  service.engine = { stop: () => {}, request: async (method, params) => ({ method, params, tasks: [] }) }
+
+  const result = await service.tasks('run-1')
+
+  assert.deepEqual(result.params, { runId: 'run-1' })
+  assert.deepEqual(result.tasks, [])
+})

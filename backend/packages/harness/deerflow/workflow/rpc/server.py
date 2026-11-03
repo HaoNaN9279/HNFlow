@@ -85,8 +85,8 @@ class RpcServer:
             "run/cancel": self._run_cancel,
             "run/events": self._run_events,
             "run/list": self._run_list,
-            "task/list": self._task_unavailable,
-            "task/submit": self._task_unavailable,
+            "task/list": self._task_list,
+            "task/submit": self._task_submit,
         }
 
     async def dispatch(self, message: dict[str, Any]) -> dict[str, Any] | None:
@@ -136,7 +136,7 @@ class RpcServer:
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "engine": {"name": ENGINE_NAME, "version": ENGINE_VERSION},
-            "capabilities": {"humanTasks": False, "durableRuns": False, "jobMirror": True},
+            "capabilities": {"humanTasks": True, "durableRuns": False, "jobMirror": True},
             "workflow": {"schemaVersion": SCHEMA_VERSION, **describe()},
         }
 
@@ -189,9 +189,22 @@ class RpcServer:
         """Return every retained run."""
         return self._host.list_runs()
 
-    async def _task_unavailable(self, _params: Params) -> dict[str, Any]:
-        """Human tasks arrive with the task bridge (M3)."""
-        raise EngineError("human-tasks-unavailable", "this engine build has no human-task bridge yet", {"capability": "humanTasks"})
+    async def _task_list(self, params: Params) -> dict[str, Any]:
+        """Return pending human tasks, for one run or for the whole engine."""
+        run_id = params.get("runId")
+        if run_id is not None and (not isinstance(run_id, str) or not run_id):
+            raise InvalidParams("runId must be a non-empty string when present")
+        return self._host.tasks(run_id)
+
+    async def _task_submit(self, params: Params) -> dict[str, Any]:
+        """Submit a task and continue its run from the suspended checkpoint."""
+        payload = params.get("payload")
+        if not isinstance(payload, dict):
+            raise InvalidParams("payload must be a JSON object")
+        revision = params.get("revision")
+        if revision is not None and (not isinstance(revision, int) or revision < 1):
+            raise InvalidParams("revision must be a positive integer when present")
+        return await self._host.submit(task_id=_required_id(params, "taskId"), payload=payload, revision=revision)
 
 
 def _required_id(params: Params, key: str) -> str:

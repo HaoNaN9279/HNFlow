@@ -56,10 +56,12 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 
 ```text
 /workflow                         列出本工作区引用的工作流
-/workflow run publish             运行并等待
+/workflow run publish             运行并等待（完成或等待人工）
 /workflow run publish target=staging
 /workflow status <runId>
 /workflow cancel <runId>
+/workflow tasks [runId]           待办人工任务
+/workflow submit <taskId> note=ok 提交并继续运行
 /workflow ref add <assetId> --pin 3 --alias publish
 /workflow ref remove publish
 /workflow asset list
@@ -67,7 +69,8 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 /workflow override reset publish
 ```
 
-工具 `hnflow`：`action = list | get | run | status | cancel | assets`，`run` 必须带 `workflow`。
+工具 `hnflow`：`action = list | get | run | status | cancel | assets | task_list | task_submit`，
+`run` 必须带 `workflow`。
 
 ## 数据布局
 
@@ -90,8 +93,8 @@ node test/run.mjs      # 插件单元/契约测试（进程内运行，避免沙
 cd ../../backend && .venv/Scripts/python -m pytest tests/test_workflow_rpc.py -q
 ```
 
-## 已知边界（M2/M3 前）
+## 已知边界（M2 前）
 
 - run 使用进程内 checkpointer，引擎重启即丢 run；
-- 人工节点（`human:task` / `human:review`）尚未接通任务桥，运行会明确返回 `human-tasks-unavailable`；
+- 人工任务存在引擎内存里：重启后待办消失（M2 换持久化存储后保留）；
 - 没有画布面板与保存菜单，写资产目前无工具入口（只有 `/workflow` 只读命令族）。

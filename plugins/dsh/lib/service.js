@@ -23,8 +23,11 @@ import { WorkspaceError } from './workspace.js'
 /** Terminal run states. */
 export const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
 
+/** Non-terminal states that still end a wait: the run needs a human now. */
+export const HOLDING_STATUSES = new Set(['waiting_human'])
+
 /** Statuses the plugin may report before the engine assigns one. */
-export const RUN_STATUSES = ['queued', 'running', 'succeeded', 'failed', 'cancelled']
+export const RUN_STATUSES = ['queued', 'running', 'waiting_human', 'succeeded', 'failed', 'cancelled']
 
 /**
  * Shared plugin behaviour.
@@ -175,7 +178,7 @@ export class HnflowService {
   }
 
   /**
-   * Poll until the run settles or the wait budget runs out.
+   * Poll until the run settles or needs a human, or the wait budget runs out.
    * @param {string} runId - engine run id.
    * @param {number} waitMs - maximum wait.
    * @returns {Promise<Record<string, any>>} the last observed status.
@@ -183,11 +186,31 @@ export class HnflowService {
   async waitFor(runId, waitMs) {
     const deadline = Date.now() + Math.max(0, waitMs)
     let status = await this.status(runId)
-    while (!TERMINAL_STATUSES.has(status.status) && Date.now() < deadline) {
+    while (!TERMINAL_STATUSES.has(status.status) && !HOLDING_STATUSES.has(status.status) && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 100))
       status = await this.status(runId)
     }
     return status
+  }
+
+  /**
+   * Pending human tasks of a run.
+   * @param {string} runId - engine run id.
+   * @returns {Promise<Record<string, any>>} `{tasks: [...]}`.
+   */
+  async tasks(runId) {
+    return await this.engineClient().request('task/list', { runId })
+  }
+
+  /**
+   * Submit a human task and let the engine continue the run.
+   * @param {{taskId: string, payload: Record<string, any>, revision?: number}} input - submission.
+   * @returns {Promise<Record<string, any>>} `{taskId, runId, status, revision}`.
+   */
+  async submitTask(input) {
+    const params = { taskId: input.taskId, payload: input.payload }
+    if (Number.isInteger(input.revision)) params.revision = input.revision
+    return await this.engineClient().request('task/submit', params)
   }
 
   /**

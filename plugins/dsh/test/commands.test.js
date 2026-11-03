@@ -24,6 +24,8 @@ function makeCommand(overrides = {}) {
     waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }),
     status: async () => ({ runId: 'run-1', status: 'running', error: null, nodes: [], result: null }),
     cancel: async () => ({ runId: 'run-1', status: 'running', cancelled: true }),
+    tasks: async () => ({ tasks: [{ taskId: 'task-9', runId: 'run-1', nodeId: 'approve', kind: 'task', description: 'confirm', outputSpec: { ports: [{ name: 'note', type: 'data', required: true }] } }] }),
+    submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
     listAssets: async () => [{ id: 'wf-1', name: '发布', revision: 3 }],
     resolve: async () => ({ assetId: 'wf-1', source: 'override', revision: 3, currentRevision: 3 }),
     resetOverride: async () => ({ removed: true, assetId: 'wf-1' }),
@@ -126,4 +128,21 @@ test('help prints the full command list', async () => {
   const { handler } = makeCommand()
   const result = await handler({ rawInput: 'help' })
   assert.equal(result.text, USAGE)
+})
+
+test('tasks lists pending human work', async () => {
+  const { handler } = makeCommand()
+  const result = await handler({ rawInput: 'tasks run-1' })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('submit answers a task and waits for the run', async () => {
+  const { handler } = makeCommand()
+  const result = await handler({ rawInput: 'submit task-9 note=ok' })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /^submitted task-9/u)
+
+  const missing = await handler({ rawInput: 'submit' })
+  assert.match(missing.text, /task-id-required/u)
 })

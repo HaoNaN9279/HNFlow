@@ -389,9 +389,12 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 | 通道 | 场景 | 说明 |
 | --- | --- | --- |
-| turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，答案回到工具，工具提交引擎 |
-| 面板收件箱 | 任意时刻 | 零 token；复杂表单只在这里 |
-| 会话自然语言 | 用户直接回复 | Agent 调 `workflow_task_submit` |
+| turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，答案回到工具，工具提交引擎（M3 剩余） |
+| 面板收件箱 | 任意时刻 | 零 token；复杂表单只在这里（M3 剩余） |
+| 会话自然语言 | 用户直接回复 | Agent 调 `hnflow` 的 `task_list` / `task_submit`（**已落地**） |
+
+提交语义已定：同一 `task_id` 重复提交返回 `task-not-pending`；字段不符返回 `task-invalid`；
+带 `revision` 的过期提交返回 `task-revision-conflict`；取消 `waiting_human` 的 run 会清掉它的待办。
 
 - `human:review` → 单选（通过/打回 + 意见）；
 - `human:task` 简单字段 → 每字段一个问题；复杂表单 → 面板；
@@ -483,8 +486,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 插件骨架 | `plugins/dsh`：bundle manifest、`cordis.patch.yml`、`preset-hnflow`（含 `dsh-vibestack` 行） |
 | 资产/引用/覆盖 | `AssetStore`（含 revision 快照）、`WorkspaceStore`、`Resolver`（override → pinned → latest + drift 判定） |
 | 会话面 | `hnflow` 工具、`/workflow` 命令族、系统提示工作流索引、内置 skill `hnflow-workflow` |
-| 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 16 项；插件 `plugins/dsh/test` 49 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
-| 未做 | job 镜像（M2）、人工任务桥（M3）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
+| 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 21 项；插件 `plugins/dsh/test` 57 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
+| 人工节点（M3 主体） | 引擎内存任务库 + `interrupt` 挂起（`waiting_human`）+ `task/list|submit` 恢复；插件 `task_list`/`task_submit` 与 `/workflow tasks|submit`；重复提交与字段校验有稳定错误码 |
+| 未做 | job 镜像（M2）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
 
 ### M0 引导（1 周）
 
@@ -512,6 +516,12 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 任务收件箱、`workflow_task_*` 工具、question 卡（review）、通知策略；
 - 复杂表单只走面板；
 - 验收：跨重启提交、双通道幂等、review 打回续跑。
+
+**已落地（引擎侧 + 会话侧）**：`MemoryTaskStore` 作为执行器仓库、`interrupt` 挂起检测（`waiting_human`）、
+`task/list` / `task/submit`（CAS：`task-not-pending` / `task-revision-conflict`，字段校验走
+`human_task_state.validate_human_task_submission`）、`hnflow` 的 `task_list`/`task_submit`、
+`/workflow tasks|submit`。
+**剩余**：面板收件箱、turn 内问题卡（`userQuestions`）、通知策略 `notify|wake`、跨重启持久化（依赖 M2 存储）。
 
 ### M4 画布与保存菜单（2–3 周）
 

@@ -7,15 +7,16 @@
  */
 
 import { diffDocuments } from './json.js'
-import { TERMINAL_STATUSES } from './service.js'
-import { formatRunStatus, formatWorkflowList } from './tools.js'
+import { formatRunStatus, formatTasks, formatWorkflowList } from './tools.js'
 
 /** Usage text shown for `/workflow` and `/workflow help`. */
 export const USAGE = [
   '/workflow — list workflows referenced by this workspace',
-  '/workflow run <name> [k=v …] — start a run and wait for it',
-  '/workflow status <runId> — show a run',
+  '/workflow run <name> [k=v …] — start a run and wait for it (or for a human task)',
+  '/workflow status <runId> — show a run and its pending tasks',
   '/workflow cancel <runId> — ask the engine to stop a run',
+  '/workflow tasks [runId] — pending human tasks',
+  '/workflow submit <taskId> [k=v …] — answer a human task and continue the run',
   '/workflow ref list — refs, overrides, and drift',
   '/workflow ref add <assetId> [--pin N] [--alias name] — add a reference',
   '/workflow ref remove <name> — drop a reference',
@@ -137,7 +138,12 @@ export function createWorkflowCommand(options) {
       if (key === undefined) throw commandError('workflow-required', 'usage: /workflow run <name> [k=v …]')
       const started = await service.startRun({ cwd, key, inputs: input })
       const status = await service.waitFor(started.runId, 60000)
-      const note = TERMINAL_STATUSES.has(status.status) ? '' : '\n(still running; use /workflow status ' + started.runId + ')'
+      const note =
+        status.status === 'waiting_human'
+          ? `\n(waiting for a human task; use /workflow tasks ${started.runId})`
+          : status.status === 'succeeded' || status.status === 'failed' || status.status === 'cancelled'
+            ? ''
+            : `\n(still running; use /workflow status ${started.runId})`
       return `${formatRunStatus(status)}\nsource: ${started.resolved.source} r${started.resolved.revision ?? 'latest'}${note}`
     }
 
@@ -150,6 +156,20 @@ export function createWorkflowCommand(options) {
       if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow cancel <runId>')
       const result = await service.cancel(rest[0])
       return `${result.runId}: cancel requested=${result.cancelled} (status ${result.status})`
+    }
+
+    if (head === 'tasks') {
+      const result = await service.tasks(rest[0])
+      return formatTasks(result.tasks)
+    }
+
+    if (head === 'submit') {
+      const { input, rest: positional } = parseInputs(rest)
+      const taskId = positional[0]
+      if (taskId === undefined) throw commandError('task-id-required', 'usage: /workflow submit <taskId> [k=v …]')
+      const submitted = await service.submitTask({ taskId, payload: input })
+      const status = await service.waitFor(submitted.runId, 60000)
+      return `submitted ${taskId}\n${formatRunStatus(status)}`
     }
 
     if (head === 'ref') return await refCommand(rest, cwd)
