@@ -19,6 +19,8 @@ export const DEFAULT_CONFIG = Object.freeze({
   engineModule: 'deerflow.workflow.rpc',
   /** Working directory for the engine process; empty means auto-discovery. */
   engineCwd: '',
+  /** Engine state directory (checkpoints + run/task records); empty means `$DSH_HOME/hnflow/state`. */
+  stateDir: '',
   /** Upper bound for one engine request. */
   requestTimeoutMs: 120000,
   /** Upper bound for the stdio handshake. */

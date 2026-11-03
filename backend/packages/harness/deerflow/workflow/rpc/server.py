@@ -27,6 +27,7 @@ from deerflow.workflow.rpc.protocol import (
     encode,
 )
 from deerflow.workflow.rpc.runner import RunHost
+from deerflow.workflow.rpc.store import default_state_dir
 from deerflow.workflow.workflow_io import SCHEMA_VERSION, deserialize, validate_definition
 
 logger = logging.getLogger(__name__)
@@ -41,9 +42,9 @@ Handler = Callable[[Params], Awaitable[dict[str, Any]]]
 class RpcServer:
     """Dispatch JSON-RPC requests onto a :class:`RunHost`."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, state_dir: Any | None = None) -> None:
         self._emit: Callable[[dict[str, Any]], None] = lambda _message: None
-        self._host = RunHost(emit=self._notify)
+        self._host = RunHost(emit=self._notify, state_dir=state_dir)
         self._shutdown_requested = False
         self._initialized = False
 
@@ -85,6 +86,7 @@ class RpcServer:
             "run/cancel": self._run_cancel,
             "run/events": self._run_events,
             "run/list": self._run_list,
+            "run/resume": self._run_resume,
             "task/list": self._task_list,
             "task/submit": self._task_submit,
         }
@@ -136,7 +138,7 @@ class RpcServer:
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "engine": {"name": ENGINE_NAME, "version": ENGINE_VERSION},
-            "capabilities": {"humanTasks": True, "durableRuns": False, "jobMirror": True},
+            "capabilities": {"humanTasks": True, "durableRuns": self._host.durable, "jobMirror": True},
             "workflow": {"schemaVersion": SCHEMA_VERSION, **describe()},
         }
 
@@ -189,6 +191,10 @@ class RpcServer:
         """Return every retained run."""
         return self._host.list_runs()
 
+    async def _run_resume(self, params: Params) -> dict[str, Any]:
+        """Continue a run that an engine restart interrupted."""
+        return await self._host.resume(_required_id(params, "runId"))
+
     async def _task_list(self, params: Params) -> dict[str, Any]:
         """Return pending human tasks, for one run or for the whole engine."""
         run_id = params.get("runId")
@@ -234,7 +240,8 @@ def _definition_from_wire(raw: dict[str, Any]) -> Any:
 
 async def serve() -> int:
     """Run the engine on stdin/stdout until EOF or ``engine/shutdown``."""
-    server = RpcServer()
+    server = RpcServer(state_dir=default_state_dir())
+    await server.host.boot()
     loop = asyncio.get_running_loop()
     incoming: asyncio.Queue[bytes | None] = asyncio.Queue()
     outgoing: asyncio.Queue[str | None] = asyncio.Queue()

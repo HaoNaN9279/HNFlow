@@ -54,10 +54,13 @@ HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图�
 ```text
 /workflow tasks <runId>                列出待办（含字段与类型）
 /workflow submit <taskId> note=ok      提交并继续运行
+/workflow resume <runId>               续跑被引擎重启打断的 run
 ```
 
-工具等价：`action="task_list"`（带 `run_id`）、`action="task_submit"`（带 `task_id` 与 `input`）。
+工具等价：`action="task_list"`（带 `run_id`）、`action="task_submit"`（带 `task_id` 与 `input`）、
+`action="resume"`（带 `run_id`）。
 重复提交返回 `task-not-pending`；字段不符返回 `task-invalid`；revision 变化返回 `task-revision-conflict`。
+引擎重启后，正在等待的 run 与待办仍在；被中断的 run 状态为 `interrupted`，需要显式 `resume`。
 
 ## 常见动作
 

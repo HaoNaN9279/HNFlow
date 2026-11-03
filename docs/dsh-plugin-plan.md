@@ -264,8 +264,11 @@ override（若存在且 enabled）
 $DSH_HOME/hnflow/
 ├─ library/                     # 全局工作流资产（可写）
 │  ├─ release/publish.workflow.json
-│  └─ review/…
-├─ state/                       # 引擎运行态（run/task/artifact），不进仓库
+│  └─ .hnflow-revisions/<id>/r<n>.json   # 只读 revision 快照
+├─ state/                       # 引擎运行态，不进仓库
+│  ├─ checkpoints.sqlite        # LangGraph checkpoint（thread_id = runId）
+│  ├─ runs.json                 # run 记录（状态 / 冻结定义 / 输入 / 来源）
+│  └─ tasks.json                # 人工任务行（含 pending）
 └─ config.json                  # 资产根、模型映射、引擎参数
 
 <workspace>/
@@ -377,9 +380,13 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ### 8.4 重启与幂等
 
-- 引擎按 checkpoint 续跑，节点使用 `<run_id>:<node_id>` 幂等键；
-- 插件启动时扫描活跃 run，补一条去重后的状态通知；
-- 人工任务提交按 `task_id + revision` CAS，重复提交返回 `conflict`。
+- 引擎的 checkpoint、run 记录、人工任务行都落在 `$DSH_HOME/hnflow/state/`（`checkpoints.sqlite` /
+  `runs.json` / `tasks.json`），DSH 重启后仍在；
+- `waiting_human` 的 run 重启后直接可提交，任务行与 checkpoint 都在；
+- 进程死亡时仍在 `running` 的 run，重启后标记为 **`interrupted`**（不猜、不自动重放），
+  由 `/workflow resume <runId>` 从最后提交的 checkpoint 继续；
+- 节点使用 `<run_id>:<node_id>` 幂等键；
+- 人工任务提交按 `task_id + revision` CAS，重复提交返回 `task-not-pending` / `task-revision-conflict`。
 
 ---
 
@@ -488,7 +495,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 会话面 | `hnflow` 工具、`/workflow` 命令族、系统提示工作流索引、内置 skill `hnflow-workflow` |
 | 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 21 项；插件 `plugins/dsh/test` 57 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
 | 人工节点（M3 主体） | 引擎内存任务库 + `interrupt` 挂起（`waiting_human`）+ `task/list|submit` 恢复；插件 `task_list`/`task_submit` 与 `/workflow tasks|submit`；重复提交与字段校验有稳定错误码 |
-| 未做 | job 镜像（M2）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
+| 运行持久化（M2 主体） | `checkpoints.sqlite`（AsyncSqliteSaver）+ `runs.json` + `tasks.json`，`$DSH_HOME/hnflow/state/`；`waiting_human` 跨重启可提交，`running` 跨重启转 `interrupted` 并可 `run/resume` |
+| 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
 
 ### M0 引导（1 周）
 
@@ -510,6 +518,10 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - run 卡片、面板运行详情（节点时间线、日志、artifact）；
 - detach/cancel、重启挂接；
 - 验收：关闭会话不杀 run；DSH 重启后 run 继续。
+
+**已落地（引擎侧）**：SQLite checkpoint + run/task 记录落盘；重启后 `waiting_human` 可直接提交，
+`running` 转 `interrupted` 并由 `run/resume` 续跑；插件 `/workflow resume` 与 `hnflow` 的 `resume`。
+**剩余**：job 镜像（`ctx.jobs` producer 契约）、run 卡片与面板时间线。
 
 ### M3 人工节点（2 周）
 

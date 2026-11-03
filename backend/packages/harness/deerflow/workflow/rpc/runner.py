@@ -9,11 +9,11 @@ Human nodes suspend the graph: the stream ends with pending tasks, the run
 becomes ``waiting_human``, and ``run/resume`` submits a task and continues the
 same checkpoint.
 
-Deliberate limits (``docs/dsh-plugin-plan.md`` §14):
+A durable host keeps the LangGraph checkpoints in SQLite plus its own run/task
+records on disk, so a suspended run, an interrupted run, and a pending human task
+all survive an engine restart. A memory host (the default) is what tests use.
 
-- a run owns a per-run ``MemorySaver`` checkpointer, so a process restart loses
-  the run; durable checkpoints arrive with the engine store in M2;
-- cancellation is cooperative: the stream stops at the next chunk boundary.
+Cancellation is cooperative: the stream stops at the next chunk boundary.
 """
 
 from __future__ import annotations
@@ -27,13 +27,16 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
+import aiosqlite
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.types import Command
 
 from deerflow.runtime.user_context import DEFAULT_USER_ID
 from deerflow.workflow.compiler import WorkflowCompileError, compile_definition
 from deerflow.workflow.executors import build_default_registry
 from deerflow.workflow.rpc.protocol import EngineError
+from deerflow.workflow.rpc.store import EngineStore
 from deerflow.workflow.rpc.tasks import MemoryTaskStore, TaskError
 from deerflow.workflow.runtime_context import build_workflow_compile_context, build_workflow_runtime_context
 from deerflow.workflow.schema import NodeType, WorkflowDefinition
@@ -80,7 +83,7 @@ class RunState:
     definition: WorkflowDefinition
     inputs: dict[str, Any]
     metadata: dict[str, Any]
-    checkpointer: MemorySaver
+    checkpointer: Any
     graph: Any = None
     config: dict[str, Any] = field(default_factory=dict)
     status: str = "queued"
@@ -106,15 +109,104 @@ class RunState:
             "nodes": [{"nodeId": node_id, **values} for node_id, values in self.nodes.items()],
         }
 
+    def to_record(self) -> dict[str, Any]:
+        """Serialize the run for `runs.json` (the graph is rebuilt, not stored)."""
+        return {
+            "runId": self.run_id,
+            "status": self.status,
+            "startedAt": self.started_at,
+            "endedAt": self.ended_at,
+            "error": self.error,
+            "result": self.result,
+            "nodes": self.nodes,
+            "definition": self.definition.model_dump(mode="json"),
+            "inputs": self.inputs,
+            "metadata": self.metadata,
+        }
+
 
 class RunHost:
     """Start, observe, cancel, and resume workflow runs inside the engine process."""
 
-    def __init__(self, emit: Callable[[dict[str, Any]], None] | None = None) -> None:
+    def __init__(self, emit: Callable[[dict[str, Any]], None] | None = None, *, state_dir: str | Any | None = None) -> None:
         self._runs: dict[str, RunState] = {}
         self._emit = emit or (lambda _message: None)
         self._registry: Any = None
         self._tasks = MemoryTaskStore()
+        self._store = EngineStore(state_dir) if state_dir is not None else None
+        self._connection: aiosqlite.Connection | None = None
+        self._checkpointer: Any = MemorySaver() if self._store is None else None
+
+    # ── lifecycle ──────────────────────────────────────────────────────────
+
+    async def boot(self) -> None:
+        """Open the durable store and restore runs/tasks, if configured.
+
+        A broken state directory degrades to an in-memory host: losing history is
+        better than refusing to serve workflows.
+        """
+        if self._store is None:
+            return
+        try:
+            self._store.ensure()
+            self._connection = await aiosqlite.connect(str(self._store.checkpoint_path))
+            self._checkpointer = AsyncSqliteSaver(self._connection)
+            await self._checkpointer.setup()
+        except Exception:  # noqa: BLE001 - fall back to memory rather than fail to boot
+            logger.warning("cannot open the engine checkpoint store; continuing in memory", exc_info=True)
+            self._checkpointer = MemorySaver()
+            self._store = None
+            return
+        self._tasks.load(self._store.load_tasks())
+        self._restore_runs(self._store.load_runs())
+
+    @property
+    def durable(self) -> bool:
+        """Whether runs, tasks, and checkpoints survive a restart."""
+        return self._store is not None
+
+    def _restore_runs(self, records: list[dict[str, Any]]) -> None:
+        """Rebuild run states (and their graphs) from persisted records."""
+        for record in records:
+            run_id = record.get("runId")
+            if not isinstance(run_id, str) or not run_id:
+                continue
+            try:
+                definition = WorkflowDefinition.model_validate(record.get("definition"))
+                graph = compile_definition(definition, context=build_workflow_compile_context(self._executor_registry(), checkpointer=self._checkpointer))
+            except Exception:  # noqa: BLE001 - one unreadable record must not block the rest
+                logger.warning("dropping an unreadable run record %s", run_id, exc_info=True)
+                continue
+            status = str(record.get("status") or "interrupted")
+            if status in {"running", "queued"}:
+                # Nothing was streaming when the process died: the checkpoint is
+                # intact, but the run must be resumed explicitly.
+                status = "interrupted"
+            state = RunState(
+                run_id=run_id,
+                definition=definition,
+                inputs=dict(record.get("inputs") or {}),
+                metadata=dict(record.get("metadata") or {}),
+                checkpointer=self._checkpointer,
+                graph=graph,
+                status=status,
+                started_at=str(record.get("startedAt") or _now()),
+                ended_at=record.get("endedAt"),
+                error=record.get("error"),
+                result=record.get("result"),
+                nodes={key: value for key, value in (record.get("nodes") or {}).items() if isinstance(value, dict)},
+            )
+            state.config = {"configurable": {"thread_id": run_id}, "context": self._runtime_context(state)}
+            self._runs[run_id] = state
+            if status == "interrupted":
+                self._record(state, "run/interrupted", None, {"reason": "engine-restart"})
+
+    def _persist(self) -> None:
+        """Write the run and task records, when a durable store is configured."""
+        if self._store is None:
+            return
+        self._store.save_runs([state.to_record() for state in self._runs.values()])
+        self._store.save_tasks(self._tasks.dump())
 
     # ── registry ───────────────────────────────────────────────────────────
 
@@ -137,7 +229,7 @@ class RunHost:
         if errors:
             raise EngineError("invalid-definition", "workflow definition is invalid", {"errors": errors})
 
-        checkpointer = MemorySaver()
+        checkpointer = self._checkpointer
         try:
             context = build_workflow_compile_context(self._executor_registry(), checkpointer=checkpointer)
             graph = compile_definition(def_, context=context)
@@ -156,6 +248,7 @@ class RunHost:
         self._runs[state.run_id] = state
         self._prune()
         self._record(state, "run/started", None, {"workflowId": def_.id, "workflowName": def_.name})
+        self._persist()
         state.task = asyncio.create_task(self._stream(state, _graph_input(def_, state.inputs)), name=f"hnflow:{state.run_id}")
         return {"runId": state.run_id, "status": state.status, "startedAt": state.started_at}
 
@@ -197,7 +290,23 @@ class RunHost:
         except TaskError as exc:
             raise EngineError(exc.code, exc.message, exc.data) from exc
         state.task = asyncio.create_task(self._stream(state, Command(resume=submitted["payload"])), name=f"hnflow:{state.run_id}:resume")
+        self._persist()
         return {"taskId": task_id, "runId": state.run_id, "status": "running", "revision": submitted["revision"]}
+
+    async def resume(self, run_id: str) -> dict[str, Any]:
+        """Continue a run that an engine restart interrupted.
+
+        The checkpoint is intact, so the graph continues from its last committed
+        step with no new input. Runs that never started a step have nothing to
+        recover and are reported as such.
+        """
+        state = self._get(run_id)
+        if state.status != "interrupted":
+            raise EngineError("run-not-resumable", f"run {run_id} is {state.status}, not interrupted", {"runId": run_id, "status": state.status})
+        if state.task is not None and not state.task.done():
+            raise EngineError("run-busy", f"run {run_id} is still streaming", {"runId": run_id})
+        state.task = asyncio.create_task(self._stream(state, None), name=f"hnflow:{run_id}:resume")
+        return {"runId": run_id, "status": "running"}
 
     def cancel(self, run_id: str) -> dict[str, Any]:
         """Ask a run to stop at its next stream boundary."""
@@ -216,12 +325,19 @@ class RunHost:
         return {"runs": [state.summary() for state in self._runs.values()]}
 
     async def close(self) -> None:
-        """Cancel every in-flight run (engine shutdown)."""
+        """Cancel every in-flight run, persist the records, close the store."""
         tasks = [state.task for state in self._runs.values() if state.task is not None and not state.task.done()]
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._persist()
+        if self._connection is not None:
+            try:
+                await self._connection.close()
+            except Exception:  # noqa: BLE001 - shutdown must not raise
+                logger.warning("cannot close the engine checkpoint store", exc_info=True)
+            self._connection = None
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -264,6 +380,7 @@ class RunHost:
         if status == "waiting_human":
             payload["tasks"] = self._tasks.summaries(state.run_id)
         self._record(state, f"run/{status}", None, payload)
+        self._persist()
         self._emit({"jsonrpc": "2.0", "method": "run/status", "params": {"runId": state.run_id, **payload}})
 
     def _runtime_context(self, state: RunState) -> dict[str, Any]:

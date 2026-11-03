@@ -15,6 +15,7 @@ export const USAGE = [
   '/workflow run <name> [k=v …] — start a run and wait for it (or for a human task)',
   '/workflow status <runId> — show a run and its pending tasks',
   '/workflow cancel <runId> — ask the engine to stop a run',
+  '/workflow resume <runId> — continue a run an engine restart interrupted',
   '/workflow tasks [runId] — pending human tasks',
   '/workflow submit <taskId> [k=v …] — answer a human task and continue the run',
   '/workflow ref list — refs, overrides, and drift',
@@ -161,6 +162,13 @@ export function createWorkflowCommand(options) {
     if (head === 'tasks') {
       const result = await service.tasks(rest[0])
       return formatTasks(result.tasks)
+    }
+
+    if (head === 'resume') {
+      if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow resume <runId>')
+      const resumed = await service.resume(rest[0])
+      const status = await service.waitFor(resumed.runId, 60000)
+      return `resumed ${resumed.runId}\n${formatRunStatus(status)}`
     }
 
     if (head === 'submit') {

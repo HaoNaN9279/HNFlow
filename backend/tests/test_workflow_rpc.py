@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 from typing import Any
 
 from deerflow.workflow.rpc.protocol import PROTOCOL_VERSION, RpcError, decode, encode
+from deerflow.workflow.rpc.runner import RunHost
 from deerflow.workflow.rpc.server import RpcServer
 
 _TERMINAL = {"succeeded", "failed", "cancelled"}
@@ -368,10 +372,128 @@ def test_unknown_run_is_a_stable_error() -> None:
     assert response["error"]["data"]["code"] == "unknown-run"
 
 
+# ── durability ────────────────────────────────────────────────────────────────
+
+
+def _temp_state_dir() -> Path:
+    """A throwaway state directory.
+
+    ``tempfile.mkdtemp`` and pytest's ``tmp_path`` both create directories whose
+    Windows ACL the sandbox cannot write SQLite files into, so the directory is
+    created with a plain mkdir under a writable temp root instead.
+    """
+    base = Path(tempfile.gettempdir()) / "hnflow-rpc"
+    base.mkdir(exist_ok=True)
+    directory = base / os.urandom(4).hex()
+    directory.mkdir()
+    return directory
+
+
+def test_waiting_run_and_pending_task_survive_a_restart() -> None:
+    state = _temp_state_dir()
+
+    async def first_session() -> tuple[str, str]:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            started = await host.start(definition=_human_task_definition())
+            run_id = started["runId"]
+            for _ in range(300):
+                status = host.status(run_id)
+                if status["status"] == "waiting_human":
+                    return run_id, status["pendingTasks"][0]["taskId"]
+                await asyncio.sleep(0.02)
+            raise AssertionError(f"run never waited: {status}")
+        finally:
+            await host.close()
+
+    async def second_session(run_id: str, task_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            restored = host.status(run_id)
+            await host.submit(task_id=task_id, payload={"note": "after restart"})
+            for _ in range(300):
+                final = host.status(run_id)
+                if final["status"] in _TERMINAL:
+                    return restored, final
+                await asyncio.sleep(0.02)
+            raise AssertionError(f"resumed run never settled: {final}")
+        finally:
+            await host.close()
+
+    run_id, task_id = asyncio.run(first_session())
+    restored, final = asyncio.run(second_session(run_id, task_id))
+
+    assert restored["status"] == "waiting_human"
+    assert restored["pendingTasks"][0]["taskId"] == task_id
+    assert final["status"] == "succeeded"
+    assert final["result"] == {"in": "after restart"}
+
+
+def test_a_run_that_was_streaming_becomes_interrupted_and_resumes() -> None:
+    state = _temp_state_dir()
+
+    async def run_once() -> str:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            started = await host.start(definition=_wait_definition(0.01))
+            for _ in range(300):
+                status = host.status(started["runId"])
+                if status["status"] in _TERMINAL:
+                    return started["runId"]
+                await asyncio.sleep(0.02)
+            raise AssertionError(f"run never settled: {status}")
+        finally:
+            await host.close()
+
+    run_id = asyncio.run(run_once())
+
+    # Simulate a process that died mid-run: the record still says "running".
+    records = json.loads((state / "runs.json").read_text(encoding="utf-8"))
+    records["runs"][0]["status"] = "running"
+    (state / "runs.json").write_text(json.dumps(records), encoding="utf-8")
+
+    async def reopen() -> tuple[dict[str, Any], dict[str, Any]]:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            restored = host.status(run_id)
+            await host.resume(run_id)
+            for _ in range(300):
+                final = host.status(run_id)
+                if final["status"] in _TERMINAL:
+                    return restored, final
+                await asyncio.sleep(0.02)
+            raise AssertionError(f"resumed run never settled: {final}")
+        finally:
+            await host.close()
+
+    restored, final = asyncio.run(reopen())
+
+    assert restored["status"] == "interrupted"
+    assert final["status"] == "succeeded"
+    assert final["result"] == {"in": None}
+
+
+def test_a_memory_host_reports_no_durability() -> None:
+    async def scenario() -> bool:
+        host = RunHost()
+        await host.boot()
+        try:
+            return host.durable
+        finally:
+            await host.close()
+
+    assert asyncio.run(scenario()) is False
+
+
 # ── stdio transport ───────────────────────────────────────────────────────────
 
 
 def test_stdio_transport_serves_a_session() -> None:
+    environment = {**os.environ, "HNFLOW_ENGINE_STATE": str(_temp_state_dir())}
     process = subprocess.Popen(
         [sys.executable, "-m", "deerflow.workflow.rpc"],
         stdin=subprocess.PIPE,
@@ -379,6 +501,7 @@ def test_stdio_transport_serves_a_session() -> None:
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
+        env=environment,
     )
     assert process.stdin is not None
     assert process.stdout is not None

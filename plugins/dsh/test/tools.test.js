@@ -25,6 +25,7 @@ function fakeService(overrides = {}) {
     status: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [{ nodeId: 'greet', status: 'succeeded' }], result: { in: 'hello' } }),
     waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'hello' } }),
     cancel: async () => ({ runId: 'run-1', status: 'running', cancelled: true }),
+    resume: async () => ({ runId: 'run-1', status: 'running' }),
     tasks: async () => ({ tasks: [] }),
     submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
     listAssets: async () => [{ id: 'wf-1', name: '发布流程', revision: 4, description: '发布' }],
@@ -126,6 +127,13 @@ test('task_list renders fields and the empty case', async () => {
   })
   const text = await makeTool(service).execute({ action: 'task_list', run_id: 'run-1' }, {})
   assert.match(text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('resume continues an interrupted run', async () => {
+  const service = fakeService({ resume: async () => ({ runId: 'run-1', status: 'running' }) })
+  const text = await makeTool(service).execute({ action: 'resume', run_id: 'run-1' }, {})
+  assert.match(text, /^resumed run-1/u)
+  assert.match(text, /run run-1: succeeded/u)
 })
 
 test('task_submit needs an id, then reports the resumed run', async () => {

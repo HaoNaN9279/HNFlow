@@ -7,7 +7,7 @@
  */
 
 /** Actions the tool accepts. */
-export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'assets', 'task_list', 'task_submit']
+export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'resume', 'assets', 'task_list', 'task_submit']
 
 /** Default wait budget for `run`, in seconds. */
 export const DEFAULT_RUN_WAIT_SECONDS = 30
@@ -126,6 +126,11 @@ export function createWorkflowTool(options) {
         return formatRunStatus(await service.status(requireRunId(args)))
       case 'cancel':
         return JSON.stringify(await service.cancel(requireRunId(args)))
+      case 'resume': {
+        const resumed = await service.resume(requireRunId(args))
+        const status = await service.waitFor(resumed.runId, clampWait(args.wait_seconds) * 1000)
+        return `resumed ${resumed.runId}\n${formatRunStatus(status)}`
+      }
       case 'task_list':
         return formatTasks((await service.tasks(requireRunId(args))).tasks)
       case 'task_submit': {
@@ -147,7 +152,7 @@ export function createWorkflowTool(options) {
     parameters: {
       action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
       workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
-      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, and task_list.' },
+      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, resume, and task_list.' },
       input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
       task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
       revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },

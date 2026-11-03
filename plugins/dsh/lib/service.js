@@ -27,7 +27,7 @@ export const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
 export const HOLDING_STATUSES = new Set(['waiting_human'])
 
 /** Statuses the plugin may report before the engine assigns one. */
-export const RUN_STATUSES = ['queued', 'running', 'waiting_human', 'succeeded', 'failed', 'cancelled']
+export const RUN_STATUSES = ['queued', 'running', 'waiting_human', 'interrupted', 'succeeded', 'failed', 'cancelled']
 
 /**
  * Shared plugin behaviour.
@@ -83,6 +83,7 @@ export class HnflowService {
       cwd: engineCwd(this.config),
       requestTimeoutMs: this.config.requestTimeoutMs,
       startupTimeoutMs: this.config.startupTimeoutMs,
+      env: this.config.stateDir.length > 0 ? { HNFLOW_ENGINE_STATE: this.config.stateDir } : {},
       logger: this.logger,
     })
     return this.engine
@@ -191,6 +192,15 @@ export class HnflowService {
       status = await this.status(runId)
     }
     return status
+  }
+
+  /**
+   * Continue a run that an engine restart interrupted.
+   * @param {string} runId - engine run id.
+   * @returns {Promise<Record<string, any>>} `{runId, status}`.
+   */
+  async resume(runId) {
+    return await this.engineClient().request('run/resume', { runId })
   }
 
   /**

@@ -60,6 +60,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 /workflow run publish target=staging
 /workflow status <runId>
 /workflow cancel <runId>
+/workflow resume <runId>          续跑被引擎重启打断的 run
 /workflow tasks [runId]           待办人工任务
 /workflow submit <taskId> note=ok 提交并继续运行
 /workflow ref add <assetId> --pin 3 --alias publish
@@ -69,7 +70,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 /workflow override reset publish
 ```
 
-工具 `hnflow`：`action = list | get | run | status | cancel | assets | task_list | task_submit`，
+工具 `hnflow`：`action = list | get | run | status | cancel | resume | assets | task_list | task_submit`，
 `run` 必须带 `workflow`。
 
 ## 数据布局
@@ -79,12 +80,20 @@ $DSH_HOME/hnflow/library/
 ├─ release/publish.workflow.json          # 资产（asset + definition）
 └─ .hnflow-revisions/<assetId>/r3.json    # 只读 revision 快照
 
+$DSH_HOME/hnflow/state/                   # 引擎运行态（可配置 stateDir 覆盖）
+├─ checkpoints.sqlite                     # LangGraph checkpoint
+├─ runs.json                              # run 记录
+└─ tasks.json                             # 人工任务行
+
 <workspace>/.hnflow/
 ├─ workflows.json                         # 引用清单（固定 revision 或 follow）
 └─ overrides/<assetId>.workflow.json      # 工作区覆盖（完整副本 + baseRevision）
 ```
 
 解析顺序：覆盖 → 引用固定 revision 的快照 → 资产最新 revision。
+
+重启语义：`waiting_human` 的 run 与待办原样保留、可直接提交；被进程中断的 `running` run
+标记为 `interrupted`，用 `/workflow resume <runId>` 从最后 checkpoint 继续。
 
 ## 测试
 
@@ -93,8 +102,8 @@ node test/run.mjs      # 插件单元/契约测试（进程内运行，避免沙
 cd ../../backend && .venv/Scripts/python -m pytest tests/test_workflow_rpc.py -q
 ```
 
-## 已知边界（M2 前）
+## 已知边界
 
-- run 使用进程内 checkpointer，引擎重启即丢 run；
-- 人工任务存在引擎内存里：重启后待办消失（M2 换持久化存储后保留）；
-- 没有画布面板与保存菜单，写资产目前无工具入口（只有 `/workflow` 只读命令族）。
+- 没有画布面板与保存菜单，写资产目前无工具入口（只有 `/workflow` 只读命令族）；
+- 没有 job 镜像：run 状态靠 `run/status` 与 `run/status` 通知，会话关闭不影响引擎里的 run；
+- run 事件（`run/events`）只在进程内保留，重启后只能看到状态与结果，看不到历史事件。

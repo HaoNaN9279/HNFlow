@@ -103,6 +103,14 @@ class MemoryTaskStore:
         """Drop every row of one run (a cancelled run can never be resumed)."""
         self._rows = [row for row in self._rows if row["workflow_run_id"] != run_id]
 
+    def dump(self) -> list[dict[str, Any]]:
+        """Snapshot of every row, for persistence."""
+        return [dict(row) for row in self._rows]
+
+    def load(self, rows: list[dict[str, Any]]) -> None:
+        """Replace the rows from a persisted snapshot."""
+        self._rows = [dict(row) for row in rows if isinstance(row, dict) and isinstance(row.get("id"), str) and isinstance(row.get("workflow_run_id"), str)]
+
     # ── engine-facing view ─────────────────────────────────────────────────
 
     def pending(self, run_id: str) -> list[dict[str, Any]]:
