@@ -406,9 +406,13 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 | 通道 | 场景 | 说明 |
 | --- | --- | --- |
-| turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，答案回到工具，工具提交引擎（M3 剩余） |
+| turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，`hnflow` 工具在 run 停在 `waiting_human` 时弹卡并按答案提交（**已落地**）；`interactive:false` 可关 |
 | 面板收件箱 | 任意时刻 | 零 token；复杂表单只在这里（M3 剩余） |
 | 会话自然语言 | 用户直接回复 | Agent 调 `hnflow` 的 `task_list` / `task_submit`（**已落地**） |
+
+问题卡映射规则：`human:review` → 一张卡片两个选项（通过 / 打回，打回原因走自由文本）；
+`human:task` → 每个输出端口一张卡（`bool` 给 true/false 选项，其余自由文本，按端口类型解析）。
+用户直接关闭或未作答 → **不提交**，任务保持 pending；一次工具调用最多连续处理 3 轮人工任务。
 
 提交语义已定：同一 `task_id` 重复提交返回 `task-not-pending`；字段不符返回 `task-invalid`；
 带 `revision` 的过期提交返回 `task-revision-conflict`；取消 `waiting_human` 的 run 会清掉它的待办。
@@ -513,6 +517,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 运行持久化（M2 主体） | `checkpoints.sqlite`（AsyncSqliteSaver）+ `runs.json` + `tasks.json`，`$DSH_HOME/hnflow/state/`；`waiting_human` 跨重启可提交，`running` 跨重启转 `interrupted` 并可 `run/resume` |
 | 写入面（M4/M5 的一部分） | `hnflow_author`（schema / validate / save_override）；`/workflow save asset` 是唯一写资产入口；覆盖先校验后落盘 |
 | 资产库生命周期 | `/workflow asset new|import|delete`、`/workflow ref pin`；导入支持资产/引擎/裸定义三种形态，删除受当前工作区引用保护 |
+| 问题卡（M3 通道之一） | `hnflow` 在 `waiting_human` 时用 `ctx.userQuestions.ask()` 弹卡：review 一卡两选项，task 一端口一卡；未作答不提交；`interactive:false` 可关 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
@@ -550,7 +555,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 `task/list` / `task/submit`（CAS：`task-not-pending` / `task-revision-conflict`，字段校验走
 `human_task_state.validate_human_task_submission`）、`hnflow` 的 `task_list`/`task_submit`、
 `/workflow tasks|submit`。
-**剩余**：面板收件箱、turn 内问题卡（`userQuestions`）、通知策略 `notify|wake`、跨重启持久化（依赖 M2 存储）。
+**剩余**：面板收件箱、通知策略 `notify|wake`、跨重启持久化（依赖 M2 存储）。
+（turn 内问题卡已完成，见 §9 通道一。）
 
 ### M4 画布与保存菜单（2–3 周）
 

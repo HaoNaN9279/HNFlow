@@ -129,6 +129,67 @@ test('task_list renders fields and the empty case', async () => {
   assert.match(text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
 })
 
+test('a waiting run is answered through question cards when the caller allows it', async () => {
+  /** @type {Record<string, any>[]} */
+  const asked = []
+  /** @type {Record<string, any>[]} */
+  const submitted = []
+  const service = fakeService({
+    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', outputSpec: { ports: [] } }] }),
+    submitTask: async (input) => {
+      submitted.push(input)
+      return { taskId: input.taskId, runId: 'run-1', status: 'running' }
+    },
+  })
+  // Second wait observes the resumed run finishing.
+  let calls = 0
+  service.waitFor = async () => {
+    calls += 1
+    if (calls === 1) return { runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', outputSpec: { ports: [] } }] }
+    return { runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }
+  }
+  const tool = createWorkflowTool({
+    defineTool,
+    service,
+    cwdOf: () => '/ws',
+    askTask: async (pending) => {
+      asked.push(pending)
+      return { decision: true, feedback: '' }
+    },
+  })
+
+  const text = await tool.execute({ action: 'run', workflow: 'publish' }, {})
+
+  assert.equal(asked.length, 1)
+  assert.equal(asked[0].taskId, 'task-9')
+  assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { decision: true, feedback: '' } })
+  assert.match(text, /run run-1: succeeded/u)
+})
+
+test('interactive:false leaves the task pending', async () => {
+  let asked = 0
+  const service = fakeService({
+    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'task', nodeId: 'approve', description: 'confirm', outputSpec: { ports: [] } }] }),
+  })
+  const tool = createWorkflowTool({ defineTool, service, cwdOf: () => '/ws', askTask: async () => { asked += 1; return { note: 'x' } } })
+
+  const text = await tool.execute({ action: 'run', workflow: 'publish', interactive: false }, {})
+
+  assert.equal(asked, 0)
+  assert.match(text, /waiting on task task-9/u)
+})
+
+test('an unanswered card keeps the task pending', async () => {
+  const service = fakeService({
+    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', description: 'confirm', outputSpec: { ports: [] } }] }),
+  })
+  const tool = createWorkflowTool({ defineTool, service, cwdOf: () => '/ws', askTask: async () => null })
+
+  const text = await tool.execute({ action: 'run', workflow: 'publish' }, {})
+
+  assert.match(text, /waiting on task task-9/u)
+})
+
 test('resume continues an interrupted run', async () => {
   const service = fakeService({ resume: async () => ({ runId: 'run-1', status: 'running' }) })
   const text = await makeTool(service).execute({ action: 'resume', run_id: 'run-1' }, {})

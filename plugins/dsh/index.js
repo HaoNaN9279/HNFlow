@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 
 import { USAGE, createWorkflowCommand } from './lib/commands.js'
 import { createWorkflowAuthorTool } from './lib/author.js'
+import { questionsForTask } from './lib/questions.js'
 import { HnflowService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createWorkflowTool } from './lib/tools.js'
@@ -56,6 +57,25 @@ export function apply(ctx, rawConfig) {
   const indexCache = new Map()
 
   /**
+   * Ask the user about one waiting human task and build its submission payload.
+   *
+   * Returns null whenever the question path is unavailable (no service, no live
+   * agent, nothing chosen); the caller then leaves the task pending rather than
+   * submitting a guess.
+   * @param {Record<string, any>} task - pending task summary.
+   * @param {{agent?: unknown, signal?: AbortSignal}} exec - tool execution context.
+   * @returns {Promise<Record<string, any> | null>} payload or null.
+   */
+  const askTask = async (task, exec) => {
+    const userQuestions = ctx.get('userQuestions')
+    if (typeof userQuestions?.ask !== 'function' || exec?.agent === undefined) return null
+    const { questions, build } = questionsForTask(task)
+    if (questions.length === 0) return null
+    const answer = await userQuestions.ask({ questions, agent: exec.agent, signal: exec.signal })
+    return build(answer)
+  }
+
+  /**
    * Effective working directory of an agent session.
    * @param {unknown} agent - agent handle.
    * @returns {string | null} absolute path, or null when unknown.
@@ -94,7 +114,7 @@ export function apply(ctx, rawConfig) {
           warn('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the workflow tools stay unregistered')
           return
         }
-        scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf }))
+        scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf, askTask }))
         scope.tools.register(createWorkflowAuthorTool({ defineTool, service, cwdOf }))
       } catch (error) {
         warn('hnflow: cannot register the workflow tool: %o', error)

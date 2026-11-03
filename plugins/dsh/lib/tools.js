@@ -73,19 +73,48 @@ export function formatWorkflowList(entries) {
  * @returns {Record<string, any>} the tool definition handed to `ctx.tools.register`.
  */
 export function createWorkflowTool(options) {
-  const { defineTool, service, cwdOf } = options
+  const { defineTool, service, cwdOf, askTask = null } = options
+
+  /**
+   * Answer waiting human tasks with question cards while the caller allows it.
+   *
+   * Bounded to three rounds so a workflow that keeps asking cannot hold the tool
+   * open indefinitely; every round still ends in a real submit + wait.
+   * @param {Record<string, any>} status - run status.
+   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
+   * @param {boolean} interactive - whether the caller wants cards.
+   * @returns {Promise<Record<string, any>>} the latest status.
+   */
+  const settle = async (status, exec, interactive) => {
+    let current = status
+    for (let round = 0; round < 3; round += 1) {
+      if (current.status !== 'waiting_human') return current
+      const tasks = Array.isArray(current.pendingTasks) ? current.pendingTasks : []
+      if (!interactive || askTask === null || tasks.length !== 1) return current
+      let payload
+      try {
+        payload = await askTask(tasks[0], exec)
+      } catch {
+        return current
+      }
+      if (payload === null || payload === undefined) return current
+      await service.submitTask({ taskId: tasks[0].taskId, payload })
+      current = await service.waitFor(current.runId, 60000)
+    }
+    return current
+  }
 
   /**
    * Run one action.
    * @param {Record<string, any>} args - validated arguments.
-   * @param {{agent?: unknown}} exec - execution context.
+   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
    */
   const execute = async (args, exec) => {
     const cwd = cwdOf(exec?.agent)
     try {
       if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-      return await run(args, cwd)
+      return await run(args, cwd, exec)
     } catch (error) {
       return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
     }
@@ -95,9 +124,11 @@ export function createWorkflowTool(options) {
    * Dispatch one action against a resolved workspace.
    * @param {Record<string, any>} args - validated arguments.
    * @param {string} cwd - workspace root.
+   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
    */
-  const run = async (args, cwd) => {
+  const run = async (args, cwd, exec) => {
+    const interactive = args.interactive !== false
     switch (args.action) {
       case 'list':
         return formatWorkflowList(await service.listWorkflows(cwd))
@@ -118,7 +149,8 @@ export function createWorkflowTool(options) {
         const key = requireWorkflow(args)
         const started = await service.startRun({ cwd, key, inputs: args.input ?? {} })
         const waitSeconds = clampWait(args.wait_seconds)
-        const status = waitSeconds > 0 ? await service.waitFor(started.runId, waitSeconds * 1000) : await service.status(started.runId)
+        const observed = waitSeconds > 0 ? await service.waitFor(started.runId, waitSeconds * 1000) : await service.status(started.runId)
+        const status = await settle(observed, exec, interactive)
         const header = `started ${started.runId} from ${started.resolved.source} r${started.resolved.revision ?? 'latest'}`
         return `${header}\n${formatRunStatus(status)}`
       }
@@ -137,7 +169,7 @@ export function createWorkflowTool(options) {
         const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
         if (taskId.length === 0) return 'error task-id-required: pass task_id from action "task_list"'
         const submitted = await service.submitTask({ taskId, payload: args.input ?? {}, revision: Number.isInteger(args.revision) ? args.revision : undefined })
-        const status = await service.waitFor(submitted.runId, 60000)
+        const status = await settle(await service.waitFor(submitted.runId, 60000), exec, interactive)
         return `submitted ${taskId}\n${formatRunStatus(status)}`
       }
       default:
@@ -156,6 +188,7 @@ export function createWorkflowTool(options) {
       input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
       task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
       revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },
+      interactive: { type: 'boolean', description: 'Ask question cards for a waiting human task (default true); pass false to leave it pending.' },
       wait_seconds: { type: 'number', description: `How long run waits for completion (default ${DEFAULT_RUN_WAIT_SECONDS}, max ${MAX_RUN_WAIT_SECONDS}).` },
     },
     output: {
