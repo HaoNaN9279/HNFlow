@@ -99,14 +99,14 @@ def _ai_definition() -> dict[str, Any]:
             {
                 "id": "write",
                 "type": "ai:llm_agent",
-                "inputs": [{"name": "task", "type": "data"}],
+                "inputs": [{"name": "template_prompt", "type": "data"}],
                 "outputs": [{"name": "out", "type": "data"}],
                 "params": {"template_prompt": "write a haiku"},
             },
             {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
         ],
         "edges": [
-            {"source": "start", "source_port": "out", "target": "write", "target_port": "task"},
+            {"source": "start", "source_port": "out", "target": "write", "target_port": "template_prompt"},
             {"source": "write", "source_port": "out", "target": "end", "target_port": "in"},
         ],
     }
@@ -401,10 +401,10 @@ def _ai_definition_models() -> list[dict[str, Any]]:
     return [
         {
             "name": "test-model",
-            "use": "deerflow.models.patched_deepseek:PatchedChatDeepSeek",
+            "use": "deerflow.workflow.rpc.llm_bridge:BridgeChatModel",
             "model": "test-model",
-            "api_base": "http://127.0.0.1:9/v1",
-            "api_key": "test-key",
+            "provider": "deepseek",
+            "context_window": 65536,
         }
     ]
 
@@ -625,6 +625,13 @@ def test_the_bridge_model_forwards_to_the_harness() -> None:
     assert seen[0]["messages"] == [{"role": "system", "text": "be brief"}, {"role": "user", "text": "hi"}]
 
 
+def test_the_bridge_model_accepts_a_tool_binding_without_using_it() -> None:
+    from deerflow.workflow.rpc.llm_bridge import BridgeChatModel
+
+    model = BridgeChatModel(provider="deepseek", model="m")
+    assert model.bind_tools([{"name": "x"}]) is model
+
+
 def test_the_bridge_model_fails_loud_without_a_transport() -> None:
     from langchain_core.messages import HumanMessage
 
@@ -666,6 +673,69 @@ def test_outbound_requests_resolve_and_time_out() -> None:
 
     assert resolved == {"text": "ok"}
     assert getattr(error, "engine_code", "") == "client-timeout"
+
+
+def test_an_ai_node_completes_through_the_plugin_over_stdio() -> None:
+    """The whole bridge path: engine -> stdio request -> plugin -> text back."""
+    state = _temp_state_dir()
+    environment = {**os.environ, "HNFLOW_ENGINE_STATE": str(state)}
+    process = subprocess.Popen(
+        [sys.executable, "-m", "deerflow.workflow.rpc"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        encoding="utf-8",
+        env=environment,
+    )
+    assert process.stdin is not None
+    assert process.stdout is not None
+    calls: list[dict[str, Any]] = []
+
+    def send(message: dict[str, Any]) -> None:
+        process.stdin.write(encode(message))
+        process.stdin.flush()
+
+    def next_message() -> dict[str, Any]:
+        line = process.stdout.readline()
+        assert line, "the engine closed the channel"
+        return json.loads(line)
+
+    try:
+        send(_request("engine/initialize", {"protocolVersion": PROTOCOL_VERSION, "models": _ai_definition_models()}))
+        assert next_message()["result"]["capabilities"]["models"] == 1
+        send(_request("run/start", {"definition": _ai_definition(), "inputs": {"out": "write a haiku"}}, request_id=2))
+        send(_request("run/status", {"runId": "run-missing"}, request_id=3))
+
+        run_id = None
+        deadline = __import__("time").time() + 60
+        while __import__("time").time() < deadline:
+            message = next_message()
+            if message.get("method") == "llm/complete":
+                calls.append(message["params"])
+                send({"jsonrpc": "2.0", "id": message["id"], "result": {"text": "bridged answer"}})
+                continue
+            if message.get("method") == "run/status" and message["params"]["runId"] == run_id and message["params"]["status"] in _TERMINAL:
+                break
+            if message.get("id") == 2 and run_id is None:
+                run_id = message["result"]["runId"]
+        assert run_id is not None
+        send(_request("run/status", {"runId": run_id}, request_id=4))
+        status = None
+        while status is None:
+            message = next_message()
+            if message.get("method") == "llm/complete":
+                send({"jsonrpc": "2.0", "id": message["id"], "result": {"text": "bridged answer"}})
+                continue
+            if message.get("id") == 4:
+                status = message["result"]
+    finally:
+        process.stdin.close()
+        process.wait(timeout=30)
+
+    assert status["status"] == "succeeded", status
+    assert len(calls) == 1
+    assert calls[0]["messages"][0]["role"] == "system"
 
 
 # ── stdio transport ───────────────────────────────────────────────────────────

@@ -180,11 +180,19 @@ class RunHost:
         if self._app_config is not None:
             return self._app_config
         try:
-            from deerflow.config.app_config import get_app_config
-            from deerflow.config.model_config import ModelConfig
+            from deerflow.config.app_config import AppConfig, get_app_config, set_app_config
 
-            base = get_app_config()
-            self._app_config = base.model_copy(update={"models": [ModelConfig.model_validate(entry) for entry in self._models]})
+            # Rebuild rather than `model_copy`: the name index is built when the
+            # model is constructed, and a copy would come back without the new
+            # entries.
+            data = get_app_config().model_dump()
+            data["models"] = list(self._models)
+            config = AppConfig.model_validate(data)
+            # AI nodes resolve their model by name through the process-global
+            # config, so the catalog has to be installed there too; this process
+            # exists only to serve these runs.
+            set_app_config(config)
+            self._app_config = config
         except Exception:  # noqa: BLE001 - a bad catalog must not stop non-AI runs
             logger.warning("cannot install the supplied model catalog", exc_info=True)
             self._app_config = None

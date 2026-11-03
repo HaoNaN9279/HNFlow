@@ -63,7 +63,10 @@ models:
     use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel
     model: deepseek-flash       # DSH 里的模型 id
     provider: deepseek          # 可选，DSH 里的 provider 路由
+    context_window: 65536       # 必填：AI 节点按它做上下文压缩
 ```
+
+桥接模型只做「消息 → 纯文本」，不接受工具调用（`bind_tools` 是空操作），也不带思考控制。
 
 2. **走 HNFlow 自己的 provider 配置**——`use` 指向真实 provider 类，此时 `api_base` / `api_key` 要写全：
 

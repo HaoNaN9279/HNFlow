@@ -92,6 +92,15 @@ class BridgeChatModel(BaseChatModel):
         """Parameters that identify this model instance."""
         return {"provider": self.provider_name, "model": self.model_name}
 
+    def bind_tools(self, tools: Any, **kwargs: Any) -> BridgeChatModel:
+        """Accept a tool binding without acting on it.
+
+        The workflow AI executor builds a LangChain agent, which always binds its
+        tool list to the model. The bridge answers text only, so the binding is a
+        no-op: tools stay unavailable to the node but the call does not fail.
+        """
+        return self
+
     def _payload(self, messages: list[BaseMessage]) -> dict[str, Any]:
         """Build the plugin request."""
         return {

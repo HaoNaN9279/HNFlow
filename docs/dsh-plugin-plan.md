@@ -498,6 +498,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 节点模型（阶段二，**已落地**）：模型条目的 `use` 指向 `deerflow.workflow.rpc.llm_bridge:BridgeChatModel` 时，
   AI 节点的消息经 `llm/complete` 反向请求送到插件，由 DSH 的 `ctx.llm.stream` 执行并回传文本——
   模型目录与凭据只存在于 DSH，HNFlow 侧不需要再写一份 api_key；
+  条目仍需 `context_window`（AI 节点按它压缩上下文），桥接模型只回答文本、`bind_tools` 为空操作；
 - 能力组：节点侧解析与四层提示词保持不变；会话侧复用 `dsh-vibestack`（见 §6）；
 - 项目内容（`AGENTS.md`、`.hnflow/content`）保持不变，作为能力组之外的项目级来源。
 
@@ -536,7 +537,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层含工作流列表、只读 SVG 画布（`/workflow panel` 供数）、节点参数编辑（`/workflow node` → 覆盖）、撤销覆盖与命令按钮；仅 `hnflow` 模式渲染；`dsh plugin add` 后 boot 图里可见 `dsh-hnflow/client.js` |
 | 保存回资产（M4 验收项） | `/workflow save asset` 先给 diff 与 `rN → rN+1`，必须 `--yes` 才写；面板「保存回资产…」→「确认写入资产」是同一命令的两次点击；工具面仍无写资产动作 |
 | 模型桥（M5 阶段一） | 插件 `models[]` 随 `engine/initialize` 下发，引擎替换 `AppConfig.models` 交给 AI 节点；无模型且含 AI 节点时 `run/start` 返回 `models-unavailable` |
-| 模型桥（M5 阶段二） | `llm_bridge.BridgeChatModel` + 反向 RPC `llm/complete`：AI 节点的消息送到插件，由 `ctx.llm.stream` 在 DSH 侧执行、回传文本；凭据只存在 DSH |
+| 模型桥（M5 阶段二） | `llm_bridge.BridgeChatModel` + 反向 RPC `llm/complete`：AI 节点的消息送到插件，由 `ctx.llm.stream` 在 DSH 侧执行、回传文本；凭据只存在 DSH；端到端由 `test_an_ai_node_completes_through_the_plugin_over_stdio` 覆盖 |
 | 面板收件箱（M3 通道二） | 面板「待办」页签读 `/workflow inbox`（JSON），点任务给模板 JSON，提交走 `/workflow submit <id> {json}`；`submit` 同时支持 `k=v` 与 JSON 两种写法 |
 | 运行时间线 | `run/events` 追加写入 `state/events/<runId>.jsonl`，重启后仍可回放；`hnflow` 的 `events` 动作与 `/workflow events <runId>` 渲染节点时间线 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |

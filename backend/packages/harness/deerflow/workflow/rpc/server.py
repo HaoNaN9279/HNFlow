@@ -279,6 +279,13 @@ def _definition_from_wire(raw: dict[str, Any]) -> Any:
 
 async def serve() -> int:
     """Run the engine on stdin/stdout until EOF or ``engine/shutdown``."""
+    # The protocol is UTF-8 regardless of the host console; without this a
+    # Chinese prompt would leave the engine as GBK bytes.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):  # pragma: no cover - non-reconfigurable streams
+        pass
     server = RpcServer(state_dir=default_state_dir())
     await server.host.boot()
     llm_bridge.set_transport(lambda payload: server.call_client("llm/complete", payload))
