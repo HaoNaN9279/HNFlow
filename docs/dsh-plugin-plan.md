@@ -468,6 +468,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 删除受引用保护；重命名/移动不改变 id；
 - 可选导出/导入（文件即格式）。
 
+**已在命令层落地**：`/workflow asset list|new|import|delete` 与 `/workflow ref pin <name> [--to N]`。
+导入接受三种文件形态（资产信封 / 引擎 `serialize()` 信封 / 裸定义），这就是现存 HNFlow 工作流的迁移入口；
+删除在**本工作区仍引用**时拒绝（`asset-in-use`），并顺带清理遗留覆盖。
+**剩余**：面板形态的资产库、跨工作区使用情况统计、版本历史浏览。
+
 ---
 
 ## 12. 模型与能力组
@@ -507,6 +512,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 人工节点（M3 主体） | 引擎内存任务库 + `interrupt` 挂起（`waiting_human`）+ `task/list|submit` 恢复；插件 `task_list`/`task_submit` 与 `/workflow tasks|submit`；重复提交与字段校验有稳定错误码 |
 | 运行持久化（M2 主体） | `checkpoints.sqlite`（AsyncSqliteSaver）+ `runs.json` + `tasks.json`，`$DSH_HOME/hnflow/state/`；`waiting_human` 跨重启可提交，`running` 跨重启转 `interrupted` 并可 `run/resume` |
 | 写入面（M4/M5 的一部分） | `hnflow_author`（schema / validate / save_override）；`/workflow save asset` 是唯一写资产入口；覆盖先校验后落盘 |
+| 资产库生命周期 | `/workflow asset new|import|delete`、`/workflow ref pin`；导入支持资产/引擎/裸定义三种形态，删除受当前工作区引用保护 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）

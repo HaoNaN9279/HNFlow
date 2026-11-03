@@ -21,7 +21,11 @@ export const USAGE = [
   '/workflow ref list — refs, overrides, and drift',
   '/workflow ref add <assetId> [--pin N] [--alias name] — add a reference',
   '/workflow ref remove <name> — drop a reference',
+  '/workflow ref pin <name> [--to N] — move a reference to the current (or given) revision',
   '/workflow asset list — the asset library',
+  '/workflow asset new <name> [--folder dir] — create an empty workflow asset',
+  '/workflow asset import <path> [--name name] — import a workflow file as a new asset',
+  '/workflow asset delete <assetId> — delete an unreferenced asset',
   '/workflow save asset <name> — write the workspace override back to the asset (explicit, revision +1)',
   '/workflow override diff <name> — override vs asset',
   '/workflow override reset <name> — drop the workspace override',
@@ -182,11 +186,7 @@ export function createWorkflowCommand(options) {
     }
 
     if (head === 'ref') return await refCommand(rest, cwd)
-    if (head === 'asset') {
-      const assets = await service.listAssets(cwd)
-      if (assets.length === 0) return 'the library has no workflow assets yet'
-      return assets.map((asset) => `${asset.id}  r${asset.revision}  ${asset.name}`).join('\n')
-    }
+    if (head === 'asset') return await assetCommand(rest, cwd)
     if (head === 'save') {
       const [what, key] = rest
       if (what !== 'asset' || key === undefined) throw commandError('usage', 'usage: /workflow save asset <name>')
@@ -241,7 +241,56 @@ export function createWorkflowCommand(options) {
       const removed = await stores.workspace.removeRef(key)
       return `removed reference ${removed.alias || removed.assetId}`
     }
-    throw commandError('unknown-subcommand', 'usage: /workflow ref list|add|remove')
+    if (action === 'pin') {
+      const key = rest[0]
+      if (key === undefined) throw commandError('ref-required', 'usage: /workflow ref pin <name> [--to N]')
+      const target = rest.indexOf('--to')
+      const requested = target >= 0 ? Number(rest[target + 1]) : undefined
+      if (target >= 0 && (!Number.isInteger(requested) || requested <= 0)) {
+        throw commandError('invalid-pin', '--to expects a positive integer revision')
+      }
+      const pinned = await service.repinRef({ cwd, key, revision: requested })
+      return pinned.revision === null ? `${key} now follows the latest revision (r${pinned.currentRevision})` : `${key} pinned to r${pinned.revision} (asset is at r${pinned.currentRevision})`
+    }
+    throw commandError('unknown-subcommand', 'usage: /workflow ref list|add|remove|pin')
+  }
+
+  /**
+   * `/workflow asset …`
+   * @param {string[]} tokens - tokens after `asset`.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} output text.
+   */
+  const assetCommand = async (tokens, cwd) => {
+    const [action, ...rest] = tokens
+    if (action === undefined || action === 'list') {
+      const assets = await service.listAssets(cwd)
+      if (assets.length === 0) return 'the library has no workflow assets yet'
+      return assets.map((asset) => `${asset.id}  r${asset.revision}  ${asset.name}`).join('\n')
+    }
+    if (action === 'new') {
+      const name = rest[0]
+      if (name === undefined) throw commandError('asset-required', 'usage: /workflow asset new <name> [--folder dir]')
+      const folderIndex = rest.indexOf('--folder')
+      const folder = folderIndex >= 0 ? (rest[folderIndex + 1] ?? '') : ''
+      const created = await service.createAsset({ cwd, name, folder })
+      return `created ${created.name} (${created.assetId}, r${created.revision})\nadd it with: /workflow ref add ${created.assetId} --alias <name>`
+    }
+    if (action === 'import') {
+      const file = rest[0]
+      if (file === undefined) throw commandError('path-required', 'usage: /workflow asset import <path> [--name name]')
+      const nameIndex = rest.indexOf('--name')
+      const name = nameIndex >= 0 ? rest[nameIndex + 1] : undefined
+      const imported = await service.importAsset({ cwd, path: file, name })
+      return `imported ${imported.name} as ${imported.assetId} (r${imported.revision}) from ${imported.source}`
+    }
+    if (action === 'delete') {
+      const assetId = rest[0]
+      if (assetId === undefined) throw commandError('asset-required', 'usage: /workflow asset delete <assetId>')
+      const removed = await service.deleteAsset({ cwd, assetId })
+      return `deleted ${removed.assetId}${removed.hadOverride ? ' (its workspace override was removed too)' : ''}`
+    }
+    throw commandError('unknown-subcommand', 'usage: /workflow asset list|new|import|delete')
   }
 
   /**

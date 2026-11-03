@@ -13,6 +13,9 @@
  * - the engine, not this process, decides a run's status.
  */
 
+import { readFile } from 'node:fs/promises'
+import path from 'node:path'
+
 import { AssetError } from './assets.js'
 import { resolveConfig } from './config.js'
 import { EngineError, createEngineClient } from './engine.js'
@@ -283,6 +286,83 @@ export class HnflowService {
   }
 
   /**
+   * Create a new asset from a name (a start → end scaffold) or a definition.
+   * @param {{cwd: string, name: string, description?: string, folder?: string, definition?: Record<string, any>}} input - creation request.
+   * @returns {Promise<Record<string, any>>} `{assetId, name, revision, path}`.
+   */
+  async createAsset(input) {
+    const stores = this.storesFor(input.cwd)
+    const definition = input.definition ?? scaffoldDefinition(input.name)
+    const created = await stores.assets.create({
+      name: input.name,
+      description: input.description ?? '',
+      folder: input.folder ?? '',
+      definition,
+    })
+    return { assetId: created.asset.id, name: created.asset.name, revision: created.asset.revision, path: created.path }
+  }
+
+  /**
+   * Import a workflow file into the library as a new asset.
+   *
+   * Accepts the asset envelope, the engine's `serialize()` envelope, or a bare
+   * definition — the three shapes existing HNFlow/DSH files come in.
+   * @param {{cwd: string, path: string, name?: string, folder?: string}} input - import request.
+   * @returns {Promise<Record<string, any>>} `{assetId, name, revision, source}`.
+   */
+  async importAsset(input) {
+    const stores = this.storesFor(input.cwd)
+    const source = path.resolve(input.cwd, input.path)
+    let raw
+    try {
+      raw = JSON.parse(await readFile(source, 'utf8'))
+    } catch (error) {
+      throw new WorkspaceError('import-unreadable', `cannot read ${source}: ${error.message}`, { path: source })
+    }
+    const definition = definitionFromDocument(raw)
+    if (definition === null) {
+      throw new WorkspaceError('import-invalid', `${source} is not a workflow definition`, { path: source })
+    }
+    const name = input.name?.trim() || String(definition.name ?? path.basename(source).replace(/\.workflow\.json$/u, ''))
+    const created = await stores.assets.create({ name, definition, folder: input.folder ?? '' })
+    return { assetId: created.asset.id, name: created.asset.name, revision: created.asset.revision, source }
+  }
+
+  /**
+   * Delete an asset, refusing while this workspace still references it.
+   * @param {{cwd: string, assetId: string}} input - delete request.
+   * @returns {Promise<{assetId: string, path: string, hadOverride: boolean}>} deletion result.
+   */
+  async deleteAsset(input) {
+    const stores = this.storesFor(input.cwd)
+    const catalogue = await stores.resolver.catalogue()
+    const used = catalogue.find((entry) => entry.assetId === input.assetId)
+    if (used !== undefined) {
+      throw new WorkspaceError('asset-in-use', `${input.assetId} is referenced by this workspace as ${used.alias || used.assetId}`, {
+        assetId: input.assetId,
+        alias: used.alias,
+      })
+    }
+    const hadOverride = (await stores.workspace.readOverride(input.assetId)) !== null
+    const removed = await stores.assets.remove(input.assetId)
+    if (hadOverride) await stores.workspace.removeOverride(input.assetId)
+    return { assetId: input.assetId, path: removed.path, hadOverride }
+  }
+
+  /**
+   * Re-pin a reference to the asset's current revision (or a given one).
+   * @param {{cwd: string, key: string, revision?: number|null}} input - pin request.
+   * @returns {Promise<Record<string, any>>} `{key, assetId, revision, currentRevision}`.
+   */
+  async repinRef(input) {
+    const stores = this.storesFor(input.cwd)
+    const resolved = await stores.resolver.resolve(input.key)
+    const revision = input.revision === undefined ? resolved.currentRevision : input.revision
+    const ref = await stores.workspace.updateRef(input.key, { revision })
+    return { key: input.key, assetId: resolved.assetId, revision: ref.revision, currentRevision: resolved.currentRevision }
+  }
+
+  /**
    * Remove a workspace override (back to the asset revision).
    * @param {{cwd: string, key: string}} input - reset request.
    * @returns {Promise<{removed: boolean, assetId: string}>} reset result.
@@ -332,3 +412,45 @@ export class HnflowService {
 }
 
 export { AssetError, EngineError, ResolveError, WorkspaceError }
+
+/**
+ * A start → end scaffold for a brand-new asset.
+ * @param {string} name - display name.
+ * @returns {Record<string, any>} definition.
+ */
+export function scaffoldDefinition(name) {
+  const slug = String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 40)
+  const id = slug.length > 0 ? slug : `workflow-${Math.random().toString(16).slice(2, 8)}`
+  return {
+    id,
+    name: String(name ?? 'New workflow').trim() || 'New workflow',
+    version: '0.1.0',
+    nodes: [
+      { id: 'start', type: 'flow:start', outputs: [{ name: 'out', type: 'data' }] },
+      { id: 'end', type: 'flow:end', inputs: [{ name: 'in', type: 'data' }] },
+    ],
+    edges: [{ source: 'start', source_port: 'out', target: 'end', target_port: 'in' }],
+  }
+}
+
+/**
+ * Pick the definition out of the three file shapes we accept on import.
+ * @param {unknown} raw - parsed JSON.
+ * @returns {Record<string, any> | null} the definition, or null when the file is not one.
+ */
+export function definitionFromDocument(raw) {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const document = /** @type {Record<string, any>} */ (raw)
+  if (document.definition !== null && typeof document.definition === 'object' && Array.isArray(document.definition?.nodes)) {
+    return document.definition
+  }
+  if (document.workflow !== null && typeof document.workflow === 'object' && Array.isArray(document.workflow?.nodes)) {
+    return document.workflow
+  }
+  if (Array.isArray(document.nodes) && Array.isArray(document.edges)) return document
+  return null
+}

@@ -65,7 +65,11 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 /workflow submit <taskId> note=ok 提交并继续运行
 /workflow ref add <assetId> --pin 3 --alias publish
 /workflow ref remove publish
+/workflow ref pin publish --to 4   把引用移到新 revision（不带 --to 跟最新）
 /workflow asset list
+/workflow asset new "Release flow" 新建空工作流（start → end 骨架）
+/workflow asset import ./old.workflow.json
+/workflow asset delete <assetId>
 /workflow override diff publish
 /workflow override reset publish
 ```

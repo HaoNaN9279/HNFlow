@@ -1,16 +1,16 @@
-/**
+﻿/**
  * The service facade: what a run freezes, and what stays workspace-local.
  */
 
 import assert from 'node:assert/strict'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import { HnflowService } from '../lib/service.js'
 
-/** A minimal start → assign → end definition. */
+/** A minimal start 鈫?assign 鈫?end definition. */
 function definition(value) {
   return {
     id: 'hello-workflow',
@@ -48,6 +48,7 @@ async function makeService(calls = []) {
   }
   const service = new HnflowService({ config: { libraryRoot: path.join(root, 'library') }, engine })
   const cwd = path.join(root, 'workspace')
+  await mkdir(cwd, { recursive: true })
   return { service, cwd }
 }
 
@@ -116,7 +117,7 @@ test('saving an asset bumps its revision and leaves refs pinned', async () => {
   const stores = service.storesFor(cwd)
   const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
   await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  await service.writeOverride({ cwd, key: 'hello', definition: definition('local'), note: 'local' })
+  const override = await service.writeOverride({ cwd, key: 'hello', definition: definition('local'), note: '本项目用途', origin: 'agent' })
 
   const saved = await service.saveAsset({ cwd, key: 'hello', note: 'back to the asset' })
 
@@ -154,6 +155,88 @@ test('validation and schema go to the engine', async () => {
   assert.deepEqual(await service.schema(), { nodeTypes: [], portTypes: [] })
   assert.equal(calls[0].method, 'workflow/validate')
   assert.equal(calls[1].method, 'workflow/describe')
+})
+
+test('a new asset starts as a runnable start → end scaffold', async () => {
+  const { service, cwd } = await makeService()
+  const created = await service.createAsset({ cwd, name: 'Release flow' })
+
+  assert.equal(created.name, 'Release flow')
+  assert.equal(created.revision, 1)
+  const stores = service.storesFor(cwd)
+  const stored = await stores.assets.read(created.assetId)
+  assert.deepEqual(
+    stored.definition.nodes.map((node) => node.type),
+    ['flow:start', 'flow:end'],
+  )
+  assert.equal(stored.definition.id, 'release-flow')
+
+  await stores.workspace.addRef({ assetId: created.assetId, alias: 'release', revision: 1 })
+  assert.equal((await service.resolve(cwd, 'release')).definition.id, 'release-flow')
+})
+
+test('import accepts the asset, engine, and bare shapes', async () => {
+  const { service, cwd } = await makeService()
+  const shapes = {
+    'asset.workflow.json': { asset: { id: 'wf-x' }, definition: definition('from-asset') },
+    'engine.workflow.json': { schema_version: 1, workflow: definition('from-engine') },
+    'bare.workflow.json': definition('from-bare'),
+  }
+  for (const [name, body] of Object.entries(shapes)) {
+    await writeFile(path.join(cwd, name), JSON.stringify(body), 'utf8')
+  }
+
+  for (const [name, expected] of [
+    ['asset.workflow.json', 'from-asset'],
+    ['engine.workflow.json', 'from-engine'],
+    ['bare.workflow.json', 'from-bare'],
+  ]) {
+    const imported = await service.importAsset({ cwd, path: name })
+    const stored = await service.storesFor(cwd).assets.read(imported.assetId)
+    assert.equal(stored.definition.nodes[1].params.value, expected)
+  }
+})
+
+test('import failures are coded, not thrown raw', async () => {
+  const { service, cwd } = await makeService()
+  await writeFile(path.join(cwd, 'junk.json'), '{"nope": true}', 'utf8')
+
+  await assert.rejects(service.importAsset({ cwd, path: 'junk.json' }), (error) => error.code === 'import-invalid')
+  await assert.rejects(service.importAsset({ cwd, path: 'missing.json' }), (error) => error.code === 'import-unreadable')
+})
+
+test('an asset cannot be deleted while this workspace references it', async () => {
+  const { service, cwd } = await makeService()
+  const created = await service.createAsset({ cwd, name: 'Keep me' })
+  const stores = service.storesFor(cwd)
+  await stores.workspace.addRef({ assetId: created.assetId, alias: 'keep', revision: 1 })
+
+  await assert.rejects(service.deleteAsset({ cwd, assetId: created.assetId }), (error) => error.code === 'asset-in-use')
+
+  await stores.workspace.removeRef('keep')
+  const removed = await service.deleteAsset({ cwd, assetId: created.assetId })
+  assert.equal(removed.assetId, created.assetId)
+  assert.deepEqual(await stores.assets.list(), [])
+})
+
+test('repin moves a ref onto the saved revision', async () => {
+  const { service, cwd } = await makeService()
+  const created = await service.createAsset({ cwd, name: 'Release' })
+  const stores = service.storesFor(cwd)
+  await stores.workspace.addRef({ assetId: created.assetId, alias: 'release', revision: 1 })
+  await service.writeOverride({ cwd, key: 'release', definition: definition('local') })
+  await service.saveAsset({ cwd, key: 'release' })
+
+  const pinned = await service.repinRef({ cwd, key: 'release' })
+  assert.equal(pinned.revision, 2)
+  const after = await service.resolve(cwd, 'release')
+  // The override still wins, so behaviour stays the same until it is reset.
+  assert.equal(after.source, 'override')
+  await service.resetOverride({ cwd, key: 'release' })
+  assert.equal((await service.resolve(cwd, 'release')).definition.nodes[1].params.value, 'local')
+
+  const following = await service.repinRef({ cwd, key: 'release', revision: null })
+  assert.equal(following.revision, null)
 })
 
 test('dispose stops the engine and clears caches', async () => {

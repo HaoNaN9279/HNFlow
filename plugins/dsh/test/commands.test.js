@@ -28,6 +28,10 @@ function makeCommand(overrides = {}) {
     tasks: async () => ({ tasks: [{ taskId: 'task-9', runId: 'run-1', nodeId: 'approve', kind: 'task', description: 'confirm', outputSpec: { ports: [{ name: 'note', type: 'data', required: true }] } }] }),
     submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
     listAssets: async () => [{ id: 'wf-1', name: '发布', revision: 3 }],
+    createAsset: async (input) => ({ assetId: 'wf-new', name: input.name, revision: 1 }),
+    importAsset: async (input) => ({ assetId: 'wf-imp', name: 'Imported', revision: 1, source: input.path }),
+    deleteAsset: async (input) => ({ assetId: input.assetId, path: 'x', hadOverride: true }),
+    repinRef: async (input) => ({ key: input.key, assetId: 'wf-1', revision: input.revision ?? 4, currentRevision: 4 }),
     resolve: async () => ({ assetId: 'wf-1', source: 'override', revision: 3, currentRevision: 3 }),
     saveAsset: async (input) => ({ assetId: 'wf-1', name: '发布流程', previousRevision: 3, revision: 4, key: input.key }),
     resetOverride: async () => ({ removed: true, assetId: 'wf-1' }),
@@ -137,6 +141,39 @@ test('tasks lists pending human work', async () => {
   const result = await handler({ rawInput: 'tasks run-1' })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('asset new / import / delete manage the library', async () => {
+  const { handler } = makeCommand()
+
+  const created = await handler({ rawInput: 'asset new "Release flow"' })
+  assert.equal(created.kind, 'success')
+  assert.match(created.text, /created Release flow \(wf-new, r1\)/u)
+  assert.match(created.text, /ref add wf-new/u)
+
+  const imported = await handler({ rawInput: 'asset import ./flow.json --name Imported' })
+  assert.match(imported.text, /imported Imported as wf-imp \(r1\) from \.\/flow\.json/u)
+
+  const deleted = await handler({ rawInput: 'asset delete wf-imp' })
+  assert.match(deleted.text, /deleted wf-imp \(its workspace override was removed too\)/u)
+
+  const usage = await handler({ rawInput: 'asset new' })
+  assert.equal(usage.kind, 'error')
+  assert.match(usage.text, /usage: \/workflow asset new/u)
+})
+
+test('ref pin moves or frees a reference', async () => {
+  const { handler } = makeCommand()
+
+  const pinned = await handler({ rawInput: 'ref pin publish --to 4' })
+  assert.equal(pinned.kind, 'success')
+  assert.match(pinned.text, /publish pinned to r4 \(asset is at r4\)/u)
+
+  const latest = await handler({ rawInput: 'ref pin publish' })
+  assert.match(latest.text, /publish pinned to r4/u)
+
+  const bad = await handler({ rawInput: 'ref pin publish --to nope' })
+  assert.match(bad.text, /invalid-pin/u)
 })
 
 test('save asset is the explicit path from workspace to asset', async () => {

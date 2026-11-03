@@ -32,8 +32,8 @@ HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图�
 
 `/workflow` 命令（宿主执行，不进模型上下文）：
 `run <name>`、`status <runId>`、`cancel <runId>`、`resume <runId>`、`tasks [runId]`、
-`submit <taskId>`、`ref list|add|remove`、`asset list`、`save asset <name>`、
-`override diff|reset`。
+`submit <taskId>`、`ref list|add|remove|pin`、`asset list|new|import|delete`、
+`save asset <name>`、`override diff|reset`。
 
 ## 节点与端口
 

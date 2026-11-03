@@ -17,7 +17,7 @@ export const DEFAULT_ENGINE_MODULE = 'deerflow.workflow.rpc'
 /** An engine failure with a stable code (transport or engine-defined). */
 export class EngineError extends Error {
   /**
-   * @param {string} code - stable reason (`engine-not-started`, `protocol-mismatch`, 鈥?.
+   * @param {string} code - stable reason (`engine-not-started`, `protocol-mismatch`, ….
    * @param {string} message - human-readable explanation.
    * @param {Record<string, unknown>} [data] - extra context.
    */

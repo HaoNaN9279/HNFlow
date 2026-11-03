@@ -126,6 +126,25 @@ export class WorkspaceStore {
     return document.refs.find((ref) => ref.assetId === key || (typeof ref.alias === 'string' && ref.alias === key)) ?? null
   }
 
+  /**
+   * Change a reference's pin without touching any other field.
+   * @param {string} key - alias or asset id.
+   * @param {{revision: number|null, alias?: string}} change - new pin (`null` follows latest).
+   * @returns {Promise<Record<string, any>>} the updated ref.
+   */
+  async updateRef(key, change) {
+    const document = await this.readRefs()
+    const ref = document.refs.find((entry) => entry.assetId === key || entry.alias === key)
+    if (ref === undefined) throw new WorkspaceError('ref-missing', `no reference named ${key}`, { key })
+    if (change.revision === null) ref.revision = null
+    else if (Number.isInteger(change.revision)) ref.revision = change.revision
+    else throw new WorkspaceError('ref-invalid', 'revision must be null or a positive integer', { key })
+    if (typeof change.alias === 'string' && change.alias.length > 0) ref.alias = change.alias
+    ref.updatedAt = new Date().toISOString()
+    await this.writeRefs(document)
+    return ref
+  }
+
   // ── overrides ───────────────────────────────────────────────────────────
 
   /**
