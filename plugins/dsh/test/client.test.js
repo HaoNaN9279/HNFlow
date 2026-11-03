@@ -212,3 +212,102 @@ test('submit carries the typed payload as JSON', () => {
   const { internals } = loadBundle()
   assert.equal(internals.submitCommand('task-1', '{"note":"a b"}'), '/workflow submit task-1 {"note":"a b"}')
 })
+
+test('the tab row has no duplicate ids or labels', () => {
+  const { internals } = loadBundle()
+  const rows = internals.menuItems()
+
+  assert.deepEqual(
+    rows.map((row) => row.label),
+    ['工作流', '待办', '资产库'],
+  )
+  assert.equal(rows.filter((row) => row.kind === 'view').length, 2)
+  // "待办" used to be both a view and an action, so the row showed it twice.
+  assert.equal(new Set(rows.map((row) => row.label)).size, rows.length)
+  assert.equal(new Set(rows.map((row) => row.id)).size, rows.length)
+  assert.equal(rows[2].command, '/workflow asset list')
+})
+
+test('a repeated panel payload row is collapsed', () => {
+  const { internals } = loadBundle()
+  const payload = internals.parsePanelPayload(
+    JSON.stringify({
+      workflows: [
+        { alias: 'publish', assetId: 'wf-1' },
+        { alias: 'publish', assetId: 'wf-1' },
+        { assetId: 'wf-2' },
+        { assetId: 'wf-2' },
+        null,
+      ],
+    }),
+  )
+
+  assert.deepEqual(
+    payload.workflows.map((entry) => entry.alias || entry.assetId),
+    ['publish', 'wf-2'],
+  )
+})
+
+test('a repeated inbox task is collapsed', () => {
+  const { internals } = loadBundle()
+  const tasks = internals.parseInbox(JSON.stringify({ tasks: [{ taskId: 'task-1' }, { taskId: 'task-1' }, { taskId: 'task-2' }] }))
+  assert.deepEqual(
+    tasks.map((task) => task.taskId),
+    ['task-1', 'task-2'],
+  )
+})
+
+test('the popover opens above the trigger when there is room', () => {
+  const { internals } = loadBundle()
+  const placed = internals.placeMenu({ left: 120, top: 700, right: 200, bottom: 728 }, { width: 1200, height: 800 })
+
+  assert.equal(placed.placement, 'above')
+  assert.equal(placed.left, 120)
+  // bottom edge sits `gap` pixels above the trigger top
+  assert.equal(placed.bottom, 800 - 700 + 6)
+  assert.ok(placed.maxHeight <= 420)
+})
+
+test('the popover flips below when the trigger is near the top', () => {
+  const { internals } = loadBundle()
+  const placed = internals.placeMenu({ left: 40, top: 30, right: 120, bottom: 58 }, { width: 1200, height: 800 })
+
+  assert.equal(placed.placement, 'below')
+  assert.equal(placed.top, 64)
+  assert.ok(placed.maxHeight >= 120)
+})
+
+test('the popover stays inside a narrow viewport', () => {
+  const { internals } = loadBundle()
+
+  const rightEdge = internals.placeMenu({ left: 300, top: 600, right: 380, bottom: 628 }, { width: 400, height: 800 })
+  assert.equal(rightEdge.left, 12) // 400 - width(380) - margin(8)
+  assert.equal(rightEdge.width, 380)
+  assert.ok(rightEdge.left >= 0)
+
+  const narrow = internals.placeMenu({ left: 10, top: 600, right: 90, bottom: 628 }, { width: 260, height: 800 })
+  assert.equal(narrow.width, 244) // 260 - 2 * 8
+  assert.equal(narrow.left, 8)
+
+  const tiny = internals.placeMenu({ left: 0, top: 20, right: 40, bottom: 48 }, { width: 200, height: 120 })
+  assert.ok(tiny.left >= 0)
+  assert.equal(tiny.width, 184) // 200 - 2 * 8
+  assert.ok(tiny.maxHeight >= 120)
+})
+
+test('applying the same context twice registers one entry', () => {
+  const exports = loadBundle()
+  const registrations = []
+  const ctx = {
+    slots: {
+      inject: (name, callback) => callback(),
+      register: (entry, component) => registrations.push({ entry, component }),
+    },
+    remote: { commands: { execute: async () => ({ ok: true, text: '' }) } },
+  }
+
+  exports.apply(ctx)
+  exports.apply(ctx)
+
+  assert.equal(registrations.length, 1)
+})

@@ -36,11 +36,25 @@ window.__ModuleLoader__.load({
     /** Host command that answers with the panel payload (JSON text). */
     const PANEL_COMMAND = "/workflow panel";
 
-    /** Commands offered as shortcut buttons. */
-    const ACTIONS = [
-      { label: "待办", command: "/workflow tasks", hint: "等待人工的任务" },
-      { label: "资产", command: "/workflow asset list", hint: "资产库" },
+    /** Popover width, also used when the anchor is clamped into the viewport. */
+    const PANEL_WIDTH = 380;
+
+    /**
+     * Panel views, in tab order.
+     *
+     * A row is either a view the panel renders itself (`kind: "view"`) or a
+     * read-only action that forwards to a host command. Ids and labels must stay
+     * unique: an earlier revision listed "待办" as a view *and* as an action, so
+     * the same label appeared twice in the row while the two buttons did
+     * different things.
+     */
+    const VIEWS = [
+      { id: "workflows", label: "工作流", hint: "工作区引用的工作流" },
+      { id: "inbox", label: "待办", hint: "等待人工的任务" },
     ];
+
+    /** Read-only actions offered next to the views. */
+    const ACTIONS = [{ id: "assets", label: "资产库", command: "/workflow asset list", hint: "资产库列表" }];
 
     /** Read-only canvas geometry. Mirrors the editor's grid fallback. */
     const CANVAS = { columns: 3, stepX: 220, stepY: 130, width: 170, height: 62, padding: 16 };
@@ -73,8 +87,10 @@ window.__ModuleLoader__.load({
         flexDirection: "column",
         gap: "6px",
         boxSizing: "border-box",
-        width: "380px",
+        width: `${PANEL_WIDTH}px`,
         maxHeight: "420px",
+        overflow: "auto",
+        overscrollBehavior: "contain",
         padding: "8px",
         borderRadius: "var(--dsw-radius-lg, 12px)",
         border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
@@ -82,7 +98,7 @@ window.__ModuleLoader__.load({
         boxShadow: "var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,0.28))",
         zIndex: 1100,
       },
-      tabs: { display: "flex", gap: "4px", alignItems: "center" },
+      tabs: { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" },
       tab: {
         padding: "3px 8px",
         borderRadius: "var(--dsw-radius-sm, 6px)",
@@ -163,6 +179,78 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The popover's row of views and actions.
+     *
+     * Deduped by id *and* label: a repeated row is unreadable and, when the two
+     * copies carry different handlers, actively misleading.
+     * @returns {{id: string, label: string, kind: "view" | "action", command?: string, hint: string}[]} unique rows, in render order.
+     */
+    function menuItems() {
+      const rows = [
+        ...VIEWS.map((view) => ({ id: view.id, label: view.label, kind: "view", hint: view.hint })),
+        ...ACTIONS.map((action) => ({ id: action.id, label: action.label, kind: "action", command: action.command, hint: action.hint })),
+      ];
+      /** @type {Set<string>} */
+      const ids = new Set();
+      /** @type {Set<string>} */
+      const labels = new Set();
+      return rows.filter((row) => {
+        if (ids.has(row.id) || labels.has(row.label)) return false;
+        ids.add(row.id);
+        labels.add(row.label);
+        return true;
+      });
+    }
+
+    /**
+     * Place the popover against its trigger.
+     *
+     * Above the trigger when there is room for a usable panel, otherwise below;
+     * horizontally clamped so a narrow window or a trigger near the right edge
+     * cannot push the panel off screen. `maxHeight` keeps the panel inside the
+     * viewport so content never spills over the composer — spilled content would
+     * stay clickable in a place that no longer matches what the user sees.
+     * @param {{left: number, top: number, right: number, bottom: number}} rect - trigger rect.
+     * @param {{width: number, height: number}} viewport - window size.
+     * @param {number} [panelWidth] - preferred width.
+     * @returns {{placement: "above" | "below", left: number, width: number, maxHeight: number, top?: number, bottom?: number}} fixed-position numbers.
+     */
+    function placeMenu(rect, viewport, panelWidth = PANEL_WIDTH) {
+      const margin = 8;
+      const gap = 6;
+      const width = Math.min(panelWidth, Math.max(160, viewport.width - margin * 2));
+      const left = Math.round(Math.min(Math.max(margin, rect.left), Math.max(margin, viewport.width - width - margin)));
+      const spaceAbove = Math.round(rect.top) - gap - margin;
+      const spaceBelow = Math.round(viewport.height - rect.bottom) - gap - margin;
+      const maxHeight = Math.max(120, Math.min(420, Math.max(spaceAbove, spaceBelow)));
+      if (spaceAbove >= 200 || spaceAbove >= spaceBelow) {
+        return { placement: "above", left, width, maxHeight: Math.min(maxHeight, Math.max(120, spaceAbove)), bottom: Math.round(viewport.height - rect.top) + gap };
+      }
+      return { placement: "below", left, width, maxHeight: Math.min(maxHeight, Math.max(120, spaceBelow)), top: Math.round(rect.bottom) + gap };
+    }
+
+    /**
+     * Drop repeated workflow rows, keeping the first occurrence of each key.
+     * @param {unknown} list - candidate entries.
+     * @returns {Record<string, any>[]} unique entries.
+     */
+    function dedupeWorkflows(list) {
+      if (!Array.isArray(list)) return [];
+      /** @type {Set<string>} */
+      const seen = new Set();
+      /** @type {Record<string, any>[]} */
+      const out = [];
+      for (const entry of list) {
+        if (entry === null || typeof entry !== "object") continue;
+        const key = entry.alias || entry.assetId;
+        if (typeof key !== "string" || seen.has(key)) continue;
+        seen.add(key);
+        out.push(entry);
+      }
+      return out;
+    }
+
+    /**
      * Parse the `/workflow panel` payload.
      * @param {string} text - command output.
      * @returns {{workflows: Record<string, any>[], selected: Record<string, any> | null} | null} payload or null.
@@ -175,7 +263,7 @@ window.__ModuleLoader__.load({
         return null;
       }
       if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.workflows)) return null;
-      return { workflows: parsed.workflows, selected: typeof parsed.selected === "object" ? parsed.selected : null };
+      return { workflows: dedupeWorkflows(parsed.workflows), selected: typeof parsed.selected === "object" ? parsed.selected : null };
     }
 
     /**
@@ -268,7 +356,15 @@ window.__ModuleLoader__.load({
         return null;
       }
       if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.tasks)) return null;
-      return parsed.tasks.filter((task) => task !== null && typeof task === "object" && typeof task.taskId === "string");
+      /** @type {Set<string>} */
+      const seen = new Set();
+      return parsed.tasks
+        .filter((task) => task !== null && typeof task === "object" && typeof task.taskId === "string")
+        .filter((task) => {
+          if (seen.has(task.taskId)) return false;
+          seen.add(task.taskId);
+          return true;
+        });
     }
 
     /**
@@ -324,6 +420,7 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = react.useState(false);
       const [busy, setBusy] = react.useState(false);
       const [payload, setPayload] = react.useState(null);
+      const [view, setView] = react.useState("workflows");
       const [text, setText] = react.useState("");
       const [selectedKey, setSelectedKey] = react.useState(null);
       const [nodeId, setNodeId] = react.useState(null);
@@ -332,13 +429,58 @@ window.__ModuleLoader__.load({
       const [tasks, setTasks] = react.useState(null);
       const [taskId, setTaskId] = react.useState(null);
       const [taskDraft, setTaskDraft] = react.useState("");
+      const [placement, setPlacement] = react.useState(null);
+      const rootRef = react.useRef(null);
       const triggerRef = react.useRef(null);
-      const [anchor, setAnchor] = react.useState(null);
+      const menuRef = react.useRef(null);
       const menuId = react.useRef(null);
       if (menuId.current === null) {
         panelSeq += 1;
         menuId.current = "hnflow-panel-" + panelSeq;
       }
+
+      /**
+       * Measure the trigger and place the popover against it.
+       * @returns {void}
+       */
+      const measure = () => {
+        const trigger = triggerRef.current;
+        if (!trigger || typeof trigger.getBoundingClientRect !== "function" || typeof window === "undefined") return;
+        setPlacement(placeMenu(trigger.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }));
+      };
+
+      // Measure after mount (and on every viewport change) instead of once inside
+      // the click handler: the measured box must match what is on screen.
+      react.useLayoutEffect(() => {
+        if (!open) return undefined;
+        measure();
+        window.addEventListener("resize", measure);
+        window.addEventListener("scroll", measure, true);
+        return () => {
+          window.removeEventListener("resize", measure);
+          window.removeEventListener("scroll", measure, true);
+        };
+      }, [open]);
+
+      // The portal lives outside the trigger, so closing on outside press has to
+      // consult both boxes explicitly.
+      react.useEffect(() => {
+        if (!open) return undefined;
+        const isInside = (node, target) => node !== null && node !== undefined && typeof node.contains === "function" && node.contains(target);
+        const onPointerDown = (event) => {
+          if (isInside(rootRef.current, event.target) || isInside(menuRef.current, event.target)) return;
+          setOpen(false);
+        };
+        const onKeyDown = (event) => {
+          if (event.key === "Escape") setOpen(false);
+        };
+        document.addEventListener("mousedown", onPointerDown);
+        document.addEventListener("keydown", onKeyDown);
+        return () => {
+          document.removeEventListener("mousedown", onPointerDown);
+          document.removeEventListener("keydown", onKeyDown);
+        };
+      }, [open]);
 
       if (!isHnflowPreset(preset)) return null;
 
@@ -425,15 +567,14 @@ window.__ModuleLoader__.load({
       };
 
       /**
-       * Open or close the popover, anchoring it above the trigger.
+       * Open or close the popover.
        * @returns {void}
        */
       const toggle = () => {
         const next = !open;
         setOpen(next);
         if (!next) return;
-        const rect = triggerRef.current && triggerRef.current.getBoundingClientRect ? triggerRef.current.getBoundingClientRect() : null;
-        setAnchor(rect === null ? null : { left: Math.max(8, rect.left), bottom: window.innerHeight - rect.top + 6 });
+        setView("workflows");
         void loadPanel(null);
       };
 
@@ -444,6 +585,7 @@ window.__ModuleLoader__.load({
           ref: triggerRef,
           "aria-haspopup": "dialog",
           "aria-expanded": open ? "true" : "false",
+          "aria-controls": open ? menuId.current : undefined,
           title: "HNFlow 工作流",
           style: open ? { ...styles.trigger, ...styles.triggerOpen } : styles.trigger,
           onClick: toggle,
@@ -452,7 +594,7 @@ window.__ModuleLoader__.load({
         h("span", null, "HNFlow"),
       );
 
-      if (!open) return h("span", { style: styles.root }, trigger);
+      if (!open) return h("span", { ref: rootRef, style: styles.root }, trigger);
 
       const selected = payload === null ? null : payload.selected;
       const layout = selected === null ? null : layoutDefinition(selected.definition);
@@ -664,34 +806,83 @@ window.__ModuleLoader__.load({
             ),
       ];
 
+      /**
+       * Switch the popover to one row of the tab bar.
+       *
+       * View rows render content themselves; action rows only print command text.
+       * @param {{id: string, kind: "view" | "action", command?: string}} row - menu row.
+       * @returns {void}
+       */
+      const selectRow = (row) => {
+        if (row.kind !== "view") {
+          setView("text");
+          setText("");
+          void runText(row.command);
+          return;
+        }
+        if (row.id === "inbox") {
+          setView("inbox");
+          void loadTasks();
+          return;
+        }
+        setView("workflows");
+        void loadPanel(selectedKey);
+      };
+
       const body = h(
         "div",
         {
+          ref: menuRef,
           role: "dialog",
           "aria-label": "HNFlow",
           id: menuId.current,
-          style: anchor === null ? { ...styles.menu, position: "absolute", bottom: "34px", left: 0 } : { ...styles.menu, position: "fixed", left: anchor.left, bottom: anchor.bottom },
+          style: {
+            ...styles.menu,
+            ...(placement === null
+              ? { position: "fixed", left: "8px", bottom: "96px", visibility: "hidden" }
+              : {
+                  position: "fixed",
+                  left: `${placement.left}px`,
+                  width: `${placement.width}px`,
+                  maxHeight: `${placement.maxHeight}px`,
+                  ...(placement.placement === "above" ? { bottom: `${placement.bottom}px` } : { top: `${placement.top}px` }),
+                }),
+          },
         },
         h(
           "div",
-          { style: styles.tabs },
-          h("button", { type: "button", style: { ...styles.tab, ...(tasks === null ? styles.tabActive : {}) }, disabled: busy, onClick: () => void loadPanel(selectedKey) }, "工作流"),
-          h("button", { type: "button", style: { ...styles.tab, ...(tasks !== null ? styles.tabActive : {}) }, disabled: busy, onClick: () => void loadTasks() }, "待办"),
-          ...ACTIONS.map((action) =>
-            h("button", { type: "button", key: action.command, title: action.hint, style: styles.tab, disabled: busy, onClick: () => { setTasks(null); void runText(action.command); } }, action.label),
+          { style: styles.tabs, role: "tablist" },
+          ...menuItems().map((row) =>
+            h(
+              "button",
+              {
+                type: "button",
+                key: row.id,
+                role: row.kind === "view" ? "tab" : undefined,
+                "aria-selected": row.kind === "view" ? (view === row.id ? "true" : "false") : undefined,
+                title: row.hint,
+                style: { ...styles.tab, ...(row.kind === "view" && view === row.id ? styles.tabActive : {}) },
+                disabled: busy,
+                onClick: () => selectRow(row),
+              },
+              row.label,
+            ),
           ),
         ),
-        ...(tasks !== null ? inboxSections : workflowSections),
-        text.length > 0 ? h("pre", { style: styles.body }, text) : null,
+        ...(view === "inbox" ? inboxSections : view === "workflows" ? workflowSections : []),
+        text.length > 0 ? h("pre", { key: "text", style: styles.body }, text) : null,
       );
 
       return h(
         "span",
-        { style: styles.root },
+        { ref: rootRef, style: styles.root },
         trigger,
         typeof document === "undefined" || reactDom.createPortal === undefined ? body : reactDom.createPortal(body, document.body),
       );
     }
+
+    /** Contexts already wired; a repeated apply must not register a second panel. */
+    const wired = new WeakSet();
 
     /**
      * Client plugin body.
@@ -699,6 +890,8 @@ window.__ModuleLoader__.load({
      * @returns {void}
      */
     function apply(ctx) {
+      if (wired.has(ctx)) return;
+      wired.add(ctx);
       ctx.slots.inject("conversation.input.left", () =>
         ctx.slots.register(
           {
@@ -725,7 +918,20 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand, parseInbox, taskTemplate, submitCommand, isHnflowPreset };
+    exports.internals = {
+      parsePanelPayload,
+      layoutDefinition,
+      edgePath,
+      readText,
+      nodeCommand,
+      saveAssetCommand,
+      parseInbox,
+      taskTemplate,
+      submitCommand,
+      isHnflowPreset,
+      menuItems,
+      placeMenu,
+    };
     return module.exports;
   },
 });

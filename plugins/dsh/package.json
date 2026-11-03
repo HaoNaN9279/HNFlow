@@ -1,6 +1,6 @@
 {
   "name": "dsh-hnflow",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "HNFlow deterministic workflows as a DeepSeek Harness mode",
   "type": "module",
