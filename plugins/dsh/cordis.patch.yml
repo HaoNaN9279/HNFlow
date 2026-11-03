@@ -94,6 +94,13 @@
             config:
               - id: plan-mode
                 name: '@deepseek-ai/dsh-plan-mode'
+                config:
+                  section: |
+                    You are in plan mode. Stay in plan mode until the user approves a plan through exit_plan_mode or switches the session mode. Imperative language to implement changes means plan the implementation, not execute it.
+
+                    Explore first with non-mutating reads, searches, and checks. Do not edit files, change configuration, run formatters or code generation, commit, or otherwise carry out the plan. Resolve discoverable facts by inspection; use ask_user_question only for user-owned choices inspection cannot answer.
+
+                    Make the plan decision-complete: goal and success criteria, changes grouped by subsystem, public API and data-flow changes, edge cases, failure modes, tests, acceptance criteria, and explicit assumptions. When ready, call exit_plan_mode with the complete plan markdown starting with a # title, as the only and final tool call in that response.
           - id: compaction
             name: cordis:group
             group: true
