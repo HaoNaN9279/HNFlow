@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { EngineClient, EngineError, PROTOCOL_VERSION } from '../lib/engine.js'
-import { FakeChild } from './fixtures/fake-child.mjs'
+import { FakeChild, defaultResponder } from './fixtures/fake-child.mjs'
 
 /**
  * A client wired to the fake pipe.
@@ -94,6 +94,32 @@ test('an engine crash fails pending requests with engine-exited', async () => {
     await assert.rejects(client.request('echo/crash'), (error) => error.code === 'engine-exited' && error.data.exitCode === 3)
     assert.equal(client.isRunning(), false)
     await assert.rejects(client.request('engine/ping'), (error) => error.code === 'engine-not-started')
+  } finally {
+    client.stop()
+  }
+})
+
+test('the handshake carries the model catalog', async () => {
+  /** @type {Record<string, any>[]} */
+  const seen = []
+  const client = new EngineClient({
+    python: 'unused',
+    command: ['fake-engine'],
+    startupTimeoutMs: 5000,
+    models: [{ name: 'm1', use: 'deerflow.models.patched_deepseek:PatchedChatDeepSeek', model: 'm1' }],
+    spawn: () =>
+      new FakeChild({
+        responder: (message, child) => {
+          seen.push(message)
+          defaultResponder(message, child)
+        },
+      }),
+  })
+  try {
+    await client.ensureStarted()
+    const initialize = seen.find((message) => message.method === 'engine/initialize')
+    assert.equal(initialize.params.models.length, 1)
+    assert.equal(initialize.params.models[0].name, 'm1')
   } finally {
     client.stop()
   }

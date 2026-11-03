@@ -57,6 +57,8 @@ export class EngineClient {
     this.cwd = options.cwd
     /** @type {Record<string, string>} */
     this.env = options.env ?? {}
+    /** @type {Record<string, any>[]} */
+    this.models = Array.isArray(options.models) ? options.models : []
     /** @type {number} */
     this.requestTimeoutMs = options.requestTimeoutMs ?? 120000
     /** @type {number} */
@@ -114,7 +116,7 @@ export class EngineClient {
     child.on('error', (error) => this.#failAll(new EngineError('engine-spawn-failed', `cannot start the engine: ${error.message}`)))
 
     try {
-      const init = await this.request('engine/initialize', { protocolVersion: PROTOCOL_VERSION, client: { name: 'dsh-hnflow', version: '0.1.0' } }, this.startupTimeoutMs)
+      const init = await this.request('engine/initialize', { protocolVersion: PROTOCOL_VERSION, client: { name: 'dsh-hnflow', version: '0.1.0' }, models: this.models }, this.startupTimeoutMs)
       this.ready = true
       this.handshake = init
       return init

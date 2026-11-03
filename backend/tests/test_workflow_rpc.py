@@ -88,6 +88,30 @@ def _human_task_definition() -> dict[str, Any]:
     }
 
 
+def _ai_definition() -> dict[str, Any]:
+    """start → ai:llm_agent → end."""
+    return {
+        "id": "ai-workflow",
+        "name": "AI workflow",
+        "version": "0.1.0",
+        "nodes": [
+            {"id": "start", "type": "flow:start", "outputs": [{"name": "out", "type": "data"}]},
+            {
+                "id": "write",
+                "type": "ai:llm_agent",
+                "inputs": [{"name": "task", "type": "data"}],
+                "outputs": [{"name": "out", "type": "data"}],
+                "params": {"template_prompt": "write a haiku"},
+            },
+            {"id": "end", "type": "flow:end", "inputs": [{"name": "in", "type": "data"}]},
+        ],
+        "edges": [
+            {"source": "start", "source_port": "out", "target": "write", "target_port": "task"},
+            {"source": "write", "source_port": "out", "target": "end", "target_port": "in"},
+        ],
+    }
+
+
 async def _await_terminal(server: RpcServer, run_id: str, timeout: float = 10.0, wanted: set[str] | frozenset[str] = _TERMINAL) -> dict[str, Any]:
     """Poll ``run/status`` until the run reaches one of ``wanted``."""
     deadline = asyncio.get_running_loop().time() + timeout
@@ -370,6 +394,51 @@ def test_unknown_run_is_a_stable_error() -> None:
     response = asyncio.run(scenario())
 
     assert response["error"]["data"]["code"] == "unknown-run"
+
+
+def _ai_definition_models() -> list[dict[str, Any]]:
+    """A minimal model catalog entry the engine accepts."""
+    return [
+        {
+            "name": "test-model",
+            "use": "deerflow.models.patched_deepseek:PatchedChatDeepSeek",
+            "model": "test-model",
+            "api_base": "http://127.0.0.1:9/v1",
+            "api_key": "test-key",
+        }
+    ]
+
+
+def test_an_ai_workflow_without_models_fails_loud() -> None:
+    async def scenario() -> dict[str, Any]:
+        return await RpcServer().dispatch(_request("run/start", {"definition": _ai_definition()}))
+
+    response = asyncio.run(scenario())
+
+    assert response["error"]["data"]["code"] == "models-unavailable"
+    assert response["error"]["data"]["nodes"] == ["write"]
+
+
+def test_initialize_installs_the_supplied_model_catalog() -> None:
+    async def scenario() -> tuple[dict[str, Any], int, int]:
+        server = RpcServer()
+        handshake = (await server.dispatch(_request("engine/initialize", {"protocolVersion": PROTOCOL_VERSION, "models": _ai_definition_models()})))["result"]
+        bad = await server.dispatch(_request("engine/initialize", {"protocolVersion": PROTOCOL_VERSION, "models": [{"name": "x"}, "nope"]}))
+        return handshake, handshake["capabilities"]["models"], bad["result"]["capabilities"]["models"]
+
+    handshake, count, after_bad = asyncio.run(scenario())
+
+    assert count == 1
+    assert after_bad == 0
+
+
+def test_the_model_catalog_reaches_the_run_context() -> None:
+    host = RunHost()
+    assert host.configure_models(_ai_definition_models()) == 1
+    assert host.model_count == 1
+    config = host._resolve_app_config()
+    assert config is not None
+    assert [model.name for model in config.models] == ["test-model"]
 
 
 # ── durability ────────────────────────────────────────────────────────────────

@@ -492,7 +492,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 ## 12. 模型与能力组
 
 - 会话模型：完全使用 DSH（`dsh-llm` 适配器 + 设置页），这就是「支持其他 LLM」的落点；
-- 节点模型：`params.model_profile` → 插件解析为 `modelBindings` 传给引擎（阶段一）；阶段二改为 `llm.complete` RPC 桥接，让节点复用 DSH 的模型目录与凭据；
+- 节点模型（阶段一，**已落地**）：插件配置里的 `models[]` 在 `engine/initialize` 时随握手发给引擎，
+  引擎用它替换 `AppConfig.models` 后交给 AI 节点；工作流里没有 AI 节点时不需要配置，
+  有 AI 节点却没配模型时 `run/start` 直接返回 `models-unavailable`（带节点名），不会跑到一半崩；
+- 节点模型（阶段二，**未做**）：改为 `llm.complete` RPC 桥接，让节点复用 DSH 的模型目录与凭据，
+  避免模型配置在两边各写一份、也避免密钥经 stdio 传递；
 - 能力组：节点侧解析与四层提示词保持不变；会话侧复用 `dsh-vibestack`（见 §6）；
 - 项目内容（`AGENTS.md`、`.hnflow/content`）保持不变，作为能力组之外的项目级来源。
 
@@ -530,6 +534,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 问题卡（M3 通道之一） | `hnflow` 在 `waiting_human` 时用 `ctx.userQuestions.ask()` 弹卡：review 一卡两选项，task 一端口一卡；未作答不提交；`interactive:false` 可关 |
 | 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层含工作流列表、只读 SVG 画布（`/workflow panel` 供数）、节点参数编辑（`/workflow node` → 覆盖）、撤销覆盖与命令按钮；仅 `hnflow` 模式渲染；`dsh plugin add` 后 boot 图里可见 `dsh-hnflow/client.js` |
 | 保存回资产（M4 验收项） | `/workflow save asset` 先给 diff 与 `rN → rN+1`，必须 `--yes` 才写；面板「保存回资产…」→「确认写入资产」是同一命令的两次点击；工具面仍无写资产动作 |
+| 模型桥（M5 阶段一） | 插件 `models[]` 随 `engine/initialize` 下发，引擎替换 `AppConfig.models` 交给 AI 节点；无模型且含 AI 节点时 `run/start` 返回 `models-unavailable`；阶段二（`llm.complete` RPC）未做 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
@@ -589,6 +594,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - `workflow_author` 全量、skill、系统提示索引（skill 与索引已在 M1 落地）；
 - 模型绑定/桥接；资产库页；
 - 验收：VibeStack 模式无工作流入口；HNFlow 模式能力组与工作流同时可用。
+
+**已落地（阶段一）**：`models[]` 配置 → 引擎 `AppConfig.models`；AI 节点前置检查 `models-unavailable`。
+**剩余**：`llm.complete` RPC（复用 DSH 目录与凭据）、资产库独立页。
 
 ---
 

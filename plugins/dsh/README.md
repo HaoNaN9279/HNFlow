@@ -51,6 +51,20 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 | `requestTimeoutMs` | `120000` | 单次引擎请求上限 |
 | `startupTimeoutMs` | `20000` | 握手超时 |
 | `maxIndexEntries` | `20` | 系统提示里注入的工作流条数 |
+| `models` | `[]` | 引擎使用的模型目录；留空则用引擎自己的 `config.yaml` |
+
+AI 节点（`ai:llm_agent`）需要模型：既没有 `models` 也没在 `config.yaml` 里配过时，`run/start` 会直接返回
+`models-unavailable` 并列出 AI 节点，不会跑到一半才失败。条目就是 HNFlow 的模型配置：
+
+```yaml
+models:
+  - name: work
+    use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
+    model: doubao-seed-1-8-251228
+    api_base: https://ark.cn-beijing.volces.com/api/v3
+    api_key: $VOLCENGINE_API_KEY
+    context_window: 262144
+```
 
 ## 用法
 

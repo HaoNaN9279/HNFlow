@@ -27,7 +27,16 @@ export const DEFAULT_CONFIG = Object.freeze({
   startupTimeoutMs: 20000,
   /** Number of workflow names injected into the system prompt. */
   maxIndexEntries: 20,
+  /**
+   * Model catalog the engine installs for AI nodes (HNFlow `models[]` entries:
+   * `name`, `use`, `model`, `api_base`, `api_key`, …). Empty means the engine
+   * falls back to its own `config.yaml`, and AI nodes fail loud when that is empty too.
+   */
+  models: [],
 })
+
+/** Keys whose value is a list of JSON objects rather than a scalar. */
+const OBJECT_LISTS = new Set(['models'])
 
 /**
  * Coerce a raw row config into the plugin's shape.
@@ -41,6 +50,10 @@ export function resolveConfig(raw) {
   for (const [key, fallback] of Object.entries(DEFAULT_CONFIG)) {
     const value = source[key]
     if (value === undefined || value === null) continue
+    if (OBJECT_LISTS.has(key)) {
+      if (Array.isArray(value)) config[key] = value.filter((entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry))
+      continue
+    }
     if (typeof fallback === 'boolean') {
       if (typeof value === 'boolean') config[key] = value
       continue

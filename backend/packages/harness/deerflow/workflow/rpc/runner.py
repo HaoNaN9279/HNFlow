@@ -52,6 +52,7 @@ MAX_RETAINED_RUNS = 50
 MAX_VALUE_BYTES = 8192
 
 _TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+_AI_NODE_TYPES = frozenset({NodeType.AI_LLM_AGENT})
 _MAX_RUN_DEPTH = 64
 
 
@@ -136,6 +137,58 @@ class RunHost:
         self._store = EngineStore(state_dir) if state_dir is not None else None
         self._connection: aiosqlite.Connection | None = None
         self._checkpointer: Any = MemorySaver() if self._store is None else None
+        self._models: list[dict[str, Any]] = []
+        self._app_config: Any = None
+
+    # ── model catalog ──────────────────────────────────────────────────────
+
+    def configure_models(self, models: Any) -> int:
+        """Install the model catalog the host client supplies.
+
+        The plugin owns model selection (it reads the DSH catalog); the engine only
+        builds chat models from what it is given, so credentials stay in DSH.
+
+        Args:
+            models: list of model-config objects.
+
+        Returns:
+            How many entries were accepted.
+        """
+        accepted: list[dict[str, Any]] = []
+        for entry in models if isinstance(models, list) else []:
+            if not isinstance(entry, dict):
+                continue
+            if not isinstance(entry.get("name"), str) or not isinstance(entry.get("model"), str):
+                continue
+            # `use` names the chat-model class; without it HNFlow cannot instantiate.
+            if not isinstance(entry.get("use"), str) or not entry["use"]:
+                continue
+            accepted.append(dict(entry))
+        self._models = accepted
+        self._app_config = None
+        return len(accepted)
+
+    @property
+    def model_count(self) -> int:
+        """Number of configured models."""
+        return len(self._models)
+
+    def _resolve_app_config(self) -> Any:
+        """The app config AI nodes read, with the supplied models installed."""
+        if not self._models:
+            return None
+        if self._app_config is not None:
+            return self._app_config
+        try:
+            from deerflow.config.app_config import get_app_config
+            from deerflow.config.model_config import ModelConfig
+
+            base = get_app_config()
+            self._app_config = base.model_copy(update={"models": [ModelConfig.model_validate(entry) for entry in self._models]})
+        except Exception:  # noqa: BLE001 - a bad catalog must not stop non-AI runs
+            logger.warning("cannot install the supplied model catalog", exc_info=True)
+            self._app_config = None
+        return self._app_config
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -228,6 +281,13 @@ class RunHost:
         errors = validate_definition(def_)
         if errors:
             raise EngineError("invalid-definition", "workflow definition is invalid", {"errors": errors})
+        ai_nodes = sorted(node.id for node in def_.nodes if node.type in _AI_NODE_TYPES)
+        if ai_nodes and self.model_count == 0:
+            raise EngineError(
+                "models-unavailable",
+                "this workflow has AI nodes but the engine has no model catalog; list `models` in the plugin config",
+                {"nodes": ai_nodes},
+            )
 
         checkpointer = self._checkpointer
         try:
@@ -392,7 +452,7 @@ class RunHost:
         Human nodes need the task store; it is the one capability this build wires.
         """
         record = SimpleNamespace(run_id=state.run_id, thread_id=state.run_id, user_id=DEFAULT_USER_ID, metadata=state.metadata)
-        run_ctx = SimpleNamespace(app_config=None, checkpointer=state.checkpointer, spec_repo=None)
+        run_ctx = SimpleNamespace(app_config=self._resolve_app_config(), checkpointer=state.checkpointer, spec_repo=None)
         return build_workflow_runtime_context(record=record, run_ctx=run_ctx, human_task_repo=self._tasks)
 
     def _note_node(self, state: RunState, node_id: str, status: str, data: dict[str, Any] | None = None, error: str | None = None) -> None:

@@ -87,6 +87,7 @@ export class HnflowService {
       requestTimeoutMs: this.config.requestTimeoutMs,
       startupTimeoutMs: this.config.startupTimeoutMs,
       env: this.config.stateDir.length > 0 ? { HNFLOW_ENGINE_STATE: this.config.stateDir } : {},
+      models: this.config.models,
       logger: this.logger,
     })
     return this.engine

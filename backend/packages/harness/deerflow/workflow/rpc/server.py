@@ -134,11 +134,12 @@ class RpcServer:
                 f"plugin speaks protocol {client_protocol!r}, engine speaks {PROTOCOL_VERSION}",
                 {"engineProtocolVersion": PROTOCOL_VERSION},
             )
+        self._host.configure_models(params.get("models"))
         self._initialized = True
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "engine": {"name": ENGINE_NAME, "version": ENGINE_VERSION},
-            "capabilities": {"humanTasks": True, "durableRuns": self._host.durable, "jobMirror": True},
+            "capabilities": {"humanTasks": True, "durableRuns": self._host.durable, "jobMirror": True, "models": self._host.model_count},
             "workflow": {"schemaVersion": SCHEMA_VERSION, **describe()},
         }
 
