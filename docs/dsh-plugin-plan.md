@@ -344,8 +344,18 @@ hnflow(
 
 - `run` 缺少 `workflow` → 直接报错（`workflow-required`），不猜候选；
 - 工具失败一律返回带稳定 code 的文本（`error <code>: <message>`），不抛异常、不结束回合；
-- 写覆盖 / 写资产的工具（`hnflow_author`）属 M5；当前写资产只存在宿主侧显式入口（§11.2），
-  因此 I1 在 M0/M1 期间是「物理上无入口」而不是「靠提示词约束」。
+- 写覆盖走 `hnflow_author` 的 `save_override`（先校验，校验不过不落盘）；
+- **工具面没有写资产的动作**：`hnflow_author` 只有 `schema | validate | save_override`，
+  资产只能由用户输入 `/workflow save asset <name>` 写入。I1 因此是「物理上无入口」而不是提示词约束。
+
+```text
+hnflow_author(
+  action: "schema"|"validate"|"save_override",
+  workflow?: string,       // save_override 必填
+  definition?: object,     // validate / save_override 必填
+  note?: string            // 写进覆盖的 changeLog
+)
+```
 
 ### 7.4 会话内发起
 
@@ -413,7 +423,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ## 10. Agent 工具与 Skill
 
-- **workflow**：运行与观察；**workflow_author**：读取 schema、校验、写覆盖、显式写资产；
+- **workflow**：运行与观察；**workflow_author**：读取 schema、校验、写覆盖（无写资产动作）；
 - 内置 skill `hnflow-workflow`：节点目录、端口规则、四层提示词、常见模式；内容由引擎 schema 生成，避免与代码漂移；
 - 系统提示注入工作流索引（名称 + 一句话，≤20 条），让「用发布流程」可以被解析；
 - 护栏：
@@ -446,8 +456,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 菜单项 | 作用 | 确认 |
 | --- | --- | --- |
 | 运行 | 手动触发（输入表单来自 start 节点） | 否 |
-| 保存到工作区 | 写/更新 override | 否 |
-| 保存回资产 | 资产 revision +1 | 是（diff + 二次确认） |
+| 保存到工作区 | 写/更新 override | 否（工具 `save_override` / 面板） |
+| 保存回资产 | 资产 revision +1 | 是（**仅命令** `/workflow save asset`，工具面无此动作） |
 | 放弃覆盖 | 删除 override | 是 |
 | 更新引用 | 把 ref 固定到新 revision / 切换 follow | 是 |
 | 另存为新资产 | fork 成新资产 | 是 |
@@ -493,10 +503,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 插件骨架 | `plugins/dsh`：bundle manifest、`cordis.patch.yml`、`preset-hnflow`（含 `dsh-vibestack` 行） |
 | 资产/引用/覆盖 | `AssetStore`（含 revision 快照）、`WorkspaceStore`、`Resolver`（override → pinned → latest + drift 判定） |
 | 会话面 | `hnflow` 工具、`/workflow` 命令族、系统提示工作流索引、内置 skill `hnflow-workflow` |
-| 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 21 项；插件 `plugins/dsh/test` 57 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
+| 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 24 项；插件 `plugins/dsh/test` 71 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
 | 人工节点（M3 主体） | 引擎内存任务库 + `interrupt` 挂起（`waiting_human`）+ `task/list|submit` 恢复；插件 `task_list`/`task_submit` 与 `/workflow tasks|submit`；重复提交与字段校验有稳定错误码 |
 | 运行持久化（M2 主体） | `checkpoints.sqlite`（AsyncSqliteSaver）+ `runs.json` + `tasks.json`，`$DSH_HOME/hnflow/state/`；`waiting_human` 跨重启可提交，`running` 跨重启转 `interrupted` 并可 `run/resume` |
-| 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
+| 写入面（M4/M5 的一部分） | `hnflow_author`（schema / validate / save_override）；`/workflow save asset` 是唯一写资产入口；覆盖先校验后落盘 |
+| 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
 

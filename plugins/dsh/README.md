@@ -73,6 +73,10 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 工具 `hnflow`：`action = list | get | run | status | cancel | resume | assets | task_list | task_submit`，
 `run` 必须带 `workflow`。
 
+工具 `hnflow_author`：`action = schema | validate | save_override`。
+它**没有**写资产的动作——资产只能由用户执行 `/workflow save asset <name>` 更新，
+Agent 的修改一律落到工作区覆盖。
+
 ## 数据布局
 
 ```text

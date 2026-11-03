@@ -242,6 +242,47 @@ export class HnflowService {
   }
 
   /**
+   * Validate a definition with the engine (no run is created).
+   * @param {Record<string, any>} definition - candidate definition.
+   * @returns {Promise<{valid: boolean, errors: string[]}>} validation result.
+   */
+  async validateDefinition(definition) {
+    return await this.engineClient().request('workflow/validate', { definition })
+  }
+
+  /**
+   * The engine's node/port catalog.
+   * @returns {Promise<Record<string, any>>} catalog.
+   */
+  async schema() {
+    return await this.engineClient().request('workflow/describe')
+  }
+
+  /**
+   * Store a new asset revision (explicit user action only).
+   *
+   * The tool surface has no action that reaches this method; only the
+   * `/workflow save asset` command does, because writing an asset changes what
+   * every workspace referencing it will run next.
+   * @param {{cwd: string, key: string, note?: string}} input - save request.
+   * @returns {Promise<Record<string, any>>} `{assetId, previousRevision, revision, name}`.
+   */
+  async saveAsset(input) {
+    const stores = this.storesFor(input.cwd)
+    const resolved = await stores.resolver.resolve(input.key)
+    if (resolved.source !== 'override') {
+      throw new WorkspaceError('nothing-to-save', `${input.key} has no workspace override to save`, { key: input.key })
+    }
+    const saved = await stores.assets.save({ assetId: resolved.assetId, definition: resolved.definition, note: input.note ?? '' })
+    return {
+      assetId: resolved.assetId,
+      name: String(saved.asset.name ?? ''),
+      previousRevision: resolved.currentRevision,
+      revision: saved.revision,
+    }
+  }
+
+  /**
    * Remove a workspace override (back to the asset revision).
    * @param {{cwd: string, key: string}} input - reset request.
    * @returns {Promise<{removed: boolean, assetId: string}>} reset result.

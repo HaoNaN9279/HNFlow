@@ -15,6 +15,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 import { USAGE, createWorkflowCommand } from './lib/commands.js'
+import { createWorkflowAuthorTool } from './lib/author.js'
 import { HnflowService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createWorkflowTool } from './lib/tools.js'
@@ -90,10 +91,11 @@ export function apply(ctx, rawConfig) {
         const module = await loadHarnessModule(ctx, '@deepseek-ai/dsh-tools')
         const defineTool = module?.defineTool
         if (typeof defineTool !== 'function') {
-          warn('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the workflow tool stays unregistered')
+          warn('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the workflow tools stay unregistered')
           return
         }
         scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf }))
+        scope.tools.register(createWorkflowAuthorTool({ defineTool, service, cwdOf }))
       } catch (error) {
         warn('hnflow: cannot register the workflow tool: %o', error)
       }

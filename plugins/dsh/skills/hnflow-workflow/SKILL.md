@@ -23,12 +23,17 @@ HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图�
 
 ## 工具与命令
 
-`hnflow` 工具：`list` / `get` / `run` / `status` / `cancel` / `assets` / `task_list` / `task_submit`。
+`hnflow` 工具：`list` / `get` / `run` / `status` / `cancel` / `resume` / `assets` / `task_list` / `task_submit`。
 `run` 必须显式给 `workflow`（别名或资产 id），不得猜测；`input` 是 start 节点端口值。
 
+`hnflow_author` 工具：`schema`（节点/端口目录）、`validate`（只校验不运行）、
+`save_override`（把完整定义写成工作区覆盖，先校验后落盘）。**它没有写资产的动作**：
+想让改动进入共享资产，只能请用户执行 `/workflow save asset <name>`。
+
 `/workflow` 命令（宿主执行，不进模型上下文）：
-`run <name>`、`status <runId>`、`cancel <runId>`、`tasks [runId]`、`submit <taskId>`、
-`ref list|add|remove`、`asset list`、`override diff|reset`。
+`run <name>`、`status <runId>`、`cancel <runId>`、`resume <runId>`、`tasks [runId]`、
+`submit <taskId>`、`ref list|add|remove`、`asset list`、`save asset <name>`、
+`override diff|reset`。
 
 ## 节点与端口
 

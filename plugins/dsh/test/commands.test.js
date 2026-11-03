@@ -29,6 +29,7 @@ function makeCommand(overrides = {}) {
     submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
     listAssets: async () => [{ id: 'wf-1', name: '发布', revision: 3 }],
     resolve: async () => ({ assetId: 'wf-1', source: 'override', revision: 3, currentRevision: 3 }),
+    saveAsset: async (input) => ({ assetId: 'wf-1', name: '发布流程', previousRevision: 3, revision: 4, key: input.key }),
     resetOverride: async () => ({ removed: true, assetId: 'wf-1' }),
     storesFor: () => ({
       workspace: {
@@ -136,6 +137,18 @@ test('tasks lists pending human work', async () => {
   const result = await handler({ rawInput: 'tasks run-1' })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('save asset is the explicit path from workspace to asset', async () => {
+  const { handler } = makeCommand()
+  const result = await handler({ rawInput: 'save asset publish' })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /saved 发布流程 \(wf-1\) as revision 4 \(was r3\)/u)
+  assert.match(result.text, /ref list/u)
+
+  const usage = await handler({ rawInput: 'save' })
+  assert.equal(usage.kind, 'error')
+  assert.match(usage.text, /usage: \/workflow save asset <name>/u)
 })
 
 test('resume continues an interrupted run', async () => {

@@ -22,6 +22,7 @@ export const USAGE = [
   '/workflow ref add <assetId> [--pin N] [--alias name] — add a reference',
   '/workflow ref remove <name> — drop a reference',
   '/workflow asset list — the asset library',
+  '/workflow save asset <name> — write the workspace override back to the asset (explicit, revision +1)',
   '/workflow override diff <name> — override vs asset',
   '/workflow override reset <name> — drop the workspace override',
 ].join('\n')
@@ -186,6 +187,16 @@ export function createWorkflowCommand(options) {
       if (assets.length === 0) return 'the library has no workflow assets yet'
       return assets.map((asset) => `${asset.id}  r${asset.revision}  ${asset.name}`).join('\n')
     }
+    if (head === 'save') {
+      const [what, key] = rest
+      if (what !== 'asset' || key === undefined) throw commandError('usage', 'usage: /workflow save asset <name>')
+      const saved = await service.saveAsset({ cwd, key, note: `saved from ${key}` })
+      return [
+        `saved ${saved.name} (${saved.assetId}) as revision ${saved.revision} (was r${saved.previousRevision})`,
+        'this workspace ref may now be behind the asset: run /workflow ref list to check drift',
+      ].join('\n')
+    }
+
     if (head === 'override') return await overrideCommand(rest, cwd)
 
     throw commandError('unknown-subcommand', USAGE)

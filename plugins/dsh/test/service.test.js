@@ -111,6 +111,51 @@ test('the prompt index lists refs and marks overrides', async () => {
   assert.equal(await service.indexSection(path.join(cwd, 'empty')), '')
 })
 
+test('saving an asset bumps its revision and leaves refs pinned', async () => {
+  const { service, cwd } = await makeService()
+  const stores = service.storesFor(cwd)
+  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
+  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
+  await service.writeOverride({ cwd, key: 'hello', definition: definition('local'), note: 'local' })
+
+  const saved = await service.saveAsset({ cwd, key: 'hello', note: 'back to the asset' })
+
+  assert.equal(saved.previousRevision, 1)
+  assert.equal(saved.revision, 2)
+  assert.equal((await stores.assets.read(created.asset.id)).definition.nodes[1].params.value, 'local')
+  // The ref still pins r1, so this workspace keeps running what it ran before.
+  assert.equal((await service.resolve(cwd, 'hello')).definition.nodes[1].params.value, 'local')
+  assert.equal((await stores.assets.readRevision(created.asset.id, 1)).nodes[1].params.value, 'asset')
+})
+
+test('an asset cannot be saved without a workspace override', async () => {
+  const { service, cwd } = await makeService()
+  const stores = service.storesFor(cwd)
+  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
+  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
+
+  await assert.rejects(service.saveAsset({ cwd, key: 'hello' }), (error) => error.code === 'nothing-to-save')
+})
+
+test('validation and schema go to the engine', async () => {
+  const calls = []
+  const { service } = await makeService(calls)
+  service.engine = {
+    ensureStarted: async () => ({}),
+    stop: () => {},
+    request: async (method, params) => {
+      calls.push({ method, params })
+      if (method === 'workflow/validate') return { valid: true, errors: [] }
+      return { nodeTypes: [], portTypes: [] }
+    },
+  }
+
+  assert.deepEqual(await service.validateDefinition({ id: 'w' }), { valid: true, errors: [] })
+  assert.deepEqual(await service.schema(), { nodeTypes: [], portTypes: [] })
+  assert.equal(calls[0].method, 'workflow/validate')
+  assert.equal(calls[1].method, 'workflow/describe')
+})
+
 test('dispose stops the engine and clears caches', async () => {
   let stopped = false
   const { service, cwd } = await makeService()
