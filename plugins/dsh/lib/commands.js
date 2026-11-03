@@ -12,6 +12,7 @@ import { formatRunStatus, formatTasks, formatWorkflowList } from './tools.js'
 /** Usage text shown for `/workflow` and `/workflow help`. */
 export const USAGE = [
   '/workflow — list workflows referenced by this workspace',
+  '/workflow panel [name] — JSON payload for the HNFlow panel (list + one definition)',
   '/workflow run <name> [k=v …] — start a run and wait for it (or for a human task)',
   '/workflow status <runId> — show a run and its pending tasks',
   '/workflow cancel <runId> — ask the engine to stop a run',
@@ -137,6 +138,8 @@ export function createWorkflowCommand(options) {
     const [head, ...rest] = tokens
     if (head === undefined || head === 'list') return formatWorkflowList(await service.listWorkflows(cwd))
     if (head === 'help') return USAGE
+
+    if (head === 'panel') return JSON.stringify(await service.panelPayload(cwd, rest[0]))
 
     if (head === 'run') {
       const { input, rest: positional } = parseInputs(rest)

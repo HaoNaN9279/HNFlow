@@ -111,3 +111,54 @@ test('the bundle declares the services it consumes', () => {
   const exports = loadBundle()
   assert.deepEqual(exports.inject, ['slots', 'remote', 'remote.commands'])
 })
+
+test('the panel payload is parsed strictly', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.parsePanelPayload('not json'), null)
+  assert.equal(internals.parsePanelPayload('{"selected":{}}'), null)
+
+  const parsed = internals.parsePanelPayload(JSON.stringify({ workflows: [{ assetId: 'wf-1' }], selected: { key: 'publish', definition: { nodes: [] } } }))
+  assert.equal(parsed.workflows.length, 1)
+  assert.equal(parsed.selected.key, 'publish')
+})
+
+test('the canvas uses stored positions and falls back to a grid', () => {
+  const { internals } = loadBundle()
+  const definition = {
+    nodes: [
+      { id: 'start', type: 'flow:start' },
+      { id: 'end', type: 'flow:end' },
+    ],
+    edges: [{ source: 'start', source_port: 'out', target: 'end', target_port: 'in' }],
+    metadata: { canvas: { positions: { start: { x: 40, y: 20 } } } },
+  }
+
+  const layout = internals.layoutDefinition(definition)
+
+  assert.deepEqual(
+    layout.nodes.map((node) => node.id),
+    ['start', 'end'],
+  )
+  // Stored x=40 → 40*0.55+16; the second node falls back to grid column 1.
+  assert.ok(Math.abs(layout.nodes[0].x - (40 * 0.55 + 16)) < 0.001)
+  assert.ok(layout.nodes[1].x > layout.nodes[0].x)
+  assert.equal(layout.edges.length, 1)
+  assert.match(layout.edges[0].path, /^M \d/u)
+  assert.ok(layout.width > 0 && layout.height > 0)
+})
+
+test('an edge to a missing node is dropped instead of drawn', () => {
+  const { internals } = loadBundle()
+  const layout = internals.layoutDefinition({
+    nodes: [{ id: 'start', type: 'flow:start' }],
+    edges: [{ source: 'start', source_port: 'out', target: 'ghost', target_port: 'in' }],
+  })
+  assert.deepEqual(layout.edges, [])
+})
+
+test('an empty definition still produces a drawable box', () => {
+  const { internals } = loadBundle()
+  const layout = internals.layoutDefinition(null)
+  assert.deepEqual(layout.nodes, [])
+  assert.ok(layout.width > 0 && layout.height > 0)
+})

@@ -455,6 +455,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 写入：宿主服务（引擎校验 → 写覆盖/资产），不直接落盘；
 - 无路由：面板选择存浏览器本地，用 `/workflow open` 作为深链替代。
 
+**MVP 已落地**：面板不是独立页面，而是 composer 左栏的一个控件 + 弹层（`client.js`）。
+它通过 `/workflow panel [name]` 拿一次性 JSON（引用清单 + 一个已解析定义），用 **只读 SVG 画布**
+画节点与边（优先用 `metadata.canvas.positions`，否则用编辑器同款三列网格），点节点看参数；
+其余按钮（待办 / 资产）直接执行命令并显示文本。**没有**画布编辑、拖拽、连线、保存菜单图形入口。
+
 ### 11.2 保存菜单
 
 | 菜单项 | 作用 | 确认 |
@@ -518,7 +523,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 写入面（M4/M5 的一部分） | `hnflow_author`（schema / validate / save_override）；`/workflow save asset` 是唯一写资产入口；覆盖先校验后落盘 |
 | 资产库生命周期 | `/workflow asset new|import|delete`、`/workflow ref pin`；导入支持资产/引擎/裸定义三种形态，删除受当前工作区引用保护 |
 | 问题卡（M3 通道之一） | `hnflow` 在 `waiting_human` 时用 `ctx.userQuestions.ask()` 弹卡：review 一卡两选项，task 一端口一卡；未作答不提交；`interactive:false` 可关 |
-| 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层按钮执行 `/workflow` 命令并显示结果；仅 `hnflow` 模式渲染；`dsh plugin add` 后能在 boot 图里看到 `dsh-hnflow/client.js` |
+| 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层含工作流列表、只读 SVG 画布（`/workflow panel` 供数）、节点参数与命令按钮；仅 `hnflow` 模式渲染；`dsh plugin add` 后 boot 图里可见 `dsh-hnflow/client.js` |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
@@ -566,9 +571,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 验收：面板改参数 → 只改覆盖；显式保存 → 资产 revision +1。
 
 **已落地（面板 MVP）**：`client.js` 在 `conversation.input.left` 注册一个 HNFlow 控件（仅 `hnflow` 模式显示），
-弹层里三个动作「工作流 / 待办 / 资产」直接执行 `/workflow …` 命令并显示返回文本。
-客户端不直接读文件、不直连引擎，所有写操作仍走宿主命令与既有不变量。
-**剩余**：画布与节点编辑（React Flow）、保存菜单的图形入口、`/workflow open` 深链。
+弹层里是工作流列表 + 只读 SVG 画布 + 节点参数，另有「待办 / 资产」命令按钮。
+数据来自 `/workflow panel` 一次调用，客户端不读文件、不直连引擎，所有写操作仍走宿主命令与既有不变量。
+**剩余**：画布编辑（拖拽 / 连线 / 参数表单）、保存菜单的图形入口、`/workflow open` 深链。
 
 ### M5 模式、Agent 创作与模型桥（2 周）
 

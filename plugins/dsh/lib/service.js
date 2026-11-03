@@ -375,6 +375,41 @@ export class HnflowService {
   }
 
   /**
+   * The panel payload: the workspace catalogue plus one resolved definition.
+   *
+   * The client cannot read the asset files, so this is how it gets a definition
+   * to draw. A missing or unresolvable key yields `selected: null` instead of an
+   * error, because a partly-broken workspace must still open.
+   * @param {string} cwd - workspace root.
+   * @param {string} [key] - workflow alias or asset id; defaults to the first ref.
+   * @returns {Promise<{workspace: string, workflows: Record<string, any>[], selected: Record<string, any> | null}>} payload.
+   */
+  async panelPayload(cwd, key) {
+    const workflows = await this.listWorkflows(cwd)
+    const fallback = workflows[0] === undefined ? null : workflows[0].alias || workflows[0].assetId
+    const resolvedKey = typeof key === 'string' && key.trim().length > 0 ? key.trim() : fallback
+    let selected = null
+    if (resolvedKey !== null) {
+      try {
+        const resolved = await this.resolve(cwd, resolvedKey)
+        selected = {
+          key: resolvedKey,
+          assetId: resolved.assetId,
+          source: resolved.source,
+          revision: resolved.revision,
+          currentRevision: resolved.currentRevision,
+          baseRevision: resolved.baseRevision,
+          drift: resolved.drift,
+          definition: resolved.definition,
+        }
+      } catch {
+        selected = null
+      }
+    }
+    return { workspace: cwd, workflows, selected }
+  }
+
+  /**
    * The workflow index injected into the system prompt.
    * @param {string} cwd - workspace root.
    * @returns {Promise<string>} a short markdown list, or an empty string.

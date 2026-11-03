@@ -32,6 +32,11 @@ function makeCommand(overrides = {}) {
     importAsset: async (input) => ({ assetId: 'wf-imp', name: 'Imported', revision: 1, source: input.path }),
     deleteAsset: async (input) => ({ assetId: input.assetId, path: 'x', hadOverride: true }),
     repinRef: async (input) => ({ key: input.key, assetId: 'wf-1', revision: input.revision ?? 4, currentRevision: 4 }),
+    panelPayload: async (_cwd, key) => ({
+      workspace: '/ws',
+      workflows: [{ alias: 'publish', assetId: 'wf-1', hasOverride: false, drift: false, pinnedRevision: 3, currentRevision: 3 }],
+      selected: { key: key ?? 'publish', assetId: 'wf-1', source: 'ref', revision: 3, definition: { nodes: [{ id: 'start', type: 'flow:start' }], edges: [] } },
+    }),
     resolve: async () => ({ assetId: 'wf-1', source: 'override', revision: 3, currentRevision: 3 }),
     saveAsset: async (input) => ({ assetId: 'wf-1', name: '发布流程', previousRevision: 3, revision: 4, key: input.key }),
     resetOverride: async () => ({ removed: true, assetId: 'wf-1' }),
@@ -141,6 +146,17 @@ test('tasks lists pending human work', async () => {
   const result = await handler({ rawInput: 'tasks run-1' })
   assert.equal(result.kind, 'success')
   assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+})
+
+test('panel returns one JSON payload the client can draw', async () => {
+  const { handler } = makeCommand()
+  const result = await handler({ rawInput: 'panel publish' })
+
+  assert.equal(result.kind, 'success')
+  const payload = JSON.parse(result.text)
+  assert.equal(payload.workflows[0].alias, 'publish')
+  assert.equal(payload.selected.key, 'publish')
+  assert.equal(payload.selected.definition.nodes[0].id, 'start')
 })
 
 test('asset new / import / delete manage the library', async () => {
