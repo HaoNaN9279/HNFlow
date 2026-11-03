@@ -190,6 +190,28 @@ test('an unanswered card keeps the task pending', async () => {
   assert.match(text, /waiting on task task-9/u)
 })
 
+test('events renders a node timeline', async () => {
+  const service = fakeService({
+    events: async () => ({
+      events: [
+        { seq: 1, at: '2026-11-03T12:00:00.000Z', type: 'run/started', nodeId: null, data: {} },
+        { seq: 2, at: '2026-11-03T12:00:00.100Z', type: 'node/completed', nodeId: 'greet', data: { output: { out: 'hi' } } },
+        { seq: 3, at: '2026-11-03T12:00:00.200Z', type: 'run/succeeded', nodeId: null, data: { status: 'succeeded' } },
+      ],
+    }),
+  })
+  const text = await makeTool(service).execute({ action: 'events', run_id: 'run-1' }, {})
+
+  assert.match(text, /  1 {2}12:00:00.000 {2}run\/started/u)
+  assert.match(text, /  2 {2}12:00:00.100 {2}node\/completed greet/u)
+  assert.match(text, /"out":"hi"/u)
+})
+
+test('an empty timeline says so', async () => {
+  const service = fakeService({ events: async () => ({ events: [] }) })
+  assert.equal(await makeTool(service).execute({ action: 'events', run_id: 'run-1' }, {}), 'no events recorded for this run')
+})
+
 test('resume continues an interrupted run', async () => {
   const service = fakeService({ resume: async () => ({ runId: 'run-1', status: 'running' }) })
   const text = await makeTool(service).execute({ action: 'resume', run_id: 'run-1' }, {})

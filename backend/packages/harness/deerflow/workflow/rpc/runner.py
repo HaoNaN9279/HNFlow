@@ -250,6 +250,13 @@ class RunHost:
                 nodes={key: value for key, value in (record.get("nodes") or {}).items() if isinstance(value, dict)},
             )
             state.config = {"configurable": {"thread_id": run_id}, "context": self._runtime_context(state)}
+            if self._store is not None:
+                state.events = [
+                    RunEvent(seq=event["seq"], at=str(event.get("at") or ""), type=str(event.get("type") or ""), node_id=event.get("nodeId"), data=event.get("data") if isinstance(event.get("data"), dict) else {})
+                    for event in self._store.load_events(run_id, MAX_EVENTS_PER_RUN)
+                ]
+                if state.events:
+                    state.seq = state.events[-1].seq
             self._runs[run_id] = state
             if status == "interrupted":
                 self._record(state, "run/interrupted", None, {"reason": "engine-restart"})
@@ -425,6 +432,8 @@ class RunHost:
         state.events.append(event)
         if len(state.events) > MAX_EVENTS_PER_RUN:
             del state.events[: len(state.events) - MAX_EVENTS_PER_RUN]
+        if self._store is not None:
+            self._store.append_event(state.run_id, event.to_wire())
         self._emit({"jsonrpc": "2.0", "method": "run/event", "params": {"runId": state.run_id, "event": event.to_wire()}})
 
     def _transition(self, state: RunState, status: str, *, error: str | None = None, result: Any = None) -> None:

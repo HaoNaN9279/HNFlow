@@ -7,7 +7,7 @@
  */
 
 /** Actions the tool accepts. */
-export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'resume', 'assets', 'task_list', 'task_submit']
+export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'resume', 'events', 'assets', 'task_list', 'task_submit']
 
 /** Default wait budget for `run`, in seconds. */
 export const DEFAULT_RUN_WAIT_SECONDS = 30
@@ -61,6 +61,35 @@ export function formatWorkflowList(entries) {
       return `- ${name} (${entry.assetId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `: ${entry.description}` : ''}`
     })
     .join('\n')
+}
+
+/**
+ * Render a run's event log as a timeline.
+ * @param {{events?: Record<string, any>[]}} log - `run/events` result.
+ * @returns {string} model-facing summary.
+ */
+export function formatTimeline(log) {
+  const events = Array.isArray(log?.events) ? log.events : []
+  if (events.length === 0) return 'no events recorded for this run'
+  return events
+    .map((event) => {
+      const node = typeof event.nodeId === 'string' && event.nodeId.length > 0 ? ` ${event.nodeId}` : ''
+      const detail = event.data && typeof event.data === 'object' ? summarise(event.data) : ''
+      return `${String(event.seq).padStart(3, ' ')}  ${String(event.at ?? '').slice(11, 23)}  ${event.type}${node}${detail.length > 0 ? `  ${detail}` : ''}`
+    })
+    .join('\n')
+}
+
+/**
+ * One compact detail string for an event payload.
+ * @param {Record<string, any>} data - event data.
+ * @returns {string} detail, or an empty string.
+ */
+function summarise(data) {
+  if (typeof data.error === 'string' && data.error.length > 0) return data.error.slice(0, 120)
+  if (data.output !== undefined) return JSON.stringify(data.output).slice(0, 120)
+  if (typeof data.status === 'string') return data.status
+  return ''
 }
 
 /**
@@ -163,6 +192,8 @@ export function createWorkflowTool(options) {
         const status = await service.waitFor(resumed.runId, clampWait(args.wait_seconds) * 1000)
         return `resumed ${resumed.runId}\n${formatRunStatus(status)}`
       }
+      case 'events':
+        return formatTimeline(await service.events(requireRunId(args), 0))
       case 'task_list':
         return formatTasks((await service.tasks(requireRunId(args))).tasks)
       case 'task_submit': {
@@ -184,7 +215,7 @@ export function createWorkflowTool(options) {
     parameters: {
       action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
       workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
-      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, resume, and task_list.' },
+      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, resume, events, and task_list.' },
       input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
       task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
       revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },

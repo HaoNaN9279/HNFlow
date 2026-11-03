@@ -182,6 +182,18 @@ test('panel returns one JSON payload the client can draw', async () => {
   assert.equal(payload.selected.definition.nodes[0].id, 'start')
 })
 
+test('events prints the run timeline', async () => {
+  const { handler } = makeCommand({
+    events: async () => ({ events: [{ seq: 1, at: '2026-11-03T12:00:00.000Z', type: 'run/started', nodeId: null, data: {} }] }),
+  })
+  const result = await handler({ rawInput: 'events run-1' })
+  assert.equal(result.kind, 'success')
+  assert.match(result.text, /run\/started/u)
+
+  const usage = await handler({ rawInput: 'events' })
+  assert.match(usage.text, /run-id-required/u)
+})
+
 test('inbox returns the pending tasks as JSON', async () => {
   const { handler } = makeCommand()
   const result = await handler({ rawInput: 'inbox' })

@@ -217,6 +217,16 @@ export class HnflowService {
   }
 
   /**
+   * A run's event log.
+   * @param {string} runId - engine run id.
+   * @param {number} [afterSeq] - only events after this sequence number.
+   * @returns {Promise<Record<string, any>>} `{runId, events, status}`.
+   */
+  async events(runId, afterSeq = 0) {
+    return await this.engineClient().request('run/events', { runId, afterSeq })
+  }
+
+  /**
    * Submit a human task and let the engine continue the run.
    * @param {{taskId: string, payload: Record<string, any>, revision?: number}} input - submission.
    * @returns {Promise<Record<string, any>>} `{taskId, runId, status, revision}`.

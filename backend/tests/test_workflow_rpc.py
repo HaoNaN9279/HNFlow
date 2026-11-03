@@ -558,6 +558,43 @@ def test_a_memory_host_reports_no_durability() -> None:
     assert asyncio.run(scenario()) is False
 
 
+def test_run_events_survive_a_restart() -> None:
+    state = _temp_state_dir()
+
+    async def first_session() -> str:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            started = await host.start(definition=_hello_definition())
+            for _ in range(300):
+                if host.status(started["runId"])["status"] in _TERMINAL:
+                    return started["runId"]
+                await asyncio.sleep(0.02)
+            raise AssertionError("run never settled")
+        finally:
+            await host.close()
+
+    run_id = asyncio.run(first_session())
+    before = json.loads((state / "events" / f"{run_id}.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert before["type"] == "run/started"
+
+    async def second_session() -> dict[str, Any]:
+        host = RunHost(state_dir=str(state))
+        await host.boot()
+        try:
+            return host.events(run_id, 0)
+        finally:
+            await host.close()
+
+    events = asyncio.run(second_session())
+    kinds = [event["type"] for event in events["events"]]
+    assert kinds[0] == "run/started"
+    assert "node/completed" in kinds
+    assert kinds[-1] == "run/succeeded"
+    seqs = [event["seq"] for event in events["events"]]
+    assert seqs == sorted(seqs)
+
+
 # ── stdio transport ───────────────────────────────────────────────────────────
 
 

@@ -53,10 +53,45 @@ class EngineStore:
         self.checkpoint_path = self.directory / "checkpoints.sqlite"
         self.runs_path = self.directory / "runs.json"
         self.tasks_path = self.directory / "tasks.json"
+        self.events_dir = self.directory / "events"
 
     def ensure(self) -> None:
         """Create the directory tree."""
         self.directory.mkdir(parents=True, exist_ok=True)
+
+    def append_event(self, run_id: str, event: dict[str, Any]) -> None:
+        """Append one run event to `<run_id>.jsonl`.
+
+        Append-only and line-delimited: a run's timeline survives a restart
+        without rewriting the whole log, and a torn last line is simply dropped
+        on read.
+        """
+        try:
+            self.events_dir.mkdir(parents=True, exist_ok=True)
+            with (self.events_dir / f"{run_id}.jsonl").open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001 - losing an event must not fail a run
+            logger.warning("cannot append the event log for %s", run_id, exc_info=True)
+
+    def load_events(self, run_id: str, limit: int) -> list[dict[str, Any]]:
+        """Read the last ``limit`` events of one run (oldest first)."""
+        path = self.events_dir / f"{run_id}.jsonl"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            return []
+        except Exception:  # noqa: BLE001 - a corrupt log must not block boot
+            logger.warning("cannot read the event log for %s", run_id, exc_info=True)
+            return []
+        parsed: list[dict[str, Any]] = []
+        for line in lines[-limit:]:
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and isinstance(event.get("seq"), int):
+                parsed.append(event)
+        return parsed
 
     def load_runs(self) -> list[dict[str, Any]]:
         """Read the persisted run records (empty when absent or unreadable)."""

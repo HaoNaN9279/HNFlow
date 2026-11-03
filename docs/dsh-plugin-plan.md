@@ -390,8 +390,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ### 8.4 重启与幂等
 
-- 引擎的 checkpoint、run 记录、人工任务行都落在 `$DSH_HOME/hnflow/state/`（`checkpoints.sqlite` /
-  `runs.json` / `tasks.json`），DSH 重启后仍在；
+- 引擎的 checkpoint、run 记录、人工任务行、run 事件都落在 `$DSH_HOME/hnflow/state/`
+  （`checkpoints.sqlite` / `runs.json` / `tasks.json` / `events/<runId>.jsonl`），DSH 重启后仍在；
 - `waiting_human` 的 run 重启后直接可提交，任务行与 checkpoint 都在；
 - 进程死亡时仍在 `running` 的 run，重启后标记为 **`interrupted`**（不猜、不自动重放），
   由 `/workflow resume <runId>` 从最后提交的 checkpoint 继续；
@@ -536,6 +536,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 保存回资产（M4 验收项） | `/workflow save asset` 先给 diff 与 `rN → rN+1`，必须 `--yes` 才写；面板「保存回资产…」→「确认写入资产」是同一命令的两次点击；工具面仍无写资产动作 |
 | 模型桥（M5 阶段一） | 插件 `models[]` 随 `engine/initialize` 下发，引擎替换 `AppConfig.models` 交给 AI 节点；无模型且含 AI 节点时 `run/start` 返回 `models-unavailable`；阶段二（`llm.complete` RPC）未做 |
 | 面板收件箱（M3 通道二） | 面板「待办」页签读 `/workflow inbox`（JSON），点任务给模板 JSON，提交走 `/workflow submit <id> {json}`；`submit` 同时支持 `k=v` 与 JSON 两种写法 |
+| 运行时间线 | `run/events` 追加写入 `state/events/<runId>.jsonl`，重启后仍可回放；`hnflow` 的 `events` 动作与 `/workflow events <runId>` 渲染节点时间线 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）

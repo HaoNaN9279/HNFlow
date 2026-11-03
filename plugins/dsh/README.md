@@ -73,6 +73,7 @@ models:
 /workflow run publish             运行并等待（完成或等待人工）
 /workflow run publish target=staging
 /workflow status <runId>
+/workflow events <runId>          节点时间线（重启后仍在）
 /workflow cancel <runId>
 /workflow resume <runId>          续跑被引擎重启打断的 run
 /workflow tasks [runId]           待办人工任务
@@ -144,6 +145,6 @@ cd ../../backend && .venv/Scripts/python -m pytest tests/test_workflow_rpc.py -q
 
 ## 已知边界
 
-- 没有画布面板与保存菜单，写资产目前无工具入口（只有 `/workflow` 只读命令族）；
+- 没有画布拖拽/连线与坐标持久化，节点参数用 JSON 文本编辑；
 - 没有 job 镜像：run 状态靠 `run/status` 与 `run/status` 通知，会话关闭不影响引擎里的 run；
-- run 事件（`run/events`）只在进程内保留，重启后只能看到状态与结果，看不到历史事件。
+- run 事件写入 `state/events/<runId>.jsonl`，重启后仍可 `events` 查看；不过事件只保留每个 run 最近 2000 条。

@@ -7,7 +7,7 @@
  */
 
 import { diffDocuments } from './json.js'
-import { formatRunStatus, formatTasks, formatWorkflowList } from './tools.js'
+import { formatRunStatus, formatTasks, formatTimeline, formatWorkflowList } from './tools.js'
 
 /** Usage text shown for `/workflow` and `/workflow help`. */
 export const USAGE = [
@@ -15,6 +15,7 @@ export const USAGE = [
   '/workflow panel [name] — JSON payload for the HNFlow panel (list + one definition)',
   '/workflow run <name> [k=v …] — start a run and wait for it (or for a human task)',
   '/workflow status <runId> — show a run and its pending tasks',
+  '/workflow events <runId> — the node timeline of a run',
   '/workflow cancel <runId> — ask the engine to stop a run',
   '/workflow resume <runId> — continue a run an engine restart interrupted',
   '/workflow tasks [runId] — pending human tasks',
@@ -163,6 +164,11 @@ export function createWorkflowCommand(options) {
     if (head === 'status') {
       if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow status <runId>')
       return formatRunStatus(await service.status(rest[0]))
+    }
+
+    if (head === 'events') {
+      if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow events <runId>')
+      return formatTimeline(await service.events(rest[0], 0))
     }
 
     if (head === 'cancel') {
