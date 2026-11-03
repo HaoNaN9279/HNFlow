@@ -1,0 +1,177 @@
+/**
+ * The `workflow` tool: run and observe, with an explicit workflow name.
+ *
+ * The model must pass `workflow` for anything that addresses one definition; the
+ * tool never guesses between candidates. Errors come back as ordinary tool text
+ * with a stable code, so a failed call does not end the turn.
+ */
+
+/** Actions the tool accepts. */
+export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'assets']
+
+/** Default wait budget for `run`, in seconds. */
+export const DEFAULT_RUN_WAIT_SECONDS = 30
+/** Hard cap for the wait budget. */
+export const MAX_RUN_WAIT_SECONDS = 300
+
+/**
+ * Render a run record as compact text.
+ * @param {Record<string, any>} status - engine run record.
+ * @returns {string} model-facing summary.
+ */
+export function formatRunStatus(status) {
+  const lines = [`run ${status.runId}: ${status.status}`]
+  if (typeof status.error === 'string' && status.error.length > 0) lines.push(`error: ${status.error}`)
+  if (Array.isArray(status.nodes) && status.nodes.length > 0) {
+    lines.push(`nodes: ${status.nodes.map((node) => `${node.nodeId}=${node.status}`).join(', ')}`)
+  }
+  if (status.result !== null && status.result !== undefined) lines.push(`result: ${JSON.stringify(status.result)}`)
+  return lines.join('\n')
+}
+
+/**
+ * Render a workflow index as a table-ish list.
+ * @param {Record<string, any>[]} entries - catalogue entries.
+ * @returns {string} model-facing summary.
+ */
+export function formatWorkflowList(entries) {
+  if (entries.length === 0) return 'This workspace references no HNFlow workflows.'
+  return entries
+    .map((entry) => {
+      const name = entry.alias.length > 0 ? entry.alias : entry.assetId
+      const flags = [entry.missing ? 'missing-asset' : '', entry.hasOverride ? 'override' : '', entry.drift ? 'drift' : ''].filter((flag) => flag.length > 0)
+      const revision = entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'}` : `pinned r${entry.pinnedRevision} of r${entry.currentRevision ?? '?'}`
+      return `- ${name} (${entry.assetId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `: ${entry.description}` : ''}`
+    })
+    .join('\n')
+}
+
+/**
+ * Build the `workflow` tool definition.
+ * @param {{
+ *   defineTool: Function,
+ *   service: import('./service.js').HnflowService,
+ *   cwdOf: (agent: unknown) => string | null,
+ * }} options - wiring.
+ * @returns {Record<string, any>} the tool definition handed to `ctx.tools.register`.
+ */
+export function createWorkflowTool(options) {
+  const { defineTool, service, cwdOf } = options
+
+  /**
+   * Run one action.
+   * @param {Record<string, any>} args - validated arguments.
+   * @param {{agent?: unknown}} exec - execution context.
+   * @returns {Promise<string>} model-facing text.
+   */
+  const execute = async (args, exec) => {
+    const cwd = cwdOf(exec?.agent)
+    try {
+      if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+      return await run(args, cwd)
+    } catch (error) {
+      return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
+    }
+  }
+
+  /**
+   * Dispatch one action against a resolved workspace.
+   * @param {Record<string, any>} args - validated arguments.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} model-facing text.
+   */
+  const run = async (args, cwd) => {
+    switch (args.action) {
+      case 'list':
+        return formatWorkflowList(await service.listWorkflows(cwd))
+      case 'assets': {
+        const assets = await service.listAssets(cwd)
+        if (assets.length === 0) return 'The HNFlow library has no workflow assets yet.'
+        return assets.map((asset) => `- ${asset.name} (${asset.id}, r${asset.revision})${asset.description ? `: ${asset.description}` : ''}`).join('\n')
+      }
+      case 'get': {
+        const resolved = await service.resolve(cwd, requireWorkflow(args))
+        return [
+          `workflow ${resolved.alias || resolved.assetId} (${resolved.assetId})`,
+          `source: ${resolved.source}; revision: ${resolved.revision ?? 'latest'} of ${resolved.currentRevision}; drift: ${resolved.drift}`,
+          `definition: ${JSON.stringify(resolved.definition)}`,
+        ].join('\n')
+      }
+      case 'run': {
+        const key = requireWorkflow(args)
+        const started = await service.startRun({ cwd, key, inputs: args.input ?? {} })
+        const waitSeconds = clampWait(args.wait_seconds)
+        const status = waitSeconds > 0 ? await service.waitFor(started.runId, waitSeconds * 1000) : await service.status(started.runId)
+        const header = `started ${started.runId} from ${started.resolved.source} r${started.resolved.revision ?? 'latest'}`
+        return `${header}\n${formatRunStatus(status)}`
+      }
+      case 'status':
+        return formatRunStatus(await service.status(requireRunId(args)))
+      case 'cancel':
+        return JSON.stringify(await service.cancel(requireRunId(args)))
+      default:
+        return `error invalid-action: expected one of ${WORKFLOW_ACTIONS.join(', ')}`
+    }
+  }
+
+  return defineTool({
+    name: 'hnflow',
+    description:
+      'Run and inspect HNFlow workflows referenced by this workspace. Every action that addresses one workflow must pass its name (alias or asset id) from `list`; the tool never guesses. `run` accepts an `input` object matching the start node ports and waits for completion by default.',
+    parameters: {
+      action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
+      workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
+      run_id: { type: 'string', description: 'Run id returned by run; required by status and cancel.' },
+      input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run.' },
+      wait_seconds: { type: 'number', description: `How long run waits for completion (default ${DEFAULT_RUN_WAIT_SECONDS}, max ${MAX_RUN_WAIT_SECONDS}).` },
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_args, value) => [{ type: 'text', text: value }],
+    },
+    execute,
+  })
+}
+
+/**
+ * Clamp the caller's wait budget.
+ * @param {unknown} value - requested seconds.
+ * @returns {number} seconds to wait.
+ */
+export function clampWait(value) {
+  if (value === undefined || value === null) return DEFAULT_RUN_WAIT_SECONDS
+  if (!Number.isFinite(value)) return DEFAULT_RUN_WAIT_SECONDS
+  return Math.max(0, Math.min(MAX_RUN_WAIT_SECONDS, Number(value)))
+}
+
+/**
+ * Require the workflow argument.
+ * @param {Record<string, any>} args - tool arguments.
+ * @returns {string} the workflow key.
+ */
+function requireWorkflow(args) {
+  const key = typeof args.workflow === 'string' ? args.workflow.trim() : ''
+  if (key.length === 0) {
+    /** @type {Error & {code?: string}} */
+    const error = new Error('workflow is required: pass the alias or asset id from action "list"')
+    error.code = 'workflow-required'
+    throw error
+  }
+  return key
+}
+
+/**
+ * Require the run id argument.
+ * @param {Record<string, any>} args - tool arguments.
+ * @returns {string} the run id.
+ */
+function requireRunId(args) {
+  const runId = typeof args.run_id === 'string' ? args.run_id.trim() : ''
+  if (runId.length === 0) {
+    /** @type {Error & {code?: string}} */
+    const error = new Error('run_id is required')
+    error.code = 'run-id-required'
+    throw error
+  }
+  return runId
+}

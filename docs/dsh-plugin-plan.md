@@ -2,12 +2,18 @@
 
 | 项 | 值 |
 | --- | --- |
-| 文档版本 | 0.1（规划稿） |
-| 日期 | 2026-11-02 |
+| 文档版本 | 0.2（M0/M1 实施后修订） |
+| 日期 | 2026-11-03 |
 | 基线 | `v0.10.0`（`master`，DSH 改造前的最后一个 HNFlow 版本） |
 | 开发分支 | `feat/dsh-plugin` |
 | 范围 | 自用插件，不提交官方插件市场，不参与官方审核 |
-| 状态 | 待评审后进入 M0 |
+| 状态 | M0 完成，M1 主体完成（见 §14.1） |
+| DSH 插件开发文档 | <https://deepseek-harness.github.io/deepseek-harness/develop/basic/> |
+| DSH 源码 | <https://github.com/deepseek-ai/deepseek-harness> |
+
+开发遵循 DSH 官方插件规范（bundle manifest / profile 安装 / Config schema / 插件生命周期 / Tool DSL / 命令 / 事件），
+唯一豁免的是上传发布相关要求（npm 发布、插件市场上架、审核用展示规范），因为本插件只自用。
+逐条对照见 §3.5。
 
 ---
 
@@ -89,9 +95,12 @@ HNFlow 的定位是 **Agent 的确定性执行能力**：把 AI 产出、人工�
 ### 3.3 进程与生命周期
 
 - 引擎由插件以 stdio 子进程方式拉起，随 DSH 退出而退出；
-- run 在 checkpoint 边界持久化，DSH 重启后由插件重新挂接并续跑；
-- 引擎不可达时，工具返回明确错误，面板显示「引擎未启动」与启动入口；
-- 协议带版本握手：`plugin ↔ engine` 的 `protocolVersion` 不匹配时 fail-loud。
+- 引擎入口 `python -m deerflow.workflow.rpc`（实现在 `backend/packages/harness/deerflow/workflow/rpc/`，
+  复用 harness 的编译/执行栈，不另起 Python 工程）；
+- run 在 checkpoint 边界持久化，DSH 重启后由插件重新挂接并续跑（**M2**：当前用进程内 checkpointer，
+  重启即丢 run）；
+- 引擎不可达时，工具返回明确错误（`engine-not-started` / `engine-exited`），面板显示「引擎未启动」与启动入口；
+- 协议带版本握手：`plugin ↔ engine` 的 `protocolVersion` 不匹配时 fail-loud（`protocol-mismatch`）。
 
 ### 3.4 插件身份与分发
 
@@ -100,6 +109,28 @@ HNFlow 的定位是 **Agent 的确定性执行能力**：把 AI 产出、人工�
 - 不发布 npm、不上架插件市场，因此不追求官方审核所需的展示规范；
   仍保留 `locale/*.json` 与 icon，便于自用时在插件列表里识别；
 - 版本约束：`engines.dsh` 绑定当前 DSH 次版本；DSH 升级时按 §16 的检查清单适配。
+
+### 3.5 DSH 插件开发规范符合性
+
+依据：官方文档 <https://deepseek-harness.github.io/deepseek-harness/develop/basic/>（第一个插件 / 开发 Tool /
+插件配置 / 打包与安装）与 <https://deepseek-harness.github.io/deepseek-harness/develop/framework/>（生命周期 /
+服务 / 事件），源码 <https://github.com/deepseek-ai/deepseek-harness>。
+
+| 规范点 | 要求 | 本插件的落地 |
+| --- | --- | --- |
+| 插件形态 | 导出 `name` + `apply(ctx, config)` | `plugins/dsh/index.js` |
+| 配置 | 导出 `Config` schema，禁止硬编码可调参数 | 全部可调项进 `lib/config.js`（库根、workspace 目录、解释器、超时、索引条数） |
+| 依赖注入 | `inject` 声明必需服务；可选服务用 `ctx.get()` | 必需：`tools`/`commands`/`systemPrompt`/`skills`；可选：`workingDirectory`/`loader` |
+| 自动清理 | 注册即 effect，卸载自动撤销 | 全部走 `ctx.inject` / `ctx.on` / `ctx.effect`；`effect` 负责停引擎 |
+| 失败可降级 | 坏配置、缺依赖不得拖垮会话 | 所有注册路径 try/catch，失败只 warn |
+| Tool DSL | `defineTool` + 参数/输出 schema + `execute` | `lib/tools.js`；参数用 enum 收窄 action，输出 `string` |
+| Tool 命名 | 不得与内置工具重名 | 内置 `dsh-tool-workflow` 已占用 `workflow`，本插件工具名改为 **`hnflow`** |
+| 命令 | `commands.register({name, description, input, handler})` | `/workflow`，返回 `{kind, text}`，不进模型上下文 |
+| 事件 | 只监听既有事件；**不得新增会话事件类型** | 只监听 `agent/pre-step`；不写 session event |
+| Bundle | `package.json` 的 `dsh.bundle.patch` 只贡献配置层 | `cordis.patch.yml` 只做 `insert`，不改他人行 |
+| Preset | 无继承，子插件清单必须自包含 | `preset-hnflow` 镜像 `dsh-web-app/presets/standard.patch.yml` |
+| 安装 | `dsh plugin --profile <name> add <path>`，层序 profile → home → `--patch` | 见 `plugins/dsh/README.md` |
+| 发布 | npm / 市场 / 审核 | **不适用**（自用）；不追求展示规范，保留 icon/locale 仅便于识别 |
 
 ---
 
@@ -128,7 +159,10 @@ HNFlow 的定位是 **Agent 的确定性执行能力**：把 AI 产出、人工�
 - 资产根默认 `$DSH_HOME/hnflow/library/`，文件夹即分类；
 - 可选只读资产根（如团队共享目录），通过配置追加，用于复用外部资产；
 - 资产 id 写入文件，路径可改；引用按 id 解析；
-- 资产删除前检查引用，存在引用时拒绝删除（或要求先解除引用）。
+- 资产删除前检查引用，存在引用时拒绝删除（或要求先解除引用）；
+- **revision 快照**：每次 `create`/`save` 在 `<library>/.hnflow-revisions/<assetId>/r<rev>.json` 写一份
+  只读副本（扫描时跳过点目录）。没有快照，`ref.revision` 就只是提示而不是契约——固定版本的引用会在资产
+  升级后失效。快照缺失即 `revision-missing`。
 
 ### 4.2 工作区引用（WorkflowRef）
 
@@ -292,28 +326,23 @@ $DSH_HOME/hnflow/
 
 ### 7.3 工具契约
 
-```text
-workflow(
-  action: "list"|"get"|"run"|"status"|"cancel"|"task_list"|"task_get"|"task_submit"|"task_skip",
-  workflow?: string,     // 必填（run/get），别名或资产 id
-  input?: object,
-  run_id?: string,
-  task_id?: string,
-  answer?: object,
-  mode?: "background"|"attended"
-)
+**工具名是 `hnflow`，不是 `workflow`**：DSH 自带的 `@deepseek-ai/dsh-tool-workflow` 已经注册了 `workflow`，
+同名会冲突。命令仍是 `/workflow`（斜杠命令与工具命名空间无关）。
 
-workflow_author(
-  action: "schema"|"capabilities"|"validate"|"save_override"|"save_asset"|"create_asset",
-  workflow?: string,
-  definition?: object,
-  note?: string
+```text
+hnflow(
+  action: "list"|"get"|"run"|"status"|"cancel"|"assets",
+  workflow?: string,     // 必填（run/get），别名或资产 id
+  input?: object,        // start 节点端口值
+  run_id?: string,
+  wait_seconds?: number  // run 等待上限，默认 30，上限 300
 )
 ```
 
-- `run` 缺少 `workflow` → 直接报错并列出候选；
-- `save_asset` 必须由用户显式要求，并通过 `ctx.userApproval` 二次确认；
-- 写覆盖返回统一 diff 摘要，供会话中展示。
+- `run` 缺少 `workflow` → 直接报错（`workflow-required`），不猜候选；
+- 工具失败一律返回带稳定 code 的文本（`error <code>: <message>`），不抛异常、不结束回合；
+- 写覆盖 / 写资产的工具（`hnflow_author`）属 M5；当前写资产只存在宿主侧显式入口（§11.2），
+  因此 I1 在 M0/M1 期间是「物理上无入口」而不是「靠提示词约束」。
 
 ### 7.4 会话内发起
 
@@ -335,6 +364,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 - run 归 **工作区**，可选 `session_id` 作为 owner；
 - 有 owner 且插件在线时注册 **job 镜像**（`ctx.jobs`）：输出环接 run 事件，`job_kill` → 引擎取消，完成通知随 job 结算；
+  **M2 交付**：job 生产需要 `JobSpec`/controller owner，且会话关闭后 job 仍须存续，先用 `run/status` +
+  通知轮询替代，避免半成品 job 语义；
 - job 只是视图；引擎重启后由插件重新挂接；
 - 面板直跑不创建会话；首次出现人工任务时懒创建/绑定会话。
 
@@ -443,18 +474,31 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ## 14. 里程碑
 
+### 14.1 已落地（2026-11-03）
+
+| 项 | 结果 |
+| --- | --- |
+| 引擎 headless | `deerflow.workflow.rpc`：stdio JSON-RPC 2.0，`engine/initialize|ping|shutdown`、`workflow/validate|describe`、`run/start|status|cancel|events|list`、`task/list|submit`（M3 前明确 `human-tasks-unavailable`） |
+| 引擎执行 | 复用 `compile_definition` + 默认 executor 注册表 + 每 run `MemorySaver`；节点事件翻译为 `run/event` |
+| 插件骨架 | `plugins/dsh`：bundle manifest、`cordis.patch.yml`、`preset-hnflow`（含 `dsh-vibestack` 行） |
+| 资产/引用/覆盖 | `AssetStore`（含 revision 快照）、`WorkspaceStore`、`Resolver`（override → pinned → latest + drift 判定） |
+| 会话面 | `hnflow` 工具、`/workflow` 命令族、系统提示工作流索引、内置 skill `hnflow-workflow` |
+| 测试 | 引擎 `backend/tests/test_workflow_rpc.py` 16 项；插件 `plugins/dsh/test` 49 项；`dsh plugin add` + `--dump-config` + Web 启动冒烟 |
+| 未做 | job 镜像（M2）、人工任务桥（M3）、画布与保存菜单（M4）、`hnflow_author` / 模型桥（M5） |
+
 ### M0 引导（1 周）
 
-- 仓库目录调整：`engine/`（Python）、`plugins/dsh/`（插件）、`docs/`；
-- 引擎 headless 协议（validate/run/status/cancel/task/events）与版本握手；
+- 仓库目录调整：`plugins/dsh/`（插件）、`docs/`；**引擎放在 harness 内**（`deerflow/workflow/rpc/`），
+  不新建顶层 `engine/`——复用同一 venv、lint 与测试，避免第二套 Python 工程；
+- 引擎 headless 协议（validate/run/status/cancel/events）与版本握手；
 - 插件骨架：bundle、host 入口、preset 行、安装脚本；
 - 验收：`dsh plugin add` 后出现 HNFlow 模式；`/workflow` 可列空列表。
 
 ### M1 资产、引用、覆盖与首次运行（2 周）
 
 - AssetStore / WorkspaceStore / Resolver；
-- `/workflow ref add|list`、`workflow run`、面板只读；
-- run 快照与 job 镜像；
+- `/workflow ref add|list`、`hnflow` 工具 run、面板只读；
+- run 快照（定义 + 来源 + revision 写入 run metadata）与 job 镜像（顺延到 M2）；
 - 验收：引用资产 → 运行 → 完成通知；改覆盖不影响资产。
 
 ### M2 运行呈现（1 周）
@@ -477,8 +521,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ### M5 模式、Agent 创作与模型桥（2 周）
 
-- `preset-hnflow` 与 `dsh-vibestack` 组合（`presetId`）；
-- `workflow_author` 全量、skill、系统提示索引；
+- `preset-hnflow` 与 `dsh-vibestack` 组合：**已提前落地**——不改造 `dsh-vibestack` 的 `presetId`，
+  而是把它的 host 行直接挂在 `preset-hnflow` 里（插件行为由工作区 `.vibestack` 决定，与 preset id 无关）；
+- `workflow_author` 全量、skill、系统提示索引（skill 与索引已在 M1 落地）；
 - 模型绑定/桥接；资产库页；
 - 验收：VibeStack 模式无工作流入口；HNFlow 模式能力组与工作流同时可用。
 
@@ -511,14 +556,17 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ## 17. 待决策
 
-| 编号 | 问题 | 建议 |
+| 编号 | 问题 | 结论 |
 | --- | --- | --- |
-| D1 | 资产根默认位置 | `$DSH_HOME/hnflow/library`，可配置追加只读根 |
-| D2 | 覆盖格式 | 完整副本 + `baseRevision`（已定） |
-| D3 | HNFlow 模式如何获得能力组 | 改造 `dsh-vibestack` 支持 `presetId` 后组合；否则降级 |
-| D4 | 引用默认固定还是跟随 | 默认固定 revision，显式 follow |
+| D1 | 资产根默认位置 | `$DSH_HOME/hnflow/library`，可配置追加只读根（**已定**） |
+| D2 | 覆盖格式 | 完整副本 + `baseRevision`（**已定**） |
+| D3 | HNFlow 模式如何获得能力组 | 不改造 `dsh-vibestack`：把它的 host 行挂进 `preset-hnflow`（**已定**，见 §3.5、M5） |
+| D4 | 引用默认固定还是跟随 | 默认固定 revision + 快照，显式 follow（**已定**） |
 | D5 | 面板编辑器的 Remote 通道 | v1 用命令 + `workspaceFiles` 读；稳定后再评估 typert Remote |
 | D6 | 定时运行 | 先由引擎调度并在面板展示；不复用 DSH schedule，避免模型轮次 |
+| D7 | 引擎代码放哪里 | 放 harness（`deerflow/workflow/rpc/`），不建顶层 `engine/`（**已定**） |
+| D8 | 工具名 | `hnflow`（`workflow` 已被内置工具占用，**已定**） |
+| D9 | 只自用时的发布面 | 不做 npm 发布/市场上架；`dsh plugin add <path>` 本地链接（**已定**） |
 
 ---
 
@@ -535,4 +583,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 ### 18.2 参考
 
 - HNFlow：`README.md`、`backend/AGENTS.md`、`backend/packages/harness/deerflow/workflow/`、`projects/`；
-- DSH：`@deepseek-ai/dsh-tool-workflow`、`dsh-jobs`、`dsh-user-questions`、`dsh-user-approval`、`dsh-agent-preset`、`dsh-client-ui-layout`、`dsh-api-workspace-files`、`dsh-vibestack`（外部插件）。
+- DSH 插件开发文档：<https://deepseek-harness.github.io/deepseek-harness/develop/basic/>
+  （第一个插件 / 开发 Tool / 插件配置 / 打包与安装）；
+- DSH 框架文档：<https://deepseek-harness.github.io/deepseek-harness/develop/framework/>
+  （插件与生命周期 / 服务与依赖 / 事件系统）；
+- DSH 源码：<https://github.com/deepseek-ai/deepseek-harness>；
+- DSH 包（本机 0.2.1-rc.5）：`dsh-tools`、`dsh-tool-workflow`、`dsh-jobs`、`dsh-user-questions`、
+  `dsh-user-approval`、`dsh-agent-preset`、`dsh-client-ui-layout`、`dsh-api-workspace-files`；
+- 外部插件参考：`dsh-vibestack`（`D:/workspace/VibeStack/plugins/dsh`）。

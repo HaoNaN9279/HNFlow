@@ -1,0 +1,250 @@
+/**
+ * `/workflow` — the deterministic entry point.
+ *
+ * DSH has no `@workflow` trigger syntax, so an explicit workflow is named here
+ * (or in the panel, or in prose). A command runs on the host: it returns text,
+ * never a model turn, which is what makes "run this workflow now" exact.
+ */
+
+import { diffDocuments } from './json.js'
+import { TERMINAL_STATUSES } from './service.js'
+import { formatRunStatus, formatWorkflowList } from './tools.js'
+
+/** Usage text shown for `/workflow` and `/workflow help`. */
+export const USAGE = [
+  '/workflow — list workflows referenced by this workspace',
+  '/workflow run <name> [k=v …] — start a run and wait for it',
+  '/workflow status <runId> — show a run',
+  '/workflow cancel <runId> — ask the engine to stop a run',
+  '/workflow ref list — refs, overrides, and drift',
+  '/workflow ref add <assetId> [--pin N] [--alias name] — add a reference',
+  '/workflow ref remove <name> — drop a reference',
+  '/workflow asset list — the asset library',
+  '/workflow override diff <name> — override vs asset',
+  '/workflow override reset <name> — drop the workspace override',
+].join('\n')
+
+/**
+ * Split a raw command line into tokens, honouring double quotes.
+ * @param {string} rawInput - text after the command name.
+ * @returns {string[]} tokens.
+ */
+export function tokenize(rawInput) {
+  const text = String(rawInput ?? '')
+  /** @type {string[]} */
+  const tokens = []
+  let current = ''
+  let quoted = false
+  for (const character of text) {
+    if (character === '"') {
+      quoted = !quoted
+      continue
+    }
+    if (!quoted && /\s/u.test(character)) {
+      if (current.length > 0) {
+        tokens.push(current)
+        current = ''
+      }
+      continue
+    }
+    current += character
+  }
+  if (current.length > 0) tokens.push(current)
+  return tokens
+}
+
+/**
+ * Parse `key=value` pairs into a run input object.
+ * @param {string[]} tokens - remaining tokens.
+ * @returns {{input: Record<string, unknown>, rest: string[]}} parsed pairs and leftovers.
+ */
+export function parseInputs(tokens) {
+  /** @type {Record<string, unknown>} */
+  const input = {}
+  /** @type {string[]} */
+  const rest = []
+  for (const token of tokens) {
+    const index = token.indexOf('=')
+    if (index <= 0) {
+      rest.push(token)
+      continue
+    }
+    const key = token.slice(0, index)
+    const raw = token.slice(index + 1)
+    try {
+      input[key] = JSON.parse(raw)
+    } catch {
+      input[key] = raw
+    }
+  }
+  return { input, rest }
+}
+
+/**
+ * Compare the workspace override against the asset's current revision.
+ * @param {Record<string, any>} resolved - resolution result for the override path is not used here.
+ * @param {Record<string, any>} override - override document.
+ * @param {Record<string, any>} asset - asset definition.
+ * @returns {string} model-facing summary.
+ */
+export function formatOverrideDiff(override, asset) {
+  const changes = diffDocuments(asset, override.definition, { maxEntries: 20 })
+  const header = `override for ${override.assetId} (base r${override.baseRevision}), ${changes.length} change(s)`
+  if (changes.length === 0) return `${header}\nno difference from the asset definition`
+  const lines = changes.map((change) => `- ${change.path}: ${JSON.stringify(change.from)} → ${JSON.stringify(change.to)}`)
+  return [header, ...lines].join('\n')
+}
+
+/**
+ * Build the `/workflow` command registration.
+ * @param {{service: import('./service.js').HnflowService, cwdOf: (agent: unknown) => string | null}} options - wiring.
+ * @returns {{name: string, description: string, input: {hint: string}, handler: Function}} command definition.
+ */
+export function createWorkflowCommand(options) {
+  const { service, cwdOf } = options
+
+  /**
+   * Execute one command invocation.
+   * @param {{agent?: unknown, rawInput?: string}} invocation - command payload.
+   * @returns {Promise<{kind: 'success'|'error', text: string}>} command result.
+   */
+  const handler = async (invocation) => {
+    const cwd = cwdOf(invocation?.agent)
+    if (cwd === null) return { kind: 'error', text: 'workflow: this session has no workspace directory' }
+    const tokens = tokenize(invocation?.rawInput)
+    try {
+      const text = await dispatch(tokens, cwd)
+      return { kind: 'success', text }
+    } catch (error) {
+      return { kind: 'error', text: `workflow: ${error?.code ?? 'error'}: ${error?.message ?? String(error)}` }
+    }
+  }
+
+  /**
+   * Route a parsed command line.
+   * @param {string[]} tokens - command tokens.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} output text.
+   */
+  const dispatch = async (tokens, cwd) => {
+    const [head, ...rest] = tokens
+    if (head === undefined || head === 'list') return formatWorkflowList(await service.listWorkflows(cwd))
+    if (head === 'help') return USAGE
+
+    if (head === 'run') {
+      const { input, rest: positional } = parseInputs(rest)
+      const key = positional[0]
+      if (key === undefined) throw commandError('workflow-required', 'usage: /workflow run <name> [k=v …]')
+      const started = await service.startRun({ cwd, key, inputs: input })
+      const status = await service.waitFor(started.runId, 60000)
+      const note = TERMINAL_STATUSES.has(status.status) ? '' : '\n(still running; use /workflow status ' + started.runId + ')'
+      return `${formatRunStatus(status)}\nsource: ${started.resolved.source} r${started.resolved.revision ?? 'latest'}${note}`
+    }
+
+    if (head === 'status') {
+      if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow status <runId>')
+      return formatRunStatus(await service.status(rest[0]))
+    }
+
+    if (head === 'cancel') {
+      if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow cancel <runId>')
+      const result = await service.cancel(rest[0])
+      return `${result.runId}: cancel requested=${result.cancelled} (status ${result.status})`
+    }
+
+    if (head === 'ref') return await refCommand(rest, cwd)
+    if (head === 'asset') {
+      const assets = await service.listAssets(cwd)
+      if (assets.length === 0) return 'the library has no workflow assets yet'
+      return assets.map((asset) => `${asset.id}  r${asset.revision}  ${asset.name}`).join('\n')
+    }
+    if (head === 'override') return await overrideCommand(rest, cwd)
+
+    throw commandError('unknown-subcommand', USAGE)
+  }
+
+  /**
+   * `/workflow ref …`
+   * @param {string[]} tokens - tokens after `ref`.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} output text.
+   */
+  const refCommand = async (tokens, cwd) => {
+    const [action, ...rest] = tokens
+    const stores = service.storesFor(cwd)
+    if (action === undefined || action === 'list') {
+      return formatWorkflowList(await service.listWorkflows(cwd))
+    }
+    if (action === 'add') {
+      const assetId = rest[0]
+      if (assetId === undefined) throw commandError('asset-required', 'usage: /workflow ref add <assetId> [--pin N] [--alias name]')
+      /** @type {{pin: number|null, alias: string}} */
+      const options = { pin: null, alias: '' }
+      for (let index = 1; index < rest.length; index += 1) {
+        if (rest[index] === '--pin') {
+          const value = Number(rest[index + 1])
+          if (!Number.isInteger(value) || value <= 0) throw commandError('invalid-pin', '--pin expects a positive integer revision')
+          options.pin = value
+          index += 1
+        } else if (rest[index] === '--alias') {
+          options.alias = rest[index + 1] ?? ''
+          index += 1
+        }
+      }
+      const asset = await stores.assets.read(assetId)
+      const ref = await stores.workspace.addRef({ assetId, alias: options.alias, revision: options.pin ?? Number(asset.asset.revision ?? 1) })
+      const pinned = Number.isInteger(ref.revision) ? `r${ref.revision}` : 'latest'
+      return `referenced ${asset.asset.name} (${assetId}) at ${pinned}${ref.alias ? ` as ${ref.alias}` : ''}`
+    }
+    if (action === 'remove') {
+      const key = rest[0]
+      if (key === undefined) throw commandError('ref-required', 'usage: /workflow ref remove <name>')
+      const removed = await stores.workspace.removeRef(key)
+      return `removed reference ${removed.alias || removed.assetId}`
+    }
+    throw commandError('unknown-subcommand', 'usage: /workflow ref list|add|remove')
+  }
+
+  /**
+   * `/workflow override …`
+   * @param {string[]} tokens - tokens after `override`.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} output text.
+   */
+  const overrideCommand = async (tokens, cwd) => {
+    const [action, key] = tokens
+    if (key === undefined) throw commandError('workflow-required', 'usage: /workflow override diff|reset <name>')
+    const stores = service.storesFor(cwd)
+    const resolved = await service.resolve(cwd, key)
+    const override = await stores.workspace.readOverride(resolved.assetId)
+    if (action === 'diff') {
+      if (override === null) return `${key} has no workspace override`
+      const asset = await stores.assets.read(resolved.assetId)
+      return formatOverrideDiff(override, asset.definition)
+    }
+    if (action === 'reset') {
+      const result = await service.resetOverride({ cwd, key })
+      return result.removed ? `dropped the override for ${key}` : `${key} had no override`
+    }
+    throw commandError('unknown-subcommand', 'usage: /workflow override diff|reset <name>')
+  }
+
+  return {
+    name: 'workflow',
+    description: 'HNFlow workflows referenced by this workspace (list / run / status / cancel / ref / override)',
+    input: { hint: '[list|run <name>|status <runId>|cancel <runId>|ref …|override …]' },
+    handler,
+  }
+}
+
+/**
+ * Build a coded command error.
+ * @param {string} code - stable code.
+ * @param {string} message - usage hint.
+ * @returns {Error & {code: string}} the error.
+ */
+function commandError(code, message) {
+  const error = new Error(message)
+  error.code = code
+  return error
+}

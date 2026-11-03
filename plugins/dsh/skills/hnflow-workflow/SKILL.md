@@ -1,0 +1,58 @@
+---
+name: hnflow-workflow
+description: 在 HNFlow 模式中运行、修改或排查工作流。需要了解工作流资产 / 工作区引用 / 覆盖的关系、节点类型、端口规则，或要用 `hnflow` 工具与 `/workflow` 命令时加载。
+---
+
+# HNFlow 工作流
+
+HNFlow 是**确定性执行层**：工作流定义（JSON）经编译成为图，由引擎执行；Agent 负责在
+需要确定性时调用它，而不是自己重放步骤。
+
+## 三层关系（最重要）
+
+| 层 | 位置 | 谁写 |
+| --- | --- | --- |
+| 资产 Asset | `$DSH_HOME/hnflow/library/**/*.workflow.json` | 只有用户显式「保存回资产」 |
+| 引用 Ref | `<workspace>/.hnflow/workflows.json` | `/workflow ref add\|remove` |
+| 覆盖 Override | `<workspace>/.hnflow/overrides/<assetId>.workflow.json` | 本项目内的修改 |
+
+- 工作区**不复制**资产，只存引用；同一资产可被多个工作区引用；
+- 解析顺序：覆盖 → 引用固定的 revision 快照 → 资产最新 revision；
+- **Agent 的修改一律写覆盖**，绝不写资产；写资产需要用户明确要求（且当前版本尚未开放）；
+- 运行使用启动时快照的定义，之后的编辑不影响该次运行。
+
+## 工具与命令
+
+`hnflow` 工具：`list` / `get` / `run` / `status` / `cancel` / `assets`。
+`run` 必须显式给 `workflow`（别名或资产 id），不得猜测；`input` 是 start 节点端口值。
+
+`/workflow` 命令（宿主执行，不进模型上下文）：
+`run <name>`、`status <runId>`、`cancel <runId>`、`ref list|add|remove`、
+`asset list`、`override diff|reset`。
+
+## 节点与端口
+
+- 节点类型为 `category:name`，例如 `flow:start`、`data:assign`、`tool:bash`、
+  `ai:llm_agent`、`human:task`、`verify:gate`；
+- 端口类型：`data` / `file` / `bool` / `enum` / `number` / `array` / `record` / `spec`，
+  只允许同类型连边；
+- 同一输入端口只允许一条入边（`flow:end`、`flow:loop` 例外）；
+- 必须有且只有一个 `flow:start` 与一个 `flow:end`；
+- `tool:bash` 必须走沙箱；`app:*` 是宿主执行的显式例外；
+- `verify:gate` 的 `verified` / `failed` / `inconclusive` 三个分支必须全部接线。
+
+## 语义边界
+
+- 人工节点是**引擎的挂起**，不是 DSH 审批：`human:task` 生成待办，`human:review`
+  走通过/打回；当前版本引擎尚未接通任务桥（提交会明确报错）；
+- run 的真相在引擎：会话只记录工具调用；
+- 修改定义时不要改 `flow:end` 的入边端口名，否则运行结果为空。
+
+## 常见动作
+
+```text
+/workflow                     列出本工作区引用的工作流
+/workflow run publish target=staging
+/workflow override diff publish
+/workflow override reset publish
+```
