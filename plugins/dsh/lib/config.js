@@ -7,7 +7,7 @@
  */
 
 export const DEFAULT_CONFIG = Object.freeze({
-  /** `false` turns this row into a no-op (kept for parity with future client rows). */
+  /** `false` turns this row into the client-only UI row. */
   host: true,
   /** Workflow asset root; empty means `$DSH_HOME/hnflow/library`. */
   libraryRoot: '',

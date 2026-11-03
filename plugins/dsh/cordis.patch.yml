@@ -19,6 +19,14 @@
 #   tool is called `hnflow`.
 
 - insert:
+    # Client half of the plugin: the HNFlow control in the composer strip. It
+    # renders only inside the `hnflow` preset, so this root row is inert
+    # elsewhere and exists purely so the browser bundle is loaded once.
+    - id: hnflow-ui
+      name: dsh-hnflow
+      config:
+        host: false
+
     - id: preset-hnflow
       name: '@deepseek-ai/dsh-agent-preset'
       config:

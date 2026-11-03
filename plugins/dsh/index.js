@@ -53,6 +53,9 @@ export function apply(ctx, rawConfig) {
   }
 
   const service = new HnflowService({ config: rawConfig, logger })
+  // The root row exists only so the client half is always available; it owns no
+  // host behaviour and must not touch any session.
+  if (service.config.host === false) return
   /** @type {Map<string, string>} */
   const indexCache = new Map()
 

@@ -81,6 +81,12 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 它**没有**写资产的动作——资产只能由用户执行 `/workflow save asset <name>` 更新，
 Agent 的修改一律落到工作区覆盖。
 
+## 界面
+
+HNFlow 模式下，输入框左栏会出现一个 **HNFlow** 控件（`conversation.input.left`）。
+点开有三个按钮：工作流 / 待办 / 资产——它们执行的就是 `/workflow` 命令，并把文本结果直接显示在弹层里。
+客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致。
+
 ## 数据布局
 
 ```text
