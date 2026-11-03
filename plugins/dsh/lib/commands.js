@@ -18,7 +18,8 @@ export const USAGE = [
   '/workflow cancel <runId> — ask the engine to stop a run',
   '/workflow resume <runId> — continue a run an engine restart interrupted',
   '/workflow tasks [runId] — pending human tasks',
-  '/workflow submit <taskId> [k=v …] — answer a human task and continue the run',
+  '/workflow inbox — the same tasks as a JSON payload for the panel',
+  '/workflow submit <taskId> [k=v …|{json}] — answer a human task and continue the run',
   '/workflow ref list — refs, overrides, and drift',
   '/workflow ref add <assetId> [--pin N] [--alias name] — add a reference',
   '/workflow ref remove <name> — drop a reference',
@@ -175,6 +176,8 @@ export function createWorkflowCommand(options) {
       return formatTasks(result.tasks)
     }
 
+    if (head === 'inbox') return JSON.stringify(await service.tasks(undefined))
+
     if (head === 'resume') {
       if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow resume <runId>')
       const resumed = await service.resume(rest[0])
@@ -183,10 +186,9 @@ export function createWorkflowCommand(options) {
     }
 
     if (head === 'submit') {
-      const { input, rest: positional } = parseInputs(rest)
-      const taskId = positional[0]
-      if (taskId === undefined) throw commandError('task-id-required', 'usage: /workflow submit <taskId> [k=v …]')
-      const submitted = await service.submitTask({ taskId, payload: input })
+      const { taskId, payload } = parseSubmission(rawInput, rest)
+      if (taskId === undefined) throw commandError('task-id-required', 'usage: /workflow submit <taskId> [k=v …|{json}]')
+      const submitted = await service.submitTask({ taskId, payload })
       const status = await service.waitFor(submitted.runId, 60000)
       return `submitted ${taskId}\n${formatRunStatus(status)}`
     }
@@ -362,6 +364,36 @@ export function createWorkflowCommand(options) {
     input: { hint: '[list|run <name>|status <runId>|cancel <runId>|ref …|override …]' },
     handler,
   }
+}
+
+/**
+ * Parse `/workflow submit <taskId> …` in either `k=v` or JSON form.
+ *
+ * The panel sends one JSON object (so a value may contain spaces); a person at
+ * the prompt can keep typing `note=ok`.
+ * @param {string} rawInput - text after the command name.
+ * @param {string[]} tokens - tokenized remaining words.
+ * @returns {{taskId: string | undefined, payload: Record<string, any>}} submission.
+ */
+export function parseSubmission(rawInput, tokens) {
+  const match = /^submit\s+(\S+)\s*([\s\S]*)$/u.exec(String(rawInput ?? '').trim())
+  if (match === null) return { taskId: undefined, payload: {} }
+  const taskId = match[1]
+  const remainder = match[2].trim()
+  if (remainder.length === 0) return { taskId, payload: {} }
+  if (remainder.startsWith('{')) {
+    let payload
+    try {
+      payload = JSON.parse(remainder)
+    } catch (error) {
+      throw commandError('payload-invalid', `payload must be valid JSON: ${error.message}`)
+    }
+    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+      throw commandError('payload-invalid', 'payload must be a JSON object')
+    }
+    return { taskId, payload }
+  }
+  return { taskId, payload: parseInputs(tokens.slice(1)).input }
 }
 
 /**

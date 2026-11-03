@@ -98,8 +98,11 @@ Agent 的修改一律落到工作区覆盖。
 ## 界面
 
 HNFlow 模式下，输入框左栏会出现一个 **HNFlow** 控件（`conversation.input.left`）。
-点开后是一个弹层：工作流列表（带覆盖 / 漂移 / 缺失标记）、**只读 SVG 画布**（点节点看参数）、
-以及「待办 / 资产」命令按钮。
+点开后是一个弹层，两个页签：
+
+- **工作流**：引用列表（带覆盖 / 漂移 / 缺失标记）、只读 SVG 画布（点节点改参数）、撤销覆盖、保存回资产；
+- **待办**：所有 pending 人工任务，点一条给出模板 JSON（review 是 `{"decision":true,"feedback":""}`，task 是各端口空值），
+  改完点提交即可继续运行。
 
 画布数据来自 `/workflow panel [name]` 的一次调用：位置优先用 `metadata.canvas.positions`，
 否则用编辑器同款三列网格。点节点可编辑它的 `params`：

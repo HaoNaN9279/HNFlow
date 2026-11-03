@@ -173,3 +173,28 @@ test('writing back to the asset is a two-step command', () => {
   assert.equal(internals.saveAssetCommand('publish', false), '/workflow save asset publish')
   assert.equal(internals.saveAssetCommand('publish', true), '/workflow save asset publish --yes')
 })
+
+test('the inbox payload is parsed strictly', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.parseInbox('nope'), null)
+  assert.equal(internals.parseInbox('{"tasks":"x"}'), null)
+
+  const tasks = internals.parseInbox(JSON.stringify({ tasks: [{ taskId: 'task-1', kind: 'task' }, { nope: true }, 'x'] }))
+  assert.equal(tasks.length, 1)
+  assert.equal(tasks[0].taskId, 'task-1')
+})
+
+test('a task template matches the task kind', () => {
+  const { internals } = loadBundle()
+
+  assert.deepEqual(JSON.parse(internals.taskTemplate({ taskId: 't', kind: 'review' })), { decision: true, feedback: '' })
+  assert.deepEqual(
+    JSON.parse(internals.taskTemplate({ taskId: 't', kind: 'task', outputSpec: { ports: [{ name: 'note', type: 'data' }, { name: 'flag', type: 'bool' }] } })),
+    { note: '', flag: false },
+  )
+})
+
+test('submit carries the typed payload as JSON', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.submitCommand('task-1', '{"note":"a b"}'), '/workflow submit task-1 {"note":"a b"}')
+})

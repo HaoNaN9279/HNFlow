@@ -256,6 +256,49 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Parse the `/workflow inbox` payload.
+     * @param {string} text - command output.
+     * @returns {Record<string, any>[] | null} tasks, or null when unreadable.
+     */
+    function parseInbox(text) {
+      let parsed;
+      try {
+        parsed = JSON.parse(String(text ?? ""));
+      } catch {
+        return null;
+      }
+      if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.tasks)) return null;
+      return parsed.tasks.filter((task) => task !== null && typeof task === "object" && typeof task.taskId === "string");
+    }
+
+    /**
+     * A payload skeleton for one task.
+     * @param {Record<string, any>} task - pending task summary.
+     * @returns {string} JSON text to prefill the editor.
+     */
+    function taskTemplate(task) {
+      if (task.kind === "review") return JSON.stringify({ decision: true, feedback: "" }, null, 2);
+      const ports = Array.isArray(task.outputSpec && task.outputSpec.ports) ? task.outputSpec.ports : [];
+      /** @type {Record<string, any>} */
+      const payload = {};
+      for (const port of ports) {
+        if (typeof port.name !== "string") continue;
+        payload[port.name] = port.type === "bool" ? false : "";
+      }
+      return JSON.stringify(payload, null, 2);
+    }
+
+    /**
+     * Build the submission command for one task.
+     * @param {string} taskId - task id.
+     * @param {string} json - payload as typed.
+     * @returns {string} command line.
+     */
+    function submitCommand(taskId, json) {
+      return `/workflow submit ${taskId} ${json}`;
+    }
+
+    /**
      * The composer-strip control.
      * @param {Record<string, unknown>} props - slot props plus the inject face.
      * @returns {unknown} React element or null when the mode is not HNFlow.
@@ -270,6 +313,9 @@ window.__ModuleLoader__.load({
       const [nodeId, setNodeId] = react.useState(null);
       const [draft, setDraft] = react.useState("");
       const [confirmSave, setConfirmSave] = react.useState(false);
+      const [tasks, setTasks] = react.useState(null);
+      const [taskId, setTaskId] = react.useState(null);
+      const [taskDraft, setTaskDraft] = react.useState("");
       const triggerRef = react.useRef(null);
       const [anchor, setAnchor] = react.useState(null);
       const menuId = react.useRef(null);
@@ -318,6 +364,44 @@ window.__ModuleLoader__.load({
           setText("");
         } catch (error) {
           setPayload(null);
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Load the pending human tasks.
+       * @returns {Promise<void>} resolves once loaded.
+       */
+      const loadTasks = async () => {
+        setBusy(true);
+        try {
+          const next = parseInbox(await props.run("/workflow inbox"));
+          setTasks(next === null ? [] : next);
+          setTaskId(null);
+          setTaskDraft("");
+          setText(next === null ? "inbox payload unavailable" : "");
+        } catch (error) {
+          setTasks([]);
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Answer the selected task.
+       * @returns {Promise<void>} resolves once submitted and reloaded.
+       */
+      const submitTask = async () => {
+        if (taskId === null) return;
+        setBusy(true);
+        try {
+          const message = await props.run(submitCommand(taskId, taskDraft));
+          await loadTasks();
+          setText(message);
+        } catch (error) {
           setText(String(error && error.message ? error.message : error));
         } finally {
           setBusy(false);
@@ -443,26 +527,11 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const body = h(
-        "div",
-        {
-          role: "dialog",
-          "aria-label": "HNFlow",
-          id: menuId.current,
-          style: anchor === null ? { ...styles.menu, position: "absolute", bottom: "34px", left: 0 } : { ...styles.menu, position: "fixed", left: anchor.left, bottom: anchor.bottom },
-        },
-        h(
-          "div",
-          { style: styles.tabs },
-          h("button", { type: "button", style: { ...styles.tab, ...styles.tabActive }, disabled: busy, onClick: () => void loadPanel(selectedKey) }, "工作流"),
-          ...ACTIONS.map((action) =>
-            h("button", { type: "button", key: action.command, title: action.hint, style: styles.tab, disabled: busy, onClick: () => void runText(action.command) }, action.label),
-          ),
-        ),
+      const workflowSections = [
         payload !== null && payload.workflows.length > 0
           ? h(
               "ul",
-              { style: styles.list },
+              { style: styles.list, key: "workflows" },
               ...payload.workflows.map((entry) =>
                 h(
                   "li",
@@ -485,7 +554,7 @@ window.__ModuleLoader__.load({
           ? null
           : h(
               "svg",
-              { viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
+              { key: "canvas", viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
               ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
               ...layout.nodes.map((node) =>
                 h("g", { key: node.id, onClick: () => selectNode(node), style: { cursor: "pointer" } }, [
@@ -499,7 +568,7 @@ window.__ModuleLoader__.load({
           ? null
           : h(
               "div",
-              { style: styles.editor },
+              { key: "node-editor", style: styles.editor },
               h("textarea", {
                 value: draft,
                 rows: 6,
@@ -518,17 +587,85 @@ window.__ModuleLoader__.load({
         confirmSave
           ? h(
               "div",
-              { style: styles.tabs },
+              { key: "confirm-save", style: styles.tabs },
               h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void confirmSaveAsset() }, "确认写入资产"),
               h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => setConfirmSave(false) }, "取消"),
             )
           : selected !== null && selected.source === "override"
             ? h(
                 "div",
-                { style: styles.tabs },
+                { key: "save-asset", style: styles.tabs },
                 h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void previewSave() }, "保存回资产…"),
               )
             : null,
+      ];
+
+      const inboxSections = [
+        tasks === null || tasks.length === 0
+          ? h("div", { key: "empty", style: styles.meta }, tasks === null ? "…" : "没有待办")
+          : h(
+              "ul",
+              { key: "tasks", style: styles.list },
+              ...tasks.map((task) =>
+                h(
+                  "li",
+                  { key: task.taskId },
+                  h(
+                    "button",
+                    {
+                      type: "button",
+                      style: taskId === task.taskId ? { ...styles.item, ...styles.itemActive } : styles.item,
+                      onClick: () => {
+                        setTaskId(task.taskId);
+                        setTaskDraft(taskTemplate(task));
+                      },
+                    },
+                    h("span", null, `${task.taskId} · ${task.kind}`),
+                    h("span", { style: styles.meta }, `run ${task.runId} · node ${task.nodeId}${task.description ? ` · ${task.description}` : ""}`),
+                  ),
+                ),
+              ),
+            ),
+        taskId === null
+          ? null
+          : h(
+              "div",
+              { key: "task-editor", style: styles.editor },
+              h("textarea", {
+                value: taskDraft,
+                rows: 5,
+                spellCheck: false,
+                "aria-label": `payload for ${taskId}`,
+                style: styles.textarea,
+                onChange: (event) => setTaskDraft(event.target.value),
+              }),
+              h(
+                "div",
+                { style: styles.tabs },
+                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void submitTask() }, "提交"),
+                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => { setTaskId(null); setTaskDraft(""); } }, "取消"),
+              ),
+            ),
+      ];
+
+      const body = h(
+        "div",
+        {
+          role: "dialog",
+          "aria-label": "HNFlow",
+          id: menuId.current,
+          style: anchor === null ? { ...styles.menu, position: "absolute", bottom: "34px", left: 0 } : { ...styles.menu, position: "fixed", left: anchor.left, bottom: anchor.bottom },
+        },
+        h(
+          "div",
+          { style: styles.tabs },
+          h("button", { type: "button", style: { ...styles.tab, ...(tasks === null ? styles.tabActive : {}) }, disabled: busy, onClick: () => void loadPanel(selectedKey) }, "工作流"),
+          h("button", { type: "button", style: { ...styles.tab, ...(tasks !== null ? styles.tabActive : {}) }, disabled: busy, onClick: () => void loadTasks() }, "待办"),
+          ...ACTIONS.map((action) =>
+            h("button", { type: "button", key: action.command, title: action.hint, style: styles.tab, disabled: busy, onClick: () => { setTasks(null); void runText(action.command); } }, action.label),
+          ),
+        ),
+        ...(tasks !== null ? inboxSections : workflowSections),
         text.length > 0 ? h("pre", { style: styles.body }, text) : null,
       );
 
@@ -572,7 +709,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand };
+    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand, saveAssetCommand, parseInbox, taskTemplate, submitCommand };
     return module.exports;
   },
 });

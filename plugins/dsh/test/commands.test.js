@@ -182,6 +182,37 @@ test('panel returns one JSON payload the client can draw', async () => {
   assert.equal(payload.selected.definition.nodes[0].id, 'start')
 })
 
+test('inbox returns the pending tasks as JSON', async () => {
+  const { handler } = makeCommand()
+  const result = await handler({ rawInput: 'inbox' })
+
+  assert.equal(result.kind, 'success')
+  const payload = JSON.parse(result.text)
+  assert.equal(payload.tasks[0].taskId, 'task-9')
+})
+
+test('submit accepts a JSON payload as well as k=v pairs', async () => {
+  /** @type {Record<string, any>[]} */
+  const submitted = []
+  const { handler } = makeCommand({
+    submitTask: async (input) => {
+      submitted.push(input)
+      return { taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }
+    },
+  })
+
+  const json = await handler({ rawInput: 'submit task-9 {"note": "a  b"}' })
+  assert.equal(json.kind, 'success')
+  assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { note: 'a  b' } })
+
+  await handler({ rawInput: 'submit task-9 note=ok count=2' })
+  assert.deepEqual(submitted[1].payload, { note: 'ok', count: 2 })
+
+  const bad = await handler({ rawInput: 'submit task-9 {nope}' })
+  assert.equal(bad.kind, 'error')
+  assert.match(bad.text, /payload-invalid/u)
+})
+
 test('asset new / import / delete manage the library', async () => {
   const { handler } = makeCommand()
 

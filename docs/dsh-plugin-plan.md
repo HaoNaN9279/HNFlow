@@ -407,7 +407,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 通道 | 场景 | 说明 |
 | --- | --- | --- |
 | turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，`hnflow` 工具在 run 停在 `waiting_human` 时弹卡并按答案提交（**已落地**）；`interactive:false` 可关 |
-| 面板收件箱 | 任意时刻 | 零 token；复杂表单只在这里（M3 剩余） |
+| 面板收件箱 | 任意时刻 | 零 token；面板「待办」页签列出所有 pending 任务，点开填 JSON 提交（**已落地**） |
 | 会话自然语言 | 用户直接回复 | Agent 调 `hnflow` 的 `task_list` / `task_submit`（**已落地**） |
 
 问题卡映射规则：`human:review` → 一张卡片两个选项（通过 / 打回，打回原因走自由文本）；
@@ -535,6 +535,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 面板 MVP（M4 一部分） | `client.js` + `dsh.client` manifest；composer 左栏 HNFlow 控件，弹层含工作流列表、只读 SVG 画布（`/workflow panel` 供数）、节点参数编辑（`/workflow node` → 覆盖）、撤销覆盖与命令按钮；仅 `hnflow` 模式渲染；`dsh plugin add` 后 boot 图里可见 `dsh-hnflow/client.js` |
 | 保存回资产（M4 验收项） | `/workflow save asset` 先给 diff 与 `rN → rN+1`，必须 `--yes` 才写；面板「保存回资产…」→「确认写入资产」是同一命令的两次点击；工具面仍无写资产动作 |
 | 模型桥（M5 阶段一） | 插件 `models[]` 随 `engine/initialize` 下发，引擎替换 `AppConfig.models` 交给 AI 节点；无模型且含 AI 节点时 `run/start` 返回 `models-unavailable`；阶段二（`llm.complete` RPC）未做 |
+| 面板收件箱（M3 通道二） | 面板「待办」页签读 `/workflow inbox`（JSON），点任务给模板 JSON，提交走 `/workflow submit <id> {json}`；`submit` 同时支持 `k=v` 与 JSON 两种写法 |
 | 未做 | job 镜像与 run 卡片（M2 剩余）、面板收件箱与 turn 内问题卡（M3 剩余）、画布与保存菜单 UI（M4）、模型桥（M5） |
 
 ### M0 引导（1 周）
@@ -572,8 +573,8 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 `task/list` / `task/submit`（CAS：`task-not-pending` / `task-revision-conflict`，字段校验走
 `human_task_state.validate_human_task_submission`）、`hnflow` 的 `task_list`/`task_submit`、
 `/workflow tasks|submit`。
-**剩余**：面板收件箱、通知策略 `notify|wake`、跨重启持久化（依赖 M2 存储）。
-（turn 内问题卡已完成，见 §9 通道一。）
+**剩余**：通知策略 `notify|wake`；复杂表单仍是 JSON 文本而非结构化控件。
+（三条通道都已可用：turn 内问题卡、面板收件箱、会话命令与工具。）
 
 ### M4 画布与保存菜单（2–3 周）
 
