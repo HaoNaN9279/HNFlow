@@ -79,3 +79,6 @@ config.yaml.bak
 
 #opencode
 .opencode/
+
+# dsh plugin install artifacts
+/plugins/dsh/dist/

@@ -15,6 +15,7 @@
     "client.js",
     "lib/",
     "skills/",
+    "examples/",
     "cordis.patch.yml"
   ],
   "scripts": {

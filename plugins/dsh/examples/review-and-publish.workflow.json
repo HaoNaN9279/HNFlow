@@ -1,0 +1,54 @@
+{
+  "id": "review-and-publish",
+  "name": "Review and publish",
+  "version": "0.1.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "flow:start",
+      "outputs": [{ "name": "out", "type": "data" }]
+    },
+    {
+      "id": "draft",
+      "type": "ai:llm_agent",
+      "inputs": [
+        { "name": "template_prompt", "type": "data" },
+        { "name": "continue_prompt", "type": "data" }
+      ],
+      "outputs": [{ "name": "out", "type": "data" }]
+    },
+    {
+      "id": "review",
+      "type": "human:review",
+      "inputs": [{ "name": "in", "type": "data" }],
+      "outputs": [
+        { "name": "approved", "type": "data" },
+        { "name": "rejected", "type": "data" }
+      ],
+      "params": {
+        "instructions": "请检查草稿：通过则继续发布；打回请写明原因，AI 会据此重写。"
+      }
+    },
+    {
+      "id": "end",
+      "type": "flow:end",
+      "inputs": [{ "name": "in", "type": "data" }]
+    }
+  ],
+  "edges": [
+    { "source": "start", "source_port": "out", "target": "draft", "target_port": "template_prompt" },
+    { "source": "draft", "source_port": "out", "target": "review", "target_port": "in" },
+    { "source": "review", "source_port": "approved", "target": "end", "target_port": "in" },
+    { "source": "review", "source_port": "rejected", "target": "draft", "target_port": "continue_prompt" }
+  ],
+  "metadata": {
+    "canvas": {
+      "positions": {
+        "start": { "x": 0, "y": 160 },
+        "draft": { "x": 260, "y": 140 },
+        "review": { "x": 560, "y": 140 },
+        "end": { "x": 880, "y": 160 }
+      }
+    }
+  }
+}
