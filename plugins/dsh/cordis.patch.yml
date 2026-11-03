@@ -45,9 +45,17 @@
           - id: vibestack
             name: dsh-vibestack
           # Host half of this bundle: the `hnflow` tool, `/workflow`, and the
-          # workflow index section.
+          # workflow index section. The model entry routes AI nodes through the
+          # harness (`ctx.llm`), so no provider credential lives in HNFlow.
           - id: hnflow
             name: dsh-hnflow
+            config:
+              models:
+                - name: dsh-default
+                  use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel
+                  model: deepseek-flash
+                  provider: deepseek-account
+                  context_window: 128000
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:
