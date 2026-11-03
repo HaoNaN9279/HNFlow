@@ -148,6 +148,29 @@ test('tasks lists pending human work', async () => {
   assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
 })
 
+test('node set edits one node through the raw remainder', async () => {
+  /** @type {Record<string, any>[]} */
+  const calls = []
+  const { handler } = makeCommand({
+    setNodeParams: async (input) => {
+      calls.push(input)
+      return { key: input.key, assetId: 'wf-1', nodeId: input.nodeId, baseRevision: 3 }
+    },
+  })
+
+  const ok = await handler({ rawInput: 'node publish greet {"value": "a  b"}' })
+  assert.equal(ok.kind, 'success')
+  assert.match(ok.text, /updated greet in the workspace override for publish \(base r3\)/u)
+  assert.deepEqual(calls[0].params, { value: 'a  b' })
+
+  const bad = await handler({ rawInput: 'node publish greet {nope}' })
+  assert.equal(bad.kind, 'error')
+  assert.match(bad.text, /params-invalid/u)
+
+  const usage = await handler({ rawInput: 'node publish' })
+  assert.match(usage.text, /usage: \/workflow node/u)
+})
+
 test('panel returns one JSON payload the client can draw', async () => {
   const { handler } = makeCommand()
   const result = await handler({ rawInput: 'panel publish' })

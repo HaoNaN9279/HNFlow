@@ -130,6 +130,21 @@ window.__ModuleLoader__.load({
       nodeActive: { fill: "rgba(110,150,255,0.28)", stroke: "rgba(110,150,255,0.9)" },
       nodeLabel: { fontSize: "9px", fill: "currentColor", pointerEvents: "none" },
       edge: { stroke: "rgba(127,127,127,0.55)", strokeWidth: 1.2, fill: "none" },
+      editor: { display: "flex", flexDirection: "column", gap: "4px" },
+      textarea: {
+        width: "100%",
+        boxSizing: "border-box",
+        minHeight: "72px",
+        padding: "6px 8px",
+        borderRadius: "var(--dsw-radius-sm, 6px)",
+        border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
+        background: "rgba(127,127,127,0.08)",
+        color: "var(--dsw-alias-label-primary, inherit)",
+        fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)",
+        fontSize: "11px",
+        lineHeight: "16px",
+        resize: "vertical",
+      },
     };
 
     /**
@@ -220,6 +235,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Build the command that stores one node's edited params.
+     * @param {string} key - workflow alias or asset id.
+     * @param {string} nodeId - node to edit.
+     * @param {string} json - params JSON as typed.
+     * @returns {string} command line.
+     */
+    function nodeCommand(key, nodeId, json) {
+      return `/workflow node ${key} ${nodeId} ${json}`;
+    }
+
+    /**
      * The composer-strip control.
      * @param {Record<string, unknown>} props - slot props plus the inject face.
      * @returns {unknown} React element or null when the mode is not HNFlow.
@@ -232,6 +258,7 @@ window.__ModuleLoader__.load({
       const [text, setText] = react.useState("");
       const [selectedKey, setSelectedKey] = react.useState(null);
       const [nodeId, setNodeId] = react.useState(null);
+      const [draft, setDraft] = react.useState("");
       const triggerRef = react.useRef(null);
       const [anchor, setAnchor] = react.useState(null);
       const menuId = react.useRef(null);
@@ -322,6 +349,53 @@ window.__ModuleLoader__.load({
       const definition = selected === null ? null : selected.definition;
       const activeParams = activeNode === null || definition === null ? null : (definition.nodes ?? []).find((node) => String(node.id) === activeNode.id) ?? null;
 
+      /**
+       * Show one node on the canvas and load its params into the editor.
+       * @param {Record<string, any>} node - laid-out node.
+       * @returns {void}
+       */
+      const selectNode = (node) => {
+        setNodeId(node.id);
+        const entry = definition === null ? null : (definition.nodes ?? []).find((candidate) => String(candidate.id) === node.id) ?? null;
+        setDraft(JSON.stringify(entry === null || entry.params === undefined ? {} : entry.params, null, 2));
+      };
+
+      /**
+       * Store the edited params as the workspace override.
+       * @returns {Promise<void>} resolves once stored and reloaded.
+       */
+      const saveNode = async () => {
+        if (selected === null || nodeId === null) return;
+        setBusy(true);
+        try {
+          const message = await props.run(nodeCommand(selected.key, nodeId, draft));
+          await loadPanel(selected.key);
+          setText(message);
+        } catch (error) {
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Drop the workspace override for the selected workflow.
+       * @returns {Promise<void>} resolves once reloaded.
+       */
+      const resetOverride = async () => {
+        if (selected === null) return;
+        setBusy(true);
+        try {
+          const message = await props.run(`/workflow override reset ${selected.key}`);
+          await loadPanel(selected.key);
+          setText(message);
+        } catch (error) {
+          setText(String(error && error.message ? error.message : error));
+        } finally {
+          setBusy(false);
+        }
+      };
+
       const body = h(
         "div",
         {
@@ -367,7 +441,7 @@ window.__ModuleLoader__.load({
               { viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
               ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
               ...layout.nodes.map((node) =>
-                h("g", { key: node.id, onClick: () => setNodeId(node.id), style: { cursor: "pointer" } }, [
+                h("g", { key: node.id, onClick: () => selectNode(node), style: { cursor: "pointer" } }, [
                   h("rect", { key: "r", x: node.x, y: node.y, width: node.width, height: node.height, rx: 8, style: nodeId === node.id ? styles.nodeActive : styles.node }),
                   h("text", { key: "t", x: node.x + 8, y: node.y + 20, style: styles.nodeLabel }, node.id),
                   h("text", { key: "ty", x: node.x + 8, y: node.y + 36, style: styles.nodeLabel }, node.type),
@@ -376,7 +450,24 @@ window.__ModuleLoader__.load({
             ),
         activeParams === null
           ? null
-          : h("pre", { style: styles.body }, JSON.stringify(activeParams, null, 2)),
+          : h(
+              "div",
+              { style: styles.editor },
+              h("textarea", {
+                value: draft,
+                rows: 6,
+                spellCheck: false,
+                "aria-label": `params for ${activeParams.id}`,
+                style: styles.textarea,
+                onChange: (event) => setDraft(event.target.value),
+              }),
+              h(
+                "div",
+                { style: styles.tabs },
+                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void saveNode() }, "保存到工作区"),
+                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void resetOverride() }, "撤销覆盖"),
+              ),
+            ),
         text.length > 0 ? h("pre", { style: styles.body }, text) : null,
       );
 
@@ -420,7 +511,7 @@ window.__ModuleLoader__.load({
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText };
+    exports.internals = { parsePanelPayload, layoutDefinition, edgePath, readText, nodeCommand };
     return module.exports;
   },
 });

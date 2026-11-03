@@ -30,6 +30,7 @@ export const USAGE = [
   '/workflow save asset <name> — write the workspace override back to the asset (explicit, revision +1)',
   '/workflow override diff <name> — override vs asset',
   '/workflow override reset <name> — drop the workspace override',
+  '/workflow node <name> <nodeId> <json> — set one node\'s params in the workspace override',
 ].join('\n')
 
 /**
@@ -119,9 +120,10 @@ export function createWorkflowCommand(options) {
   const handler = async (invocation) => {
     const cwd = cwdOf(invocation?.agent)
     if (cwd === null) return { kind: 'error', text: 'workflow: this session has no workspace directory' }
-    const tokens = tokenize(invocation?.rawInput)
+    const rawInput = invocation?.rawInput
+    const tokens = tokenize(rawInput)
     try {
-      const text = await dispatch(tokens, cwd)
+      const text = await dispatch(tokens, cwd, rawInput)
       return { kind: 'success', text }
     } catch (error) {
       return { kind: 'error', text: `workflow: ${error?.code ?? 'error'}: ${error?.message ?? String(error)}` }
@@ -134,10 +136,11 @@ export function createWorkflowCommand(options) {
    * @param {string} cwd - workspace root.
    * @returns {Promise<string>} output text.
    */
-  const dispatch = async (tokens, cwd) => {
+  const dispatch = async (tokens, cwd, rawInput) => {
     const [head, ...rest] = tokens
     if (head === undefined || head === 'list') return formatWorkflowList(await service.listWorkflows(cwd))
     if (head === 'help') return USAGE
+    if (head === 'node') return await nodeCommand(rawInput, cwd)
 
     if (head === 'panel') return JSON.stringify(await service.panelPayload(cwd, rest[0]))
 
@@ -203,6 +206,28 @@ export function createWorkflowCommand(options) {
     if (head === 'override') return await overrideCommand(rest, cwd)
 
     throw commandError('unknown-subcommand', USAGE)
+  }
+
+  /**
+   * `/workflow node <name> <nodeId> <json>`
+   *
+   * The JSON is taken from the raw remainder so quoted values survive tokenizing.
+   * @param {string} rawInput - text after the command name.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<string>} output text.
+   */
+  const nodeCommand = async (rawInput, cwd) => {
+    const match = /^node\s+(\S+)\s+(\S+)\s+([\s\S]+)$/u.exec(String(rawInput ?? '').trim())
+    if (match === null) throw commandError('usage', 'usage: /workflow node <name> <nodeId> <json>')
+    const [, key, nodeId, json] = match
+    let params
+    try {
+      params = JSON.parse(json)
+    } catch (error) {
+      throw commandError('params-invalid', `params must be valid JSON: ${error.message}`)
+    }
+    const result = await service.setNodeParams({ cwd, key, nodeId, params })
+    return `updated ${result.nodeId} in the workspace override for ${result.key} (base r${result.baseRevision})`
   }
 
   /**

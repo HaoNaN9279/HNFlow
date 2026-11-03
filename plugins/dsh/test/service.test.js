@@ -42,6 +42,7 @@ async function makeService(calls = []) {
       if (method === 'run/start') return { runId: 'run-1', status: 'queued', startedAt: 'now' }
       if (method === 'run/status') return { runId: 'run-1', status: 'succeeded', result: { in: 'ok' }, nodes: [], error: null }
       if (method === 'run/cancel') return { runId: 'run-1', status: 'running', cancelled: true }
+      if (method === 'workflow/validate') return { valid: true, errors: [] }
       return {}
     },
     stop: () => {},
@@ -266,6 +267,46 @@ test('a broken selection yields selected:null instead of failing the panel', asy
 
   assert.equal(payload.workflows[0].missing, true)
   assert.equal(payload.selected, null)
+})
+
+test('editing one node writes an override and leaves the asset alone', async () => {
+  const calls = []
+  const { service, cwd } = await makeService(calls)
+  const stores = service.storesFor(cwd)
+  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
+  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
+
+  const result = await service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: { value: 'edited' } })
+
+  assert.equal(result.nodeId, 'greet')
+  assert.equal((await stores.assets.read(created.asset.id)).definition.nodes[1].params.value, 'asset')
+  const override = await stores.workspace.readOverride(created.asset.id)
+  assert.equal(override.definition.nodes[1].params.value, 'edited')
+  assert.equal(override.origin, 'user')
+  assert.match(override.changeLog[0].summary, /panel: node greet/u)
+  assert.equal(calls.some((call) => call.method === 'workflow/validate'), true)
+})
+
+test('a rejected edit writes nothing', async () => {
+  const { service, cwd } = await makeService()
+  const stores = service.storesFor(cwd)
+  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
+  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
+  const accepting = service.engine
+  service.engine = { ...accepting, request: async (method) => (method === 'workflow/validate' ? { valid: false, errors: ['bad params'] } : {}) }
+
+  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: { value: 'x' } }), (error) => error.code === 'definition-invalid')
+  assert.equal(await stores.workspace.readOverride(created.asset.id), null)
+})
+
+test('editing rejects an unknown node and non-object params', async () => {
+  const { service, cwd } = await makeService()
+  const stores = service.storesFor(cwd)
+  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
+  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
+
+  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'ghost', params: {} }), (error) => error.code === 'node-missing')
+  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: [] }), (error) => error.code === 'params-invalid')
 })
 
 test('dispose stops the engine and clears caches', async () => {

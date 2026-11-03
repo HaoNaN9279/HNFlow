@@ -375,6 +375,43 @@ export class HnflowService {
   }
 
   /**
+   * Replace one node's `params` and store the result as the workspace override.
+   *
+   * This is the panel's edit path: it changes exactly one node, revalidates the
+   * whole definition with the engine, and only then writes the override — the
+   * asset is never touched.
+   * @param {{cwd: string, key: string, nodeId: string, params: Record<string, any>}} input - edit.
+   * @returns {Promise<{key: string, assetId: string, nodeId: string, baseRevision: number}>} result.
+   */
+  async setNodeParams(input) {
+    if (input.params === null || typeof input.params !== 'object' || Array.isArray(input.params)) {
+      throw new WorkspaceError('params-invalid', 'params must be a JSON object', { nodeId: input.nodeId })
+    }
+    const stores = this.storesFor(input.cwd)
+    const resolved = await stores.resolver.resolve(input.key)
+    const definition = structuredClone(resolved.definition)
+    const node = (definition.nodes ?? []).find((entry) => entry.id === input.nodeId)
+    if (node === undefined) {
+      throw new WorkspaceError('node-missing', `workflow ${input.key} has no node ${input.nodeId}`, { nodeId: input.nodeId })
+    }
+    node.params = input.params
+    const validation = await this.validateDefinition(definition)
+    if (!validation.valid) {
+      throw new WorkspaceError('definition-invalid', `the edited definition is invalid: ${(validation.errors ?? []).slice(0, 3).join('; ')}`, {
+        errors: validation.errors ?? [],
+      })
+    }
+    await stores.workspace.writeOverride({
+      assetId: resolved.assetId,
+      definition,
+      baseRevision: resolved.currentRevision,
+      note: `panel: node ${input.nodeId}`,
+      origin: 'user',
+    })
+    return { key: input.key, assetId: resolved.assetId, nodeId: input.nodeId, baseRevision: resolved.currentRevision }
+  }
+
+  /**
    * The panel payload: the workspace catalogue plus one resolved definition.
    *
    * The client cannot read the asset files, so this is how it gets a definition

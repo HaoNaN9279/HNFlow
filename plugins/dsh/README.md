@@ -88,8 +88,12 @@ HNFlow 模式下，输入框左栏会出现一个 **HNFlow** 控件（`conversat
 以及「待办 / 资产」命令按钮。
 
 画布数据来自 `/workflow panel [name]` 的一次调用：位置优先用 `metadata.canvas.positions`，
-否则用编辑器同款三列网格。客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致；
-画布目前只读，编辑走 `hnflow_author` 或 `/workflow save asset`。
+否则用编辑器同款三列网格。点节点可编辑它的 `params`：
+
+- **保存到工作区** → `/workflow node <name> <nodeId> <json>`，宿主改一个节点 → 引擎校验 → 写工作区覆盖（资产不动）；
+- **撤销覆盖** → `/workflow override reset <name>`。
+
+客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致；资产只能由 `/workflow save asset` 更新。
 
 ## 数据布局
 

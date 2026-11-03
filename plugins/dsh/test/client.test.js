@@ -162,3 +162,8 @@ test('an empty definition still produces a drawable box', () => {
   assert.deepEqual(layout.nodes, [])
   assert.ok(layout.width > 0 && layout.height > 0)
 })
+
+test('the editor command carries the key, node, and raw JSON', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.nodeCommand('publish', 'greet', '{"value":"a  b"}'), '/workflow node publish greet {"value":"a  b"}')
+})
