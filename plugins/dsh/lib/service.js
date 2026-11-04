@@ -25,12 +25,6 @@ import { ResolveError, createStores } from './resolve.js'
 import { shapeMonitor as shapeMonitorRows, fileMonitor as readFileMonitor } from './state.js'
 import { WorkspaceError } from './workspace.js'
 
-/** Terminal run states. */
-export const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled'])
-
-/** Non-terminal states that still end a wait: the run needs a human now. */
-export const HOLDING_STATUSES = new Set(['waiting_human'])
-
 /** Statuses the plugin may report before the engine assigns one. */
 export const RUN_STATUSES = ['queued', 'running', 'waiting_human', 'interrupted', 'succeeded', 'failed', 'cancelled']
 
@@ -254,25 +248,6 @@ export class HnflowService {
    */
   async cancel(runId) {
     return await this.engineClient().request('run/cancel', { runId })
-  }
-
-  /**
-   * Poll until the run settles or needs a human, or the wait budget runs out.
-   *
-   * Nothing on the agent path calls this: a session starts a run and stops. It
-   * stays for callers that must block on one run (the page's own actions).
-   * @param {string} runId - engine run id.
-   * @param {number} waitMs - maximum wait.
-   * @returns {Promise<Record<string, any>>} the last observed status.
-   */
-  async waitFor(runId, waitMs) {
-    const deadline = Date.now() + Math.max(0, waitMs)
-    let status = await this.status(runId)
-    while (!TERMINAL_STATUSES.has(status.status) && !HOLDING_STATUSES.has(status.status) && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100))
-      status = await this.status(runId)
-    }
-    return status
   }
 
   /**

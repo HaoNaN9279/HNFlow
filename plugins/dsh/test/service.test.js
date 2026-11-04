@@ -293,23 +293,6 @@ test('dispose stops the engine and clears caches', async () => {
   assert.equal(service.storesByCwd.size, 0)
 })
 
-test('waitFor stops as soon as a run needs a human', async () => {
-  const calls = []
-  const { service } = await makeService(calls)
-  service.engine = {
-    stop: () => {},
-    request: async (method) => {
-      calls.push({ method })
-      return { runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-1' }] }
-    },
-  }
-
-  const status = await service.waitFor('run-1', 5000)
-
-  assert.equal(status.status, 'waiting_human')
-  assert.equal(calls.length, 1)
-})
-
 test('submitTask forwards the task id, payload, and optional revision', async () => {
   const calls = []
   const { service } = await makeService(calls)

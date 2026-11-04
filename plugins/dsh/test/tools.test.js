@@ -23,7 +23,6 @@ function fakeService(overrides = {}) {
     resolve: async (_cwd, key) => ({ key, alias: key, assetId: 'wf-1', assetName: '发布流程', definition: { nodes: [] }, source: 'ref', revision: 3, currentRevision: 4, drift: true }),
     startRun: async () => ({ runId: 'run-1', status: 'queued', startedAt: 'now', resolved: { source: 'ref', revision: 3 } }),
     status: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [{ nodeId: 'greet', status: 'succeeded' }], result: { in: 'hello' } }),
-    waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'hello' } }),
     cancel: async () => ({ runId: 'run-1', status: 'running', cancelled: true }),
     resume: async () => ({ runId: 'run-1', status: 'running' }),
     tasks: async () => ({ tasks: [] }),
@@ -60,18 +59,12 @@ test('run requires an explicit workflow name', async () => {
 })
 
 test('run starts the workflow and returns without following it', async () => {
-  let waited = false
-  const service = fakeService({
-    waitFor: async () => {
-      waited = true
-      return { runId: 'run-1', status: 'succeeded' }
-    },
-  })
-  const text = await makeTool(service).execute({ action: 'run', workflow: 'publish', input: { target: 'staging' } }, {})
+  const text = await makeTool(fakeService()).execute({ action: 'run', workflow: 'publish', input: { target: 'staging' } }, {})
 
   assert.match(text, /^started run-1 \(publish, ref r3\), status queued/u)
   assert.match(text, /continues without this session/u)
-  assert.equal(waited, false)
+  // A start result never carries a terminal status: nothing waited.
+  assert.equal(/succeeded|failed/.test(text), false)
 })
 
 test('run hands the session id to the engine for the monitor', async () => {
