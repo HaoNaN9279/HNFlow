@@ -260,13 +260,12 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Session ids a global surface may name to run a command, best first.
+     * Session ids a surface may name to run a command, best first.
      *
      * `execute(undefined, …)` reports ok without running anything, so a real id
-     * is required (plan §14.2 M6.0 result). The page is resident, so it must not
-     * depend on which session happens to be selected: the current session is
-     * tried first, then every other session, and only a session that runs the
-     * HNFlow plugin answers at all.
+     * is required (plan §14.2 M6.0 result). The window pins the first session
+     * that answered, otherwise every newly opened session would collect our
+     * command log lines; HNFlow sessions sort ahead of the rest.
      * @param {Record<string, any>} ctx - client context.
      * @returns {Promise<string[]>} candidate session ids.
      */
@@ -281,57 +280,103 @@ window.__ModuleLoader__.load({
           } catch {
             // the current-session face is optional
           }
+          /** @type {string[]} */
+          const rest = [];
+          /** @type {Set<string>} */
+          const hnflow = new Set();
           try {
             const list = scope.sessions?.list?.getSnapshot?.();
             for (const id of Array.isArray(list?.ids) ? list.ids : []) {
-              if (typeof id === "string" && !ids.includes(id)) ids.push(id);
+              if (typeof id !== "string" || ids.includes(id)) continue;
+              if ((list?.byId?.[id]?.projectionValues?.agentPreset ?? null) === PRESET_ID) hnflow.add(id);
+              rest.push(id);
             }
           } catch {
             // the session list is optional
           }
+          rest.sort((left, right) => Number(hnflow.has(right)) - Number(hnflow.has(left)));
+          ids.push(...rest);
           done(ids);
         });
-      }, 3000).then((value) => (Array.isArray(value) ? value.filter((id) => typeof id === "string") : []));
+      }, 3000).then((value) => {
+        const ids = Array.isArray(value) ? value.filter((id) => typeof id === "string") : [];
+        if (pinnedSession === null) return ids;
+        return [pinnedSession, ...ids.filter((id) => id !== pinnedSession)];
+      });
     }
 
     /**
-     * Run one `/workflow ui` op and parse its JSON answer.
+     * Whether any open session runs the HNFlow preset.
+     *
+     * The ambient watcher only runs then: workflow notifications belong to that
+     * mode, and polling from a foreign session would drop our command log lines
+     * into a session that has nothing to do with workflows.
      * @param {Record<string, any>} ctx - client context.
-     * @param {string} op - one of tree / canvas / assetCanvas / monitor.
+     * @returns {Promise<boolean>} true when an HNFlow session exists.
+     */
+    function hasHnflowSession(ctx) {
+      return firstAnswer((done) => {
+        ctx.inject(["sessions"], (scope) => {
+          try {
+            const list = scope.sessions?.list?.getSnapshot?.();
+            let found = false;
+            for (const id of Array.isArray(list?.ids) ? list.ids : []) {
+              if ((list?.byId?.[id]?.projectionValues?.agentPreset ?? null) === PRESET_ID) found = true;
+            }
+            done(found);
+          } catch {
+            done(false);
+          }
+        });
+      }, 2000).then((value) => value === true);
+    }
+
+    /**
+     * Run one `ui` op and parse its JSON answer.
+     *
+     * `/hnflow` is the resident viewer command (registered in every session by
+     * the root row); `/workflow` is the mode-scoped fallback for older hosts.
+     * Session ids are tried in order because a command only answers inside a
+     * session that has it.
+     * @param {Record<string, any>} ctx - client context.
+     * @param {string} op - one of tree / canvas / assetCanvas / monitor / wait.
      * @param {Record<string, any>} payload - op arguments.
      * @returns {Promise<Record<string, any> | null>} parsed payload (null when unreadable).
      */
     async function runUi(ctx, op, payload) {
+      const encoded = encodePayload(payload);
+      const lines = [`/hnflow ui ${op} ${encoded}`, `/workflow ui ${op} ${encoded}`];
       const ids = await commandTargets(ctx);
-      const line = `/workflow ui ${op} ${encodePayload(payload)}`;
       /** @type {unknown} */
       let lastError = null;
-      // Every session is a candidate: only a session that runs the plugin
-      // answers, and the page must not care which one is selected.
-      for (const id of [...ids, undefined]) {
-        try {
-          const result = await ctx.remote.commands.execute(id, line, []);
-          if (result && result.ok === false) {
-            const code = result.error && result.error.code ? result.error.code : "command-failed";
-            const message = result.error && result.error.message ? result.error.message : "";
-            // An old host only knows `ping`: the browser bundle and the host
-            // plugin were reloaded separately, so say what actually fixes it.
-            lastError = new Error(/unknown ui op/u.test(message) ? `hnflow: ${code}: ${message}（宿主插件仍是旧版本，请完全退出 DSH 再启动，而不是只刷新窗口）` : `hnflow: ${code}: ${message}`);
-            continue;
+      for (const line of lines) {
+        for (const id of [...ids, undefined]) {
+          try {
+            const result = await ctx.remote.commands.execute(id, line, []);
+            if (result && result.ok === false) {
+              const code = result.error && result.error.code ? result.error.code : "command-failed";
+              const message = result.error && result.error.message ? result.error.message : "";
+              // An old host only knows `ping`: the browser bundle and the host
+              // plugin were reloaded separately, so say what actually fixes it.
+              lastError = new Error(/unknown ui op/u.test(message) ? `hnflow: ${code}: ${message}（宿主插件仍是旧版本，请完全退出 DSH 再启动，而不是只刷新窗口）` : `hnflow: ${code}: ${message}`);
+              continue;
+            }
+            // `undefined` value means the host did not recognise the line at all,
+            // which is how a host without the viewer row answers `/hnflow`.
+            if (result && result.value === undefined) {
+              lastError = new Error(`hnflow: unknown command: ${line.slice(0, 60)}…`);
+              continue;
+            }
+            const inner = result && result.value && typeof result.value === "object" ? result.value.result : null;
+            if (inner !== null && typeof inner === "object" && inner.kind === "error") {
+              lastError = new Error(String(inner.text ?? "command failed"));
+              continue;
+            }
+            if (typeof id === "string") pinnedSession = id;
+            return parseJson(readText(result));
+          } catch (error) {
+            lastError = error;
           }
-          // `undefined` value means the host did not recognise the line at all.
-          if (result && result.value === undefined) {
-            lastError = new Error(`hnflow: unknown command: ${line.slice(0, 60)}…`);
-            continue;
-          }
-          const inner = result && result.value && typeof result.value === "object" ? result.value.result : null;
-          if (inner !== null && typeof inner === "object" && inner.kind === "error") {
-            lastError = new Error(String(inner.text ?? "command failed"));
-            continue;
-          }
-          return parseJson(readText(result));
-        } catch (error) {
-          lastError = error;
         }
       }
       throw lastError ?? new Error("hnflow: 没有可用的会话运行命令；打开一个 HNFlow 模式的会话后重试");
@@ -738,6 +783,15 @@ window.__ModuleLoader__.load({
     /** Task ids already announced; module-level so a remount cannot re-notify. */
     const announced = new Set();
 
+    /**
+     * The session that answered first.
+     *
+     * Every command writes a `command/run`/`command/done` pair into the session
+     * it names, so the window keeps using one session instead of following the
+     * user into whichever session they open next.
+     */
+    let pinnedSession = null;
+
     /** The right-sidebar navigation face, once the profile exposes it. */
     let rightService = null;
 
@@ -923,6 +977,13 @@ window.__ModuleLoader__.load({
         let live = true;
         let failures = 0;
         const watch = async () => {
+          // Notifications belong to the HNFlow mode: with no such session open
+          // the watcher stays off, so opening any other session never collects
+          // our command log lines.
+          if (!(await hasHnflowSession(props?.ctx))) {
+            if (live) await new Promise((resolve) => setTimeout(resolve, 30000));
+            return;
+          }
           while (live) {
             let healthy = false;
             try {

@@ -282,6 +282,39 @@ export class HnflowService {
   }
 
   /**
+   * Resume every run the previous process left unfinished.
+   *
+   * A run recorded as `running` is marked `interrupted` when the engine boots
+   * (the checkpoint is intact, nothing is streaming), so a restart used to leave
+   * it stopped until someone typed `/workflow resume`. This walks those runs and
+   * continues them; a run waiting on a human is left alone on purpose.
+   * @param {{limit?: number}} [options] - how many runs to continue.
+   * @returns {Promise<{resumed: string[], failed: {runId: string, message: string}[]}>} outcome.
+   */
+  async resumeInterrupted(options = {}) {
+    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 5
+    /** @type {string[]} */
+    const resumed = []
+    /** @type {{runId: string, message: string}[]} */
+    const failed = []
+    const runs = await this.listRuns()
+    const candidates = runs
+      .filter((run) => run.status === 'running' || run.status === 'interrupted')
+      .map((run) => String(run.runId ?? ''))
+      .filter((runId) => runId.length > 0)
+      .slice(0, limit)
+    for (const runId of candidates) {
+      try {
+        await this.resume(runId)
+        resumed.push(runId)
+      } catch (error) {
+        failed.push({ runId, message: String(error?.message ?? error) })
+      }
+    }
+    return { resumed, failed }
+  }
+
+  /**
    * Pending human tasks of a run.
    * @param {string} runId - engine run id.
    * @returns {Promise<Record<string, any>>} `{tasks: [...]}`.

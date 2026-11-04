@@ -53,6 +53,40 @@ async function makeService(calls = []) {
   return { service, cwd }
 }
 
+test('an engine restart resumes the runs it interrupted', async () => {
+  /** @type {string[]} */
+  const resumed = []
+  const service = new HnflowService({
+    config: {},
+    engine: {
+      ensureStarted: async () => ({ protocolVersion: 1 }),
+      request: async (method, params) => {
+        if (method === 'run/list') {
+          return {
+            runs: [
+              { runId: 'run-a', status: 'interrupted' },
+              { runId: 'run-b', status: 'waiting_human' },
+              { runId: 'run-c', status: 'succeeded' },
+            ],
+          }
+        }
+        if (method === 'run/resume') {
+          resumed.push(params.runId)
+          return { runId: params.runId, status: 'running' }
+        }
+        return {}
+      },
+    },
+  })
+
+  const outcome = await service.resumeInterrupted()
+
+  // A run waiting on a human is not ours to restart.
+  assert.deepEqual(resumed, ['run-a'])
+  assert.deepEqual(outcome.resumed, ['run-a'])
+  assert.deepEqual(outcome.failed, [])
+})
+
 test('a run freezes the resolved definition and its provenance', async () => {
   const calls = []
   const { service, cwd } = await makeService(calls)

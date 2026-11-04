@@ -74,6 +74,25 @@ export function apply(ctx, rawConfig) {
   /** @type {Map<string, string>} */
   const indexCache = new Map()
 
+  // Resume what a previous process left half-done: an engine restart marks its
+  // runs `interrupted` even though the checkpoints are intact. Deferred so the
+  // session list is already usable when the engine starts.
+  if (service.config.autoResume) {
+    const timer = setTimeout(() => {
+      void service
+        .resumeInterrupted()
+        .then((outcome) => {
+          if (outcome.resumed.length > 0) warn('hnflow: resumed %d interrupted run(s)', outcome.resumed.length)
+          for (const failure of outcome.failed) warn('hnflow: cannot resume %s: %s', failure.runId, failure.message)
+        })
+        .catch((error) => warn('hnflow: auto-resume failed: %o', error))
+    }, 4000)
+    ctx.effect(() => () => {
+      clearTimeout(timer)
+      return undefined
+    }, 'hnflow: auto-resume timer')
+  }
+
   /**
    * Ask the user about one waiting human task and build its submission payload.
    *

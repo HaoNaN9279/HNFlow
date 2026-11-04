@@ -132,9 +132,12 @@ test('the tool row stays unregistered when dsh-tools is unavailable', async () =
   )
 })
 
-test('dispose runs through the registered effect', async () => {
+test('dispose and the auto-resume timer run through registered effects', async () => {
   const plugin = await makePlugin()
-  assert.equal(plugin.effects.length, 1)
-  assert.equal(typeof plugin.effects[0], 'function')
-  assert.equal(plugin.effects[0](), undefined)
+  // The auto-resume timer is cancelled on dispose, and the engine is stopped.
+  assert.equal(plugin.effects.length, 2)
+  for (const effect of plugin.effects) {
+    assert.equal(typeof effect, 'function')
+    assert.equal(effect(), undefined)
+  }
 })
