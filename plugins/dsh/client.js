@@ -75,17 +75,31 @@ window.__ModuleLoader__.load({
     };
 
     /**
-     * Read the model-facing text out of a command result.
+     * Read the text out of a command result.
+     *
+     * `remote.commands.execute` answers `{ok, value: {commandId, result}}`, and
+     * the handler's own `{kind, text}` sits in `value.result`. Every earlier
+     * version read the outer object, so every payload looked like
+     * `{"result":{…}}` and nothing could be parsed.
      * @param {unknown} result - `remote.commands.execute` result.
      * @returns {string} display text.
      */
     function readText(result) {
       if (result === null || typeof result !== "object") return String(result ?? "");
+      const envelope = result.value;
+      if (envelope !== null && typeof envelope === "object" && "result" in envelope) {
+        const inner = envelope.result;
+        if (inner !== null && typeof inner === "object") {
+          if (typeof inner.text === "string") return inner.text;
+          return JSON.stringify(inner);
+        }
+        if (typeof inner === "string") return inner;
+      }
       for (const key of ["text", "output", "message"]) {
         const value = result[key];
         if (typeof value === "string" && value.length > 0) return value;
       }
-      if (result.value !== undefined) return typeof result.value === "string" ? result.value : JSON.stringify(result.value);
+      if (envelope !== undefined) return typeof envelope === "string" ? envelope : JSON.stringify(envelope);
       return JSON.stringify(result);
     }
 
@@ -290,6 +304,16 @@ window.__ModuleLoader__.load({
             // An old host only knows `ping`: the browser bundle and the host
             // plugin were reloaded separately, so say what actually fixes it.
             lastError = new Error(/unknown ui op/u.test(message) ? `hnflow: ${code}: ${message}（宿主插件仍是旧版本，请完全退出 DSH 再启动，而不是只刷新窗口）` : `hnflow: ${code}: ${message}`);
+            continue;
+          }
+          // `undefined` value means the host did not recognise the line at all.
+          if (result && result.value === undefined) {
+            lastError = new Error(`hnflow: unknown command: ${line.slice(0, 60)}…`);
+            continue;
+          }
+          const inner = result && result.value && typeof result.value === "object" ? result.value.result : null;
+          if (inner !== null && typeof inner === "object" && inner.kind === "error") {
+            lastError = new Error(String(inner.text ?? "command failed"));
             continue;
           }
           return parseJson(readText(result));
@@ -890,20 +914,30 @@ window.__ModuleLoader__.load({
         let failures = 0;
         const watch = async () => {
           while (live) {
+            let healthy = false;
             try {
               const payload = await runUi("wait", { known: [...announced], timeoutMs: 25000 });
               if (!live) return;
-              failures = 0;
-              if (payload === null) continue;
-              const outcome = freshTasks(announced, payload.tasks);
-              for (const id of outcome.seen) announced.add(id);
-              if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
+              if (payload !== null && Array.isArray(payload.tasks)) {
+                healthy = true;
+                failures = 0;
+                const outcome = freshTasks(announced, payload.tasks);
+                for (const id of outcome.seen) announced.add(id);
+                if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
+              }
             } catch {
-              if (!live) return;
+              // counted below
+            }
+            if (!live) return;
+            if (!healthy) {
               failures += 1;
               if (failures >= 3) return;
               await new Promise((resolve) => setTimeout(resolve, 2000));
+              continue;
             }
+            // Even a long poll that returned at once gets a gap, so a confused
+            // payload can never turn this into a command flood.
+            await new Promise((resolve) => setTimeout(resolve, 300));
           }
         };
         void watch();

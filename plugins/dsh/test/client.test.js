@@ -131,9 +131,10 @@ test('the page inject face runs `/workflow ui` through remote.commands', async (
   /** @type {unknown[][]} */
   const calls = []
   ctx.inject = (deps, callback) => callback({ uiSession: { adapter: { current: { getSnapshot: () => ({ key: 'session-9' }) } } } })
+  // The real envelope is {ok, value: {commandId, result: {kind, text}}}.
   ctx.remote.commands.execute = async (...args) => {
     calls.push(args)
-    return { ok: true, text: '{"runs":[],"tasks":[]}' }
+    return { ok: true, value: { commandId: 'cmd-1', result: { kind: 'success', text: '{"runs":[],"tasks":[]}' } } }
   }
 
   const face = entries[1].entry.inject()
@@ -144,6 +145,15 @@ test('the page inject face runs `/workflow ui` through remote.commands', async (
   const [sessionId, line] = calls[0]
   assert.equal(sessionId, 'session-9')
   assert.match(line, /^\/workflow ui monitor /u)
+})
+
+test('a handler error nested in the envelope is surfaced', async () => {
+  const { entries, ctx } = applyBundle()
+  ctx.inject = (deps, callback) => callback({})
+  ctx.remote.commands.execute = async () => ({ ok: true, value: { commandId: 'cmd-2', result: { kind: 'error', text: 'workflow: ui-op: unknown ui op: wait' } } })
+
+  const face = entries[1].entry.inject()
+  await assert.rejects(face.runUi('wait', {}), (error) => /unknown ui op: wait/u.test(error.message))
 })
 
 test('a failing ui command surfaces its coded error', async () => {
