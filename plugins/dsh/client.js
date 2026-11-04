@@ -47,12 +47,13 @@ window.__ModuleLoader__.load({
     const styles = {
       page: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
       tabbar: { display: "flex", alignItems: "center", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
-      // The active tab is filled, tinted and underlined in the same colour, so a
-      // theme without the hover token still shows exactly one selected tab.
-      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
-      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", color: "var(--dsw-alias-label-primary, inherit)", fontWeight: 600 },
+      // Unselected is exactly the untouched look a tab has before any click:
+      // no fill, no border, no weight — only dimmed. Selected keeps the accent
+      // fill + underline, so one tab is unambiguous in every theme.
+      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
+      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", color: "var(--dsw-alias-label-primary, inherit)", opacity: 1, fontWeight: 600 },
       body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
-      tree: { width: "280px", flex: "0 0 280px", minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
+      tree: { flex: "0 0 clamp(180px, 42%, 280px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
       group: { margin: "0 0 6px" },
       groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", border: "none", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
@@ -708,8 +709,10 @@ window.__ModuleLoader__.load({
         id: RIGHT_KIND,
         kind: RIGHT_KIND,
         priority: "extension",
-        title: () => "HNFlow 任务",
-        guide: [{ id: "monitor", kind: RIGHT_KIND, title: () => "HNFlow 任务", description: () => "执行状态与需要处理的任务" }],
+        title: () => "HNFlow",
+        // The start page lists guide entries; this one opens the same three-tab
+        // page the rail entry opens, just inside the right sidebar.
+        guide: [{ id: "page", kind: RIGHT_KIND, title: () => "HNFlow", description: () => "工作区 / 通用工作流 / 任务监视" }],
       };
     }
 
@@ -804,39 +807,6 @@ window.__ModuleLoader__.load({
               h(CanvasStage, { canvas }),
             ),
       );
-    }
-
-    /**
-     * The right-sidebar monitor page.
-     * @param {{runUi: Function}} props - injected face.
-     * @returns {unknown} element.
-     */
-    function HnflowMonitorPane(props) {
-      const runUi = props?.runUi;
-      const [monitor, setMonitor] = react.useState(null);
-      const [error, setError] = react.useState("");
-
-      /**
-       * Reload the board.
-       * @returns {Promise<void>} resolves once rendered.
-       */
-      const load = async () => {
-        try {
-          const payload = await runUi("monitor", {});
-          setMonitor(payload);
-          setError(payload === null ? "monitor payload unreadable" : "");
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        }
-      };
-
-      react.useEffect(() => {
-        void load();
-        const timer = setInterval(() => void load(), POLL_MS);
-        return () => clearInterval(timer);
-      }, []);
-
-      return h("div", { style: styles.page }, error.length > 0 ? h("div", { style: styles.errorBox }, error) : null, h(TaskBoard, { monitor }));
     }
 
     /**
@@ -973,7 +943,9 @@ window.__ModuleLoader__.load({
           if (typeof scope.effect === "function") scope.effect(() => tabs.register(rightTabDefinition()), "hnflow: right tab type");
           else tabs.register(rightTabDefinition());
           rightService = scope.sidebarRight ?? null;
-          registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowMonitorPane));
+          // Same page as the rail entry, so the right sidebar shows the same
+          // three tabs instead of a second, monitor-only surface.
+          registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowPage));
           registerSlot(ctx, "sidebar.right.pane.tab.title", (slots) => slots.register({ name: "sidebar.right.pane.tab.title", key: RIGHT_KIND }, () => h("span", null, "HNFlow")));
         });
       } catch {

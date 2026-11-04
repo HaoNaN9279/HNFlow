@@ -268,12 +268,13 @@ test('the right-bar tab type has the shape the registry validates', () => {
   assert.equal(definition.id, definition.kind)
   assert.equal(definition.priority, 'extension')
   assert.equal(typeof definition.title, 'function')
-  assert.equal(definition.title(), 'HNFlow 任务')
-  // The start page lists `guide` entries; each one opens this type's kind.
+  assert.equal(definition.title(), 'HNFlow')
+  // The start page lists `guide` entries; each one opens this type's kind, so
+  // the entry opens the same three-tab page the rail entry opens.
   assert.equal(Array.isArray(definition.guide), true)
   assert.equal(definition.guide.length, 1)
   assert.equal(definition.guide[0].kind, definition.kind)
-  assert.equal(definition.guide[0].title(), 'HNFlow 任务')
+  assert.equal(definition.guide[0].title(), 'HNFlow')
   assert.equal(typeof definition.guide[0].description(), 'string')
 })
 
