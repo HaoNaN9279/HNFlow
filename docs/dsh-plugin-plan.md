@@ -797,6 +797,69 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 总计约 5 周（按交付顺序：M6.0 → M6.1 → M6.3 → M6.4 → M6.5 → M6.2 收尾，M6.2 与 M6.3 可并行）。
 
+### M7 常驻页面（规划，2026-11-04）
+
+**问题**：页面数据取自 `/workflow ui`，而这条命令只注册在 **HNFlow 模式**的会话里
+（插件行挂在 `preset-hnflow.plugins` 下）。于是"选中哪个会话"决定了页面有没有数据，
+与"插件存在即存在"的预期不符。
+
+**约束**：不能把 `hnflow` 工具暴露给所有模式（R4：VibeStack 模式只用能力组）；
+也不能让两个插件实例各起一个引擎（同一 `checkpoints.sqlite` / `runs.json` 会互相踩）。
+
+#### 方案对比
+
+| 方案 | 做法 | 代价 |
+| --- | --- | --- |
+| **A（推荐）** | 新增**全局 viewer 行**：只注册 `/hnflow ui …`，只读；`monitor`/`wait` 直接读 `state/runs.json` + `state/tasks.json`，**不启动引擎** | 监视数据来自文件最后一次落盘（引擎在 start/status/任务变化时都会 `_persist`），不是实时事件订阅 |
+| B | 全局行同样走引擎，两个实例共享模块级 engine 单例 | 依赖"同进程同模块实例"；页面首次打开要等引擎启动 |
+| C | 整个插件改全局行（命令 + 工具都全局） | 最简单，但工具进入所有模式，破坏 R4 |
+
+**推荐 A**：页面是只读视图，读文件足够；不碰引擎就不会和模式内实例抢状态。
+
+#### M7.1 宿主（0.5–1 天）
+
+- `config.role = 'all' | 'viewer'`（默认 `all`）；
+- 新 `lib/state.js`：读 `state/runs.json` / `state/tasks.json`，产出与 `monitor` 相同的 payload；
+  把现有 `service.monitor()` 的整形抽成纯函数 `shapeMonitor(runs, tasks)`，两处共用、单测覆盖；
+- `commands.js` 加 `/hnflow <op> <b64>`：`viewer` 角色只放行 `ui` 的
+  `tree / canvas / assetCanvas / monitor / wait`，其它一律 `viewer-readonly`；
+- `cordis.patch.yml`：`hnflow-ui` 行改 `host: true` + `config: { role: viewer }`
+  （同包第二个实例，不注册工具）；
+- 测试：整形纯函数、文件缺失/损坏容错、viewer 白名单、`/hnflow` 注册形状。
+
+#### M7.2 客户端（0.5 天）
+
+- 页面与右栏改调 `/hnflow ui …`；保留"逐会话尝试"作为旧宿主兜底；
+- 错误区分：`/hnflow` 不存在（宿主未更新）与「没有会话可执行命令」。
+
+#### M7.3 验收（0.5 天）
+
+- 全新启动、**不打开任何 HNFlow 会话**：左栏页面有工作区/资产；任务监视显示
+  `state/` 里那条 `waiting_human`；新待办出现时右下角弹一次；
+- 打开 HNFlow 会话：`/workflow run smoke` 照常；
+- VibeStack 模式会话里 `/workflow` 与 `hnflow` 工具**都不出现**（R4 守住）。
+
+#### 风险与回退
+
+| 风险 | 缓解 |
+| --- | --- |
+| 文件格式与引擎实现耦合 | 单测用引擎的 `EngineStore` 写、`lib/state.js` 读，格式一变立刻失败 |
+| 文件比内存状态旧 | 引擎在 start/status/任务变化时 `_persist`；验收覆盖"等待人工"这一关键状态 |
+| 第二个实例的副作用 | viewer 不注册工具、不起引擎、不写文件 |
+| 回退 | `hnflow-ui` 行改回 `host: false`，客户端退回 `/workflow ui` |
+
+**已落地（2026-11-04，0.2.13）**
+
+| 项 | 结果 |
+| --- | --- |
+| 全局 viewer 行 | `hnflow-ui` 行 `role: viewer`：只注册 `/hnflow ui …`，不注册工具 |
+| 只读命令 | `createViewerCommand` + `VIEWER_OPS`（`ping/tree/canvas/assetCanvas/monitor/wait`），`run` 等拒绝 |
+| 监视数据 | `lib/state.js` 读 `state/runs.json` + `state/tasks.json`；`shapeMonitor` 与引擎路径共用（兼容 camelCase / snake_case 两种记录） |
+| 状态目录 | 顺带修掉一个真问题：引擎此前读不到 `DSH_HOME`，状态落到了 `<cwd>/.hnflow-engine`；现在显式传 `DSH_HOME` + `HNFLOW_ENGINE_STATE`，与页面读的是同一个目录 |
+| 客户端 | 先调 `/hnflow ui`，旧宿主回退 `/workflow ui`；会话 id 仍然逐个尝试 |
+| 测试 | 插件 151（新增 5 条：两种记录整形一致、缺文件/半写文件容错、状态目录解析、viewer 只放行只读 op） |
+
+
 ---
 
 ## 15. 测试策略

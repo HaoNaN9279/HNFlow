@@ -149,8 +149,12 @@ start → greet(data:assign) → confirm(human:task) → result(data:assign) →
 任务监视就是该页面的第三个页签。面板没打开时，**第一次出现**的待办会在右下角弹一次通知
 （同一任务只弹一次），点「查看」打开右栏 HNFlow 页。
 
-数据一律经 `/workflow ui <op> <base64url(JSON)>` 取回（`tree` / `canvas` / `assetCanvas` / `monitor`），
-客户端不读文件、不连引擎，所以页面能做的事和手敲命令一致。
+页面是**常驻**的：数据来自全局命令 `/hnflow ui <op> <base64url(JSON)>`
+（`tree` / `canvas` / `assetCanvas` / `monitor` / `wait`），与"当前选中哪个会话"无关，
+也不需要打开任何 HNFlow 模式的会话。该命令只读、不启动引擎——它直接读引擎落盘的
+`$DSH_HOME/hnflow/state/{runs,tasks}.json`，因此不会和模式内的引擎争用状态。
+客户端的取数顺序是 `/hnflow` → 旧宿主回退 `/workflow`。
+
 画布位置优先用 `metadata.canvas.positions`，否则用编辑器同款三列网格。
 
 参数编辑、保存回资产等写操作仍走命令：`/workflow node <name> <nodeId> <json>`（写工作区覆盖）、

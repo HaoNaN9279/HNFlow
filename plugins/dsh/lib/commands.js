@@ -130,6 +130,41 @@ export function parseInputs(tokens) {
 }
 
 /**
+ * Ops the resident viewer row may run: data for the page, nothing else.
+ *
+ * The viewer lives outside the HNFlow preset, so it must not become a second
+ * entry point for running workflows.
+ */
+export const VIEWER_OPS = new Set(['ping', 'tree', 'canvas', 'assetCanvas', 'monitor', 'wait'])
+
+/**
+ * Build the `/hnflow` registration used by the resident viewer row.
+ *
+ * It answers only `ui <op>` and reads the state files instead of starting an
+ * engine, so the page works with no HNFlow session open and without competing
+ * for the checkpoint database.
+ * @param {{service: import('./service.js').HnflowService}} options - wiring.
+ * @returns {{name: string, description: string, input: {hint: string}, handler: Function}} command definition.
+ */
+export function createViewerCommand(options) {
+  const { service } = options
+  return {
+    name: 'hnflow',
+    description: 'HNFlow page data (read-only; available in every session)',
+    input: { hint: 'ui <op> <base64url payload>' },
+    handler: async (invocation) => {
+      const tokens = tokenize(invocation?.rawInput)
+      if (tokens[0] !== 'ui') return { kind: 'error', text: 'usage: /hnflow ui <op> <base64url payload>' }
+      try {
+        return { kind: 'success', text: await dispatchUi(tokens.slice(1), { service, ops: VIEWER_OPS, fromFiles: true, label: '/hnflow ui' }) }
+      } catch (error) {
+        return { kind: 'error', text: `hnflow: ${error?.code ?? 'error'}: ${error?.message ?? String(error)}` }
+      }
+    },
+  }
+}
+
+/**
  * Compare the workspace override against the asset's current revision.
  * @param {Record<string, any>} resolved - resolution result for the override path is not used here.
  * @param {Record<string, any>} override - override document.

@@ -14,7 +14,7 @@
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
-import { USAGE, createWorkflowCommand } from './lib/commands.js'
+import { USAGE, createViewerCommand, createWorkflowCommand } from './lib/commands.js'
 import { createWorkflowAuthorTool } from './lib/author.js'
 import { questionsForTask } from './lib/questions.js'
 import { HnflowService } from './lib/service.js'
@@ -56,6 +56,21 @@ export function apply(ctx, rawConfig) {
   // The root row exists only so the client half is always available; it owns no
   // host behaviour and must not touch any session.
   if (service.config.host === false) return
+  // The resident viewer row: page data for every session, no tools, no engine.
+  if (service.config.role === 'viewer') {
+    ctx.inject(['commands'], (scope) => {
+      try {
+        scope.commands.register(createViewerCommand({ service }))
+      } catch (error) {
+        warn('hnflow: cannot register /hnflow: %o', error)
+      }
+    })
+    ctx.effect(() => () => {
+      service.dispose()
+      return undefined
+    }, 'hnflow: stop the viewer row')
+    return
+  }
   /** @type {Map<string, string>} */
   const indexCache = new Map()
 

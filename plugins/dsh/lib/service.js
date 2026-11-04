@@ -22,6 +22,7 @@ import { EngineError, createEngineClient } from './engine.js'
 import { engineCwd, dshHome, libraryRoot, resolvePython } from './paths.js'
 import { hashOf } from './json.js'
 import { ResolveError, createStores } from './resolve.js'
+import { shapeMonitor as shapeMonitorRows, fileMonitor as readFileMonitor } from './state.js'
 import { WorkspaceError } from './workspace.js'
 
 /** Terminal run states. */
@@ -98,13 +99,17 @@ export class HnflowService {
         searched: engineCwd(this.config),
       })
     }
+    // The engine resolves its state directory from `HNFLOW_ENGINE_STATE` or
+    // `DSH_HOME`; without either it falls back to `<cwd>/.hnflow-engine`, which
+    // is not where this plugin (or the page) looks. Pin it explicitly.
+    const stateDir = this.config.stateDir.length > 0 ? this.config.stateDir : path.join(dshHome(), 'hnflow', 'state')
     this.engine = createEngineClient({
       python,
       module: this.config.engineModule,
       cwd: engineCwd(this.config),
       requestTimeoutMs: this.config.requestTimeoutMs,
       startupTimeoutMs: this.config.startupTimeoutMs,
-      env: this.config.stateDir.length > 0 ? { HNFLOW_ENGINE_STATE: this.config.stateDir } : {},
+      env: { DSH_HOME: dshHome(), HNFLOW_ENGINE_STATE: stateDir },
       models: this.config.models,
       logger: this.logger,
     })
@@ -316,37 +321,18 @@ export class HnflowService {
    */
   async monitor() {
     const [runs, tasks] = await Promise.all([this.listRuns(), this.listTasks()])
-    /** @type {Map<string, Record<string, any>>} */
-    const byRun = new Map(runs.map((run) => [String(run.runId), run]))
-    const shapedRuns = runs.map((run) => ({
-      runId: run.runId,
-      status: run.status,
-      startedAt: run.startedAt ?? null,
-      endedAt: run.endedAt ?? null,
-      updatedAt: run.updatedAt ?? run.endedAt ?? run.startedAt ?? null,
-      workspace: run.metadata?.workspace ?? null,
-      sessionId: run.metadata?.sessionId ?? null,
-      workflow: run.metadata?.workflowAlias || run.metadata?.workflowAssetId || null,
-      assetId: run.metadata?.workflowAssetId ?? null,
-      error: run.error ?? null,
-      node: Array.isArray(run.nodes) && run.nodes.length > 0 ? run.nodes.at(-1)?.nodeId ?? null : null,
-    }))
-    const shapedTasks = tasks.map((task) => {
-      const run = byRun.get(String(task.runId))
-      return {
-        taskId: task.taskId,
-        runId: task.runId,
-        nodeId: task.nodeId,
-        kind: task.kind,
-        description: task.description ?? '',
-        createdAt: task.createdAt ?? null,
-        updatedAt: task.updatedAt ?? null,
-        workspace: run?.metadata?.workspace ?? null,
-        sessionId: run?.metadata?.sessionId ?? null,
-        workflow: run?.metadata?.workflowAlias || run?.metadata?.workflowAssetId || null,
-      }
-    })
-    return { runs: shapedRuns, tasks: shapedTasks }
+    return shapeMonitorRows(runs, tasks)
+  }
+
+  /**
+   * The monitor payload read from the state files instead of the engine.
+   *
+   * The viewer row uses this: it must never start an engine, because a second
+   * engine process would share the same checkpoint database and run records.
+   * @returns {Promise<{runs: Record<string, any>[], tasks: Record<string, any>[]}>} monitor payload.
+   */
+  async fileMonitor() {
+    return await readFileMonitor(this.config)
   }
 
   /**

@@ -126,7 +126,7 @@ test('the bundle no longer registers a composer entry', () => {
   assert.equal(injected.includes('conversation.input.left'), false)
 })
 
-test('the page inject face runs `/workflow ui` through remote.commands', async () => {
+test('the page inject face tries the resident `/hnflow` command first', async () => {
   const { entries, ctx } = applyBundle()
   /** @type {unknown[][]} */
   const calls = []
@@ -144,7 +144,26 @@ test('the page inject face runs `/workflow ui` through remote.commands', async (
   assert.equal(calls.length, 1)
   const [sessionId, line] = calls[0]
   assert.equal(sessionId, 'session-9')
-  assert.match(line, /^\/workflow ui monitor /u)
+  assert.match(line, /^\/hnflow ui monitor /u)
+})
+
+test('an older host without `/hnflow` falls back to `/workflow ui`', async () => {
+  const { entries, ctx } = applyBundle()
+  /** @type {string[]} */
+  const lines = []
+  ctx.inject = (deps, callback) => callback({ uiSession: { adapter: { current: { getSnapshot: () => ({ key: 'session-1' }) } } } })
+  ctx.remote.commands.execute = async (id, line) => {
+    lines.push(line)
+    if (line.startsWith('/hnflow ui')) return { ok: true, value: undefined }
+    return { ok: true, value: { commandId: 'c', result: { kind: 'success', text: '{"runs":[{"runId":"r1"}],"tasks":[]}' } } }
+  }
+
+  const face = entries[1].entry.inject()
+  const answer = await face.runUi('monitor', {})
+
+  assert.deepEqual(answer, { runs: [{ runId: 'r1' }], tasks: [] })
+  assert.equal(lines[0].startsWith('/hnflow ui'), true)
+  assert.equal(lines.some((line) => line.startsWith('/workflow ui')), true)
 })
 
 test('a handler error nested in the envelope is surfaced', async () => {

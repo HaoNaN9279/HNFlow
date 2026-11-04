@@ -28,6 +28,12 @@ export const DEFAULT_CONFIG = Object.freeze({
   /** Number of workflow names injected into the system prompt. */
   maxIndexEntries: 20,
   /**
+   * `all` registers tools and the `/workflow` family (the mode row);
+   * `viewer` registers only `/hnflow ui` and reads state files (the global row
+   * that keeps the page alive without any HNFlow session).
+   */
+  role: 'all',
+  /**
    * Model catalog the engine installs for AI nodes (HNFlow `models[]` entries:
    * `name`, `use`, `model`, `api_base`, `api_key`, …). Empty means the engine
    * falls back to its own `config.yaml`, and AI nodes fail loud when that is empty too.

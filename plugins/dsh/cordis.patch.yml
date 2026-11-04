@@ -19,13 +19,17 @@
 #   tool is called `hnflow`.
 
 - insert:
-    # Client half of the plugin: the HNFlow control in the composer strip. It
-    # renders only inside the `hnflow` preset, so this root row is inert
-    # elsewhere and exists purely so the browser bundle is loaded once.
+    # Root row: the browser bundle plus the resident viewer command.
+    #
+    # It is a second host instance of the same package with `role: viewer`, so
+    # `/hnflow ui …` exists in EVERY session and the page never depends on an
+    # HNFlow-mode session being open. The viewer registers no tools and starts
+    # no engine: it reads the engine's state files, which keeps it away from the
+    # checkpoint database the mode row owns.
     - id: hnflow-ui
       name: dsh-hnflow
       config:
-        host: false
+        role: viewer
 
     - id: preset-hnflow
       name: '@deepseek-ai/dsh-agent-preset'
