@@ -966,7 +966,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ## 15. R16：会话只负责启动（覆盖 §7.2 / §7.3 / §9 / §11.1 的旧描述）
 
-四条规则，均已落地（`dsh-hnflow` 0.2.15）：
+四条规则，均已落地（`dsh-hnflow` 0.2.15+）：
 
 1. **会话里触发工作流只有一条路径**：`/workflow <name> <提示词>`。
    命令不执行工作流，它解析引用、把
@@ -989,7 +989,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
    引擎重启把残留 `running` 标成 `interrupted` 之后，状态就停在那里，要续跑必须显式
    `hnflow(action="resume")`。
 
-| 旧（≤0.2.14） | 新（0.2.15） |
+| 旧（≤0.2.14） | 新（0.2.15+） |
 | --- | --- |
 | `/workflow run <name>` 宿主直跑并等待 | 删除；页面直跑（待做） |
 | `/workflow submit <taskId>` | 删除；页面表单（待做）或 AI `task_submit` |
