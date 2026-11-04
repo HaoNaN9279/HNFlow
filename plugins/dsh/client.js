@@ -260,27 +260,38 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The session id a global surface must name to run a command.
+     * Session ids a global surface may name to run a command, best first.
      *
      * `execute(undefined, …)` reports ok without running anything, so a real id
-     * is required (plan §14.2 M6.0 result).
+     * is required (plan §14.2 M6.0 result). The page is resident, so it must not
+     * depend on which session happens to be selected: the current session is
+     * tried first, then every other session, and only a session that runs the
+     * HNFlow plugin answers at all.
      * @param {Record<string, any>} ctx - client context.
-     * @returns {Promise<string | null>} current session id, or the first listed one.
+     * @returns {Promise<string[]>} candidate session ids.
      */
-    function commandTarget(ctx) {
+    function commandTargets(ctx) {
       return firstAnswer((done) => {
         ctx.inject(["uiSession", "sessions"], (scope) => {
+          /** @type {string[]} */
+          const ids = [];
           try {
             const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
-            if (current && typeof current.key === "string") return done(current.key);
-            const list = scope.sessions?.list?.getSnapshot?.();
-            if (Array.isArray(list?.ids) && list.ids.length > 0) return done(list.ids[0]);
+            if (current && typeof current.key === "string") ids.push(current.key);
           } catch {
-            // fall through to "no session"
+            // the current-session face is optional
           }
-          done(null);
+          try {
+            const list = scope.sessions?.list?.getSnapshot?.();
+            for (const id of Array.isArray(list?.ids) ? list.ids : []) {
+              if (typeof id === "string" && !ids.includes(id)) ids.push(id);
+            }
+          } catch {
+            // the session list is optional
+          }
+          done(ids);
         });
-      }).then((value) => (typeof value === "string" ? value : null));
+      }, 3000).then((value) => (Array.isArray(value) ? value.filter((id) => typeof id === "string") : []));
     }
 
     /**
@@ -291,11 +302,13 @@ window.__ModuleLoader__.load({
      * @returns {Promise<Record<string, any> | null>} parsed payload (null when unreadable).
      */
     async function runUi(ctx, op, payload) {
-      const sessionId = await commandTarget(ctx);
+      const ids = await commandTargets(ctx);
       const line = `/workflow ui ${op} ${encodePayload(payload)}`;
       /** @type {unknown} */
       let lastError = null;
-      for (const id of sessionId === null ? [undefined] : [sessionId, undefined]) {
+      // Every session is a candidate: only a session that runs the plugin
+      // answers, and the page must not care which one is selected.
+      for (const id of [...ids, undefined]) {
         try {
           const result = await ctx.remote.commands.execute(id, line, []);
           if (result && result.ok === false) {
@@ -321,7 +334,7 @@ window.__ModuleLoader__.load({
           lastError = error;
         }
       }
-      throw lastError ?? new Error("hnflow: no session available to run a command");
+      throw lastError ?? new Error("hnflow: 没有可用的会话运行命令；打开一个 HNFlow 模式的会话后重试");
     }
 
     /**
@@ -701,9 +714,6 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { style: styles.tabbar },
-          // A visible title makes "the page rendered but is empty" distinguishable
-          // from "the page did not render at all".
-          h("span", { style: { fontSize: "13px", fontWeight: 600, marginRight: "12px" } }, "HNFlow"),
           h(PanelTabs, { value: tab, onChange: setTab }),
           h("span", { style: { flex: "1 1 auto" } }),
           h("button", { type: "button", style: styles.linkButton, disabled: busy, onClick: refresh }, "刷新"),
