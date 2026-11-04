@@ -790,6 +790,11 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 三处对齐（同一组件、同一空态、同一字号与间距）、README/本规划同步、打 `0.2.0`、实机验收；
 - 回归：`plugins/dsh/test`、引擎 `backend/tests/test_workflow_rpc.py`。
 
+**已落地（2026-11-04，0.2.2）**：`WorkflowTree` / `AssetTree` / `CanvasStage` / `TaskBoard`
+四处共用，页面与会话页签的树结构、空态、字号一致；切页签清空选区，画布不会串到另一页签；
+会话页签加了工作区名 + 刷新。版本号 `0.2.0 → 0.2.2`。
+**待实机验收**：三处 UI 与通知（通知需要真有 pending 任务）。
+
 总计约 5 周（按交付顺序：M6.0 → M6.1 → M6.3 → M6.4 → M6.5 → M6.2 收尾，M6.2 与 M6.3 可并行）。
 
 ---

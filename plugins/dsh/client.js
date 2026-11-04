@@ -407,6 +407,75 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The left tree of workspace refs, shared by the page and the session tab.
+     * @param {{groups: Record<string, any>[], selected: string, onPick: Function}} props - groups and selection.
+     * @returns {unknown} element.
+     */
+    function WorkflowTree(props) {
+      const groups = Array.isArray(props?.groups) ? props.groups : [];
+      const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
+      return h(
+        "div",
+        { style: styles.tree },
+        groups.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
+        ...groups.map((group) =>
+          h(
+            "div",
+            { key: group.path, style: styles.group },
+            h("div", { style: styles.groupTitle }, `${group.name}${group.error ? " · 读取失败" : ""}`),
+            (group.workflows ?? []).length === 0
+              ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的工作流")
+              : h(
+                  "div",
+                  null,
+                  ...(group.workflows ?? []).map((entry) =>
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        key: `${group.path}:${entry.alias || entry.assetId}`,
+                        style: props.selected === `${group.path}:${entry.alias || entry.assetId}` ? { ...styles.item, ...styles.itemActive } : styles.item,
+                        onClick: () => onPick(group.path, entry),
+                      },
+                      h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
+                      h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                    ),
+                  ),
+                ),
+          ),
+        ),
+      );
+    }
+
+    /**
+     * The left tree of library assets.
+     * @param {{assets: Record<string, any>[], selected: string, onPick: Function}} props - assets and selection.
+     * @returns {unknown} element.
+     */
+    function AssetTree(props) {
+      const assets = Array.isArray(props?.assets) ? props.assets : [];
+      const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
+      return h(
+        "div",
+        { style: styles.tree },
+        assets.length === 0 ? h("div", { style: styles.meta }, "资产库是空的") : null,
+        ...assets.map((asset) =>
+          h(
+            "button",
+            {
+              type: "button",
+              key: asset.id,
+              style: props.selected === asset.id ? { ...styles.item, ...styles.itemActive } : styles.item,
+              onClick: () => onPick(asset),
+            },
+            h("span", null, asset.name || asset.id),
+            h("span", { style: styles.meta }, `${asset.id} · r${asset.revision ?? "?"}`),
+          ),
+        ),
+      );
+    }
+
+    /**
      * The HNFlow page: three tabs over one tree+canvas layout.
      * @param {{runUi: (op: string, payload: Record<string, any>) => Promise<Record<string, any> | null>}} props - injected command face.
      * @returns {unknown} element.
@@ -464,7 +533,7 @@ window.__ModuleLoader__.load({
        */
       const pickWorkflow = async (workspace, entry) => {
         const key = entry.alias || entry.assetId;
-        setSelected(`w:${workspace}:${key}`);
+        setSelected(`${workspace}:${key}`);
         setBusy(true);
         try {
           const payload = await runUi("canvas", { workspace, key });
@@ -483,7 +552,7 @@ window.__ModuleLoader__.load({
        * @returns {Promise<void>} resolves once drawn.
        */
       const pickAsset = async (asset) => {
-        setSelected(`a:${asset.id}`);
+        setSelected(asset.id);
         setBusy(true);
         try {
           const payload = await runUi("assetCanvas", { assetId: asset.id });
@@ -504,56 +573,21 @@ window.__ModuleLoader__.load({
         if (tab === "monitor" && monitor === null) void loadMonitor();
       }, [tab]);
 
+      // Switching tabs drops the previous selection so a workspace canvas can
+      // never appear under the library tab (the three surfaces stay identical).
+      react.useEffect(() => {
+        setCanvas(null);
+        setSelected("");
+      }, [tab]);
+
       const workspaces = Array.isArray(tree?.workspaces) ? tree.workspaces : [];
       const assets = Array.isArray(tree?.assets) ? tree.assets : [];
 
       const left =
         tab === "workspaces"
-          ? h(
-              "div",
-              { style: styles.tree },
-              workspaces.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
-              ...workspaces.map((workspace) =>
-                h(
-                  "div",
-                  { key: workspace.path, style: styles.group },
-                  h("div", { style: styles.groupTitle }, `${workspace.name}${workspace.error ? " · 读取失败" : ""}`),
-                  ...(workspace.workflows ?? []).map((entry) =>
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        key: `${workspace.path}:${entry.alias || entry.assetId}`,
-                        style: selected === `w:${workspace.path}:${entry.alias || entry.assetId}` ? { ...styles.item, ...styles.itemActive } : styles.item,
-                        onClick: () => void pickWorkflow(workspace.path, entry),
-                      },
-                      h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
-                      h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
-                    ),
-                  ),
-                  (workspace.workflows ?? []).length === 0 ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的工作流") : null,
-                ),
-              ),
-            )
+          ? h(WorkflowTree, { groups: workspaces, selected, onPick: (path, entry) => void pickWorkflow(path, entry) })
           : tab === "assets"
-            ? h(
-                "div",
-                { style: styles.tree },
-                assets.length === 0 ? h("div", { style: styles.meta }, "资产库是空的") : null,
-                ...assets.map((asset) =>
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      key: asset.id,
-                      style: selected === `a:${asset.id}` ? { ...styles.item, ...styles.itemActive } : styles.item,
-                      onClick: () => void pickAsset(asset),
-                    },
-                    h("span", null, asset.name || asset.id),
-                    h("span", { style: styles.meta }, `${asset.id} · r${asset.revision ?? "?"}`),
-                  ),
-                ),
-              )
+            ? h(AssetTree, { assets, selected, onPick: (asset) => void pickAsset(asset) })
             : null;
 
       const right = tab === "monitor" ? h(TaskBoard, { monitor }) : h(CanvasStage, { canvas });
@@ -743,37 +777,22 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: styles.page },
-        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
         h(
           "div",
-          { style: styles.body },
-          h(
-            "div",
-            { style: styles.tree },
-            workspace === null
-              ? h("div", { style: styles.meta }, "读取中…")
-              : (workspace.workflows ?? []).length === 0
-                ? h("div", { style: styles.meta }, "这个工作区还没有引用的工作流")
-                : h(
-                    "div",
-                    null,
-                    ...(workspace.workflows ?? []).map((entry) =>
-                      h(
-                        "button",
-                        {
-                          type: "button",
-                          key: entry.alias || entry.assetId,
-                          style: selected === (entry.alias || entry.assetId) ? { ...styles.item, ...styles.itemActive } : styles.item,
-                          onClick: () => void pick(workspace.path, entry),
-                        },
-                        h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}`),
-                        h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
-                      ),
-                    ),
-                  ),
-          ),
-          h(CanvasStage, { canvas }),
+          { style: styles.tabbar },
+          h("span", { style: styles.meta }, workspace === null ? "读取中…" : workspace.name),
+          h("span", { style: { flex: "1 1 auto" } }),
+          h("button", { type: "button", style: styles.tab, onClick: () => void load() }, "刷新"),
         ),
+        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
+        workspace === null
+          ? h("div", { style: styles.empty }, "读取中…")
+          : h(
+              "div",
+              { style: styles.body },
+              h(WorkflowTree, { groups: [workspace], selected: `${workspace.path}:${selected}`, onPick: (path, entry) => void pick(path, entry) }),
+              h(CanvasStage, { canvas }),
+            ),
       );
     }
 
