@@ -11,7 +11,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createWorkflowCommand, extractSessionOption } from '../lib/commands.js'
+import { createWorkflowCommand } from '../lib/commands.js'
 import { decodePayload, dispatchUi, encodePayload, UiError } from '../lib/ui.js'
 
 /**
@@ -76,7 +76,7 @@ test('the ui branch runs without a session, other commands still need one', asyn
     const ok = await command.handler({ rawInput: `ui ping ${encodePayload({ surface: 'S2' })}` })
     assert.equal(ok.kind, 'success')
 
-    const blocked = await command.handler({ rawInput: 'list' })
+    const blocked = await command.handler({ rawInput: 'publish 帮我发布' })
     assert.equal(blocked.kind, 'error')
     assert.match(blocked.text, /no workspace directory/u)
   } finally {
@@ -176,13 +176,6 @@ test('monitor returns the service payload verbatim', async () => {
 
 test('a page op without a service says so', async () => {
   await assert.rejects(dispatchUi(['tree', encodePayload({ workspaces: [] })]), (error) => error.code === 'ui-service')
-})
-
-test('--session is lifted out of the run arguments', () => {
-  assert.deepEqual(extractSessionOption(['publish', 'out=1']), { rest: ['publish', 'out=1'], sessionId: null })
-  assert.deepEqual(extractSessionOption(['publish', '--session', 's-1', 'out=1']), { rest: ['publish', 'out=1'], sessionId: 's-1' })
-  assert.deepEqual(extractSessionOption(['--session=s-2', 'publish']), { rest: ['publish'], sessionId: 's-2' })
-  assert.deepEqual(extractSessionOption(['publish', '--session']), { rest: ['publish'], sessionId: null })
 })
 
 test('wait returns as soon as an unseen task exists', async () => {

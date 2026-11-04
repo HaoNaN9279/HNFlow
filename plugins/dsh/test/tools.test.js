@@ -1,11 +1,11 @@
 /**
- * The `hnflow` tool: explicit naming, readable failures, wait semantics.
+ * The `hnflow` tool: explicit naming, readable failures, start-only semantics.
  */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { DEFAULT_RUN_WAIT_SECONDS, MAX_RUN_WAIT_SECONDS, clampWait, createWorkflowTool, formatRunStatus, formatWorkflowList } from '../lib/tools.js'
+import { createWorkflowTool, formatRunStatus, formatWorkflowList } from '../lib/tools.js'
 /** A `defineTool` stand-in that keeps the spec addressable. */
 const defineTool = (spec) => spec
 
@@ -59,14 +59,7 @@ test('run requires an explicit workflow name', async () => {
   assert.match(text, /^error workflow-required:/u)
 })
 
-test('run reports provenance and the terminal status', async () => {
-  const text = await makeTool(fakeService()).execute({ action: 'run', workflow: 'publish', input: { target: 'staging' } }, {})
-  assert.match(text, /^started run-1 from ref r3/u)
-  assert.match(text, /run run-1: succeeded/u)
-  assert.match(text, /result: \{"in":"hello"\}/u)
-})
-
-test('run honours wait_seconds=0 by sampling once', async () => {
+test('run starts the workflow and returns without following it', async () => {
   let waited = false
   const service = fakeService({
     waitFor: async () => {
@@ -74,9 +67,25 @@ test('run honours wait_seconds=0 by sampling once', async () => {
       return { runId: 'run-1', status: 'succeeded' }
     },
   })
-  const text = await makeTool(service).execute({ action: 'run', workflow: 'publish', wait_seconds: 0 }, {})
+  const text = await makeTool(service).execute({ action: 'run', workflow: 'publish', input: { target: 'staging' } }, {})
+
+  assert.match(text, /^started run-1 \(publish, ref r3\), status queued/u)
+  assert.match(text, /continues without this session/u)
   assert.equal(waited, false)
-  assert.match(text, /run run-1: succeeded/u)
+})
+
+test('run hands the session id to the engine for the monitor', async () => {
+  /** @type {Record<string, any>[]} */
+  const started = []
+  const service = fakeService({
+    startRun: async (input) => {
+      started.push(input)
+      return { runId: 'run-1', status: 'queued', resolved: { source: 'ref', revision: 3 } }
+    },
+  })
+  await makeTool(service).execute({ action: 'run', workflow: 'publish' }, { agent: { session: { id: 'session-7' } } })
+
+  assert.equal(started[0].sessionId, 'session-7')
 })
 
 test('service failures surface as coded text, not exceptions', async () => {
@@ -94,13 +103,6 @@ test('service failures surface as coded text, not exceptions', async () => {
 test('a session without a workspace says so', async () => {
   const tool = createWorkflowTool({ defineTool, service: fakeService(), cwdOf: () => null })
   assert.match(await tool.execute({ action: 'list' }, {}), /workspace-unavailable/u)
-})
-
-test('wait budgets clamp to the documented bounds', () => {
-  assert.equal(clampWait(undefined), DEFAULT_RUN_WAIT_SECONDS)
-  assert.equal(clampWait(-5), 0)
-  assert.equal(clampWait(10_000), MAX_RUN_WAIT_SECONDS)
-  assert.equal(clampWait(Number.NaN), DEFAULT_RUN_WAIT_SECONDS)
 })
 
 test('run status text omits empty sections', () => {
@@ -129,67 +131,6 @@ test('task_list renders fields and the empty case', async () => {
   assert.match(text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
 })
 
-test('a waiting run is answered through question cards when the caller allows it', async () => {
-  /** @type {Record<string, any>[]} */
-  const asked = []
-  /** @type {Record<string, any>[]} */
-  const submitted = []
-  const service = fakeService({
-    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', outputSpec: { ports: [] } }] }),
-    submitTask: async (input) => {
-      submitted.push(input)
-      return { taskId: input.taskId, runId: 'run-1', status: 'running' }
-    },
-  })
-  // Second wait observes the resumed run finishing.
-  let calls = 0
-  service.waitFor = async () => {
-    calls += 1
-    if (calls === 1) return { runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', outputSpec: { ports: [] } }] }
-    return { runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }
-  }
-  const tool = createWorkflowTool({
-    defineTool,
-    service,
-    cwdOf: () => '/ws',
-    askTask: async (pending) => {
-      asked.push(pending)
-      return { decision: true, feedback: '' }
-    },
-  })
-
-  const text = await tool.execute({ action: 'run', workflow: 'publish' }, {})
-
-  assert.equal(asked.length, 1)
-  assert.equal(asked[0].taskId, 'task-9')
-  assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { decision: true, feedback: '' } })
-  assert.match(text, /run run-1: succeeded/u)
-})
-
-test('interactive:false leaves the task pending', async () => {
-  let asked = 0
-  const service = fakeService({
-    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'task', nodeId: 'approve', description: 'confirm', outputSpec: { ports: [] } }] }),
-  })
-  const tool = createWorkflowTool({ defineTool, service, cwdOf: () => '/ws', askTask: async () => { asked += 1; return { note: 'x' } } })
-
-  const text = await tool.execute({ action: 'run', workflow: 'publish', interactive: false }, {})
-
-  assert.equal(asked, 0)
-  assert.match(text, /waiting on task task-9/u)
-})
-
-test('an unanswered card keeps the task pending', async () => {
-  const service = fakeService({
-    waitFor: async () => ({ runId: 'run-1', status: 'waiting_human', pendingTasks: [{ taskId: 'task-9', kind: 'review', nodeId: 'approve', description: 'confirm', outputSpec: { ports: [] } }] }),
-  })
-  const tool = createWorkflowTool({ defineTool, service, cwdOf: () => '/ws', askTask: async () => null })
-
-  const text = await tool.execute({ action: 'run', workflow: 'publish' }, {})
-
-  assert.match(text, /waiting on task task-9/u)
-})
-
 test('events renders a node timeline', async () => {
   const service = fakeService({
     events: async () => ({
@@ -212,14 +153,14 @@ test('an empty timeline says so', async () => {
   assert.equal(await makeTool(service).execute({ action: 'events', run_id: 'run-1' }, {}), 'no events recorded for this run')
 })
 
-test('resume continues an interrupted run', async () => {
+test('resume continues an interrupted run without waiting for it', async () => {
   const service = fakeService({ resume: async () => ({ runId: 'run-1', status: 'running' }) })
   const text = await makeTool(service).execute({ action: 'resume', run_id: 'run-1' }, {})
-  assert.match(text, /^resumed run-1/u)
-  assert.match(text, /run run-1: succeeded/u)
+  assert.match(text, /^resumed run-1 \(status running\)/u)
+  assert.match(text, /continues without this session/u)
 })
 
-test('task_submit needs an id, then reports the resumed run', async () => {
+test('task_submit needs an id, then submits without waiting', async () => {
   const bare = await makeTool(fakeService()).execute({ action: 'task_submit' }, {})
   assert.match(bare, /^error task-id-required:/u)
 
@@ -230,13 +171,11 @@ test('task_submit needs an id, then reports the resumed run', async () => {
       submitted.push(input)
       return { taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }
     },
-    waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }),
   })
   const text = await makeTool(service).execute({ action: 'task_submit', task_id: 'task-9', input: { note: 'lgtm' }, revision: 2 }, {})
 
   assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { note: 'lgtm' }, revision: 2 })
-  assert.match(text, /^submitted task-9/u)
-  assert.match(text, /run run-1: succeeded/u)
+  assert.match(text, /^submitted task-9; run run-1 continues/u)
 })
 
 test('an empty catalogue has a usable message', () => {

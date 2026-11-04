@@ -63,7 +63,7 @@ export class HnflowService {
   /**
    * Drop the cached engine client so the next call re-reads the installation.
    *
-   * `/workflow doctor --save` changes where the engine lives; without this the
+   * `/hnflow doctor --save` changes where the engine lives; without this the
    * process would keep the old, possibly broken, client.
    * @returns {void}
    */
@@ -258,6 +258,9 @@ export class HnflowService {
 
   /**
    * Poll until the run settles or needs a human, or the wait budget runs out.
+   *
+   * Nothing on the agent path calls this: a session starts a run and stops. It
+   * stays for callers that must block on one run (the page's own actions).
    * @param {string} runId - engine run id.
    * @param {number} waitMs - maximum wait.
    * @returns {Promise<Record<string, any>>} the last observed status.
@@ -274,44 +277,15 @@ export class HnflowService {
 
   /**
    * Continue a run that an engine restart interrupted.
+   *
+   * Nothing does this automatically: a restart leaves the run stopped until a
+   * person or the model asks for it, because "continue the thing the last
+   * process was doing" is not something a new process may assume.
    * @param {string} runId - engine run id.
    * @returns {Promise<Record<string, any>>} `{runId, status}`.
    */
   async resume(runId) {
     return await this.engineClient().request('run/resume', { runId })
-  }
-
-  /**
-   * Resume every run the previous process left unfinished.
-   *
-   * A run recorded as `running` is marked `interrupted` when the engine boots
-   * (the checkpoint is intact, nothing is streaming), so a restart used to leave
-   * it stopped until someone typed `/workflow resume`. This walks those runs and
-   * continues them; a run waiting on a human is left alone on purpose.
-   * @param {{limit?: number}} [options] - how many runs to continue.
-   * @returns {Promise<{resumed: string[], failed: {runId: string, message: string}[]}>} outcome.
-   */
-  async resumeInterrupted(options = {}) {
-    const limit = Number.isInteger(options.limit) && options.limit > 0 ? options.limit : 5
-    /** @type {string[]} */
-    const resumed = []
-    /** @type {{runId: string, message: string}[]} */
-    const failed = []
-    const runs = await this.listRuns()
-    const candidates = runs
-      .filter((run) => run.status === 'running' || run.status === 'interrupted')
-      .map((run) => String(run.runId ?? ''))
-      .filter((runId) => runId.length > 0)
-      .slice(0, limit)
-    for (const runId of candidates) {
-      try {
-        await this.resume(runId)
-        resumed.push(runId)
-      } catch (error) {
-        failed.push({ runId, message: String(error?.message ?? error) })
-      }
-    }
-    return { resumed, failed }
   }
 
   /**
@@ -428,7 +402,7 @@ export class HnflowService {
    * Store a new asset revision (explicit user action only).
    *
    * The tool surface has no action that reaches this method; only the
-   * `/workflow save asset` command does, because writing an asset changes what
+   * `/hnflow save asset` command does, because writing an asset changes what
    * every workspace referencing it will run next.
    * @param {{cwd: string, key: string, note?: string}} input - save request.
    * @returns {Promise<Record<string, any>>} `{assetId, previousRevision, revision, name}`.
@@ -575,41 +549,6 @@ export class HnflowService {
   }
 
   /**
-   * The panel payload: the workspace catalogue plus one resolved definition.
-   *
-   * The client cannot read the asset files, so this is how it gets a definition
-   * to draw. A missing or unresolvable key yields `selected: null` instead of an
-   * error, because a partly-broken workspace must still open.
-   * @param {string} cwd - workspace root.
-   * @param {string} [key] - workflow alias or asset id; defaults to the first ref.
-   * @returns {Promise<{workspace: string, workflows: Record<string, any>[], selected: Record<string, any> | null}>} payload.
-   */
-  async panelPayload(cwd, key) {
-    const workflows = await this.listWorkflows(cwd)
-    const fallback = workflows[0] === undefined ? null : workflows[0].alias || workflows[0].assetId
-    const resolvedKey = typeof key === 'string' && key.trim().length > 0 ? key.trim() : fallback
-    let selected = null
-    if (resolvedKey !== null) {
-      try {
-        const resolved = await this.resolve(cwd, resolvedKey)
-        selected = {
-          key: resolvedKey,
-          assetId: resolved.assetId,
-          source: resolved.source,
-          revision: resolved.revision,
-          currentRevision: resolved.currentRevision,
-          baseRevision: resolved.baseRevision,
-          drift: resolved.drift,
-          definition: resolved.definition,
-        }
-      } catch {
-        selected = null
-      }
-    }
-    return { workspace: cwd, workflows, selected }
-  }
-
-  /**
    * The workflow index injected into the system prompt.
    * @param {string} cwd - workspace root.
    * @returns {Promise<string>} a short markdown list, or an empty string.
@@ -630,7 +569,13 @@ export class HnflowService {
       const override = entry.hasOverride ? '（本项目有覆盖）' : ''
       return `- ${name}${description}${override}`
     })
-    return ['This workspace references these HNFlow workflows. Call the `hnflow` tool with an explicit name to run one.', '', ...lines].join('\n')
+    return [
+      'This workspace references these HNFlow workflows:',
+      '',
+      ...lines,
+      '',
+      'Starting a run is the whole job of this session. A message that starts with `<hnflow_workflow name="…" asset="…" />` names the workflow to start, and the rest of that message is the request: call the `hnflow` tool once with `action: "run"`, `workflow: <name>`, and an `input` derived from the request. Then reply with one line — run id and state — and stop. The engine continues the run on its own; do not poll, wait, retry, or answer its human tasks unless the user asks about that run in a later message.',
+    ].join('\n')
   }
 
   /**

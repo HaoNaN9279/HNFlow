@@ -469,9 +469,8 @@ window.__ModuleLoader__.load({
                     h("span", { key: "d", style: { ...styles.cell, flex: "1 1 auto" } }, task.description || task.nodeId),
                     h("span", { key: "id", style: { ...styles.cell, flex: "0 0 150px" } }, task.taskId),
                   ]),
-                  // Until the in-panel form lands, the row carries the exact
-                  // command that answers it.
-                  h("div", { key: "cmd", style: { ...styles.meta, fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)" } }, `/workflow submit ${task.taskId} note="…"`),
+                  // Until the in-panel form lands, the row says what to ask for.
+                  h("div", { key: "cmd", style: { ...styles.meta, fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)" } }, `在会话里说：处理待办 ${task.taskId}`),
                 ]),
               ),
             ),

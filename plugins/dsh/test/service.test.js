@@ -53,40 +53,6 @@ async function makeService(calls = []) {
   return { service, cwd }
 }
 
-test('an engine restart resumes the runs it interrupted', async () => {
-  /** @type {string[]} */
-  const resumed = []
-  const service = new HnflowService({
-    config: {},
-    engine: {
-      ensureStarted: async () => ({ protocolVersion: 1 }),
-      request: async (method, params) => {
-        if (method === 'run/list') {
-          return {
-            runs: [
-              { runId: 'run-a', status: 'interrupted' },
-              { runId: 'run-b', status: 'waiting_human' },
-              { runId: 'run-c', status: 'succeeded' },
-            ],
-          }
-        }
-        if (method === 'run/resume') {
-          resumed.push(params.runId)
-          return { runId: params.runId, status: 'running' }
-        }
-        return {}
-      },
-    },
-  })
-
-  const outcome = await service.resumeInterrupted()
-
-  // A run waiting on a human is not ours to restart.
-  assert.deepEqual(resumed, ['run-a'])
-  assert.deepEqual(outcome.resumed, ['run-a'])
-  assert.deepEqual(outcome.failed, [])
-})
-
 test('a run freezes the resolved definition and its provenance', async () => {
   const calls = []
   const { service, cwd } = await makeService(calls)
@@ -142,7 +108,8 @@ test('the prompt index lists refs and marks overrides', async () => {
   await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
 
   const section = await service.indexSection(cwd)
-  assert.match(section, /Call the `hnflow` tool/u)
+  assert.match(section, /Starting a run is the whole job of this session/u)
+  assert.match(section, /<hnflow_workflow name=/u)
   assert.match(section, /- hello — demo/u)
   assert.equal(await service.indexSection(path.join(cwd, 'empty')), '')
 })
@@ -272,35 +239,6 @@ test('repin moves a ref onto the saved revision', async () => {
 
   const following = await service.repinRef({ cwd, key: 'release', revision: null })
   assert.equal(following.revision, null)
-})
-
-test('the panel payload carries the catalogue and one definition', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  await stores.workspace.writeOverride({ assetId: created.asset.id, definition: definition('local'), baseRevision: 1 })
-
-  const payload = await service.panelPayload(cwd)
-
-  assert.equal(payload.workspace, cwd)
-  assert.equal(payload.workflows.length, 1)
-  assert.equal(payload.workflows[0].alias, 'hello')
-  assert.equal(payload.workflows[0].hasOverride, true)
-  assert.equal(payload.selected.key, 'hello')
-  assert.equal(payload.selected.source, 'override')
-  assert.equal(payload.selected.definition.nodes[1].params.value, 'local')
-})
-
-test('a broken selection yields selected:null instead of failing the panel', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  await stores.workspace.addRef({ assetId: 'wf-gone', alias: 'gone', revision: null })
-
-  const payload = await service.panelPayload(cwd, 'gone')
-
-  assert.equal(payload.workflows[0].missing, true)
-  assert.equal(payload.selected, null)
 })
 
 test('editing one node writes an override and leaves the asset alone', async () => {

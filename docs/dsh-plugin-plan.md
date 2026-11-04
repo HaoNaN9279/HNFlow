@@ -317,21 +317,31 @@ $DSH_HOME/hnflow/
 - 用户「明确指定工作流」通过三条路径实现：命令、面板、自然语言点名；
 - 工具调用必须带显式 `workflow` 标识，Agent 不得猜测。
 
-### 7.2 `/workflow` 命令族
+### 7.2 `/workflow` 命令（R16 后）
 
 ```text
 /workflow                          列出本工作区引用的工作流
-/workflow run <alias|id> [k=v …]   直接运行（不产生模型消息）
-/workflow open <alias|id>          打开面板并定位
-/workflow ref add <asset> [--pin r] 添加引用
-/workflow ref list                 查看引用与覆盖状态
-/workflow override diff            查看工作区覆盖与资产的差异
-/workflow override reset           放弃覆盖
-/workflow save override            保存到工作区（Agent 编辑的确认入口）
-/workflow save asset               保存回资产（要求确认）
+/workflow <alias|id> <提示词…>      把引用 + 提示词交给 AI，由 AI 用 hnflow 工具启动
 ```
 
-命令在宿主侧执行，返回文本结果；不进入模型上下文（与 DSH 命令语义一致）。
+命令**不再直接执行**工作流：它把 `<hnflow_workflow name="…" asset="…" />` 与用户提示词
+合成一条用户消息（`agent.followup(createUserMessage(...))`），AI 在这一轮里用
+`hnflow(run)` 启动，然后回一行就结束。会话只负责启动。
+
+直接运行（不经对话）属于 HNFlow 页面；资产库与引用的管理属于 `/hnflow`（R16 新增），
+任何会话可用，且**没有任何运行能力**：
+
+```text
+/hnflow ref list|add|remove|pin
+/hnflow asset list|new|import|delete
+/hnflow override diff|reset <name>
+/hnflow save asset <name> [--yes]   先给 diff，--yes 才写
+/hnflow node <name> <nodeId> <json>
+/hnflow ui <op> <base64url payload> 页面取数（只读，读 state 文件）
+/hnflow doctor [--python p] [--cwd d] [--save]
+```
+
+命令在宿主侧执行，返回文本结果；除 `/workflow <name> <提示词>` 之外都不进入模型上下文。
 
 ### 7.3 工具契约
 
@@ -340,19 +350,21 @@ $DSH_HOME/hnflow/
 
 ```text
 hnflow(
-  action: "list"|"get"|"run"|"status"|"cancel"|"assets",
+  action: "list"|"get"|"run"|"status"|"cancel"|"resume"|"events"|"assets"|"task_list"|"task_submit",
   workflow?: string,     // 必填（run/get），别名或资产 id
   input?: object,        // start 节点端口值
   run_id?: string,
-  wait_seconds?: number  // run 等待上限，默认 30，上限 300
+  task_id?: string,
+  revision?: number
 )
 ```
 
 - `run` 缺少 `workflow` → 直接报错（`workflow-required`），不猜候选；
+- **`run` 只启动**：引擎接受定义后立即返回（runId + 状态），不等待、不轮询、不弹卡；R16 去掉了 `wait_seconds` 与 `interactive`；
 - 工具失败一律返回带稳定 code 的文本（`error <code>: <message>`），不抛异常、不结束回合；
 - 写覆盖走 `hnflow_author` 的 `save_override`（先校验，校验不过不落盘）；
 - **工具面没有写资产的动作**：`hnflow_author` 只有 `schema | validate | save_override`，
-  资产只能由用户输入 `/workflow save asset <name>` 写入。I1 因此是「物理上无入口」而不是提示词约束。
+  资产只能由用户输入 `/hnflow save asset <name>` 写入。I1 因此是「物理上无入口」而不是提示词约束。
 
 ```text
 hnflow_author(
@@ -400,7 +412,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
   （`checkpoints.sqlite` / `runs.json` / `tasks.json` / `events/<runId>.jsonl`），DSH 重启后仍在；
 - `waiting_human` 的 run 重启后直接可提交，任务行与 checkpoint 都在；
 - 进程死亡时仍在 `running` 的 run，重启后标记为 **`interrupted`**（不猜、不自动重放），
-  由 `/workflow resume <runId>` 从最后提交的 checkpoint 继续；
+  **也不会自动续跑**（R16 去掉了自动续跑）：要续跑就让模型调 `hnflow(resume)`；
 - 节点使用 `<run_id>:<node_id>` 幂等键；
 - 人工任务提交按 `task_id + revision` CAS，重复提交返回 `task-not-pending` / `task-revision-conflict`。
 
@@ -412,13 +424,13 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 | 通道 | 场景 | 说明 |
 | --- | --- | --- |
-| turn 内问题卡 | attended run | `ctx.userQuestions.ask()`，`hnflow` 工具在 run 停在 `waiting_human` 时弹卡并按答案提交（**已落地**）；`interactive:false` 可关 |
-| 面板收件箱 | 任意时刻 | 零 token；面板「待办」页签列出所有 pending 任务，点开填 JSON 提交（**已落地**） |
-| 会话自然语言 | 用户直接回复 | Agent 调 `hnflow` 的 `task_list` / `task_submit`（**已落地**） |
+| ~~turn 内问题卡~~ | — | **R16 移除**：会话只负责启动，不再在 turn 里弹卡或提交答案 |
+| 面板收件箱 | 任意时刻 | 零 token；面板「待办」页签列出所有 pending 任务，点开填 JSON 提交（行内表单待做） |
+| 会话自然语言 | 用户之后追问 | Agent 调 `hnflow` 的 `task_list` / `task_submit`（**已落地**） |
 
-问题卡映射规则：`human:review` → 一张卡片两个选项（通过 / 打回，打回原因走自由文本）；
-`human:task` → 每个输出端口一张卡（`bool` 给 true/false 选项，其余自由文本，按端口类型解析）。
-用户直接关闭或未作答 → **不提交**，任务保持 pending；一次工具调用最多连续处理 3 轮人工任务。
+问题卡映射规则（`lib/questions.js` 已随 R16 删除，规则留作页面表单的参考）：
+`human:review` → 通过 / 打回（打回原因走自由文本）；
+`human:task` → 每个输出端口一个字段（`bool` 给 true/false，其余自由文本，按端口类型解析）。
 
 提交语义已定：同一 `task_id` 重复提交返回 `task-not-pending`；字段不符返回 `task-invalid`；
 带 `revision` 的过期提交返回 `task-revision-conflict`；取消 `waiting_human` 的 run 会清掉它的待办。
@@ -836,7 +848,7 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 - 全新启动、**不打开任何 HNFlow 会话**：左栏页面有工作区/资产；任务监视显示
   `state/` 里那条 `waiting_human`；新待办出现时右下角弹一次；
-- 打开 HNFlow 会话：`/workflow run smoke` 照常；
+- 打开 HNFlow 会话：`/workflow smoke 跑一遍冒烟流程` 会把引用交给 AI 启动（R16 后不再直跑）；
 - VibeStack 模式会话里 `/workflow` 与 `hnflow` 工具**都不出现**（R4 守住）。
 
 #### 风险与回退
@@ -949,3 +961,39 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 读服务 | `ctx.get("<service>")`，不要用 `ctx.<service>` | 未在 `inject` 声明的属性访问会抛 `cannot get property … without inject`（M6.0 实测）；DSH 自身用 `ctx.get("uiWorkspace")` |
 | 当前会话 preset | `ctx.get("uiSession").adapter.current.getSnapshot().key` + `ctx.get("sessions").list` 的 `byId[id].projectionValues.agentPreset` | 页签注册需要按会话模式开关 |
 - 外部插件参考：`dsh-vibestack`（`D:/workspace/VibeStack/plugins/dsh`）。
+
+---
+
+## 15. R16：会话只负责启动（覆盖 §7.2 / §7.3 / §9 / §11.1 的旧描述）
+
+四条规则，均已落地（`dsh-hnflow` 0.2.15）：
+
+1. **会话里触发工作流只有一条路径**：`/workflow <name> <提示词>`。
+   命令不执行工作流，它解析引用、把
+   `<hnflow_workflow name="…" asset="…" revision="…" source="…" />` 和提示词合成一条
+   普通用户消息（`agent.followup(createUserMessage(...))`），由 AI 在下一轮识别引用、
+   按提示词内容推导 `input`、调用 `hnflow` 工具启动。
+   - 引用必须**当前工作区已引用**的名称或资产 id（`ref-missing` 直接拒绝并列出现有引用）；
+   - 提示词按原始文本原样带入（引号、换行、空格都保留）；
+   - 系统提示的索引段写明：「这条消息以 `<hnflow_workflow …/>` 开头就是要点名的流程，
+     启动后只回一行」。
+2. **启动即结束**：`hnflow` 的 `run` 在引擎接受定义后立即返回（runId + 状态），
+   不等待、不轮询、不弹问题卡；`wait_seconds` 与 `interactive` 参数已删除，
+   `lib/questions.js`（问题卡）随之删除。`status` / `events` / `task_list` 只用于回答
+   用户之后的追问。
+3. **删除直接执行**：`/workflow run|status|events|cancel|tasks|inbox|submit|resume|panel|list`
+   全部移除。直接运行（不经对话）由 HNFlow 页面发起（**待做**）。
+   资产库与引用的管理改挂到 `/hnflow`：`ref` / `asset` / `override` / `save asset` / `node` /
+   `doctor`，任何会话可用，但**没有任何运行能力**（`VIEWER_OPS` 只读，且没有 run/submit 分支）。
+4. **不再自动续跑**：删除了 `config.autoResume` 与 `Service.resumeInterrupted()`。
+   引擎重启把残留 `running` 标成 `interrupted` 之后，状态就停在那里，要续跑必须显式
+   `hnflow(action="resume")`。
+
+| 旧（≤0.2.14） | 新（0.2.15） |
+| --- | --- |
+| `/workflow run <name>` 宿主直跑并等待 | 删除；页面直跑（待做） |
+| `/workflow submit <taskId>` | 删除；页面表单（待做）或 AI `task_submit` |
+| `/workflow ref|asset|override|save|node|doctor …` | 改为 `/hnflow …` |
+| 工具 `run` 默认等 30s、可弹卡 | 只启动，立即返回 |
+| 启动 4s 后自动 `resumeInterrupted()` | 删除 |
+

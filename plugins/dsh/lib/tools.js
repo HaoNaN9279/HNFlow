@@ -1,18 +1,18 @@
 /**
- * The `workflow` tool: run and observe, with an explicit workflow name.
+ * The `hnflow` tool: start a run, and answer questions about one.
  *
  * The model must pass `workflow` for anything that addresses one definition; the
  * tool never guesses between candidates. Errors come back as ordinary tool text
  * with a stable code, so a failed call does not end the turn.
+ *
+ * Starting is the only interactive job. `run` returns as soon as the engine has
+ * accepted the definition — the session does not follow the run, because a run
+ * outlives a turn and its progress belongs to the HNFlow page. The read actions
+ * exist for a later question in the same session ("跑完没"), never for polling.
  */
 
 /** Actions the tool accepts. */
 export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'resume', 'events', 'assets', 'task_list', 'task_submit']
-
-/** Default wait budget for `run`, in seconds. */
-export const DEFAULT_RUN_WAIT_SECONDS = 30
-/** Hard cap for the wait budget. */
-export const MAX_RUN_WAIT_SECONDS = 300
 
 /**
  * Render a run record as compact text.
@@ -93,7 +93,7 @@ function summarise(data) {
 }
 
 /**
- * Build the `workflow` tool definition.
+ * Build the `hnflow` tool definition.
  * @param {{
  *   defineTool: Function,
  *   service: import('./service.js').HnflowService,
@@ -102,41 +102,12 @@ function summarise(data) {
  * @returns {Record<string, any>} the tool definition handed to `ctx.tools.register`.
  */
 export function createWorkflowTool(options) {
-  const { defineTool, service, cwdOf, askTask = null } = options
-
-  /**
-   * Answer waiting human tasks with question cards while the caller allows it.
-   *
-   * Bounded to three rounds so a workflow that keeps asking cannot hold the tool
-   * open indefinitely; every round still ends in a real submit + wait.
-   * @param {Record<string, any>} status - run status.
-   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
-   * @param {boolean} interactive - whether the caller wants cards.
-   * @returns {Promise<Record<string, any>>} the latest status.
-   */
-  const settle = async (status, exec, interactive) => {
-    let current = status
-    for (let round = 0; round < 3; round += 1) {
-      if (current.status !== 'waiting_human') return current
-      const tasks = Array.isArray(current.pendingTasks) ? current.pendingTasks : []
-      if (!interactive || askTask === null || tasks.length !== 1) return current
-      let payload
-      try {
-        payload = await askTask(tasks[0], exec)
-      } catch {
-        return current
-      }
-      if (payload === null || payload === undefined) return current
-      await service.submitTask({ taskId: tasks[0].taskId, payload })
-      current = await service.waitFor(current.runId, 60000)
-    }
-    return current
-  }
+  const { defineTool, service, cwdOf } = options
 
   /**
    * Run one action.
    * @param {Record<string, any>} args - validated arguments.
-   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
+   * @param {{agent?: unknown}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
    */
   const execute = async (args, exec) => {
@@ -153,11 +124,10 @@ export function createWorkflowTool(options) {
    * Dispatch one action against a resolved workspace.
    * @param {Record<string, any>} args - validated arguments.
    * @param {string} cwd - workspace root.
-   * @param {{agent?: unknown, signal?: AbortSignal}} exec - execution context.
+   * @param {{agent?: unknown}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
    */
   const run = async (args, cwd, exec) => {
-    const interactive = args.interactive !== false
     switch (args.action) {
       case 'list':
         return formatWorkflowList(await service.listWorkflows(cwd))
@@ -179,11 +149,11 @@ export function createWorkflowTool(options) {
         // The tool runs inside a session, so it can name it without a flag.
         const sessionId = typeof exec?.agent?.session?.id === 'string' ? exec.agent.session.id : null
         const started = await service.startRun({ cwd, key, inputs: args.input ?? {}, sessionId })
-        const waitSeconds = clampWait(args.wait_seconds)
-        const observed = waitSeconds > 0 ? await service.waitFor(started.runId, waitSeconds * 1000) : await service.status(started.runId)
-        const status = await settle(observed, exec, interactive)
-        const header = `started ${started.runId} from ${started.resolved.source} r${started.resolved.revision ?? 'latest'}`
-        return `${header}\n${formatRunStatus(status)}`
+        const revision = started.resolved.revision === null || started.resolved.revision === undefined ? 'latest' : `r${started.resolved.revision}`
+        return [
+          `started ${started.runId} (${key}, ${started.resolved.source} ${revision}), status ${started.status ?? 'queued'}`,
+          'the run is owned by the HNFlow engine and continues without this session: report this one line and stop. Do not poll, wait, or answer its human tasks unless the user asks again.',
+        ].join('\n')
       }
       case 'status':
         return formatRunStatus(await service.status(requireRunId(args)))
@@ -191,8 +161,7 @@ export function createWorkflowTool(options) {
         return JSON.stringify(await service.cancel(requireRunId(args)))
       case 'resume': {
         const resumed = await service.resume(requireRunId(args))
-        const status = await service.waitFor(resumed.runId, clampWait(args.wait_seconds) * 1000)
-        return `resumed ${resumed.runId}\n${formatRunStatus(status)}`
+        return `resumed ${resumed.runId} (status ${resumed.status ?? 'running'}); it continues without this session`
       }
       case 'events':
         return formatTimeline(await service.events(requireRunId(args), 0))
@@ -202,8 +171,10 @@ export function createWorkflowTool(options) {
         const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
         if (taskId.length === 0) return 'error task-id-required: pass task_id from action "task_list"'
         const submitted = await service.submitTask({ taskId, payload: args.input ?? {}, revision: Number.isInteger(args.revision) ? args.revision : undefined })
-        const status = await settle(await service.waitFor(submitted.runId, 60000), exec, interactive)
-        return `submitted ${taskId}\n${formatRunStatus(status)}`
+        return [
+          `submitted ${taskId}; run ${submitted.runId} continues (status ${submitted.status ?? 'running'})`,
+          'do not wait for it in this session: the HNFlow page reports progress.',
+        ].join('\n')
       }
       default:
         return `error invalid-action: expected one of ${WORKFLOW_ACTIONS.join(', ')}`
@@ -213,7 +184,7 @@ export function createWorkflowTool(options) {
   return defineTool({
     name: 'hnflow',
     description:
-      'Run and inspect HNFlow workflows referenced by this workspace. Every action that addresses one workflow must pass its name (alias or asset id) from `list`; the tool never guesses. `run` accepts an `input` object matching the start node ports and waits for completion or for a human task. `task_list`/`task_submit` handle the human steps of a suspended run.',
+      'Start and inspect HNFlow workflows referenced by this workspace. `run` names one workflow (alias or asset id from `list`, never guessed), derives the start-node `input` from the user request, and returns as soon as the engine accepts it — the run then continues without this session, so reply with its run id and stop. `status`/`events`/`task_list` answer a later question; `task_submit` answers a human task; nothing here polls.',
     parameters: {
       action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
       workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
@@ -221,8 +192,6 @@ export function createWorkflowTool(options) {
       input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
       task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
       revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },
-      interactive: { type: 'boolean', description: 'Ask question cards for a waiting human task (default true); pass false to leave it pending.' },
-      wait_seconds: { type: 'number', description: `How long run waits for completion (default ${DEFAULT_RUN_WAIT_SECONDS}, max ${MAX_RUN_WAIT_SECONDS}).` },
     },
     output: {
       schema: { type: 'string' },
@@ -230,17 +199,6 @@ export function createWorkflowTool(options) {
     },
     execute,
   })
-}
-
-/**
- * Clamp the caller's wait budget.
- * @param {unknown} value - requested seconds.
- * @returns {number} seconds to wait.
- */
-export function clampWait(value) {
-  if (value === undefined || value === null) return DEFAULT_RUN_WAIT_SECONDS
-  if (!Number.isFinite(value)) return DEFAULT_RUN_WAIT_SECONDS
-  return Math.max(0, Math.min(MAX_RUN_WAIT_SECONDS, Number(value)))
 }
 
 /**

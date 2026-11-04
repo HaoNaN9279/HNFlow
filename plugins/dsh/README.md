@@ -4,8 +4,10 @@ HNFlow 确定性工作流在 DeepSeek Harness 里的模式插件。设计与边�
 [`docs/dsh-plugin-plan.md`](../../docs/dsh-plugin-plan.md)。
 
 - 工作流是**资产**，放在库目录里；工作区只存**引用**与**覆盖**；
-- Agent 会话通过 `hnflow` 工具与 `/workflow` 命令显式点名工作流，不猜；
-- 运行由 Python 引擎（`python -m deerflow.workflow.rpc`）执行，插件只做呈现与编排。
+- 会话里触发工作流只有一条路径：`/workflow <name> <提示词>` 把引用交给 AI，AI 用 `hnflow` 工具
+  启动，回报一行就结束——**会话只负责启动**；
+- 运行由 Python 引擎（`python -m deerflow.workflow.rpc`）执行，插件只做呈现与编排；
+- 不经对话的直接运行属于 HNFlow 页面（待实现），不属于会话。
 
 ## 依赖
 
@@ -84,33 +86,46 @@ models:
 
 ## 用法
 
+### 会话里：只启动
+
 ```text
 /workflow                         列出本工作区引用的工作流
-/workflow run publish             运行并等待（完成或等待人工）
-/workflow run publish target=staging
-/workflow status <runId>
-/workflow events <runId>          节点时间线（重启后仍在）
-/workflow cancel <runId>
-/workflow resume <runId>          续跑被引擎重启打断的 run
-/workflow tasks [runId]           待办人工任务
-/workflow submit <taskId> note=ok 提交并继续运行
-/workflow ref add <assetId> --pin 3 --alias publish
-/workflow ref remove publish
-/workflow ref pin publish --to 4   把引用移到新 revision（不带 --to 跟最新）
-/workflow asset list
-/workflow asset new "Release flow" 新建空工作流（start → end 骨架）
-/workflow asset import ./old.workflow.json
-/workflow asset delete <assetId>
-/workflow override diff publish
-/workflow override reset publish
+/workflow publish 把 staging 的产物发布出去   交给 AI 启动
 ```
 
-工具 `hnflow`：`action = list | get | run | status | cancel | resume | assets | task_list | task_submit`，
-`run` 必须带 `workflow`。run 停在人工节点时工具会弹问题卡并提交答案；`interactive:false` 可改为只报告待办。
+`/workflow` 不再直接执行工作流，也没有 `run` / `status` / `submit` 这些子命令。
+它只做一件事：把 `<hnflow_workflow name="…" asset="…" />` 标签和你的提示词合成一条用户消息，
+让 AI 用 `hnflow` 工具启动这次运行。启动后 AI 只回一行（runId + 状态）就结束本轮，
+不轮询、不等待、不替你回答人工节点——进度看 HNFlow 页面。
 
-工具 `hnflow_author`：`action = schema | validate | save_override`。
-它**没有**写资产的动作——资产只能由用户执行 `/workflow save asset <name>` 更新，
+### 工具
+
+`hnflow`：`action = list | get | run | status | cancel | resume | events | assets | task_list | task_submit`，
+`run` 必须带 `workflow`，`input` 从提示词推导；`run` 在引擎接受后立即返回，不等结果。
+`status` / `events` / `task_list` 用于回答用户之后的追问，不用于轮询。
+
+`hnflow_author`：`action = schema | validate | save_override`。
+它**没有**写资产的动作——资产只能由用户执行 `/hnflow save asset <name>`（或 HNFlow 页面）更新，
 Agent 的修改一律落到工作区覆盖。
+
+### 页面与资产库：`/hnflow`
+
+任何会话都能用，读写定义，但**没有任何运行能力**：
+
+```text
+/hnflow ref list|add|remove|pin
+/hnflow ref add <assetId> --pin 3 --alias publish
+/hnflow ref pin publish --to 4     把引用移到新 revision（不带 --to 跟最新）
+/hnflow asset list
+/hnflow asset new "Release flow"   新建空工作流（start → end 骨架）
+/hnflow asset import ./old.workflow.json
+/hnflow asset delete <assetId>
+/hnflow override diff publish
+/hnflow override reset publish
+/hnflow save asset publish         先给 diff，加 --yes 才写回资产
+/hnflow node publish greet {"value": "x"}   写工作区覆盖
+/hnflow doctor [--save]            引擎安装位置
+```
 
 ### 自带的冒烟工作流
 
@@ -123,16 +138,13 @@ start → greet(data:assign) → confirm(human:task) → result(data:assign) →
 导入并引用（在目标工作区里执行）：
 
 ```text
-/workflow asset import <插件目录>/examples/smoke-test.workflow.json
-/workflow ref add <返回的 assetId> --alias smoke
-/workflow run smoke
+/hnflow asset import <插件目录>/examples/smoke-test.workflow.json
+/hnflow ref add <返回的 assetId> --alias smoke
+/workflow smoke 跑一遍冒烟流程
 ```
 
-它会在 `confirm` 停下，任务监视里出现一条待办；提交后跑到 `end`：
-
-```text
-/workflow submit <taskId> note="ok"
-```
+它会在 `confirm` 停下，任务监视里出现一条待办；在页面里处理，或让 AI 用
+`task_submit` 提交，之后跑到 `end`。
 
 ## 界面
 
@@ -157,8 +169,8 @@ start → greet(data:assign) → confirm(human:task) → result(data:assign) →
 
 画布位置优先用 `metadata.canvas.positions`，否则用编辑器同款三列网格。
 
-参数编辑、保存回资产等写操作仍走命令：`/workflow node <name> <nodeId> <json>`（写工作区覆盖）、
-`/workflow override reset <name>`、`/workflow save asset <name>`（先 diff，再 `--yes`）。
+参数编辑、保存回资产等写操作走 `/hnflow`：`/hnflow node <name> <nodeId> <json>`（写工作区覆盖）、
+`/hnflow override reset <name>`、`/hnflow save asset <name>`（先 diff，再 `--yes`）。
 
 ## 数据布局
 
@@ -180,7 +192,7 @@ $DSH_HOME/hnflow/state/                   # 引擎运行态（可配置 stateDir
 解析顺序：覆盖 → 引用固定 revision 的快照 → 资产最新 revision。
 
 重启语义：`waiting_human` 的 run 与待办原样保留、可直接提交；被进程中断的 `running` run
-标记为 `interrupted`，用 `/workflow resume <runId>` 从最后 checkpoint 继续。
+标记为 `interrupted`，**不会自动续跑**——要续跑就让 AI 调 `hnflow` 的 `resume`（或页面的续跑入口）。
 
 ## 测试
 

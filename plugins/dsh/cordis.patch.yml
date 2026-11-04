@@ -19,13 +19,14 @@
 #   tool is called `hnflow`.
 
 - insert:
-    # Root row: the browser bundle plus the resident viewer command.
+    # Root row: the browser bundle plus the resident `/hnflow` command.
     #
     # It is a second host instance of the same package with `role: viewer`, so
-    # `/hnflow ui …` exists in EVERY session and the page never depends on an
-    # HNFlow-mode session being open. The viewer registers no tools and starts
-    # no engine: it reads the engine's state files, which keeps it away from the
-    # checkpoint database the mode row owns.
+    # `/hnflow ui …` (page data) and the library commands exist in EVERY session
+    # and the page never depends on an HNFlow-mode session being open. The viewer
+    # registers no tools, starts no engine, and cannot start a run: it reads the
+    # engine's state files, which keeps it away from the checkpoint database the
+    # mode row owns.
     - id: hnflow-ui
       name: dsh-hnflow
       config:
@@ -48,9 +49,10 @@
           # `vibestack` mode. Remove this row for a workflows-only mode.
           - id: vibestack
             name: dsh-vibestack
-          # Host half of this bundle: the `hnflow` tool, `/workflow`, and the
-          # workflow index section. The model entry routes AI nodes through the
-          # harness (`ctx.llm`), so no provider credential lives in HNFlow.
+          # Host half of this bundle: the `hnflow` tools, `/workflow` (a workflow
+          # reference plus your prompt, handed to the model), and the workflow
+          # index section. The model entry routes AI nodes through the harness
+          # (`ctx.llm`), so no provider credential lives in HNFlow.
           - id: hnflow
             name: dsh-hnflow
             config:

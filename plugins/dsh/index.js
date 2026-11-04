@@ -2,9 +2,13 @@
  * HNFlow mode for DeepSeek Harness.
  *
  * The plugin is mounted as a child row of the `hnflow` agent preset, so every
- * registration — the `workflow` tool, the `/workflow` command family, and the
+ * registration — the `hnflow` tools, the `/workflow` reference command, and the
  * workflow index in the system prompt — belongs to that mode. The `vibestack`
  * mode keeps its capability groups and gains no workflow entry point.
+ *
+ * A session never runs a workflow by itself: `/workflow <name> <prompt>` turns
+ * the reference into one user turn, that turn calls the tool, and the tool only
+ * starts the run. The engine owns the rest; the page reports it.
  *
  * Everything here is failure-open: a missing interpreter, an unreadable
  * library, or an unexpected payload degrades to a log line, never to a broken
@@ -16,7 +20,6 @@ import { fileURLToPath } from 'node:url'
 
 import { USAGE, createViewerCommand, createWorkflowCommand } from './lib/commands.js'
 import { createWorkflowAuthorTool } from './lib/author.js'
-import { questionsForTask } from './lib/questions.js'
 import { HnflowService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createWorkflowTool } from './lib/tools.js'
@@ -52,66 +55,6 @@ export function apply(ctx, rawConfig) {
     }
   }
 
-  const service = new HnflowService({ config: rawConfig, logger, llm: llmAdapter(ctx) })
-  // The root row exists only so the client half is always available; it owns no
-  // host behaviour and must not touch any session.
-  if (service.config.host === false) return
-  // The resident viewer row: page data for every session, no tools, no engine.
-  if (service.config.role === 'viewer') {
-    ctx.inject(['commands'], (scope) => {
-      try {
-        scope.commands.register(createViewerCommand({ service }))
-      } catch (error) {
-        warn('hnflow: cannot register /hnflow: %o', error)
-      }
-    })
-    ctx.effect(() => () => {
-      service.dispose()
-      return undefined
-    }, 'hnflow: stop the viewer row')
-    return
-  }
-  /** @type {Map<string, string>} */
-  const indexCache = new Map()
-
-  // Resume what a previous process left half-done: an engine restart marks its
-  // runs `interrupted` even though the checkpoints are intact. Deferred so the
-  // session list is already usable when the engine starts.
-  if (service.config.autoResume) {
-    const timer = setTimeout(() => {
-      void service
-        .resumeInterrupted()
-        .then((outcome) => {
-          if (outcome.resumed.length > 0) warn('hnflow: resumed %d interrupted run(s)', outcome.resumed.length)
-          for (const failure of outcome.failed) warn('hnflow: cannot resume %s: %s', failure.runId, failure.message)
-        })
-        .catch((error) => warn('hnflow: auto-resume failed: %o', error))
-    }, 4000)
-    ctx.effect(() => () => {
-      clearTimeout(timer)
-      return undefined
-    }, 'hnflow: auto-resume timer')
-  }
-
-  /**
-   * Ask the user about one waiting human task and build its submission payload.
-   *
-   * Returns null whenever the question path is unavailable (no service, no live
-   * agent, nothing chosen); the caller then leaves the task pending rather than
-   * submitting a guess.
-   * @param {Record<string, any>} task - pending task summary.
-   * @param {{agent?: unknown, signal?: AbortSignal}} exec - tool execution context.
-   * @returns {Promise<Record<string, any> | null>} payload or null.
-   */
-  const askTask = async (task, exec) => {
-    const userQuestions = ctx.get('userQuestions')
-    if (typeof userQuestions?.ask !== 'function' || exec?.agent === undefined) return null
-    const { questions, build } = questionsForTask(task)
-    if (questions.length === 0) return null
-    const answer = await userQuestions.ask({ questions, agent: exec.agent, signal: exec.signal })
-    return build(answer)
-  }
-
   /**
    * Effective working directory of an agent session.
    * @param {unknown} agent - agent handle.
@@ -127,6 +70,60 @@ export function apply(ctx, rawConfig) {
     } catch {
       return null
     }
+  }
+
+  const service = new HnflowService({ config: rawConfig, logger, llm: llmAdapter(ctx) })
+  // The root row exists only so the client half is always available; it owns no
+  // host behaviour and must not touch any session.
+  if (service.config.host === false) return
+  // The resident viewer row: page data and the library for every session, no
+  // tools, no engine, and no way to start a run.
+  if (service.config.role === 'viewer') {
+    ctx.inject(['commands'], (scope) => {
+      try {
+        scope.commands.register(createViewerCommand({ service, cwdOf }))
+      } catch (error) {
+        warn('hnflow: cannot register /hnflow: %o', error)
+      }
+    })
+    ctx.effect(() => () => {
+      service.dispose()
+      return undefined
+    }, 'hnflow: stop the viewer row')
+    return
+  }
+  /** @type {Map<string, string>} */
+  const indexCache = new Map()
+  /** Lazily imported `@deepseek-ai/dsh-llm`; reset on failure so a retry can succeed. */
+  let llmModule = null
+
+  /**
+   * Hand one composed prompt to the model as an ordinary user turn.
+   *
+   * `/workflow <name> <prompt>` only references a workflow; the model decides to
+   * start it through the `hnflow` tool, which is what keeps the choice of run —
+   * and its input — in one place. The message is a plain user message, so it
+   * replays, forks, and renders like anything else the person types.
+   * @param {unknown} agent - the command's agent handle.
+   * @param {string} text - complete prompt for the new turn.
+   * @returns {Promise<void>} resolves once the message is queued.
+   */
+  const startTurn = async (agent, text) => {
+    const handle = /** @type {{followup?: Function} | undefined} */ (agent ?? undefined)
+    if (typeof handle?.followup !== 'function') {
+      throw Object.assign(new Error('this session cannot accept a new turn'), { code: 'turn-unavailable' })
+    }
+    if (llmModule === null) {
+      llmModule = loadHarnessModule(ctx, '@deepseek-ai/dsh-llm').catch((error) => {
+        llmModule = null
+        throw error
+      })
+    }
+    const createUserMessage = (await llmModule)?.createUserMessage
+    if (typeof createUserMessage !== 'function') {
+      throw Object.assign(new Error('@deepseek-ai/dsh-llm does not export createUserMessage'), { code: 'turn-unavailable' })
+    }
+    handle.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   }
 
   /**
@@ -151,7 +148,7 @@ export function apply(ctx, rawConfig) {
           warn('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the workflow tools stay unregistered')
           return
         }
-        scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf, askTask }))
+        scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf }))
         scope.tools.register(createWorkflowAuthorTool({ defineTool, service, cwdOf }))
       } catch (error) {
         warn('hnflow: cannot register the workflow tool: %o', error)
@@ -161,7 +158,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.inject(['commands'], (scope) => {
     try {
-      scope.commands.register(createWorkflowCommand({ service, cwdOf }))
+      scope.commands.register(createWorkflowCommand({ service, cwdOf, startTurn }))
     } catch (error) {
       warn('hnflow: cannot register /workflow: %o', error)
     }

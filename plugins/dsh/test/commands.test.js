@@ -1,294 +1,141 @@
 /**
- * `/workflow`: parsing, routing, and the commands that never reach the model.
+ * `/workflow`: one reference, one prompt, one AI turn — and nothing else.
+ *
+ * The properties pinned here are the ones the product decision rests on: the
+ * command never starts a run itself, it only resolves a name the workspace
+ * actually references, and the person's prompt reaches the model verbatim.
  */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { USAGE, createWorkflowCommand, formatOverrideDiff, parseInputs, tokenize } from '../lib/commands.js'
+import { USAGE, composeWorkflowPrompt, createWorkflowCommand, tokenize } from '../lib/commands.js'
 
 /**
  * Build the command over a scripted service.
- * @param {Record<string, any>} overrides - service methods to replace.
- * @returns {{handler: Function, calls: Record<string, any>[]}} command and call log.
+ * @param {Record<string, any>} [overrides] - service methods to replace.
+ * @returns {{handler: Function, turns: {agent: unknown, text: string}[], calls: Record<string, any>[]}} command and call log.
  */
 function makeCommand(overrides = {}) {
+  /** @type {{agent: unknown, text: string}[]} */
+  const turns = []
   /** @type {Record<string, any>[]} */
   const calls = []
   const base = {
-    listWorkflows: async () => [{ alias: 'publish', assetId: 'wf-1', description: '发布', pinnedRevision: 3, currentRevision: 3, hasOverride: false, drift: false, enabled: true, missing: false }],
-    startRun: async (input) => {
-      calls.push({ method: 'startRun', input })
-      return { runId: 'run-1', status: 'queued', resolved: { source: 'ref', revision: 3 } }
+    listWorkflows: async () => [
+      { alias: 'publish', assetId: 'wf-1', description: '发布', pinnedRevision: 3, currentRevision: 3, hasOverride: false, drift: false, enabled: true, missing: false },
+    ],
+    resolve: async (_cwd, key) => {
+      calls.push({ method: 'resolve', key })
+      if (key !== 'publish') {
+        const error = new Error(`no workflow named ${key} in this workspace`)
+        error.code = 'ref-missing'
+        throw error
+      }
+      return { key, alias: 'publish', assetId: 'wf-1', assetName: '发布', definition: { nodes: [], edges: [] }, source: 'ref', revision: 3, currentRevision: 4, drift: true }
     },
-    waitFor: async () => ({ runId: 'run-1', status: 'succeeded', error: null, nodes: [], result: { in: 'ok' } }),
-    status: async () => ({ runId: 'run-1', status: 'running', error: null, nodes: [], result: null }),
-    cancel: async () => ({ runId: 'run-1', status: 'running', cancelled: true }),
-    resume: async () => ({ runId: 'run-1', status: 'running' }),
-    tasks: async () => ({ tasks: [{ taskId: 'task-9', runId: 'run-1', nodeId: 'approve', kind: 'task', description: 'confirm', outputSpec: { ports: [{ name: 'note', type: 'data', required: true }] } }] }),
-    submitTask: async (input) => ({ taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }),
-    listAssets: async () => [{ id: 'wf-1', name: '发布', revision: 3 }],
-    createAsset: async (input) => ({ assetId: 'wf-new', name: input.name, revision: 1 }),
-    importAsset: async (input) => ({ assetId: 'wf-imp', name: 'Imported', revision: 1, source: input.path }),
-    deleteAsset: async (input) => ({ assetId: input.assetId, path: 'x', hadOverride: true }),
-    repinRef: async (input) => ({ key: input.key, assetId: 'wf-1', revision: input.revision ?? 4, currentRevision: 4 }),
-    panelPayload: async (_cwd, key) => ({
-      workspace: '/ws',
-      workflows: [{ alias: 'publish', assetId: 'wf-1', hasOverride: false, drift: false, pinnedRevision: 3, currentRevision: 3 }],
-      selected: { key: key ?? 'publish', assetId: 'wf-1', source: 'ref', revision: 3, definition: { nodes: [{ id: 'start', type: 'flow:start' }], edges: [] } },
-    }),
-    resolve: async () => ({ assetId: 'wf-1', source: 'override', revision: 3, currentRevision: 3 }),
-    saveAsset: async (input) => ({ assetId: 'wf-1', name: '发布流程', previousRevision: 3, revision: 4, key: input.key }),
-    resetOverride: async () => ({ removed: true, assetId: 'wf-1' }),
-    storesFor: () => ({
-      workspace: {
-        addRef: async (input) => ({ ...input, alias: input.alias }),
-        removeRef: async () => ({ alias: 'publish', assetId: 'wf-1' }),
-        readOverride: async () => ({ assetId: 'wf-1', baseRevision: 2, definition: { a: 2 } }),
-      },
-      assets: {
-        read: async () => ({ asset: { revision: 3 }, definition: { a: 1 } }),
-      },
-    }),
     ...overrides,
   }
-  const command = createWorkflowCommand({ service: base, cwdOf: () => '/ws' })
-  return { handler: command.handler, calls }
+  const agent = { session: { id: 'session-1' } }
+  const command = createWorkflowCommand({
+    service: base,
+    cwdOf: () => '/ws',
+    startTurn: async (target, text) => {
+      turns.push({ agent: target, text })
+    },
+  })
+  return { handler: (invocation) => command.handler({ agent, ...invocation }), turns, calls }
 }
 
 test('tokenize honours quotes and collapses whitespace', () => {
-  assert.deepEqual(tokenize('  run "publish flow" a=1 '), ['run', 'publish flow', 'a=1'])
+  assert.deepEqual(tokenize('  "publish flow" a=1 '), ['publish flow', 'a=1'])
   assert.deepEqual(tokenize(''), [])
 })
 
-test('parseInputs JSON-decodes values with a string fallback', () => {
-  assert.deepEqual(parseInputs(['target=staging', 'count=3', 'flag=true', 'name']), {
-    input: { target: 'staging', count: 3, flag: true },
-    rest: ['name'],
-  })
-})
-
-test('bare /workflow lists the workspace refs', async () => {
-  const { handler } = makeCommand()
+test('bare /workflow lists the workspace refs and the usage', async () => {
+  const { handler, turns } = makeCommand()
   const result = await handler({ rawInput: '' })
+
   assert.equal(result.kind, 'success')
   assert.match(result.text, /- publish \(wf-1/u)
+  assert.match(result.text, /\/workflow <name> <prompt>/u)
+  assert.equal(turns.length, 0)
 })
 
-test('run passes typed inputs and waits for the run', async () => {
-  const { handler, calls } = makeCommand()
-  const result = await handler({ rawInput: 'run publish target=staging count=2' })
-
-  assert.equal(result.kind, 'success')
-  assert.deepEqual(calls[0].input, { cwd: '/ws', key: 'publish', inputs: { target: 'staging', count: 2 } })
-  assert.match(result.text, /run run-1: succeeded/u)
-  assert.match(result.text, /source: ref r3/u)
-})
-
-test('missing arguments come back as usage errors, not exceptions', async () => {
-  const { handler } = makeCommand()
-  const run = await handler({ rawInput: 'run' })
-  assert.equal(run.kind, 'error')
-  assert.match(run.text, /workflow-required/u)
-
-  const unknown = await handler({ rawInput: 'nope' })
-  assert.match(unknown.text, /unknown-subcommand/u)
-  assert.match(unknown.text, /\/workflow — list/u)
-})
-
-test('a coded service failure keeps its code', async () => {
-  const { handler } = makeCommand({
-    status: async () => {
-      const error = new Error('no run named run-404')
-      error.code = 'unknown-run'
-      throw error
-    },
-  })
-  const result = await handler({ rawInput: 'status run-404' })
-  assert.equal(result.kind, 'error')
-  assert.equal(result.text, 'workflow: unknown-run: no run named run-404')
-})
-
-test('ref add pins the asset revision by default and validates --pin', async () => {
-  const { handler } = makeCommand()
-  const added = await handler({ rawInput: 'ref add wf-1 --alias publish' })
-  assert.equal(added.kind, 'success')
-  assert.match(added.text, /at r3 as publish/u)
-
-  const bad = await handler({ rawInput: 'ref add wf-1 --pin nope' })
-  assert.match(bad.text, /invalid-pin/u)
-})
-
-test('override diff and reset stay inside the workspace', async () => {
-  const { handler } = makeCommand()
-  const diff = await handler({ rawInput: 'override diff publish' })
-  assert.equal(diff.kind, 'success')
-  assert.match(diff.text, /override for wf-1 \(base r2\), 1 change\(s\)/u)
-  assert.match(diff.text, /- a: 1 → 2/u)
-
-  const reset = await handler({ rawInput: 'override reset publish' })
-  assert.match(reset.text, /dropped the override for publish/u)
-})
-
-test('the diff summary reports an unchanged override clearly', () => {
-  const text = formatOverrideDiff({ assetId: 'wf-1', baseRevision: 1, definition: { a: 1 } }, { a: 1 })
-  assert.match(text, /no difference from the asset definition/u)
-})
-
-test('help prints the full command list', async () => {
-  const { handler } = makeCommand()
+test('help is the same answer and starts no turn', async () => {
+  const { handler, turns } = makeCommand()
   const result = await handler({ rawInput: 'help' })
-  assert.equal(result.text, USAGE)
+
+  assert.equal(result.text.startsWith(USAGE), true)
+  assert.equal(turns.length, 0)
 })
 
-test('tasks lists pending human work', async () => {
-  const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'tasks run-1' })
+test('a reference plus a prompt becomes exactly one AI turn', async () => {
+  const { handler, turns, calls } = makeCommand()
+  const result = await handler({ rawInput: 'publish 把 staging 的构建产物发布出去，注意版本号' })
+
   assert.equal(result.kind, 'success')
-  assert.match(result.text, /- task-9 \(run run-1, node approve, task\) fields: note:data!/u)
+  assert.match(result.text, /已交给 AI：publish（wf-1，r3）/u)
+  assert.deepEqual(calls, [{ method: 'resolve', key: 'publish' }])
+  assert.equal(turns.length, 1)
+  assert.equal(turns[0].agent.session.id, 'session-1')
+  assert.match(turns[0].text, /^<hnflow_workflow name="publish" asset="wf-1" revision="3" source="ref" \/>/u)
+  assert.match(turns[0].text, /把 staging 的构建产物发布出去，注意版本号/u)
 })
 
-test('node set edits one node through the raw remainder', async () => {
-  /** @type {Record<string, any>[]} */
-  const calls = []
-  const { handler } = makeCommand({
-    setNodeParams: async (input) => {
-      calls.push(input)
-      return { key: input.key, assetId: 'wf-1', nodeId: input.nodeId, baseRevision: 3 }
+test('the prompt is preserved verbatim, including quotes and newlines', async () => {
+  const { handler, turns } = makeCommand()
+  await handler({ rawInput: 'publish 第一行\n第二行 "带 空格" 的文本' })
+
+  assert.match(turns[0].text, /第一行\n第二行 "带 空格" 的文本$/u)
+})
+
+test('a name the workspace does not reference is refused before any turn', async () => {
+  const { handler, turns } = makeCommand()
+  const result = await handler({ rawInput: 'release 帮我发布' })
+
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /ref-missing/u)
+  assert.match(result.text, /本工作区没有引用名叫 release 的工作流/u)
+  assert.match(result.text, /- publish \(wf-1/u)
+  assert.equal(turns.length, 0)
+})
+
+test('a reference without a prompt asks for one instead of starting a turn', async () => {
+  const { handler, turns } = makeCommand()
+  const result = await handler({ rawInput: 'publish' })
+
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /usage: \/workflow publish <提示词>/u)
+  assert.equal(turns.length, 0)
+})
+
+test('a session that cannot start a turn reports it instead of throwing', async () => {
+  const command = createWorkflowCommand({
+    service: {
+      listWorkflows: async () => [],
+      resolve: async (_cwd, key) => ({ key, assetId: 'wf-1', source: 'override', revision: 2, currentRevision: 2 }),
+    },
+    cwdOf: () => '/ws',
+    startTurn: async () => {
+      throw Object.assign(new Error('this session cannot accept a new turn'), { code: 'turn-unavailable' })
     },
   })
+  const result = await command.handler({ agent: {}, rawInput: 'publish 去做' })
 
-  const ok = await handler({ rawInput: 'node publish greet {"value": "a  b"}' })
-  assert.equal(ok.kind, 'success')
-  assert.match(ok.text, /updated greet in the workspace override for publish \(base r3\)/u)
-  assert.deepEqual(calls[0].params, { value: 'a  b' })
-
-  const bad = await handler({ rawInput: 'node publish greet {nope}' })
-  assert.equal(bad.kind, 'error')
-  assert.match(bad.text, /params-invalid/u)
-
-  const usage = await handler({ rawInput: 'node publish' })
-  assert.match(usage.text, /usage: \/workflow node/u)
+  assert.equal(result.kind, 'error')
+  assert.equal(result.text, 'workflow: turn-unavailable: this session cannot accept a new turn')
 })
 
-test('panel returns one JSON payload the client can draw', async () => {
-  const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'panel publish' })
+test('a session without a workspace is told so', async () => {
+  const command = createWorkflowCommand({ service: {}, cwdOf: () => null, startTurn: async () => {} })
+  const result = await command.handler({ rawInput: 'publish 去做' })
 
-  assert.equal(result.kind, 'success')
-  const payload = JSON.parse(result.text)
-  assert.equal(payload.workflows[0].alias, 'publish')
-  assert.equal(payload.selected.key, 'publish')
-  assert.equal(payload.selected.definition.nodes[0].id, 'start')
+  assert.equal(result.kind, 'error')
+  assert.match(result.text, /no workspace directory/u)
 })
 
-test('events prints the run timeline', async () => {
-  const { handler } = makeCommand({
-    events: async () => ({ events: [{ seq: 1, at: '2026-11-03T12:00:00.000Z', type: 'run/started', nodeId: null, data: {} }] }),
-  })
-  const result = await handler({ rawInput: 'events run-1' })
-  assert.equal(result.kind, 'success')
-  assert.match(result.text, /run\/started/u)
-
-  const usage = await handler({ rawInput: 'events' })
-  assert.match(usage.text, /run-id-required/u)
-})
-
-test('inbox returns the pending tasks as JSON', async () => {
-  const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'inbox' })
-
-  assert.equal(result.kind, 'success')
-  const payload = JSON.parse(result.text)
-  assert.equal(payload.tasks[0].taskId, 'task-9')
-})
-
-test('submit accepts a JSON payload as well as k=v pairs', async () => {
-  /** @type {Record<string, any>[]} */
-  const submitted = []
-  const { handler } = makeCommand({
-    submitTask: async (input) => {
-      submitted.push(input)
-      return { taskId: input.taskId, runId: 'run-1', status: 'running', revision: 2 }
-    },
-  })
-
-  const json = await handler({ rawInput: 'submit task-9 {"note": "a  b"}' })
-  assert.equal(json.kind, 'success')
-  assert.deepEqual(submitted[0], { taskId: 'task-9', payload: { note: 'a  b' } })
-
-  await handler({ rawInput: 'submit task-9 note=ok count=2' })
-  assert.deepEqual(submitted[1].payload, { note: 'ok', count: 2 })
-
-  const bad = await handler({ rawInput: 'submit task-9 {nope}' })
-  assert.equal(bad.kind, 'error')
-  assert.match(bad.text, /payload-invalid/u)
-})
-
-test('asset new / import / delete manage the library', async () => {
-  const { handler } = makeCommand()
-
-  const created = await handler({ rawInput: 'asset new "Release flow"' })
-  assert.equal(created.kind, 'success')
-  assert.match(created.text, /created Release flow \(wf-new, r1\)/u)
-  assert.match(created.text, /ref add wf-new/u)
-
-  const imported = await handler({ rawInput: 'asset import ./flow.json --name Imported' })
-  assert.match(imported.text, /imported Imported as wf-imp \(r1\) from \.\/flow\.json/u)
-
-  const deleted = await handler({ rawInput: 'asset delete wf-imp' })
-  assert.match(deleted.text, /deleted wf-imp \(its workspace override was removed too\)/u)
-
-  const usage = await handler({ rawInput: 'asset new' })
-  assert.equal(usage.kind, 'error')
-  assert.match(usage.text, /usage: \/workflow asset new/u)
-})
-
-test('ref pin moves or frees a reference', async () => {
-  const { handler } = makeCommand()
-
-  const pinned = await handler({ rawInput: 'ref pin publish --to 4' })
-  assert.equal(pinned.kind, 'success')
-  assert.match(pinned.text, /publish pinned to r4 \(asset is at r4\)/u)
-
-  const latest = await handler({ rawInput: 'ref pin publish' })
-  assert.match(latest.text, /publish pinned to r4/u)
-
-  const bad = await handler({ rawInput: 'ref pin publish --to nope' })
-  assert.match(bad.text, /invalid-pin/u)
-})
-
-test('save asset is a dry run until --yes', async () => {
-  const { handler } = makeCommand()
-
-  const dry = await handler({ rawInput: 'save asset publish' })
-  assert.equal(dry.kind, 'success')
-  assert.match(dry.text, /this would write publish back to wf-1: r3 → r4/u)
-  assert.match(dry.text, /rerun with --yes to save/u)
-
-  const saved = await handler({ rawInput: 'save asset publish --yes' })
-  assert.equal(saved.kind, 'success')
-  assert.match(saved.text, /saved 发布流程 \(wf-1\) as revision 4 \(was r3\)/u)
-  assert.match(saved.text, /ref list/u)
-
-  const usage = await handler({ rawInput: 'save' })
-  assert.equal(usage.kind, 'error')
-  assert.match(usage.text, /usage: \/workflow save asset <name>/u)
-})
-
-test('resume continues an interrupted run', async () => {
-  const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'resume run-1' })
-  assert.equal(result.kind, 'success')
-  assert.match(result.text, /^resumed run-1/u)
-})
-
-test('submit answers a task and waits for the run', async () => {
-  const { handler } = makeCommand()
-  const result = await handler({ rawInput: 'submit task-9 note=ok' })
-  assert.equal(result.kind, 'success')
-  assert.match(result.text, /^submitted task-9/u)
-
-  const missing = await handler({ rawInput: 'submit' })
-  assert.match(missing.text, /task-id-required/u)
+test('the composed prompt quotes the tag attributes', () => {
+  const text = composeWorkflowPrompt({ key: 'a"<b>', assetId: 'wf-1', revision: null, source: 'override' }, 'go')
+  assert.equal(text, '<hnflow_workflow name="a&quot;&lt;b&gt;" asset="wf-1" source="override" />\n\ngo')
 })

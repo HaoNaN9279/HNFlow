@@ -33,8 +33,6 @@ export const DEFAULT_CONFIG = Object.freeze({
    * that keeps the page alive without any HNFlow session).
    */
   role: 'all',
-  /** Continue runs a restart interrupted, instead of waiting for `/workflow resume`. */
-  autoResume: true,
   /**
    * Model catalog the engine installs for AI nodes (HNFlow `models[]` entries:
    * `name`, `use`, `model`, `api_base`, `api_key`, …). Empty means the engine

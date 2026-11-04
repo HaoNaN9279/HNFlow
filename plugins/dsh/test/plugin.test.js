@@ -119,7 +119,7 @@ test('pre-step refreshes the index the prompt section serves', async () => {
 
   assert.deepEqual(decision, { kind: 'allow' })
   const text = plugin.sections[0].text({ agent: { session: plugin.session } })
-  assert.match(text, /Call the `hnflow` tool/u)
+  assert.match(text, /Starting a run is the whole job of this session/u)
   assert.match(text, /- publish — 构建 → 发布/u)
 })
 
@@ -132,10 +132,10 @@ test('the tool row stays unregistered when dsh-tools is unavailable', async () =
   )
 })
 
-test('dispose and the auto-resume timer run through registered effects', async () => {
+test('dispose runs through the registered effect', async () => {
   const plugin = await makePlugin()
-  // The auto-resume timer is cancelled on dispose, and the engine is stopped.
-  assert.equal(plugin.effects.length, 2)
+  // Nothing schedules work at mount: the only effect stops the engine on unload.
+  assert.equal(plugin.effects.length, 1)
   for (const effect of plugin.effects) {
     assert.equal(typeof effect, 'function')
     assert.equal(effect(), undefined)

@@ -3,8 +3,8 @@
  * workspace only.
  *
  * Guardrail: this tool has no action that writes an asset. Changing what every
- * workspace runs next is a user decision, and the only surface that can do it is
- * the `/workflow save asset` command, which the user types themselves.
+ * workspace runs next is a user decision, and the surfaces that can do it are the
+ * person's own: `/hnflow save asset` (explicit, with a diff) or the HNFlow page.
  */
 
 import { diffDocuments } from './json.js'
@@ -108,7 +108,7 @@ export function createWorkflowAuthorTool(options) {
         })
         return [
           `saved the workspace override for ${key} (asset ${stored.assetId}, base r${stored.baseRevision})`,
-          'the asset is unchanged; `/workflow override diff` shows this diff, `/workflow override reset` drops it',
+          'the asset is unchanged; `/hnflow override diff` shows this diff, `/hnflow override reset` drops it',
           formatDefinitionDiff(before, definition),
         ].join('\n')
       }
@@ -120,7 +120,7 @@ export function createWorkflowAuthorTool(options) {
   return defineTool({
     name: 'hnflow_author',
     description:
-      'Inspect, validate, and edit HNFlow workflow definitions inside this workspace. `schema` lists node and port types, `validate` checks a definition, and `save_override` stores the definition as the workspace override. There is deliberately no action that writes the shared asset: only the user can run `/workflow save asset`.',
+      'Inspect, validate, and edit HNFlow workflow definitions inside this workspace. `schema` lists node and port types, `validate` checks a definition, and `save_override` stores the definition as the workspace override. There is deliberately no action that writes the shared asset: only the user can do that, through `/hnflow save asset` or the HNFlow page.',
     parameters: {
       action: { type: 'string', required: true, enum: AUTHOR_ACTIONS, description: 'Operation to perform.' },
       workflow: { type: 'string', description: 'Workflow alias or asset id; required by save_override.' },

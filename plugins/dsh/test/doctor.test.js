@@ -2,7 +2,7 @@
  * Where the engine comes from.
  *
  * The plugin ships as an installed copy, so the checkout that owns the
- * virtualenv is not reachable through the bundle path; `/workflow doctor --save`
+ * virtualenv is not reachable through the bundle path; `/hnflow doctor --save`
  * records it once and later starts read it back.
  */
 
@@ -11,7 +11,7 @@ import { mkdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import test from 'node:test'
 
-import { createWorkflowCommand } from '../lib/commands.js'
+import { createViewerCommand } from '../lib/commands.js'
 import { engineCwd, enginePointerPath, readEnginePointer, resolvePython } from '../lib/paths.js'
 
 /**
@@ -74,7 +74,7 @@ test('the doctor reports the installation and can record a new one', async () =>
       },
     }
     let resetCalls = 0
-    const command = createWorkflowCommand({ service, cwdOf: () => process.cwd() })
+    const command = createViewerCommand({ service })
 
     const report = await command.handler({ rawInput: 'doctor', agent: {} })
     assert.equal(report.kind, 'success')
