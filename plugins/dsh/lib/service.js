@@ -49,12 +49,26 @@ export class HnflowService {
     this.storesByCwd = new Map()
     /** @type {import('./engine.js').EngineClient | null} */
     this.engine = options.engine ?? null
+    /** Whether the client came from the caller (tests) and must not be dropped. */
+    this.engineInjected = options.engine !== undefined && options.engine !== null
     /** @type {{complete: (payload: Record<string, any>) => Promise<{text: string}>} | null} */
     this.llm = options.llm ?? null
     if (this.engine !== null) this.wireEngine()
     /** @type {Map<string, {runId: string, cwd: string, key: string, alias: string, assetId: string, startedAt: string}>} */
     this.runs = new Map()
     this.disposed = false
+  }
+
+  /**
+   * Drop the cached engine client so the next call re-reads the installation.
+   *
+   * `/workflow doctor --save` changes where the engine lives; without this the
+   * process would keep the old, possibly broken, client.
+   * @returns {void}
+   */
+  resetEngine() {
+    if (this.engineInjected) return
+    this.engine = null
   }
 
   /**

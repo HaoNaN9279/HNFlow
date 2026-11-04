@@ -6,7 +6,7 @@
  * copies. See `docs/dsh-plugin-plan.md` §5.
  */
 
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -85,10 +85,49 @@ export function overridePath(cwd, assetId, config) {
 }
 
 /**
+ * Where the plugin remembers the engine installation.
+ *
+ * The plugin is installed as a copy, so `REPO_ROOT` points into
+ * `node_modules`; the real checkout (interpreter + backend directory) has to be
+ * recorded once and read back on every later start.
+ * @returns {string} absolute path to `engine.json`.
+ */
+export function enginePointerPath() {
+  return path.join(dshHome(), 'hnflow', 'engine.json')
+}
+
+/**
+ * Read the recorded engine installation.
+ * @returns {{python?: string, cwd?: string} | null} the record, or null.
+ */
+export function readEnginePointer() {
+  const target = enginePointerPath()
+  if (!existsSync(target)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(target, 'utf8'))
+    return parsed !== null && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Record the engine installation for later starts.
+ * @param {{python: string, cwd: string}} record - interpreter and backend directory.
+ * @returns {string} the path written.
+ */
+export function writeEnginePointer(record) {
+  const target = enginePointerPath()
+  mkdirSync(path.dirname(target), { recursive: true })
+  writeFileSync(target, `${JSON.stringify({ python: record.python, cwd: record.cwd }, null, 2)}\n`, 'utf8')
+  return target
+}
+
+/**
  * Candidate interpreters for the engine, most specific first.
  *
- * The plugin is developed inside this repository, so the backend virtualenv is
- * the default; `DSH_HNFLOW_PYTHON` overrides it for other checkouts.
+ * Order: explicit config, environment, the recorded installation, then the
+ * in-repo virtualenv (which only resolves when the plugin runs from the repo).
  * @param {{enginePython?: string}} config - plugin config.
  * @returns {string | null} an existing interpreter path, or null when unknown.
  */
@@ -97,6 +136,8 @@ export function resolvePython(config) {
   if (explicit.length > 0) return explicit
   const fromEnv = typeof process.env.DSH_HNFLOW_PYTHON === 'string' ? process.env.DSH_HNFLOW_PYTHON.trim() : ''
   if (fromEnv.length > 0) return fromEnv
+  const recorded = readEnginePointer()?.python
+  if (typeof recorded === 'string' && recorded.length > 0 && existsSync(recorded)) return recorded
   const candidates =
     process.platform === 'win32'
       ? [path.join(REPO_ROOT, 'backend', '.venv', 'Scripts', 'python.exe')]
@@ -114,5 +155,8 @@ export function resolvePython(config) {
  */
 export function engineCwd(config) {
   const explicit = typeof config?.engineCwd === 'string' ? config.engineCwd.trim() : ''
-  return explicit.length > 0 ? path.resolve(explicit) : path.join(REPO_ROOT, 'backend')
+  if (explicit.length > 0) return path.resolve(explicit)
+  const recorded = readEnginePointer()?.cwd
+  if (typeof recorded === 'string' && recorded.length > 0 && existsSync(recorded)) return path.resolve(recorded)
+  return path.join(REPO_ROOT, 'backend')
 }

@@ -6,7 +6,10 @@
  * never a model turn, which is what makes "run this workflow now" exact.
  */
 
+import { existsSync } from 'node:fs'
+
 import { diffDocuments } from './json.js'
+import { engineCwd, enginePointerPath, readEnginePointer, resolvePython, writeEnginePointer } from './paths.js'
 import { formatRunStatus, formatTasks, formatTimeline, formatWorkflowList } from './tools.js'
 import { dispatchUi } from './ui.js'
 
@@ -35,6 +38,7 @@ export const USAGE = [
   '/workflow override reset <name> — drop the workspace override',
   '/workflow node <name> <nodeId> <json> — set one node\'s params in the workspace override',
   '/workflow ui <op> [base64url payload] — JSON for the browser surfaces (works without a session)',
+  '/workflow doctor [--python <path>] [--cwd <path>] [--save] — where the engine comes from (and record it)',
 ].join('\n')
 
 /**
@@ -226,8 +230,9 @@ export function createWorkflowCommand(options) {
       return formatTasks(result.tasks)
     }
 
-    if (head === 'inbox') return JSON.stringify(await service.tasks(undefined))
+    if (head === 'doctor') return doctorCommand(rest, service)
 
+    if (head === 'inbox') return JSON.stringify(await service.tasks(undefined))
     if (head === 'resume') {
       if (rest[0] === undefined) throw commandError('run-id-required', 'usage: /workflow resume <runId>')
       const resumed = await service.resume(rest[0])
@@ -269,6 +274,55 @@ export function createWorkflowCommand(options) {
     if (head === 'override') return await overrideCommand(rest, cwd)
 
     throw commandError('unknown-subcommand', USAGE)
+  }
+
+  /**
+   * `/workflow doctor [--python <path>] [--cwd <path>] [--save]`
+   *
+   * Reports how the engine would be started, and records an installation when
+   * asked. Needed because the plugin ships as an installed copy: the checkout
+   * that holds the virtualenv and the `deerflow` package is not discoverable
+   * from `node_modules`.
+   * @param {string[]} tokens - arguments after `doctor`.
+   * @param {import('./service.js').HnflowService} service - plugin service.
+   * @returns {string} report text.
+   */
+  const doctorCommand = (tokens, service) => {
+    /** @type {{python: string | null, cwd: string | null, save: boolean}} */
+    const options = { python: null, cwd: null, save: false }
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index]
+      if (token === '--save') options.save = true
+      else if (token === '--python') options.python = tokens[(index += 1)] ?? null
+      else if (token === '--cwd') options.cwd = tokens[(index += 1)] ?? null
+      else throw commandError('usage', 'usage: /workflow doctor [--python <path>] [--cwd <path>] [--save]')
+    }
+
+    const config = service.config ?? {}
+    const python = options.python ?? resolvePython(config)
+    const cwd = options.cwd ?? engineCwd(config)
+    const pointer = enginePointerPath()
+    const recorded = readEnginePointer()
+
+    if (options.save) {
+      if (python === null || !existsSync(python)) throw commandError('engine-python-missing', `no interpreter at ${python ?? '(none)'}`)
+      if (!existsSync(cwd)) throw commandError('engine-cwd-missing', `no engine directory at ${cwd}`)
+      const written = writeEnginePointer({ python, cwd })
+      service.resetEngine?.()
+      return [`recorded engine installation:`, `  python: ${python}`, `  cwd:    ${cwd}`, `  file:   ${written}`, 'restart the session commands with /workflow status <runId> or run again'].join('\n')
+    }
+
+    return [
+      'engine installation',
+      `  python:  ${python ?? '(not found)'}${python !== null && existsSync(python) ? '' : '  ← missing'}`,
+      `  cwd:     ${cwd}${existsSync(cwd) ? '' : '  ← missing'}`,
+      `  module:  ${config.engineModule ?? 'deerflow.workflow.rpc'}`,
+      `  record:  ${pointer}${recorded === null ? ' (none)' : ` → ${recorded.python ?? '?'}`}`,
+      `  env:     DSH_HNFLOW_PYTHON=${process.env.DSH_HNFLOW_PYTHON ?? ''}`,
+      '',
+      'an installed copy cannot find the repository by itself; record it once:',
+      '  /workflow doctor --python <backend/.venv/Scripts/python.exe> --cwd <repo>/backend --save',
+    ].join('\n')
   }
 
   /**

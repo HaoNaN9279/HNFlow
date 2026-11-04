@@ -867,22 +867,31 @@ window.__ModuleLoader__.load({
 
       react.useEffect(() => {
         let live = true;
+        let failures = 0;
+        let timer = null;
         const tick = async () => {
           try {
             const payload = await runUi("monitor", {});
             if (!live || payload === null) return;
+            failures = 0;
             const outcome = freshTasks(announced, payload.tasks);
             for (const id of outcome.seen) announced.add(id);
             if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
           } catch {
-            // a failed poll is not a user-facing error
+            // A broken engine must not flood the session log once per poll:
+            // three failures stop the poller until the window is reloaded.
+            failures += 1;
+            if (failures >= 3 && timer !== null) {
+              clearInterval(timer);
+              timer = null;
+            }
           }
         };
         void tick();
-        const timer = setInterval(() => void tick(), POLL_MS);
+        timer = setInterval(() => void tick(), POLL_MS);
         return () => {
           live = false;
-          clearInterval(timer);
+          if (timer !== null) clearInterval(timer);
         };
       }, []);
 
