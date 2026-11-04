@@ -26,6 +26,22 @@ window.__ModuleLoader__.load({
     const reactDom = require("react-dom");
     const h = react.createElement;
 
+    /**
+     * The host's own UI kit. Using it means the page tabs are the same control
+     * the session window uses instead of hand-styled buttons.
+     * @returns {Record<string, any> | null} the module, or null when absent.
+     */
+    function loadPrimitives() {
+      try {
+        const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+        return primitives !== null && typeof primitives === "object" ? primitives : null;
+      } catch {
+        return null;
+      }
+    }
+
+    const primitives = loadPrimitives();
+
     /** Services this client plugin consumes directly. */
     const inject = ["slots", "remote", "remote.commands"];
 
@@ -68,6 +84,7 @@ window.__ModuleLoader__.load({
       edge: { stroke: "rgba(127,127,127,0.55)", strokeWidth: 1.2, fill: "none" },
       empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
       errorBox: { margin: "10px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      linkButton: { padding: 0, border: "none", background: "transparent", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textDecoration: "underline", cursor: "pointer" },
       toast: { position: "fixed", right: "16px", bottom: "16px", zIndex: 2000, maxWidth: "320px", padding: "10px 12px", borderRadius: "12px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "var(--dsw-specific-menu, #1f1f1f)", boxShadow: "0 8px 24px rgba(0,0,0,0.3)", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary, inherit)" },
       board: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "12px 14px", boxSizing: "border-box" },
       boardTitle: { margin: "10px 0 6px", fontSize: "13px", fontWeight: 600 },
@@ -483,6 +500,37 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The page's tab row.
+     *
+     * Prefers the host's own `SegmentedTabs` — the same control the session
+     * window and the plugin manager use — so the row looks native and cannot
+     * pick up stray button chrome. A plain-button fallback keeps the page usable
+     * when the UI kit is not exposed.
+     * @param {{value: string, onChange: Function, busy?: boolean}} props - selection.
+     * @returns {unknown} element.
+     */
+    function PanelTabs(props) {
+      const value = props?.value;
+      const onChange = typeof props?.onChange === "function" ? props.onChange : () => {};
+      const Segmented = primitives === null ? undefined : primitives.SegmentedTabs;
+      if (typeof Segmented === "function") {
+        return h(Segmented, {
+          label: "HNFlow 页签",
+          value,
+          onChange,
+          items: TABS.map((entry) => ({ value: entry.id, label: entry.label, id: `hnflow-tab-${entry.id}`, panelId: `hnflow-panel-${entry.id}` })),
+        });
+      }
+      return h(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: "4px" } },
+        ...TABS.map((entry) =>
+          h("button", { type: "button", key: entry.id, style: entry.id === value ? { ...styles.tab, ...styles.tabActive } : styles.tab, onClick: () => onChange(entry.id) }, entry.label),
+        ),
+      );
+    }
+
+    /**
      * The HNFlow page: three tabs over one tree+canvas layout.
      * @param {{runUi: (op: string, payload: Record<string, any>) => Promise<Record<string, any> | null>}} props - injected command face.
      * @returns {unknown} element.
@@ -598,30 +646,17 @@ window.__ModuleLoader__.load({
             : null;
 
       const right = tab === "monitor" ? h(TaskBoard, { monitor }) : h(CanvasStage, { canvas });
+      const refresh = () => (tab === "monitor" ? void loadMonitor() : void loadTree());
 
       return h(
         "div",
         { style: styles.page },
         h(
           "div",
-          { style: styles.tabbar, role: "tablist" },
-          ...TABS.map((entry) =>
-            h(
-              "button",
-              {
-                type: "button",
-                key: entry.id,
-                // Plain buttons: a `role="tab"` would pick up the host's tab
-                // styling, which is exactly the box this row must not show.
-                "aria-pressed": tab === entry.id ? "true" : "false",
-                style: tab === entry.id ? { ...styles.tab, ...styles.tabActive } : styles.tab,
-                onClick: () => setTab(entry.id),
-              },
-              entry.label,
-            ),
-          ),
+          { style: styles.tabbar },
+          h(PanelTabs, { value: tab, onChange: setTab, busy }),
           h("span", { style: { flex: "1 1 auto" } }),
-          h("button", { type: "button", style: styles.tab, disabled: busy, onClick: () => (tab === "monitor" ? void loadMonitor() : void loadTree()) }, "刷新"),
+          h("button", { type: "button", style: styles.linkButton, disabled: busy, onClick: refresh }, "刷新"),
         ),
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
         h("div", { style: styles.body }, tab === "monitor" ? null : left, right),
