@@ -997,3 +997,16 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 工具 `run` 默认等 30s、可弹卡 | 只启动，立即返回 |
 | 启动 4s 后自动 `resumeInterrupted()` | 删除 |
 
+### 15.1 右下角提示窗走 Fetch 路由，不写会话
+
+`remote.commands.execute` 每次调用都会往它点名的会话追加 `command/run` + `command/done`，
+所以「窗口级」的待办提示不能走命令：之前它每 25 秒发一次 `/hnflow ui wait`，把当前会话的
+日志刷到 10MB / 1.6 万条。现在改为：
+
+- 宿主（`role: viewer` 那一行）注册 exact Fetch 路由 `GET /api/hnflow/tasks`
+  （`ctx.connection.fetch.register`，`lib/route.js`），返回与 `/hnflow ui monitor`
+  同源的 `{runs, tasks}`，读的还是引擎落盘的 `state/{runs,tasks}.json`，不起第二个引擎；
+- 客户端（`HnflowNotifier`）每 15 秒 `fetch` 一次（失败退到 60 秒），只弹信息 + 「关闭」，
+  不跳转、不点名会话、**不产生任何命令记录**；
+- 页面本身仍走 `/hnflow ui`，只在打开或点「刷新」时取数。
+

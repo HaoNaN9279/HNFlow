@@ -307,32 +307,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Whether any open session runs the HNFlow preset.
-     *
-     * The ambient watcher only runs then: workflow notifications belong to that
-     * mode, and polling from a foreign session would drop our command log lines
-     * into a session that has nothing to do with workflows.
-     * @param {Record<string, any>} ctx - client context.
-     * @returns {Promise<boolean>} true when an HNFlow session exists.
-     */
-    function hasHnflowSession(ctx) {
-      return firstAnswer((done) => {
-        ctx.inject(["sessions"], (scope) => {
-          try {
-            const list = scope.sessions?.list?.getSnapshot?.();
-            let found = false;
-            for (const id of Array.isArray(list?.ids) ? list.ids : []) {
-              if ((list?.byId?.[id]?.projectionValues?.agentPreset ?? null) === PRESET_ID) found = true;
-            }
-            done(found);
-          } catch {
-            done(false);
-          }
-        });
-      }, 2000).then((value) => value === true);
-    }
-
-    /**
      * Run one `ui` op and parse its JSON answer.
      *
      * `/hnflow` is the resident viewer command (registered in every session by
@@ -780,6 +754,13 @@ window.__ModuleLoader__.load({
     /** Overlay notice id. */
     const NOTICE_ID = "hnflow.notice";
 
+    /** Exact Fetch route the host registers for the task notice (no session involved). */
+    const MONITOR_PATH = "/api/hnflow/tasks";
+
+    /** Notice poll cadence, and the slower cadence after a failure. */
+    const NOTICE_POLL_MS = 15000;
+    const NOTICE_RETRY_MS = 60000;
+
     /** Task ids already announced; module-level so a remount cannot re-notify. */
     const announced = new Set();
 
@@ -791,21 +772,6 @@ window.__ModuleLoader__.load({
      * user into whichever session they open next.
      */
     let pinnedSession = null;
-
-    /** The right-sidebar navigation face, once the profile exposes it. */
-    let rightService = null;
-
-    /**
-     * Open the monitor page in the right sidebar, best effort.
-     * @returns {void}
-     */
-    function openMonitorTab() {
-      try {
-        if (rightService !== null && typeof rightService.openTab === "function") rightService.openTab(RIGHT_KIND, {});
-      } catch {
-        // a global panel is showing, so no session surface is mounted
-      }
-    }
 
     /**
      * The current session's id, workspace directory, and preset.
@@ -961,59 +927,43 @@ window.__ModuleLoader__.load({
     /**
      * The overlay host that announces the first sighting of a pending task.
      *
-     * It owns the only watcher, and it watches through `ui wait`: the host holds
-     * one command open until a task it has not announced appears, so an idle
-     * window writes one command pair per wait window instead of one every five
-     * seconds into the session log.
-     * @param {{runUi: Function, open: Function}} props - injected face.
+     * It never runs a command: `remote.commands.execute` appends a
+     * `command/run` + `command/done` pair to whichever session it names, and the
+     * notice belongs to no session. It reads the host's exact Fetch route
+     * instead — the same state files the page reads, with nothing written into
+     * any conversation.
+     * @param {{ctx: Record<string, any>}} props - injected face.
      * @returns {unknown} element.
      */
     function HnflowNotifier(props) {
-      const runUi = props?.runUi;
-      const open = typeof props?.open === "function" ? props.open : () => {};
       const [notice, setNotice] = react.useState(null);
 
       react.useEffect(() => {
         let live = true;
+        let timer = null;
         let failures = 0;
-        const watch = async () => {
-          // Notifications belong to the HNFlow mode: with no such session open
-          // the watcher stays off, so opening any other session never collects
-          // our command log lines.
-          if (!(await hasHnflowSession(props?.ctx))) {
-            if (live) await new Promise((resolve) => setTimeout(resolve, 30000));
-            return;
-          }
-          while (live) {
-            let healthy = false;
-            try {
-              const payload = await runUi("wait", { known: [...announced], timeoutMs: 25000 });
-              if (!live) return;
-              if (payload !== null && Array.isArray(payload.tasks)) {
-                healthy = true;
-                failures = 0;
-                const outcome = freshTasks(announced, payload.tasks);
-                for (const id of outcome.seen) announced.add(id);
-                if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
-              }
-            } catch {
-              // counted below
-            }
+        const poll = async () => {
+          try {
+            const payload = await fetchTasks(props?.ctx);
             if (!live) return;
-            if (!healthy) {
-              failures += 1;
-              if (failures >= 3) return;
-              await new Promise((resolve) => setTimeout(resolve, 2000));
-              continue;
+            failures = 0;
+            if (payload !== null && Array.isArray(payload.tasks)) {
+              const outcome = freshTasks(announced, payload.tasks);
+              for (const id of outcome.seen) announced.add(id);
+              if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
             }
-            // Even a long poll that returned at once gets a gap, so a confused
-            // payload can never turn this into a command flood.
-            await new Promise((resolve) => setTimeout(resolve, 300));
+          } catch {
+            failures += 1;
           }
+          if (!live) return;
+          // Back off after repeated failures, but keep trying: the host may be
+          // restarting, and the notice must come back when it does.
+          timer = setTimeout(() => void poll(), failures === 0 ? NOTICE_POLL_MS : NOTICE_RETRY_MS);
         };
-        void watch();
+        void poll();
         return () => {
           live = false;
+          if (timer !== null) clearTimeout(timer);
         };
       }, []);
 
@@ -1026,10 +976,24 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { style: { display: "flex", gap: "6px", marginTop: "8px" } },
-          h("button", { type: "button", style: styles.tab, onClick: () => { open(); setNotice(null); } }, "查看"),
           h("button", { type: "button", style: styles.tab, onClick: () => setNotice(null) }, "关闭"),
         ),
       );
+    }
+
+    /**
+     * Read the pending tasks from the host's exact Fetch route.
+     *
+     * A browser request carries the harness cookie, so the route answers without
+     * any command, session, or model turn.
+     * @param {Record<string, any>} ctx - client context (unused; kept for symmetry).
+     * @returns {Promise<Record<string, any>>} `{ok, runs, tasks}`.
+     */
+    async function fetchTasks(ctx) {
+      void ctx;
+      const response = await fetch(MONITOR_PATH, { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok) throw new Error(`hnflow: monitor ${response.status}`);
+      return await response.json();
     }
 
     /**
@@ -1116,7 +1080,6 @@ window.__ModuleLoader__.load({
           if (!tabs || typeof tabs.register !== "function") return;
           if (typeof scope.effect === "function") scope.effect(() => tabs.register(rightTabDefinition()), "hnflow: right tab type");
           else tabs.register(rightTabDefinition());
-          rightService = scope.sidebarRight ?? null;
           // Same page as the rail entry, so the right sidebar shows the same
           // three tabs instead of a second, monitor-only surface.
           registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowPage));
@@ -1126,20 +1089,9 @@ window.__ModuleLoader__.load({
         // this profile has no right sidebar; the page tab still shows the board
       }
 
-      // First-sighting announcement, bottom-right.
-      registerSlot(ctx, "shell.overlay", (slots) =>
-        slots.register(
-          {
-            name: "shell.overlay",
-            id: NOTICE_ID,
-            inject: () => ({
-              ...face(),
-              open: openMonitorTab,
-            }),
-          },
-          HnflowNotifier,
-        ),
-      );
+      // First-sighting announcement, bottom-right. It reads the host's Fetch
+      // route, so it exists in every window and touches no session.
+      registerSlot(ctx, "shell.overlay", (slots) => slots.register({ name: "shell.overlay", id: NOTICE_ID, inject: () => ({ ctx }) }, HnflowNotifier));
     }
 
     exports.apply = apply;

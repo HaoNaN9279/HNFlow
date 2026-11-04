@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url'
 
 import { USAGE, createViewerCommand, createWorkflowCommand } from './lib/commands.js'
 import { createWorkflowAuthorTool } from './lib/author.js'
+import { createMonitorRoute } from './lib/route.js'
 import { HnflowService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createWorkflowTool } from './lib/tools.js'
@@ -84,6 +85,21 @@ export function apply(ctx, rawConfig) {
         scope.commands.register(createViewerCommand({ service, cwdOf }))
       } catch (error) {
         warn('hnflow: cannot register /hnflow: %o', error)
+      }
+    })
+    // The bottom-right notice reads this route instead of running a command:
+    // a command would write its lifecycle pair into whichever session it names,
+    // and the notice belongs to no session at all.
+    ctx.inject(['connection'], (scope) => {
+      try {
+        const registry = scope.connection?.fetch
+        if (typeof registry?.register !== 'function') {
+          warn('hnflow: this harness has no Fetch route registry; the task notice stays off')
+          return
+        }
+        registry.register(createMonitorRoute({ service }))
+      } catch (error) {
+        warn('hnflow: cannot register the monitor route: %o', error)
       }
     })
     ctx.effect(() => () => {

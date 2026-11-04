@@ -158,13 +158,18 @@ start → greet(data:assign) → confirm(human:task) → result(data:assign) →
 会话顶部页签（**仅 HNFlow 模式的会话**）列出当前工作区的引用 + 画布。
 
 **右侧同步视图**：右栏「开始导航」页有 **HNFlow** 入口，打开的是与左栏相同的三页签页面（只是落在右侧栏）；
-任务监视就是该页面的第三个页签。面板没打开时，**第一次出现**的待办会在右下角弹一次通知
-（同一任务只弹一次），点「查看」打开右栏 HNFlow 页。
+任务监视就是该页面的第三个页签。
+
+**右下角提示窗**：第一次出现待办时弹一次（同一任务只弹一次），只显示信息与「关闭」，
+不跳转、不写任何会话。它的数据来自宿主注册的 exact Fetch 路由 `GET /api/hnflow/tasks`
+（每 15 秒一次，失败退到 60 秒），**不是**命令——命令会把 `command/run` + `command/done`
+写进它点名的会话，而这个提示属于整个窗口，不属于任何会话。
 
 页面是**常驻**的：数据来自全局命令 `/hnflow ui <op> <base64url(JSON)>`
 （`tree` / `canvas` / `assetCanvas` / `monitor` / `wait`），与"当前选中哪个会话"无关，
 也不需要打开任何 HNFlow 模式的会话。该命令只读、不启动引擎——它直接读引擎落盘的
 `$DSH_HOME/hnflow/state/{runs,tasks}.json`，因此不会和模式内的引擎争用状态。
+页面只在打开/点「刷新」时取数，所以会话里只会在你主动操作时出现一条命令记录。
 客户端的取数顺序是 `/hnflow` → 旧宿主回退 `/workflow`。
 
 画布位置优先用 `metadata.canvas.positions`，否则用编辑器同款三列网格。
