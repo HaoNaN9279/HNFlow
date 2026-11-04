@@ -14,13 +14,15 @@ import { USAGE, composeWorkflowPrompt, createWorkflowCommand, tokenize } from '.
 /**
  * Build the command over a scripted service.
  * @param {Record<string, any>} [overrides] - service methods to replace.
- * @returns {{handler: Function, turns: {agent: unknown, text: string}[], calls: Record<string, any>[]}} command and call log.
+ * @returns {{handler: Function, turns: {agent: unknown, text: string}[], calls: Record<string, any>[], primed: string[]}} command and call log.
  */
 function makeCommand(overrides = {}) {
   /** @type {{agent: unknown, text: string}[]} */
   const turns = []
   /** @type {Record<string, any>[]} */
   const calls = []
+  /** @type {string[]} */
+  const primed = []
   const base = {
     listWorkflows: async () => [
       { alias: 'publish', assetId: 'wf-1', description: '发布', pinnedRevision: 3, currentRevision: 3, hasOverride: false, drift: false, enabled: true, missing: false },
@@ -43,8 +45,11 @@ function makeCommand(overrides = {}) {
     startTurn: async (target, text) => {
       turns.push({ agent: target, text })
     },
+    primeIndex: async (cwd) => {
+      primed.push(cwd)
+    },
   })
-  return { handler: (invocation) => command.handler({ agent, ...invocation }), turns, calls }
+  return { handler: (invocation) => command.handler({ agent, ...invocation }), turns, calls, primed }
 }
 
 test('tokenize honours quotes and collapses whitespace', () => {
@@ -71,12 +76,14 @@ test('help is the same answer and starts no turn', async () => {
 })
 
 test('a reference plus a prompt becomes exactly one AI turn', async () => {
-  const { handler, turns, calls } = makeCommand()
+  const { handler, turns, calls, primed } = makeCommand()
   const result = await handler({ rawInput: 'publish 把 staging 的构建产物发布出去，注意版本号' })
 
   assert.equal(result.kind, 'success')
   assert.match(result.text, /已交给 AI：publish（wf-1，r3）/u)
   assert.deepEqual(calls, [{ method: 'resolve', key: 'publish' }])
+  // The index is primed before the turn, so a first turn already carries it.
+  assert.deepEqual(primed, ['/ws'])
   assert.equal(turns.length, 1)
   assert.equal(turns[0].agent.session.id, 'session-1')
   assert.match(turns[0].text, /^<hnflow_workflow name="publish" asset="wf-1" revision="3" source="ref" \/>/u)

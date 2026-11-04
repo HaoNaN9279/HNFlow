@@ -158,7 +158,7 @@ export function apply(ctx, rawConfig) {
 
   ctx.inject(['commands'], (scope) => {
     try {
-      scope.commands.register(createWorkflowCommand({ service, cwdOf, startTurn }))
+      scope.commands.register(createWorkflowCommand({ service, cwdOf, startTurn, primeIndex: refreshIndex }))
     } catch (error) {
       warn('hnflow: cannot register /workflow: %o', error)
     }

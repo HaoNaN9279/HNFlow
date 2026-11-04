@@ -158,11 +158,12 @@ function escapeAttribute(value) {
  *   service: import('./service.js').HnflowService,
  *   cwdOf: (agent: unknown) => string | null,
  *   startTurn: (agent: unknown, text: string) => Promise<void>,
+ *   primeIndex?: (cwd: string) => Promise<void>,
  * }} options - wiring.
  * @returns {{name: string, description: string, input: {hint: string}, handler: Function}} command definition.
  */
 export function createWorkflowCommand(options) {
-  const { service, cwdOf, startTurn } = options
+  const { service, cwdOf, startTurn, primeIndex } = options
 
   /**
    * Execute one command invocation.
@@ -220,6 +221,10 @@ export function createWorkflowCommand(options) {
       { key, assetId: resolved.assetId, revision: Number.isInteger(resolved.revision) ? resolved.revision : null, source: resolved.source },
       request,
     )
+    // The next turn must carry the workflow index: this command may be the very
+    // first thing a session ever sees, and the index is normally refreshed on
+    // `agent/pre-step`, which has not run yet for this workspace.
+    if (typeof primeIndex === 'function') await primeIndex(cwd)
     try {
       await startTurn(invocation?.agent, text)
     } catch (error) {

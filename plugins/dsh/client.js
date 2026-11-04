@@ -12,9 +12,10 @@
 //   the task panel (M6.5) can reuse the same components.
 //
 // The client never reads asset files and never talks to the engine: every piece
-// of data and every write goes through `/workflow ui <op> <base64url>` (or a
-// plain `/workflow` command), so the page obeys exactly the same rules as typing
-// the command by hand.
+// of data goes through `/hnflow ui <op> <base64url>` (the resident viewer row, so
+// the page does not depend on any session), and the page has no way to start a
+// run. Starting belongs to `/workflow <name> <prompt>` in a session, or to a
+// future page action.
 window.__ModuleLoader__.load({
   id: "dsh-hnflow",
   factory: (require) => {
