@@ -77,22 +77,48 @@ function applyBundle() {
   return { entries, exports, injected, ctx }
 }
 
-test('the bundle registers the sidebar entry and the keyed main panel', () => {
+test('the bundle registers the sidebar entry, the keyed main panel and the notice host', () => {
   const { entries, injected } = applyBundle()
 
   assert.equal(registration.id, 'dsh-hnflow')
-  assert.deepEqual(injected, ['sidebar.panellist', 'main'])
-  assert.equal(entries.length, 2)
+  assert.equal(injected[0], 'sidebar.panellist')
+  assert.equal(injected[1], 'main')
+  assert.equal(injected.includes('shell.overlay'), true)
 
-  const [rail, page] = entries
+  const rail = entries[0]
   assert.equal(rail.entry.name, 'sidebar.panellist')
   assert.equal(rail.entry.id, 'hnflow')
   assert.equal(rail.entry.order, 15)
   assert.equal(rail.entry.label(), 'HNFlow')
 
+  const page = entries[1]
   assert.equal(page.entry.name, 'main')
   // The layout matches the rail id to the main key.
   assert.equal(page.entry.key, rail.entry.id)
+})
+
+test('the session tab registers only for an HNFlow session', () => {
+  const exports = loadBundle()
+
+  /** @param {string} preset - projection value of the current session. */
+  const run = (preset) => {
+    const entries = []
+    const ctx = {
+      slots: { inject: (name, callback) => callback(), register: (entry) => entries.push(entry) },
+      remote: { commands: { execute: async () => ({ ok: true, text: '{}' }) } },
+      inject: (deps, callback) =>
+        callback({
+          uiSession: { adapter: { current: { getSnapshot: () => ({ key: 'session-1' }) } } },
+          sessions: { list: { getSnapshot: () => ({ ids: ['session-1'], byId: { 'session-1': { projectionValues: { agentPreset: preset } } } }), subscribe: () => () => {} } },
+        }),
+      effect: () => {},
+    }
+    exports.apply(ctx)
+    return entries
+  }
+
+  assert.equal(run('hnflow').some((entry) => entry.name === 'conversation.view'), true)
+  assert.equal(run('vibestack').some((entry) => entry.name === 'conversation.view'), false)
 })
 
 test('the bundle no longer registers a composer entry', () => {
@@ -218,6 +244,31 @@ test('the preset projection decides visibility in both shapes', () => {
   assert.equal(internals.isHnflowPreset({ id: 'standard' }), false)
   assert.equal(internals.isHnflowPreset(null), true)
   assert.equal(internals.isHnflowPreset(undefined), true)
+})
+
+test('only the first sighting of a pending task is announced', () => {
+  const { internals } = loadBundle()
+  const seen = new Set(['task-1'])
+
+  const first = internals.freshTasks(seen, [{ taskId: 'task-1' }, { taskId: 'task-2' }, { taskId: 'task-3' }])
+  assert.deepEqual(first.fresh.map((task) => task.taskId), ['task-2', 'task-3'])
+
+  const again = internals.freshTasks(first.seen, [{ taskId: 'task-2' }, { taskId: 'task-3' }])
+  assert.deepEqual(again.fresh, [])
+  assert.equal(again.seen.has('task-2'), true)
+
+  // A later, genuinely new task still announces.
+  assert.deepEqual(internals.freshTasks(again.seen, [{ taskId: 'task-4' }]).fresh.map((task) => task.taskId), ['task-4'])
+})
+
+test('the right-bar tab type has the shape the registry validates', () => {
+  const { internals } = loadBundle()
+  const definition = internals.rightTabDefinition()
+
+  assert.equal(definition.id, definition.kind)
+  assert.equal(definition.priority, 'extension')
+  assert.equal(typeof definition.title, 'function')
+  assert.equal(definition.title(), 'HNFlow 任务')
 })
 
 test('labels stay compact in the monitor rows', () => {

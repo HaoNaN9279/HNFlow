@@ -765,11 +765,25 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 内容：当前工作区左树 + 画布；每会话独立选择；
 - 验收：顶部出现页签；切回对话无副作用；换个会话互不影响。
 
+**已落地（2026-11-04，0.2.1）**：页签按**当前会话**的 `projectionValues.agentPreset` 动态注册 / 注销（`preset === "hnflow"` 才注册）；
+视图内容用 `sessionId` 反查该会话的 `cwd`（不是"当前会话"，所以多开不会串），左树只列该工作区的引用。
+**待实机验收**：需要在 HNFlow 模式的会话里看页签；切到其它模式会话应消失。
+
 #### M6.5 右侧任务监视 + 通知（1 周）
 
 - `sidebarRightTabs.register` + 两个 keyed 槽；`ctx.sidebarRight.openTab(kind, {params})`；
 - `shell.overlay` 通知入口（轮询 + 判重 + 右下角）；
 - 验收：右栏出现 HNFlow 页签；面板未打开时新待办弹通知一次；点通知能打开面板并定位任务。
+
+**已落地（2026-11-04，0.2.1）**：
+
+| 项 | 结果 |
+| --- | --- |
+| 页签类型 | `ctx.inject(["sidebarRightTabs","sidebarRight"])` → `register({id, kind, priority:"extension", title})` |
+| 面板正文 | `sidebar.right.pane.tab`（key=kind）里复用 `TaskBoard`，每 5 秒自刷一次 |
+| 打开入口 | 会话头部 `conversation.session.header.utilities` 的「◆ 任务」按钮 → `openTab(kind)`；类型注册本身不产生页签，且只能在已挂载会话面时打开 |
+| 通知 | `shell.overlay` 常驻入口，独占轮询（页面与面板不再各查一次）；`taskId` 判重，**首次出现**弹右下角一次，一次一条，点「查看」打开右栏 |
+**待实机验收**：右栏页签与通知（通知要求真有新的 pending 任务）。
 
 #### M6.6 收尾（0.5 周）
 

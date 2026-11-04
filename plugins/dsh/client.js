@@ -63,6 +63,7 @@ window.__ModuleLoader__.load({
       edge: { stroke: "rgba(127,127,127,0.55)", strokeWidth: 1.2, fill: "none" },
       empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
       errorBox: { margin: "10px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      toast: { position: "fixed", right: "16px", bottom: "16px", zIndex: 2000, maxWidth: "320px", padding: "10px 12px", borderRadius: "12px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "var(--dsw-specific-menu, #1f1f1f)", boxShadow: "0 8px 24px rgba(0,0,0,0.3)", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary, inherit)" },
       board: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "12px 14px", boxSizing: "border-box" },
       boardTitle: { margin: "10px 0 6px", fontSize: "13px", fontWeight: 600 },
       row: { display: "flex", alignItems: "baseline", gap: "10px", padding: "4px 6px", borderRadius: "var(--dsw-radius-sm, 6px)", fontSize: "12px" },
@@ -588,6 +589,311 @@ window.__ModuleLoader__.load({
     /** Contexts already wired; a repeated apply must not register a second panel. */
     const wired = new WeakSet();
 
+    /** Session-tab view id (the tab strip is built from `conversation.view` entries). */
+    const VIEW_ID = "hnflow";
+
+    /** Right-sidebar page type (the tab kind and its title slot share it). */
+    const RIGHT_KIND = "hnflow.monitor";
+
+    /** Overlay notice id. */
+    const NOTICE_ID = "hnflow.notice";
+
+    /** How often the notice host asks for pending tasks. */
+    const POLL_MS = 5000;
+
+    /** Task ids already announced; module-level so a remount cannot re-notify. */
+    const announced = new Set();
+
+    /** The right-sidebar navigation face, once the profile exposes it. */
+    let rightService = null;
+
+    /**
+     * Open the monitor page in the right sidebar, best effort.
+     * @returns {void}
+     */
+    function openMonitorTab() {
+      try {
+        if (rightService !== null && typeof rightService.openTab === "function") rightService.openTab(RIGHT_KIND, {});
+      } catch {
+        // a global panel is showing, so no session surface is mounted
+      }
+    }
+
+    /**
+     * The current session's id, workspace directory, and preset.
+     * @param {Record<string, any>} ctx - client context.
+     * @returns {Promise<{sessionId: string | null, cwd: string | null, preset: string | null}>} session info.
+     */
+    function sessionInfo(ctx) {
+      return firstAnswer((done) => {
+        ctx.inject(["uiSession", "sessions"], (scope) => {
+          try {
+            const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
+            const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
+            const id = current && typeof current.key === "string" ? current.key : Array.isArray(snapshot?.ids) ? snapshot.ids[0] : null;
+            const entry = id === null ? null : (snapshot?.byId?.[id] ?? null);
+            done({ sessionId: typeof id === "string" ? id : null, cwd: typeof entry?.cwd === "string" ? entry.cwd : null, preset: entry?.projectionValues?.agentPreset ?? null });
+          } catch {
+            done({ sessionId: null, cwd: null, preset: null });
+          }
+        });
+      }, 3000).then((value) => value ?? { sessionId: null, cwd: null, preset: null });
+    }
+
+    /**
+     * The workspace directory of one session.
+     * @param {Record<string, any>} ctx - client context.
+     * @param {string | null} sessionId - session to look up.
+     * @returns {Promise<string | null>} absolute path, or null.
+     */
+    function cwdOfSession(ctx, sessionId) {
+      if (typeof sessionId !== "string" || sessionId.length === 0) return Promise.resolve(null);
+      return firstAnswer((done) => {
+        ctx.inject(["sessions"], (scope) => {
+          try {
+            const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
+            const cwd = snapshot?.byId?.[sessionId]?.cwd ?? null;
+            done(typeof cwd === "string" ? cwd : null);
+          } catch {
+            done(null);
+          }
+        });
+      }, 2000).then((value) => (typeof value === "string" ? value : null));
+    }
+
+    /**
+     * The right-sidebar tab type registration.
+     * @returns {{id: string, kind: string, priority: string, title: () => string}} definition.
+     */
+    function rightTabDefinition() {
+      return { id: RIGHT_KIND, kind: RIGHT_KIND, priority: "extension", title: () => "HNFlow 任务" };
+    }
+
+    /**
+     * Split pending tasks into the ones never announced and the new seen set.
+     * @param {Set<string>} seen - ids already announced.
+     * @param {Record<string, any>[]} tasks - pending task summaries.
+     * @returns {{fresh: Record<string, any>[], seen: Set<string>}} fresh tasks and the updated set.
+     */
+    function freshTasks(seen, tasks) {
+      const next = new Set(seen);
+      /** @type {Record<string, any>[]} */
+      const fresh = [];
+      for (const task of Array.isArray(tasks) ? tasks : []) {
+        const id = typeof task?.taskId === "string" ? task.taskId : "";
+        if (id.length === 0 || next.has(id)) continue;
+        next.add(id);
+        fresh.push(task);
+      }
+      return { fresh, seen: next };
+    }
+
+    /**
+     * One workflow in the session tab: left list of this workspace's refs, right canvas.
+     * @param {{runUi: Function, sessionId: string}} props - injected face.
+     * @returns {unknown} element.
+     */
+    function SessionHnflowView(props) {
+      const runUi = props?.runUi;
+      const [tree, setTree] = react.useState(null);
+      const [canvas, setCanvas] = react.useState(null);
+      const [error, setError] = react.useState("");
+      const [selected, setSelected] = react.useState("");
+
+      /**
+       * Load this session's workspace refs.
+       * @returns {Promise<void>} resolves once rendered.
+       */
+      const load = async () => {
+        try {
+          const cwd = (await cwdOfSession(props.ctx, props.sessionId)) ?? (await sessionInfo(props.ctx)).cwd;
+          if (cwd === null) {
+            setError("这个会话没有工作区目录");
+            return;
+          }
+          const payload = await runUi("tree", { workspaces: [{ id: "session", name: shortPath(cwd), path: cwd }] });
+          setTree(payload);
+          setError(payload === null ? "tree payload unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        }
+      };
+
+      /**
+       * Draw one ref.
+       * @param {string} workspace - workspace root.
+       * @param {Record<string, any>} entry - ref entry.
+       * @returns {Promise<void>} resolves once drawn.
+       */
+      const pick = async (workspace, entry) => {
+        const key = entry.alias || entry.assetId;
+        setSelected(key);
+        try {
+          setCanvas(await runUi("canvas", { workspace, key }));
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        }
+      };
+
+      react.useEffect(() => {
+        void load();
+      }, []);
+
+      const workspace = Array.isArray(tree?.workspaces) ? tree.workspaces[0] : null;
+      return h(
+        "div",
+        { style: styles.page },
+        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
+        h(
+          "div",
+          { style: styles.body },
+          h(
+            "div",
+            { style: styles.tree },
+            workspace === null
+              ? h("div", { style: styles.meta }, "读取中…")
+              : (workspace.workflows ?? []).length === 0
+                ? h("div", { style: styles.meta }, "这个工作区还没有引用的工作流")
+                : h(
+                    "div",
+                    null,
+                    ...(workspace.workflows ?? []).map((entry) =>
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          key: entry.alias || entry.assetId,
+                          style: selected === (entry.alias || entry.assetId) ? { ...styles.item, ...styles.itemActive } : styles.item,
+                          onClick: () => void pick(workspace.path, entry),
+                        },
+                        h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}`),
+                        h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                      ),
+                    ),
+                  ),
+          ),
+          h(CanvasStage, { canvas }),
+        ),
+      );
+    }
+
+    /**
+     * The right-sidebar monitor page.
+     * @param {{runUi: Function}} props - injected face.
+     * @returns {unknown} element.
+     */
+    function HnflowMonitorPane(props) {
+      const runUi = props?.runUi;
+      const [monitor, setMonitor] = react.useState(null);
+      const [error, setError] = react.useState("");
+
+      /**
+       * Reload the board.
+       * @returns {Promise<void>} resolves once rendered.
+       */
+      const load = async () => {
+        try {
+          const payload = await runUi("monitor", {});
+          setMonitor(payload);
+          setError(payload === null ? "monitor payload unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        }
+      };
+
+      react.useEffect(() => {
+        void load();
+        const timer = setInterval(() => void load(), POLL_MS);
+        return () => clearInterval(timer);
+      }, []);
+
+      return h("div", { style: styles.page }, error.length > 0 ? h("div", { style: styles.errorBox }, error) : null, h(TaskBoard, { monitor }));
+    }
+
+    /**
+     * The session-header button that opens the monitor in the right sidebar.
+     * @param {{open?: Function}} props - injected opener.
+     * @returns {unknown} element.
+     */
+    function HnflowMonitorButton(props) {
+      const open = typeof props?.open === "function" ? props.open : () => {};
+      return h(
+        "button",
+        {
+          type: "button",
+          title: "HNFlow 任务监视",
+          style: { display: "inline-flex", alignItems: "center", gap: "4px", height: "24px", padding: "0 6px", borderRadius: "6px", border: "none", background: "transparent", color: "inherit", fontFamily: "inherit", fontSize: "12px", cursor: "pointer" },
+          onClick: () => open(),
+        },
+        "\u25C6 任务",
+      );
+    }
+
+    /**
+     * The overlay host that announces the first sighting of a pending task.
+     *
+     * It owns the only poller, so the page and the right panel never add a
+     * second query; a task is announced once per process lifetime.
+     * @param {{runUi: Function, open: Function}} props - injected face.
+     * @returns {unknown} element.
+     */
+    function HnflowNotifier(props) {
+      const runUi = props?.runUi;
+      const open = typeof props?.open === "function" ? props.open : () => {};
+      const [notice, setNotice] = react.useState(null);
+
+      react.useEffect(() => {
+        let live = true;
+        const tick = async () => {
+          try {
+            const payload = await runUi("monitor", {});
+            if (!live || payload === null) return;
+            const outcome = freshTasks(announced, payload.tasks);
+            for (const id of outcome.seen) announced.add(id);
+            if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
+          } catch {
+            // a failed poll is not a user-facing error
+          }
+        };
+        void tick();
+        const timer = setInterval(() => void tick(), POLL_MS);
+        return () => {
+          live = false;
+          clearInterval(timer);
+        };
+      }, []);
+
+      if (notice === null) return null;
+      return h(
+        "div",
+        { style: styles.toast, role: "status" },
+        h("div", { style: { fontWeight: 600, marginBottom: "4px" } }, "HNFlow 有待处理任务"),
+        h("div", { style: styles.meta }, `${notice.task.description || notice.task.nodeId || notice.task.taskId}${notice.extra > 0 ? ` 等 ${notice.extra + 1} 条` : ""}`),
+        h(
+          "div",
+          { style: { display: "flex", gap: "6px", marginTop: "8px" } },
+          h("button", { type: "button", style: styles.tab, onClick: () => { open(); setNotice(null); } }, "查看"),
+          h("button", { type: "button", style: styles.tab, onClick: () => setNotice(null) }, "关闭"),
+        ),
+      );
+    }
+
+    /**
+     * Register one slot, tolerating a host that does not declare it.
+     * @param {Record<string, any>} ctx - client context.
+     * @param {string} name - slot name.
+     * @param {function(Record<string, any>): unknown} build - registration body.
+     * @returns {boolean} whether the registration was accepted.
+     */
+    function registerSlot(ctx, name, build) {
+      try {
+        ctx.slots.inject(name, () => build(ctx.slots));
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
     /**
      * Client plugin body.
      * @param {Record<string, any>} ctx - client context.
@@ -597,19 +903,112 @@ window.__ModuleLoader__.load({
       if (wired.has(ctx)) return;
       wired.add(ctx);
 
+      const face = () => ({ runUi: (op, payload) => runUi(ctx, op, payload), ctx });
+
       // Sidebar rail entry: the host calls `layout.selectPanel('hnflow')` on click.
-      ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 15, label: () => "HNFlow" }, HnflowIcon));
+      registerSlot(ctx, "sidebar.panellist", (slots) => slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 15, label: () => "HNFlow" }, HnflowIcon));
 
       // The page itself; the layout key must equal the rail entry id.
-      ctx.slots.inject("main", () =>
-        ctx.slots.register({ name: "main", key: PANEL_ID, inject: () => ({ runUi: (op, payload) => runUi(ctx, op, payload), ctx }) }, HnflowPage),
+      registerSlot(ctx, "main", (slots) => slots.register({ name: "main", key: PANEL_ID, inject: face }, HnflowPage));
+
+      // Session tab, registered only while the current session runs HNFlow
+      // (plan R15): the tab strip is global, so the registration is the switch.
+      let disposeView = null;
+      const syncView = (info) => {
+        const wanted = info.preset === PRESET_ID;
+        if (wanted && disposeView === null) {
+          disposeView = ctx.slots.inject("conversation.view", () =>
+            ctx.slots.register(
+              { name: "conversation.view", id: VIEW_ID, order: 20, label: () => "HNFlow", inject: (sessionId) => ({ ...face(), sessionId }) },
+              SessionHnflowView,
+            ),
+          );
+        } else if (!wanted && disposeView !== null) {
+          disposeView();
+          disposeView = null;
+        }
+      };
+      try {
+        ctx.inject(["sessions", "uiSession"], (scope) => {
+          let last = null;
+          const read = () => {
+            try {
+              const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
+              const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
+              const id = current && typeof current.key === "string" ? current.key : Array.isArray(snapshot?.ids) ? snapshot.ids[0] : null;
+              const preset = id === null ? null : (snapshot?.byId?.[id]?.projectionValues?.agentPreset ?? null);
+              if (preset === last) return;
+              last = preset;
+              syncView({ preset });
+            } catch {
+              // a store that is not ready yet simply retries on the next frame
+            }
+          };
+          read();
+          for (const store of [scope.sessions?.list, scope.uiSession?.adapter?.current]) {
+            if (store && typeof store.subscribe === "function") store.subscribe(read);
+          }
+        });
+      } catch {
+        // no session services: the tab stays off
+      }
+
+      // Right-sidebar page: the type plus its body and chip title, and a header
+      // button that opens it (a type alone shows no tab).
+      try {
+        ctx.inject(["sidebarRightTabs", "sidebarRight"], (scope) => {
+          const tabs = scope.sidebarRightTabs;
+          if (!tabs || typeof tabs.register !== "function") return;
+          if (typeof scope.effect === "function") scope.effect(() => tabs.register(rightTabDefinition()), "hnflow: right tab type");
+          else tabs.register(rightTabDefinition());
+          const right = scope.sidebarRight;
+          rightService = right ?? null;
+          registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowMonitorPane));
+          registerSlot(ctx, "sidebar.right.pane.tab.title", (slots) => slots.register({ name: "sidebar.right.pane.tab.title", key: RIGHT_KIND }, () => h("span", null, "HNFlow")));
+          registerSlot(ctx, "conversation.session.header.utilities", (slots) =>
+            slots.register(
+              {
+                name: "conversation.session.header.utilities",
+                id: "hnflow.monitor.open",
+                order: -6,
+                inject: () => ({
+                  open: () => {
+                    try {
+                      if (right && typeof right.openTab === "function") right.openTab(RIGHT_KIND, {});
+                    } catch {
+                      // no mounted session surface (a global panel is showing)
+                    }
+                  },
+                }),
+              },
+              HnflowMonitorButton,
+            ),
+          );
+        });
+      } catch {
+        // this profile has no right sidebar; the page tab still shows the board
+      }
+
+      // First-sighting announcement, bottom-right.
+      registerSlot(ctx, "shell.overlay", (slots) =>
+        slots.register(
+          {
+            name: "shell.overlay",
+            id: NOTICE_ID,
+            inject: () => ({
+              ...face(),
+              open: openMonitorTab,
+            }),
+          },
+          HnflowNotifier,
+        ),
       );
     }
 
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { readText, encodePayload, parseJson, workspaceItems, layoutDefinition, edgePath, isHnflowPreset, shortPath, shortSession };
+    exports.internals = { readText, encodePayload, parseJson, workspaceItems, layoutDefinition, edgePath, isHnflowPreset, shortPath, shortSession, rightTabDefinition, freshTasks };
     return module.exports;
   },
 });
