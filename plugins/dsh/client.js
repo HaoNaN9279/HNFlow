@@ -397,12 +397,17 @@ window.__ModuleLoader__.load({
               "div",
               null,
               ...tasks.map((task) =>
-                h("div", { key: task.taskId, style: styles.row }, [
-                  h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(task.workspace)),
-                  h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(task.sessionId)),
-                  h("span", { key: "k", style: { ...styles.cell, flex: "0 0 80px" } }, task.kind),
-                  h("span", { key: "d", style: { ...styles.cell, flex: "1 1 auto" } }, task.description || task.nodeId),
-                  h("span", { key: "id", style: { ...styles.cell, flex: "0 0 160px" } }, task.taskId),
+                h("div", { key: task.taskId, style: { ...styles.row, flexDirection: "column", alignItems: "stretch", marginBottom: "4px" } }, [
+                  h("div", { key: "head", style: { display: "flex", alignItems: "baseline", gap: "10px" } }, [
+                    h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(task.workspace)),
+                    h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(task.sessionId)),
+                    h("span", { key: "k", style: { ...styles.cell, flex: "0 0 80px" } }, task.kind),
+                    h("span", { key: "d", style: { ...styles.cell, flex: "1 1 auto" } }, task.description || task.nodeId),
+                    h("span", { key: "id", style: { ...styles.cell, flex: "0 0 150px" } }, task.taskId),
+                  ]),
+                  // Until the in-panel form lands, the row carries the exact
+                  // command that answers it.
+                  h("div", { key: "cmd", style: { ...styles.meta, fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)" } }, `/workflow submit ${task.taskId} note="…"`),
                 ]),
               ),
             ),

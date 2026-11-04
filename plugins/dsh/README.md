@@ -112,6 +112,28 @@ models:
 它**没有**写资产的动作——资产只能由用户执行 `/workflow save asset <name>` 更新，
 Agent 的修改一律落到工作区覆盖。
 
+### 自带的冒烟工作流
+
+`examples/smoke-test.workflow.json` 是确定性的最小流程（不需要模型）：
+
+```text
+start → greet(data:assign) → confirm(human:task) → result(data:assign) → end
+```
+
+导入并引用（在目标工作区里执行）：
+
+```text
+/workflow asset import <插件目录>/examples/smoke-test.workflow.json
+/workflow ref add <返回的 assetId> --alias smoke
+/workflow run smoke
+```
+
+它会在 `confirm` 停下，任务监视里出现一条待办；提交后跑到 `end`：
+
+```text
+/workflow submit <taskId> note="ok"
+```
+
 ## 界面
 
 左侧栏有一个 **◆ HNFlow** 入口（`sidebar.panellist` + 主面板 `main`），点开是 HNFlow 页面。
