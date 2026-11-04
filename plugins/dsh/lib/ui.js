@@ -175,6 +175,32 @@ export async function assetCanvasPayload(service, payload) {
 }
 
 /**
+ * Wait for the first pending task the caller has not seen yet.
+ *
+ * Notifications poll through this instead of `monitor`: one long-running
+ * command per window writes one `command/run` pair into the session log, where
+ * a short poll loop wrote one every five seconds.
+ * @param {Record<string, any>} service - plugin service.
+ * @param {Record<string, any>} payload - `{known: string[], timeoutMs?: number}`.
+ * @returns {Promise<Record<string, any>>} `{changed, runs, tasks}`.
+ */
+export async function waitPayload(service, payload) {
+  const known = new Set(Array.isArray(payload.known) ? payload.known.filter((id) => typeof id === 'string') : [])
+  const requested = Number.isFinite(payload.timeoutMs) ? payload.timeoutMs : 25000
+  const timeoutMs = Math.min(60000, Math.max(1000, requested))
+  const deadline = Date.now() + timeoutMs
+  const snapshot = await service.monitor()
+  for (;;) {
+    if (snapshot.tasks.some((task) => !known.has(task.taskId))) return { changed: true, ...snapshot }
+    if (Date.now() >= deadline) return { changed: false, ...snapshot }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    const next = await service.monitor()
+    snapshot.runs = next.runs
+    snapshot.tasks = next.tasks
+  }
+}
+
+/**
  * Route one `/workflow ui` call.
  * @param {string[]} tokens - arguments after `ui`.
  * @param {{service?: Record<string, any>}} [options] - plugin wiring.
@@ -184,7 +210,7 @@ export async function dispatchUi(tokens, options = {}) {
   const [op, encoded] = tokens
   if (op === undefined) throw new UiError('ui-op', 'usage: /workflow ui <op> [base64url payload]')
   /** @type {Set<string>} */
-  const ops = new Set(['ping', 'tree', 'canvas', 'assetCanvas', 'monitor'])
+  const ops = new Set(['ping', 'tree', 'canvas', 'assetCanvas', 'monitor', 'wait'])
   if (!ops.has(op)) throw new UiError('ui-op', `unknown ui op: ${op}`)
   const payload = decodePayload(encoded)
   if (op === 'ping') {
@@ -196,5 +222,6 @@ export async function dispatchUi(tokens, options = {}) {
   if (op === 'tree') return JSON.stringify(await treePayload(service, payload))
   if (op === 'canvas') return JSON.stringify(await canvasPayload(service, payload))
   if (op === 'assetCanvas') return JSON.stringify(await assetCanvasPayload(service, payload))
+  if (op === 'wait') return JSON.stringify(await waitPayload(service, payload))
   return JSON.stringify(await service.monitor())
 }

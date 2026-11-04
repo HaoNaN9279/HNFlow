@@ -184,3 +184,19 @@ test('--session is lifted out of the run arguments', () => {
   assert.deepEqual(extractSessionOption(['--session=s-2', 'publish']), { rest: ['publish'], sessionId: 's-2' })
   assert.deepEqual(extractSessionOption(['publish', '--session']), { rest: ['publish'], sessionId: null })
 })
+
+test('wait returns as soon as an unseen task exists', async () => {
+  const service = {
+    async monitor() {
+      return { runs: [{ runId: 'run-1' }], tasks: [{ taskId: 'task-1' }, { taskId: 'task-2' }] }
+    },
+  }
+
+  const fresh = JSON.parse(await dispatchUi(['wait', encodePayload({ known: ['task-1'], timeoutMs: 2000 })], { service }))
+  assert.equal(fresh.changed, true)
+  assert.equal(fresh.tasks.length, 2)
+
+  const idle = JSON.parse(await dispatchUi(['wait', encodePayload({ known: ['task-1', 'task-2'], timeoutMs: 1000 })], { service }))
+  assert.equal(idle.changed, false)
+  assert.equal(idle.runs.length, 1)
+})

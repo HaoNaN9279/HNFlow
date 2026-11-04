@@ -26,22 +26,6 @@ window.__ModuleLoader__.load({
     const reactDom = require("react-dom");
     const h = react.createElement;
 
-    /**
-     * The host's own UI kit. Using it means the page tabs are the same control
-     * the session window uses instead of hand-styled buttons.
-     * @returns {Record<string, any> | null} the module, or null when absent.
-     */
-    function loadPrimitives() {
-      try {
-        const primitives = require("@deepseek-ai/dsh-client-ui-primitives");
-        return primitives !== null && typeof primitives === "object" ? primitives : null;
-      } catch {
-        return null;
-      }
-    }
-
-    const primitives = loadPrimitives();
-
     /** Services this client plugin consumes directly. */
     const inject = ["slots", "remote", "remote.commands"];
 
@@ -61,15 +45,13 @@ window.__ModuleLoader__.load({
     ];
 
     const styles = {
-      page: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
+      page: { height: "100%", minHeight: "320px", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
       tabbar: { display: "flex", alignItems: "center", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
-      // Unselected is exactly the untouched look a tab has before any click:
-      // no fill, no border, no weight — only dimmed. Selected keeps the accent
-      // fill + underline, so one tab is unambiguous in every theme.
-      // `appearance`/`outline`/`boxShadow` are reset because the host styles
-      // plain buttons, and a native focus ring reads as a white selected box.
-      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", backgroundImage: "none", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
-      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", backgroundImage: "none", boxShadow: "none", outline: "none", color: "var(--dsw-alias-label-primary, inherit)", opacity: 1, fontWeight: 600 },
+      // Unselected keeps the untouched look (no fill, no border, no weight) and
+      // only dims; selected adds an accent underline. `all: unset` is required
+      // because the host styles every `button`.
+      tab: { all: "unset", padding: "2px 0", background: "transparent", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, lineHeight: "20px", borderBottom: "2px solid transparent", cursor: "pointer" },
+      tabActive: { opacity: 1, fontWeight: 600, borderBottomColor: "rgba(110,150,255,0.95)", color: "var(--dsw-alias-label-primary, inherit)" },
       body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
       tree: { flex: "0 0 clamp(180px, 42%, 280px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
       group: { margin: "0 0 6px" },
@@ -436,6 +418,43 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * Catch a render failure inside the page and show it instead of a blank
+     * surface. Built lazily because the contract tests use a React stub without
+     * class components.
+     * @returns {unknown} a boundary component, or null when unavailable.
+     */
+    const RenderBoundary = (() => {
+      const Component = react.Component;
+      if (typeof Component !== "function") return null;
+      return class RenderBoundary extends Component {
+        constructor(props) {
+          super(props);
+          this.state = { message: "" };
+        }
+
+        static getDerivedStateFromError(error) {
+          return { message: String(error && error.message ? error.message : error) };
+        }
+
+        render() {
+          if (this.state.message.length > 0) {
+            return h("div", { style: { padding: "16px", fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)", fontSize: "12px", color: "var(--dsw-alias-label-danger, #e5534b)", whiteSpace: "pre-wrap" } }, `HNFlow 页面渲染失败：${this.state.message}`);
+          }
+          return this.props.children;
+        }
+      };
+    })();
+
+    /**
+     * Wrap the page so a render failure is visible rather than blank.
+     * @param {unknown} node - page element.
+     * @returns {unknown} wrapped element.
+     */
+    function withBoundary(node) {
+      return RenderBoundary === null ? node : h(RenderBoundary, null, node);
+    }
+
+    /**
      * The left tree of workspace refs, shared by the page and the session tab.
      * @param {{groups: Record<string, any>[], selected: string, onPick: Function}} props - groups and selection.
      * @returns {unknown} element.
@@ -507,30 +526,29 @@ window.__ModuleLoader__.load({
     /**
      * The page's tab row.
      *
-     * Prefers the host's own `SegmentedTabs` — the same control the session
-     * window and the plugin manager use — so the row looks native and cannot
-     * pick up stray button chrome. A plain-button fallback keeps the page usable
-     * when the UI kit is not exposed.
-     * @param {{value: string, onChange: Function, busy?: boolean}} props - selection.
+     * Plain buttons whose style is fully reset with `all: unset`: the host
+     * styles every `button`, and that chrome is what kept showing as a white box
+     * around unselected tabs. Only the selected tab draws an accent underline.
+     * @param {{value: string, onChange: Function}} props - selection.
      * @returns {unknown} element.
      */
     function PanelTabs(props) {
       const value = props?.value;
       const onChange = typeof props?.onChange === "function" ? props.onChange : () => {};
-      const Segmented = primitives === null ? undefined : primitives.SegmentedTabs;
-      if (typeof Segmented === "function") {
-        return h(Segmented, {
-          label: "HNFlow 页签",
-          value,
-          onChange,
-          items: TABS.map((entry) => ({ value: entry.id, label: entry.label, id: `hnflow-tab-${entry.id}`, panelId: `hnflow-panel-${entry.id}` })),
-        });
-      }
       return h(
         "div",
-        { style: { display: "flex", alignItems: "center", gap: "4px" } },
+        { style: { display: "flex", alignItems: "center", gap: "16px" } },
         ...TABS.map((entry) =>
-          h("button", { type: "button", key: entry.id, style: entry.id === value ? { ...styles.tab, ...styles.tabActive } : styles.tab, onClick: () => onChange(entry.id) }, entry.label),
+          h(
+            "button",
+            {
+              type: "button",
+              key: entry.id,
+              style: entry.id === value ? { ...styles.tab, ...styles.tabActive } : styles.tab,
+              onClick: () => onChange(entry.id),
+            },
+            entry.label,
+          ),
         ),
       );
     }
@@ -659,12 +677,15 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { style: styles.tabbar },
-          h(PanelTabs, { value: tab, onChange: setTab, busy }),
+          // A visible title makes "the page rendered but is empty" distinguishable
+          // from "the page did not render at all".
+          h("span", { style: { fontSize: "13px", fontWeight: 600, marginRight: "12px" } }, "HNFlow"),
+          h(PanelTabs, { value: tab, onChange: setTab }),
           h("span", { style: { flex: "1 1 auto" } }),
           h("button", { type: "button", style: styles.linkButton, disabled: busy, onClick: refresh }, "刷新"),
         ),
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
-        h("div", { style: styles.body }, tab === "monitor" ? null : left, right),
+        withBoundary(h("div", { style: styles.body }, tab === "monitor" ? null : left, right)),
       );
     }
 
@@ -679,9 +700,6 @@ window.__ModuleLoader__.load({
 
     /** Overlay notice id. */
     const NOTICE_ID = "hnflow.notice";
-
-    /** How often the notice host asks for pending tasks. */
-    const POLL_MS = 5000;
 
     /** Task ids already announced; module-level so a remount cannot re-notify. */
     const announced = new Set();
@@ -855,8 +873,10 @@ window.__ModuleLoader__.load({
     /**
      * The overlay host that announces the first sighting of a pending task.
      *
-     * It owns the only poller, so the page and the right panel never add a
-     * second query; a task is announced once per process lifetime.
+     * It owns the only watcher, and it watches through `ui wait`: the host holds
+     * one command open until a task it has not announced appears, so an idle
+     * window writes one command pair per wait window instead of one every five
+     * seconds into the session log.
      * @param {{runUi: Function, open: Function}} props - injected face.
      * @returns {unknown} element.
      */
@@ -868,30 +888,27 @@ window.__ModuleLoader__.load({
       react.useEffect(() => {
         let live = true;
         let failures = 0;
-        let timer = null;
-        const tick = async () => {
-          try {
-            const payload = await runUi("monitor", {});
-            if (!live || payload === null) return;
-            failures = 0;
-            const outcome = freshTasks(announced, payload.tasks);
-            for (const id of outcome.seen) announced.add(id);
-            if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
-          } catch {
-            // A broken engine must not flood the session log once per poll:
-            // three failures stop the poller until the window is reloaded.
-            failures += 1;
-            if (failures >= 3 && timer !== null) {
-              clearInterval(timer);
-              timer = null;
+        const watch = async () => {
+          while (live) {
+            try {
+              const payload = await runUi("wait", { known: [...announced], timeoutMs: 25000 });
+              if (!live) return;
+              failures = 0;
+              if (payload === null) continue;
+              const outcome = freshTasks(announced, payload.tasks);
+              for (const id of outcome.seen) announced.add(id);
+              if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
+            } catch {
+              if (!live) return;
+              failures += 1;
+              if (failures >= 3) return;
+              await new Promise((resolve) => setTimeout(resolve, 2000));
             }
           }
         };
-        void tick();
-        timer = setInterval(() => void tick(), POLL_MS);
+        void watch();
         return () => {
           live = false;
-          if (timer !== null) clearInterval(timer);
         };
       }, []);
 
