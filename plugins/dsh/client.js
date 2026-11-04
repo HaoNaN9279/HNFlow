@@ -47,8 +47,10 @@ window.__ModuleLoader__.load({
     const styles = {
       page: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
       tabbar: { display: "flex", alignItems: "center", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
-      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "13px", cursor: "pointer" },
-      tabActive: { borderColor: "var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.12))", color: "var(--dsw-alias-label-primary, inherit)" },
+      // The active tab is filled, tinted and underlined in the same colour, so a
+      // theme without the hover token still shows exactly one selected tab.
+      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
+      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", color: "var(--dsw-alias-label-primary, inherit)", fontWeight: 600 },
       body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
       tree: { width: "280px", flex: "0 0 280px", minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
       group: { margin: "0 0 6px" },
@@ -283,7 +285,9 @@ window.__ModuleLoader__.load({
           if (result && result.ok === false) {
             const code = result.error && result.error.code ? result.error.code : "command-failed";
             const message = result.error && result.error.message ? result.error.message : "";
-            lastError = new Error(`hnflow: ${code}: ${message}`);
+            // An old host only knows `ping`: the browser bundle and the host
+            // plugin were reloaded separately, so say what actually fixes it.
+            lastError = new Error(/unknown ui op/u.test(message) ? `hnflow: ${code}: ${message}（宿主插件仍是旧版本，请完全退出 DSH 再启动，而不是只刷新窗口）` : `hnflow: ${code}: ${message}`);
             continue;
           }
           return parseJson(readText(result));
@@ -700,7 +704,13 @@ window.__ModuleLoader__.load({
      * @returns {{id: string, kind: string, priority: string, title: () => string}} definition.
      */
     function rightTabDefinition() {
-      return { id: RIGHT_KIND, kind: RIGHT_KIND, priority: "extension", title: () => "HNFlow 任务" };
+      return {
+        id: RIGHT_KIND,
+        kind: RIGHT_KIND,
+        priority: "extension",
+        title: () => "HNFlow 任务",
+        guide: [{ id: "monitor", kind: RIGHT_KIND, title: () => "HNFlow 任务", description: () => "执行状态与需要处理的任务" }],
+      };
     }
 
     /**
@@ -830,25 +840,6 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The session-header button that opens the monitor in the right sidebar.
-     * @param {{open?: Function}} props - injected opener.
-     * @returns {unknown} element.
-     */
-    function HnflowMonitorButton(props) {
-      const open = typeof props?.open === "function" ? props.open : () => {};
-      return h(
-        "button",
-        {
-          type: "button",
-          title: "HNFlow 任务监视",
-          style: { display: "inline-flex", alignItems: "center", gap: "4px", height: "24px", padding: "0 6px", borderRadius: "6px", border: "none", background: "transparent", color: "inherit", fontFamily: "inherit", fontSize: "12px", cursor: "pointer" },
-          onClick: () => open(),
-        },
-        "\u25C6 任务",
-      );
-    }
-
-    /**
      * The overlay host that announces the first sighting of a pending task.
      *
      * It owns the only poller, so the page and the right panel never add a
@@ -972,37 +963,18 @@ window.__ModuleLoader__.load({
         // no session services: the tab stays off
       }
 
-      // Right-sidebar page: the type plus its body and chip title, and a header
-      // button that opens it (a type alone shows no tab).
+      // Right-sidebar page: the type (with its start-page guide entry) plus the
+      // body and the chip title. No session-header button: the monitor is
+      // entered from the HNFlow page tab or from the right sidebar's start page.
       try {
         ctx.inject(["sidebarRightTabs", "sidebarRight"], (scope) => {
           const tabs = scope.sidebarRightTabs;
           if (!tabs || typeof tabs.register !== "function") return;
           if (typeof scope.effect === "function") scope.effect(() => tabs.register(rightTabDefinition()), "hnflow: right tab type");
           else tabs.register(rightTabDefinition());
-          const right = scope.sidebarRight;
-          rightService = right ?? null;
+          rightService = scope.sidebarRight ?? null;
           registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowMonitorPane));
           registerSlot(ctx, "sidebar.right.pane.tab.title", (slots) => slots.register({ name: "sidebar.right.pane.tab.title", key: RIGHT_KIND }, () => h("span", null, "HNFlow")));
-          registerSlot(ctx, "conversation.session.header.utilities", (slots) =>
-            slots.register(
-              {
-                name: "conversation.session.header.utilities",
-                id: "hnflow.monitor.open",
-                order: -6,
-                inject: () => ({
-                  open: () => {
-                    try {
-                      if (right && typeof right.openTab === "function") right.openTab(RIGHT_KIND, {});
-                    } catch {
-                      // no mounted session surface (a global panel is showing)
-                    }
-                  },
-                }),
-              },
-              HnflowMonitorButton,
-            ),
-          );
         });
       } catch {
         // this profile has no right sidebar; the page tab still shows the board
