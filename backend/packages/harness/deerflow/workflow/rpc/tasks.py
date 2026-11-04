@@ -177,6 +177,8 @@ def _summary(row: dict[str, Any]) -> dict[str, Any]:
         "revision": row["revision"],
         "outputSpec": row["output_spec"],
         "inputs": row["inputs_snapshot"],
+        "createdAt": row.get("created_at"),
+        "updatedAt": row.get("updated_at"),
     }
 
 

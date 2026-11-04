@@ -308,6 +308,35 @@ def test_task_list_returns_pending_tasks() -> None:
 
     assert len(result["tasks"]) == 1
     assert result["tasks"][0]["runId"].startswith("run-")
+    # The monitor sorts by creation time, so the summary must carry it.
+    assert isinstance(result["tasks"][0]["createdAt"], str)
+
+
+def test_run_list_carries_the_metadata_the_monitor_groups_by() -> None:
+    async def scenario() -> dict[str, Any]:
+        server = RpcServer()
+        started = (
+            await server.dispatch(
+                _request(
+                    "run/start",
+                    {
+                        "definition": _hello_definition(),
+                        "metadata": {"workspace": "D:/ws", "sessionId": "session-1", "workflowAlias": "publish"},
+                    },
+                )
+            )
+        )["result"]
+        await _await_terminal(server, started["runId"])
+        return (await server.dispatch(_request("run/list", {})))["result"]
+
+    result = asyncio.run(scenario())
+
+    run = next(entry for entry in result["runs"] if entry["runId"].startswith("run-"))
+    assert run["metadata"]["workspace"] == "D:/ws"
+    assert run["metadata"]["sessionId"] == "session-1"
+    assert run["metadata"]["workflowAlias"] == "publish"
+    assert isinstance(run["startedAt"], str)
+    assert isinstance(run["updatedAt"], str)
 
 
 def test_task_submit_resumes_the_run_to_completion() -> None:

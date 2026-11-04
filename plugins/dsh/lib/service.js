@@ -19,7 +19,8 @@ import path from 'node:path'
 import { AssetError } from './assets.js'
 import { resolveConfig } from './config.js'
 import { EngineError, createEngineClient } from './engine.js'
-import { engineCwd, libraryRoot, resolvePython } from './paths.js'
+import { engineCwd, dshHome, libraryRoot, resolvePython } from './paths.js'
+import { hashOf } from './json.js'
 import { ResolveError, createStores } from './resolve.js'
 import { WorkspaceError } from './workspace.js'
 
@@ -153,17 +154,46 @@ export class HnflowService {
   }
 
   /**
+   * Read one library asset, optionally at one revision.
+   *
+   * The library is global, so the anchor only selects a store set; a workspace
+   * without `.hnflow` still reads the same assets.
+   * @param {string} assetId - asset identity.
+   * @param {number | null} [revision] - revision to read, or the current one.
+   * @returns {Promise<{asset: Record<string, any>, definition: Record<string, any>, hash?: string}>} asset record.
+   */
+  async readAsset(assetId, revision = null) {
+    const stores = this.storesFor(this.libraryAnchor())
+    const base = await stores.assets.read(assetId)
+    if (revision === null || revision === Number(base.asset?.revision ?? 1)) return base
+    const definition = await stores.assets.readRevision(assetId, revision)
+    if (definition === null) throw new ResolveError('revision-missing', `${assetId} has no revision ${revision}`, { assetId, revision })
+    return { ...base, definition, hash: hashOf(definition) }
+  }
+
+  /**
+   * A directory that always exists for library-only reads.
+   * @returns {string} absolute path.
+   */
+  libraryAnchor() {
+    const known = [...this.runs.values()].map((run) => run.cwd).find((cwd) => typeof cwd === 'string' && cwd.length > 0)
+    return known ?? dshHome()
+  }
+
+  /**
    * Start a run for a workspace key.
    *
    * The definition is resolved (override → pinned revision → latest) and frozen:
-   * the engine receives the exact definition this call resolved.
-   * @param {{cwd: string, key: string, inputs?: Record<string, any>}} input - run request.
+   * the engine receives the exact definition this call resolved. `sessionId`
+   * rides along in the metadata so the monitor can say which session started it.
+   * @param {{cwd: string, key: string, inputs?: Record<string, any>, sessionId?: string | null}} input - run request.
    * @returns {Promise<Record<string, any>>} `{runId, status, startedAt, resolved}`.
    */
   async startRun(input) {
     const resolved = await this.resolve(input.cwd, input.key)
     const engine = this.engineClient()
     await engine.ensureStarted()
+    const sessionId = typeof input.sessionId === 'string' && input.sessionId.length > 0 ? input.sessionId : null
     const started = await engine.request('run/start', {
       definition: resolved.definition,
       inputs: input.inputs ?? {},
@@ -174,6 +204,7 @@ export class HnflowService {
         workflowRevision: resolved.revision,
         workflowHash: resolved.hash,
         workspace: input.cwd,
+        ...(sessionId === null ? {} : { sessionId }),
       },
     })
     this.runs.set(started.runId, {
@@ -182,6 +213,7 @@ export class HnflowService {
       key: input.key,
       alias: resolved.alias,
       assetId: resolved.assetId,
+      sessionId,
       startedAt: started.startedAt,
     })
     return { ...started, resolved }
@@ -237,6 +269,70 @@ export class HnflowService {
    */
   async tasks(runId) {
     return await this.engineClient().request('task/list', { runId })
+  }
+
+  /**
+   * Every retained run the engine knows, newest last.
+   * @returns {Promise<Record<string, any>[]>} run summaries (with metadata).
+   */
+  async listRuns() {
+    const engine = this.engineClient()
+    await engine.ensureStarted()
+    const answer = await engine.request('run/list', {})
+    return Array.isArray(answer?.runs) ? answer.runs : []
+  }
+
+  /**
+   * Every pending human task across runs.
+   * @returns {Promise<Record<string, any>[]>} task summaries.
+   */
+  async listTasks() {
+    const engine = this.engineClient()
+    await engine.ensureStarted()
+    const answer = await engine.request('task/list', {})
+    return Array.isArray(answer?.tasks) ? answer.tasks : []
+  }
+
+  /**
+   * The monitor payload: runs and the tasks that need a human.
+   *
+   * Each task is joined to its run's metadata so the panel can show the
+   * workspace and the session that started it without a second lookup.
+   * @returns {Promise<{runs: Record<string, any>[], tasks: Record<string, any>[]>}> monitor payload.
+   */
+  async monitor() {
+    const [runs, tasks] = await Promise.all([this.listRuns(), this.listTasks()])
+    /** @type {Map<string, Record<string, any>>} */
+    const byRun = new Map(runs.map((run) => [String(run.runId), run]))
+    const shapedRuns = runs.map((run) => ({
+      runId: run.runId,
+      status: run.status,
+      startedAt: run.startedAt ?? null,
+      endedAt: run.endedAt ?? null,
+      updatedAt: run.updatedAt ?? run.endedAt ?? run.startedAt ?? null,
+      workspace: run.metadata?.workspace ?? null,
+      sessionId: run.metadata?.sessionId ?? null,
+      workflow: run.metadata?.workflowAlias || run.metadata?.workflowAssetId || null,
+      assetId: run.metadata?.workflowAssetId ?? null,
+      error: run.error ?? null,
+      node: Array.isArray(run.nodes) && run.nodes.length > 0 ? run.nodes.at(-1)?.nodeId ?? null : null,
+    }))
+    const shapedTasks = tasks.map((task) => {
+      const run = byRun.get(String(task.runId))
+      return {
+        taskId: task.taskId,
+        runId: task.runId,
+        nodeId: task.nodeId,
+        kind: task.kind,
+        description: task.description ?? '',
+        createdAt: task.createdAt ?? null,
+        updatedAt: task.updatedAt ?? null,
+        workspace: run?.metadata?.workspace ?? null,
+        sessionId: run?.metadata?.sessionId ?? null,
+        workflow: run?.metadata?.workflowAlias || run?.metadata?.workflowAssetId || null,
+      }
+    })
+    return { runs: shapedRuns, tasks: shapedTasks }
   }
 
   /**

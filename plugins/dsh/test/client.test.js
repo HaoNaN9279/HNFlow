@@ -1,12 +1,14 @@
 /**
- * Client bundle contract: the module-loader factory, the slot registration, and
- * the command bridge the panel runs on.
+ * Client bundle contract: the module-loader factory, the two slot registrations
+ * (sidebar rail entry + keyed main panel), and the pure helpers the page renders
+ * with.
  *
  * There is no browser here, so the test loads the bundle with a minimal React
  * stand-in and a fake client context — enough to prove the registration shape
- * and that every action goes through `remote.commands`.
+ * and that one `/workflow ui` command carries every payload.
  */
 
+import { TextEncoder } from 'node:util'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -15,6 +17,7 @@ const react = {
   createElement: (type, props, ...children) => ({ type, props, children }),
   useState: (initial) => [initial, () => {}],
   useRef: (initial) => ({ current: initial }),
+  useEffect: () => {},
 }
 const reactDom = { createPortal: (node) => node }
 
@@ -28,6 +31,8 @@ globalThis.window = {
   },
   innerHeight: 800,
 }
+globalThis.btoa = (value) => Buffer.from(value, 'binary').toString('base64')
+globalThis.TextEncoder = globalThis.TextEncoder ?? TextEncoder
 
 await import('../client.js?contract-test')
 
@@ -46,13 +51,12 @@ function loadBundle() {
 
 /**
  * Apply the bundle to a fake client context.
- * @param {Record<string, any>} remote - `remote.commands.execute` result source.
- * @returns {{entry: Record<string, any>, exports: Record<string, any>}} the registration.
+ * @returns {{entries: Record<string, any>[], exports: Record<string, any>, injected: string[], ctx: Record<string, any>}} registrations and context.
  */
-function applyBundle(remote) {
+function applyBundle() {
   const exports = loadBundle()
   /** @type {Record<string, any>[]} */
-  const registrations = []
+  const entries = []
   /** @type {string[]} */
   const injected = []
   const ctx = {
@@ -62,49 +66,67 @@ function applyBundle(remote) {
         callback()
       },
       register: (entry, component) => {
-        registrations.push({ entry, component })
+        entries.push({ entry, component })
       },
     },
-    remote: { commands: { execute: remote } },
+    remote: { commands: { execute: async () => ({ ok: true, text: '{}' }) } },
+    inject: (deps, callback) => callback({}),
     effect: () => {},
   }
   exports.apply(ctx)
-  assert.deepEqual(injected, ['conversation.input.left'])
-  assert.equal(registrations.length, 1)
-  return { entry: registrations[0].entry, exports }
+  return { entries, exports, injected, ctx }
 }
 
-test('the bundle registers one composer-strip entry', () => {
-  const { entry } = applyBundle(async () => ({ ok: true, text: 'x' }))
+test('the bundle registers the sidebar entry and the keyed main panel', () => {
+  const { entries, injected } = applyBundle()
+
   assert.equal(registration.id, 'dsh-hnflow')
-  assert.equal(entry.name, 'conversation.input.left')
-  assert.equal(entry.id, 'hnflow-panel')
-  assert.equal(entry.order, 6)
+  assert.deepEqual(injected, ['sidebar.panellist', 'main'])
+  assert.equal(entries.length, 2)
+
+  const [rail, page] = entries
+  assert.equal(rail.entry.name, 'sidebar.panellist')
+  assert.equal(rail.entry.id, 'hnflow')
+  assert.equal(rail.entry.order, 15)
+  assert.equal(rail.entry.label(), 'HNFlow')
+
+  assert.equal(page.entry.name, 'main')
+  // The layout matches the rail id to the main key.
+  assert.equal(page.entry.key, rail.entry.id)
 })
 
-test('the inject face runs the command through remote.commands', async () => {
+test('the bundle no longer registers a composer entry', () => {
+  const { injected } = applyBundle()
+  assert.equal(injected.includes('conversation.input.left'), false)
+})
+
+test('the page inject face runs `/workflow ui` through remote.commands', async () => {
+  const { entries, ctx } = applyBundle()
   /** @type {unknown[][]} */
   const calls = []
-  const { entry } = applyBundle(async (...args) => {
+  ctx.inject = (deps, callback) => callback({ uiSession: { adapter: { current: { getSnapshot: () => ({ key: 'session-9' }) } } } })
+  ctx.remote.commands.execute = async (...args) => {
     calls.push(args)
-    return { ok: true, text: 'refs: publish' }
-  })
+    return { ok: true, text: '{"runs":[],"tasks":[]}' }
+  }
 
-  const face = entry.inject('session-1')
-  assert.equal(await face.run('/workflow'), 'refs: publish')
-  assert.deepEqual(calls[0], ['session-1', '/workflow', []])
+  const face = entries[1].entry.inject()
+  const answer = await face.runUi('monitor', {})
+
+  assert.deepEqual(answer, { runs: [], tasks: [] })
+  assert.equal(calls.length, 1)
+  const [sessionId, line] = calls[0]
+  assert.equal(sessionId, 'session-9')
+  assert.match(line, /^\/workflow ui monitor /u)
 })
 
-test('a failing command surfaces its coded error', async () => {
-  const { entry } = applyBundle(async () => ({ ok: false, error: { code: 'ref-missing', message: 'no workflow named x' } }))
-  const face = entry.inject('session-1')
+test('a failing ui command surfaces its coded error', async () => {
+  const { entries, ctx } = applyBundle()
+  ctx.inject = (deps, callback) => callback({})
+  ctx.remote.commands.execute = async () => ({ ok: false, error: { code: 'ui-op', message: 'unknown ui op' } })
 
-  await assert.rejects(face.run('/workflow run x'), (error) => error.message === 'hnflow: ref-missing: no workflow named x')
-})
-
-test('a result without a text field is shown as JSON', async () => {
-  const { entry } = applyBundle(async () => ({ ok: true, value: { a: 1 } }))
-  assert.equal(await entry.inject('session-1').run('/workflow'), '{"a":1}')
+  const face = entries[1].entry.inject()
+  await assert.rejects(face.runUi('nope', {}), (error) => /hnflow: ui-op: unknown ui op/u.test(error.message))
 })
 
 test('the bundle declares the services it consumes', () => {
@@ -112,14 +134,39 @@ test('the bundle declares the services it consumes', () => {
   assert.deepEqual(exports.inject, ['slots', 'remote', 'remote.commands'])
 })
 
-test('the panel payload is parsed strictly', () => {
+test('the ui payload round-trips Windows paths and CJK', () => {
   const { internals } = loadBundle()
-  assert.equal(internals.parsePanelPayload('not json'), null)
-  assert.equal(internals.parsePanelPayload('{"selected":{}}'), null)
+  const payload = { workspace: 'D:\\workspace\\HNFlow', key: '发布-公告' }
+  const encoded = internals.encodePayload(payload)
 
-  const parsed = internals.parsePanelPayload(JSON.stringify({ workflows: [{ assetId: 'wf-1' }], selected: { key: 'publish', definition: { nodes: [] } } }))
-  assert.equal(parsed.workflows.length, 1)
-  assert.equal(parsed.selected.key, 'publish')
+  assert.equal(encoded.includes(' '), false)
+  assert.equal(encoded.includes('\\'), false)
+  const decoded = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'))
+  assert.deepEqual(decoded, payload)
+})
+
+test('a payload that is not an object is rejected', () => {
+  const { internals } = loadBundle()
+  assert.equal(internals.parseJson('not json'), null)
+  assert.equal(internals.parseJson('[1,2]'), null)
+  assert.deepEqual(internals.parseJson('{"a":1}'), { a: 1 })
+})
+
+test('the workspace snapshot maps to tree rows, skipping entries without a path', () => {
+  const { internals } = loadBundle()
+  const rows = internals.workspaceItems({
+    items: [
+      { workspaceId: 'w1', title: 'HNFlow', path: 'D:\\workspace\\HNFlow' },
+      { workspaceId: 'w2', path: '' },
+      { workspaceId: 'w3', path: 'D:\\tmp\\x' },
+      null,
+    ],
+  })
+
+  assert.deepEqual(rows, [
+    { id: 'w1', name: 'HNFlow', path: 'D:\\workspace\\HNFlow' },
+    { id: 'w3', name: 'D:\\tmp\\x', path: 'D:\\tmp\\x' },
+  ])
 })
 
 test('the canvas uses stored positions and falls back to a grid', () => {
@@ -139,7 +186,6 @@ test('the canvas uses stored positions and falls back to a grid', () => {
     layout.nodes.map((node) => node.id),
     ['start', 'end'],
   )
-  // Stored x=40 → 40*0.55+16; the second node falls back to grid column 1.
   assert.ok(Math.abs(layout.nodes[0].x - (40 * 0.55 + 16)) < 0.001)
   assert.ok(layout.nodes[1].x > layout.nodes[0].x)
   assert.equal(layout.edges.length, 1)
@@ -166,148 +212,19 @@ test('an empty definition still produces a drawable box', () => {
 test('the preset projection decides visibility in both shapes', () => {
   const { internals } = loadBundle()
 
-  // The live projection is the preset id string, not an object.
   assert.equal(internals.isHnflowPreset('hnflow'), true)
   assert.equal(internals.isHnflowPreset('vibestack'), false)
-  assert.equal(internals.isHnflowPreset('standard'), false)
-  // The older object shape still works, and an unknown projection must not hide it.
   assert.equal(internals.isHnflowPreset({ id: 'hnflow' }), true)
   assert.equal(internals.isHnflowPreset({ id: 'standard' }), false)
   assert.equal(internals.isHnflowPreset(null), true)
   assert.equal(internals.isHnflowPreset(undefined), true)
 })
 
-test('the editor command carries the key, node, and raw JSON', () => {
+test('labels stay compact in the monitor rows', () => {
   const { internals } = loadBundle()
-  assert.equal(internals.nodeCommand('publish', 'greet', '{"value":"a  b"}'), '/workflow node publish greet {"value":"a  b"}')
-})
-
-test('writing back to the asset is a two-step command', () => {
-  const { internals } = loadBundle()
-  assert.equal(internals.saveAssetCommand('publish', false), '/workflow save asset publish')
-  assert.equal(internals.saveAssetCommand('publish', true), '/workflow save asset publish --yes')
-})
-
-test('the inbox payload is parsed strictly', () => {
-  const { internals } = loadBundle()
-  assert.equal(internals.parseInbox('nope'), null)
-  assert.equal(internals.parseInbox('{"tasks":"x"}'), null)
-
-  const tasks = internals.parseInbox(JSON.stringify({ tasks: [{ taskId: 'task-1', kind: 'task' }, { nope: true }, 'x'] }))
-  assert.equal(tasks.length, 1)
-  assert.equal(tasks[0].taskId, 'task-1')
-})
-
-test('a task template matches the task kind', () => {
-  const { internals } = loadBundle()
-
-  assert.deepEqual(JSON.parse(internals.taskTemplate({ taskId: 't', kind: 'review' })), { decision: true, feedback: '' })
-  assert.deepEqual(
-    JSON.parse(internals.taskTemplate({ taskId: 't', kind: 'task', outputSpec: { ports: [{ name: 'note', type: 'data' }, { name: 'flag', type: 'bool' }] } })),
-    { note: '', flag: false },
-  )
-})
-
-test('submit carries the typed payload as JSON', () => {
-  const { internals } = loadBundle()
-  assert.equal(internals.submitCommand('task-1', '{"note":"a b"}'), '/workflow submit task-1 {"note":"a b"}')
-})
-
-test('the tab row has no duplicate ids or labels', () => {
-  const { internals } = loadBundle()
-  const rows = internals.menuItems()
-
-  assert.deepEqual(
-    rows.map((row) => row.label),
-    ['工作流', '待办', '资产库'],
-  )
-  assert.equal(rows.filter((row) => row.kind === 'view').length, 2)
-  // "待办" used to be both a view and an action, so the row showed it twice.
-  assert.equal(new Set(rows.map((row) => row.label)).size, rows.length)
-  assert.equal(new Set(rows.map((row) => row.id)).size, rows.length)
-  assert.equal(rows[2].command, '/workflow asset list')
-})
-
-test('a repeated panel payload row is collapsed', () => {
-  const { internals } = loadBundle()
-  const payload = internals.parsePanelPayload(
-    JSON.stringify({
-      workflows: [
-        { alias: 'publish', assetId: 'wf-1' },
-        { alias: 'publish', assetId: 'wf-1' },
-        { assetId: 'wf-2' },
-        { assetId: 'wf-2' },
-        null,
-      ],
-    }),
-  )
-
-  assert.deepEqual(
-    payload.workflows.map((entry) => entry.alias || entry.assetId),
-    ['publish', 'wf-2'],
-  )
-})
-
-test('a repeated inbox task is collapsed', () => {
-  const { internals } = loadBundle()
-  const tasks = internals.parseInbox(JSON.stringify({ tasks: [{ taskId: 'task-1' }, { taskId: 'task-1' }, { taskId: 'task-2' }] }))
-  assert.deepEqual(
-    tasks.map((task) => task.taskId),
-    ['task-1', 'task-2'],
-  )
-})
-
-test('the popover opens above the trigger when there is room', () => {
-  const { internals } = loadBundle()
-  const placed = internals.placeMenu({ left: 120, top: 700, right: 200, bottom: 728 }, { width: 1200, height: 800 })
-
-  assert.equal(placed.placement, 'above')
-  assert.equal(placed.left, 120)
-  // bottom edge sits `gap` pixels above the trigger top
-  assert.equal(placed.bottom, 800 - 700 + 6)
-  assert.ok(placed.maxHeight <= 420)
-})
-
-test('the popover flips below when the trigger is near the top', () => {
-  const { internals } = loadBundle()
-  const placed = internals.placeMenu({ left: 40, top: 30, right: 120, bottom: 58 }, { width: 1200, height: 800 })
-
-  assert.equal(placed.placement, 'below')
-  assert.equal(placed.top, 64)
-  assert.ok(placed.maxHeight >= 120)
-})
-
-test('the popover stays inside a narrow viewport', () => {
-  const { internals } = loadBundle()
-
-  const rightEdge = internals.placeMenu({ left: 300, top: 600, right: 380, bottom: 628 }, { width: 400, height: 800 })
-  assert.equal(rightEdge.left, 12) // 400 - width(380) - margin(8)
-  assert.equal(rightEdge.width, 380)
-  assert.ok(rightEdge.left >= 0)
-
-  const narrow = internals.placeMenu({ left: 10, top: 600, right: 90, bottom: 628 }, { width: 260, height: 800 })
-  assert.equal(narrow.width, 244) // 260 - 2 * 8
-  assert.equal(narrow.left, 8)
-
-  const tiny = internals.placeMenu({ left: 0, top: 20, right: 40, bottom: 48 }, { width: 200, height: 120 })
-  assert.ok(tiny.left >= 0)
-  assert.equal(tiny.width, 184) // 200 - 2 * 8
-  assert.ok(tiny.maxHeight >= 120)
-})
-
-test('applying the same context twice registers one entry', () => {
-  const exports = loadBundle()
-  const registrations = []
-  const ctx = {
-    slots: {
-      inject: (name, callback) => callback(),
-      register: (entry, component) => registrations.push({ entry, component }),
-    },
-    remote: { commands: { execute: async () => ({ ok: true, text: '' }) } },
-  }
-
-  exports.apply(ctx)
-  exports.apply(ctx)
-
-  assert.equal(registrations.length, 1)
+  assert.equal(internals.shortPath('D:\\workspace\\HNFlow'), 'workspace/HNFlow')
+  assert.equal(internals.shortPath(''), '—')
+  assert.equal(internals.shortSession('session-bffb5087-60d4-48c1-a4c1-916ff797d3f1'), '…916ff797d3f1')
+  assert.equal(internals.shortSession('short'), 'short')
+  assert.equal(internals.shortSession(null), '—')
 })

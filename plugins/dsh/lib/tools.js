@@ -176,7 +176,9 @@ export function createWorkflowTool(options) {
       }
       case 'run': {
         const key = requireWorkflow(args)
-        const started = await service.startRun({ cwd, key, inputs: args.input ?? {} })
+        // The tool runs inside a session, so it can name it without a flag.
+        const sessionId = typeof exec?.agent?.session?.id === 'string' ? exec.agent.session.id : null
+        const started = await service.startRun({ cwd, key, inputs: args.input ?? {}, sessionId })
         const waitSeconds = clampWait(args.wait_seconds)
         const observed = waitSeconds > 0 ? await service.waitFor(started.runId, waitSeconds * 1000) : await service.status(started.runId)
         const status = await settle(observed, exec, interactive)

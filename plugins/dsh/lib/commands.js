@@ -8,6 +8,7 @@
 
 import { diffDocuments } from './json.js'
 import { formatRunStatus, formatTasks, formatTimeline, formatWorkflowList } from './tools.js'
+import { dispatchUi } from './ui.js'
 
 /** Usage text shown for `/workflow` and `/workflow help`. */
 export const USAGE = [
@@ -33,6 +34,7 @@ export const USAGE = [
   '/workflow override diff <name> — override vs asset',
   '/workflow override reset <name> — drop the workspace override',
   '/workflow node <name> <nodeId> <json> — set one node\'s params in the workspace override',
+  '/workflow ui <op> [base64url payload] — JSON for the browser surfaces (works without a session)',
 ].join('\n')
 
 /**
@@ -62,6 +64,38 @@ export function tokenize(rawInput) {
   }
   if (current.length > 0) tokens.push(current)
   return tokens
+}
+
+/**
+ * Pull `--session <id>` / `--session=<id>` out of a run's arguments.
+ *
+ * The run record carries the session id so the monitor can name the session
+ * that started it; a bare command has no session object to ask.
+ * @param {string[]} tokens - remaining tokens.
+ * @returns {{rest: string[], sessionId: string | null}} tokens without the option, and its value.
+ */
+export function extractSessionOption(tokens) {
+  /** @type {string[]} */
+  const rest = []
+  /** @type {string | null} */
+  let sessionId = null
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token === '--session') {
+      const value = tokens[index + 1]
+      if (typeof value === 'string' && !value.startsWith('--')) {
+        sessionId = value
+        index += 1
+      }
+      continue
+    }
+    if (token.startsWith('--session=')) {
+      sessionId = token.slice('--session='.length)
+      continue
+    }
+    rest.push(token)
+  }
+  return { rest, sessionId }
 }
 
 /**
@@ -120,10 +154,19 @@ export function createWorkflowCommand(options) {
    * @returns {Promise<{kind: 'success'|'error', text: string}>} command result.
    */
   const handler = async (invocation) => {
-    const cwd = cwdOf(invocation?.agent)
-    if (cwd === null) return { kind: 'error', text: 'workflow: this session has no workspace directory' }
     const rawInput = invocation?.rawInput
     const tokens = tokenize(rawInput)
+    // `ui` is the browser surfaces' channel: a global page has no session, so
+    // this branch must run before the workspace lookup rejects the invocation.
+    if (tokens[0] === 'ui') {
+      try {
+        return { kind: 'success', text: await dispatchUi(tokens.slice(1), { service }) }
+      } catch (error) {
+        return { kind: 'error', text: `workflow: ${error?.code ?? 'error'}: ${error?.message ?? String(error)}` }
+      }
+    }
+    const cwd = cwdOf(invocation?.agent)
+    if (cwd === null) return { kind: 'error', text: 'workflow: this session has no workspace directory' }
     try {
       const text = await dispatch(tokens, cwd, rawInput)
       return { kind: 'success', text }
@@ -147,10 +190,11 @@ export function createWorkflowCommand(options) {
     if (head === 'panel') return JSON.stringify(await service.panelPayload(cwd, rest[0]))
 
     if (head === 'run') {
-      const { input, rest: positional } = parseInputs(rest)
+      const { rest: withoutSession, sessionId } = extractSessionOption(rest)
+      const { input, rest: positional } = parseInputs(withoutSession)
       const key = positional[0]
-      if (key === undefined) throw commandError('workflow-required', 'usage: /workflow run <name> [k=v …]')
-      const started = await service.startRun({ cwd, key, inputs: input })
+      if (key === undefined) throw commandError('workflow-required', 'usage: /workflow run <name> [k=v …] [--session <id>]')
+      const started = await service.startRun({ cwd, key, inputs: input, ...(sessionId === null ? {} : { sessionId }) })
       const status = await service.waitFor(started.runId, 60000)
       const note =
         status.status === 'waiting_human'

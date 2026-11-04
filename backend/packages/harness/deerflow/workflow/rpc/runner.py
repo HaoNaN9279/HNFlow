@@ -99,14 +99,20 @@ class RunState:
     task: asyncio.Task[None] | None = None
 
     def summary(self) -> dict[str, Any]:
-        """Render the compact run record returned by ``run/status``."""
+        """Render the compact run record returned by ``run/status`` and ``run/list``.
+
+        ``metadata`` rides along because the monitor groups runs by workspace and
+        Session; it is a small dict, so the status payload stays cheap.
+        """
         return {
             "runId": self.run_id,
             "status": self.status,
             "startedAt": self.started_at,
             "endedAt": self.ended_at,
+            "updatedAt": self.ended_at or self.started_at,
             "error": self.error,
             "result": self.result,
+            "metadata": dict(self.metadata),
             "nodes": [{"nodeId": node_id, **values} for node_id, values in self.nodes.items()],
         }
 

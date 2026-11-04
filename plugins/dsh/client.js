@@ -4,15 +4,17 @@
 // loader. Only React and react-dom (platform-seeded modules) are required, so no
 // build step is involved.
 //
-// The entry point is a compact "HNFlow" control in `conversation.input.left` —
-// the left side of the composer strip, next to the model picker. It opens a
-// popover with a list of the workspace's workflows, a read-only canvas of the
-// selected definition, and a few command shortcuts to the host's `/workflow`
-// commands.
+// Surfaces (docs/dsh-plugin-plan.md §11.4):
 //
-// The client never reads the asset files and never talks to the engine: every
-// piece of data and every write goes through a host command, so the panel obeys
-// exactly the same rules as typing the command by hand.
+// - a left-sidebar page (`sidebar.panellist` + the keyed `main` slot) with three
+//   tabs: 工作区 / 通用工作流 / 任务监视;
+// - one shared left-tree + right-canvas layout, so the session tab (M6.4) and
+//   the task panel (M6.5) can reuse the same components.
+//
+// The client never reads asset files and never talks to the engine: every piece
+// of data and every write goes through `/workflow ui <op> <base64url>` (or a
+// plain `/workflow` command), so the page obeys exactly the same rules as typing
+// the command by hand.
 window.__ModuleLoader__.load({
   id: "dsh-hnflow",
   factory: (require) => {
@@ -24,143 +26,47 @@ window.__ModuleLoader__.load({
     const reactDom = require("react-dom");
     const h = react.createElement;
 
-    /** Services this client plugin consumes. */
+    /** Services this client plugin consumes directly. */
     const inject = ["slots", "remote", "remote.commands"];
 
-    /** Slot entry id, unique inside the composer strip. */
-    const ENTRY_ID = "hnflow-panel";
+    /** Sidebar entry id; also the `main` panel key (the layout pairs them). */
+    const PANEL_ID = "hnflow";
 
-    /** Agent preset this panel belongs to. */
+    /** Agent preset that owns the session tab (M6.4). */
     const PRESET_ID = "hnflow";
-
-    /** Host command that answers with the panel payload (JSON text). */
-    const PANEL_COMMAND = "/workflow panel";
-
-    /** Popover width, also used when the anchor is clamped into the viewport. */
-    const PANEL_WIDTH = 380;
-
-    /**
-     * Panel views, in tab order.
-     *
-     * A row is either a view the panel renders itself (`kind: "view"`) or a
-     * read-only action that forwards to a host command. Ids and labels must stay
-     * unique: an earlier revision listed "待办" as a view *and* as an action, so
-     * the same label appeared twice in the row while the two buttons did
-     * different things.
-     */
-    const VIEWS = [
-      { id: "workflows", label: "工作流", hint: "工作区引用的工作流" },
-      { id: "inbox", label: "待办", hint: "等待人工的任务" },
-    ];
-
-    /** Read-only actions offered next to the views. */
-    const ACTIONS = [{ id: "assets", label: "资产库", command: "/workflow asset list", hint: "资产库列表" }];
 
     /** Read-only canvas geometry. Mirrors the editor's grid fallback. */
     const CANVAS = { columns: 3, stepX: 220, stepY: 130, width: 170, height: 62, padding: 16 };
 
-    /** Menu ids stay unique per mounted panel. */
-    let panelSeq = 0;
+    const TABS = [
+      { id: "workspaces", label: "工作区" },
+      { id: "assets", label: "通用工作流" },
+      { id: "monitor", label: "任务监视" },
+    ];
 
     const styles = {
-      root: { position: "relative", display: "inline-flex", alignItems: "center" },
-      trigger: {
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "4px",
-        height: "28px",
-        padding: "0 8px",
-        borderRadius: "var(--dsw-radius-sm, 6px)",
-        border: "none",
-        background: "transparent",
-        color: "var(--dsw-alias-label-secondary, inherit)",
-        fontFamily: "inherit",
-        fontSize: "13px",
-        fontWeight: 500,
-        lineHeight: "20px",
-        whiteSpace: "nowrap",
-        cursor: "pointer",
-      },
-      triggerOpen: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.18))" },
-      menu: {
-        display: "flex",
-        flexDirection: "column",
-        gap: "6px",
-        boxSizing: "border-box",
-        width: `${PANEL_WIDTH}px`,
-        maxHeight: "420px",
-        overflow: "auto",
-        overscrollBehavior: "contain",
-        padding: "8px",
-        borderRadius: "var(--dsw-radius-lg, 12px)",
-        border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
-        background: "var(--dsw-specific-menu, var(--dsw-specific-input-major, #1f1f1f))",
-        boxShadow: "var(--dsw-elevation-prominent, 0 8px 24px rgba(0,0,0,0.28))",
-        zIndex: 1100,
-      },
-      tabs: { display: "flex", gap: "4px", alignItems: "center", flexWrap: "wrap" },
-      tab: {
-        padding: "3px 8px",
-        borderRadius: "var(--dsw-radius-sm, 6px)",
-        border: "1px solid transparent",
-        background: "transparent",
-        color: "var(--dsw-alias-label-secondary, inherit)",
-        fontFamily: "inherit",
-        fontSize: "12px",
-        cursor: "pointer",
-      },
-      tabActive: {
-        borderColor: "var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
-        color: "var(--dsw-alias-label-primary, inherit)",
-      },
-      body: {
-        margin: 0,
-        maxHeight: "320px",
-        overflow: "auto",
-        fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)",
-        fontSize: "11px",
-        lineHeight: "16px",
-        whiteSpace: "pre-wrap",
-        color: "var(--dsw-alias-label-secondary, inherit)",
-      },
-      list: { display: "flex", flexDirection: "column", gap: "2px", margin: 0, padding: 0, listStyle: "none" },
-      item: {
-        display: "flex",
-        flexDirection: "column",
-        gap: "1px",
-        width: "100%",
-        padding: "5px 8px",
-        borderRadius: "var(--dsw-radius-sm, 6px)",
-        border: "none",
-        background: "transparent",
-        color: "var(--dsw-alias-label-primary, inherit)",
-        textAlign: "left",
-        fontFamily: "inherit",
-        fontSize: "12px",
-        cursor: "pointer",
-      },
+      page: { height: "100%", minHeight: 0, display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
+      tabbar: { display: "flex", alignItems: "center", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
+      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "13px", cursor: "pointer" },
+      tabActive: { borderColor: "var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.12))", color: "var(--dsw-alias-label-primary, inherit)" },
+      body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
+      tree: { width: "280px", flex: "0 0 280px", minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
+      group: { margin: "0 0 6px" },
+      groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", border: "none", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
+      item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       itemActive: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.16))" },
       meta: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary, inherit)" },
-      canvas: { width: "100%", height: "240px", display: "block", borderRadius: "var(--dsw-radius-sm, 6px)", background: "rgba(127,127,127,0.06)" },
+      canvasPane: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "14px", boxSizing: "border-box" },
+      canvas: { width: "100%", height: "100%", minHeight: "240px", display: "block", borderRadius: "var(--dsw-radius-sm, 6px)", background: "rgba(127,127,127,0.06)" },
       node: { fill: "rgba(127,127,127,0.14)", stroke: "rgba(127,127,127,0.45)", strokeWidth: 1 },
-      nodeActive: { fill: "rgba(110,150,255,0.28)", stroke: "rgba(110,150,255,0.9)" },
       nodeLabel: { fontSize: "9px", fill: "currentColor", pointerEvents: "none" },
       edge: { stroke: "rgba(127,127,127,0.55)", strokeWidth: 1.2, fill: "none" },
-      editor: { display: "flex", flexDirection: "column", gap: "4px" },
-      textarea: {
-        width: "100%",
-        boxSizing: "border-box",
-        minHeight: "72px",
-        padding: "6px 8px",
-        borderRadius: "var(--dsw-radius-sm, 6px)",
-        border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
-        background: "rgba(127,127,127,0.08)",
-        color: "var(--dsw-alias-label-primary, inherit)",
-        fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)",
-        fontSize: "11px",
-        lineHeight: "16px",
-        resize: "vertical",
-      },
+      empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
+      errorBox: { margin: "10px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      board: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "12px 14px", boxSizing: "border-box" },
+      boardTitle: { margin: "10px 0 6px", fontSize: "13px", fontWeight: 600 },
+      row: { display: "flex", alignItems: "baseline", gap: "10px", padding: "4px 6px", borderRadius: "var(--dsw-radius-sm, 6px)", fontSize: "12px" },
+      cell: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
     };
 
     /**
@@ -179,91 +85,48 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The popover's row of views and actions.
-     *
-     * Deduped by id *and* label: a repeated row is unreadable and, when the two
-     * copies carry different handlers, actively misleading.
-     * @returns {{id: string, label: string, kind: "view" | "action", command?: string, hint: string}[]} unique rows, in render order.
+     * base64url-encode a `/workflow ui` payload (the host decodes it).
+     * @param {unknown} value - payload.
+     * @returns {string} encoded text without padding.
      */
-    function menuItems() {
-      const rows = [
-        ...VIEWS.map((view) => ({ id: view.id, label: view.label, kind: "view", hint: view.hint })),
-        ...ACTIONS.map((action) => ({ id: action.id, label: action.label, kind: "action", command: action.command, hint: action.hint })),
-      ];
-      /** @type {Set<string>} */
-      const ids = new Set();
-      /** @type {Set<string>} */
-      const labels = new Set();
-      return rows.filter((row) => {
-        if (ids.has(row.id) || labels.has(row.label)) return false;
-        ids.add(row.id);
-        labels.add(row.label);
-        return true;
-      });
+    function encodePayload(value) {
+      const bytes = new TextEncoder().encode(JSON.stringify(value ?? {}));
+      let binary = "";
+      for (const byte of bytes) binary += String.fromCharCode(byte);
+      return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
     }
 
     /**
-     * Place the popover against its trigger.
-     *
-     * Above the trigger when there is room for a usable panel, otherwise below;
-     * horizontally clamped so a narrow window or a trigger near the right edge
-     * cannot push the panel off screen. `maxHeight` keeps the panel inside the
-     * viewport so content never spills over the composer — spilled content would
-     * stay clickable in a place that no longer matches what the user sees.
-     * @param {{left: number, top: number, right: number, bottom: number}} rect - trigger rect.
-     * @param {{width: number, height: number}} viewport - window size.
-     * @param {number} [panelWidth] - preferred width.
-     * @returns {{placement: "above" | "below", left: number, width: number, maxHeight: number, top?: number, bottom?: number}} fixed-position numbers.
+     * Parse a JSON payload returned by the host.
+     * @param {string} text - command text.
+     * @returns {Record<string, any> | null} parsed object, or null.
      */
-    function placeMenu(rect, viewport, panelWidth = PANEL_WIDTH) {
-      const margin = 8;
-      const gap = 6;
-      const width = Math.min(panelWidth, Math.max(160, viewport.width - margin * 2));
-      const left = Math.round(Math.min(Math.max(margin, rect.left), Math.max(margin, viewport.width - width - margin)));
-      const spaceAbove = Math.round(rect.top) - gap - margin;
-      const spaceBelow = Math.round(viewport.height - rect.bottom) - gap - margin;
-      const maxHeight = Math.max(120, Math.min(420, Math.max(spaceAbove, spaceBelow)));
-      if (spaceAbove >= 200 || spaceAbove >= spaceBelow) {
-        return { placement: "above", left, width, maxHeight: Math.min(maxHeight, Math.max(120, spaceAbove)), bottom: Math.round(viewport.height - rect.top) + gap };
-      }
-      return { placement: "below", left, width, maxHeight: Math.min(maxHeight, Math.max(120, spaceBelow)), top: Math.round(rect.bottom) + gap };
-    }
-
-    /**
-     * Drop repeated workflow rows, keeping the first occurrence of each key.
-     * @param {unknown} list - candidate entries.
-     * @returns {Record<string, any>[]} unique entries.
-     */
-    function dedupeWorkflows(list) {
-      if (!Array.isArray(list)) return [];
-      /** @type {Set<string>} */
-      const seen = new Set();
-      /** @type {Record<string, any>[]} */
-      const out = [];
-      for (const entry of list) {
-        if (entry === null || typeof entry !== "object") continue;
-        const key = entry.alias || entry.assetId;
-        if (typeof key !== "string" || seen.has(key)) continue;
-        seen.add(key);
-        out.push(entry);
-      }
-      return out;
-    }
-
-    /**
-     * Parse the `/workflow panel` payload.
-     * @param {string} text - command output.
-     * @returns {{workflows: Record<string, any>[], selected: Record<string, any> | null} | null} payload or null.
-     */
-    function parsePanelPayload(text) {
-      let parsed;
+    function parseJson(text) {
       try {
-        parsed = JSON.parse(String(text ?? ""));
+        const parsed = JSON.parse(String(text ?? ""));
+        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
       } catch {
         return null;
       }
-      if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.workflows)) return null;
-      return { workflows: dedupeWorkflows(parsed.workflows), selected: typeof parsed.selected === "object" ? parsed.selected : null };
+    }
+
+    /**
+     * Map a Workspace store snapshot to the `{id, name, path}` list the tree needs.
+     * @param {unknown} snapshot - `ctx.workspaces.list.getSnapshot()` value.
+     * @returns {{id: string, name: string, path: string}[]} workspaces with a path.
+     */
+    function workspaceItems(snapshot) {
+      const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+      /** @type {{id: string, name: string, path: string}[]} */
+      const out = [];
+      for (const item of items) {
+        const path = typeof item?.path === "string" ? item.path : "";
+        if (path.length === 0) continue;
+        const id = typeof item.workspaceId === "string" ? item.workspaceId : typeof item.id === "string" ? item.id : path;
+        const name = typeof item.title === "string" && item.title.length > 0 ? item.title : path;
+        out.push({ id, name, path });
+      }
+      return out;
     }
 
     /**
@@ -323,85 +186,12 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Build the command that stores one node's edited params.
-     * @param {string} key - workflow alias or asset id.
-     * @param {string} nodeId - node to edit.
-     * @param {string} json - params JSON as typed.
-     * @returns {string} command line.
-     */
-    function nodeCommand(key, nodeId, json) {
-      return `/workflow node ${key} ${nodeId} ${json}`;
-    }
-
-    /**
-     * Build the two-step "write back to the asset" command.
-     * @param {string} key - workflow alias or asset id.
-     * @param {boolean} confirmed - whether the user confirmed the diff.
-     * @returns {string} command line.
-     */
-    function saveAssetCommand(key, confirmed) {
-      return confirmed ? `/workflow save asset ${key} --yes` : `/workflow save asset ${key}`;
-    }
-
-    /**
-     * Parse the `/workflow inbox` payload.
-     * @param {string} text - command output.
-     * @returns {Record<string, any>[] | null} tasks, or null when unreadable.
-     */
-    function parseInbox(text) {
-      let parsed;
-      try {
-        parsed = JSON.parse(String(text ?? ""));
-      } catch {
-        return null;
-      }
-      if (parsed === null || typeof parsed !== "object" || !Array.isArray(parsed.tasks)) return null;
-      /** @type {Set<string>} */
-      const seen = new Set();
-      return parsed.tasks
-        .filter((task) => task !== null && typeof task === "object" && typeof task.taskId === "string")
-        .filter((task) => {
-          if (seen.has(task.taskId)) return false;
-          seen.add(task.taskId);
-          return true;
-        });
-    }
-
-    /**
-     * A payload skeleton for one task.
-     * @param {Record<string, any>} task - pending task summary.
-     * @returns {string} JSON text to prefill the editor.
-     */
-    function taskTemplate(task) {
-      if (task.kind === "review") return JSON.stringify({ decision: true, feedback: "" }, null, 2);
-      const ports = Array.isArray(task.outputSpec && task.outputSpec.ports) ? task.outputSpec.ports : [];
-      /** @type {Record<string, any>} */
-      const payload = {};
-      for (const port of ports) {
-        if (typeof port.name !== "string") continue;
-        payload[port.name] = port.type === "bool" ? false : "";
-      }
-      return JSON.stringify(payload, null, 2);
-    }
-
-    /**
-     * Build the submission command for one task.
-     * @param {string} taskId - task id.
-     * @param {string} json - payload as typed.
-     * @returns {string} command line.
-     */
-    function submitCommand(taskId, json) {
-      return `/workflow submit ${taskId} ${json}`;
-    }
-
-    /**
      * Whether the session runs the HNFlow preset.
      *
      * The `agentPreset` projection is the preset id as a plain string; an older
-     * shape carried `{ id }`. An absent projection means "not known yet", which
-     * must not hide the control.
+     * shape carried `{ id }`. An absent projection means "not known yet".
      * @param {unknown} preset - projection value.
-     * @returns {boolean} true when the control should render.
+     * @returns {boolean} true when the session tab belongs to this session.
      */
     function isHnflowPreset(preset) {
       if (preset === null || preset === undefined) return true;
@@ -411,473 +201,387 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The composer-strip control.
-     * @param {Record<string, unknown>} props - slot props plus the inject face.
-     * @returns {unknown} React element or null when the mode is not HNFlow.
+     * Resolve once, or after a timeout, with whatever the injection produced.
+     * @param {function(function(any): void): void} start - begins an async probe.
+     * @param {number} waitMs - fallback delay.
+     * @returns {Promise<any>} the first answer.
      */
-    function Panel(props) {
-      const preset = typeof props.useProjection === "function" ? props.useProjection("agentPreset") : null;
-      const [open, setOpen] = react.useState(false);
-      const [busy, setBusy] = react.useState(false);
-      const [payload, setPayload] = react.useState(null);
-      const [view, setView] = react.useState("workflows");
-      const [text, setText] = react.useState("");
-      const [selectedKey, setSelectedKey] = react.useState(null);
-      const [nodeId, setNodeId] = react.useState(null);
-      const [draft, setDraft] = react.useState("");
-      const [confirmSave, setConfirmSave] = react.useState(false);
-      const [tasks, setTasks] = react.useState(null);
-      const [taskId, setTaskId] = react.useState(null);
-      const [taskDraft, setTaskDraft] = react.useState("");
-      const [placement, setPlacement] = react.useState(null);
-      const rootRef = react.useRef(null);
-      const triggerRef = react.useRef(null);
-      const menuRef = react.useRef(null);
-      const menuId = react.useRef(null);
-      if (menuId.current === null) {
-        panelSeq += 1;
-        menuId.current = "hnflow-panel-" + panelSeq;
-      }
-
-      /**
-       * Measure the trigger and place the popover against it.
-       * @returns {void}
-       */
-      const measure = () => {
-        const trigger = triggerRef.current;
-        if (!trigger || typeof trigger.getBoundingClientRect !== "function" || typeof window === "undefined") return;
-        setPlacement(placeMenu(trigger.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight }));
-      };
-
-      // Measure after mount (and on every viewport change) instead of once inside
-      // the click handler: the measured box must match what is on screen.
-      react.useLayoutEffect(() => {
-        if (!open) return undefined;
-        measure();
-        window.addEventListener("resize", measure);
-        window.addEventListener("scroll", measure, true);
-        return () => {
-          window.removeEventListener("resize", measure);
-          window.removeEventListener("scroll", measure, true);
+    function firstAnswer(start, waitMs = 2000) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(value);
         };
-      }, [open]);
-
-      // The portal lives outside the trigger, so closing on outside press has to
-      // consult both boxes explicitly.
-      react.useEffect(() => {
-        if (!open) return undefined;
-        const isInside = (node, target) => node !== null && node !== undefined && typeof node.contains === "function" && node.contains(target);
-        const onPointerDown = (event) => {
-          if (isInside(rootRef.current, event.target) || isInside(menuRef.current, event.target)) return;
-          setOpen(false);
-        };
-        const onKeyDown = (event) => {
-          if (event.key === "Escape") setOpen(false);
-        };
-        document.addEventListener("mousedown", onPointerDown);
-        document.addEventListener("keydown", onKeyDown);
-        return () => {
-          document.removeEventListener("mousedown", onPointerDown);
-          document.removeEventListener("keydown", onKeyDown);
-        };
-      }, [open]);
-
-      if (!isHnflowPreset(preset)) return null;
-
-      /**
-       * Run a raw command and show its text.
-       * @param {string} command - `/workflow …` command line.
-       * @returns {Promise<void>} resolves once shown.
-       */
-      const runText = async (command) => {
-        setBusy(true);
         try {
-          setPayload(null);
-          setText(await props.run(command));
-        } catch (error) {
-          setPayload(null);
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
+          start(done);
+        } catch {
+          done(undefined);
         }
-      };
+        setTimeout(() => done(undefined), waitMs);
+      });
+    }
 
-      /**
-       * Load the panel payload (list + one definition), optionally for one key.
-       * @param {string | null} key - workflow alias or asset id.
-       * @returns {Promise<void>} resolves once loaded.
-       */
-      const loadPanel = async (key) => {
-        setBusy(true);
-        try {
-          const next = parsePanelPayload(await props.run(key === null ? PANEL_COMMAND : `${PANEL_COMMAND} ${key}`));
-          setSelectedKey(key);
-          setNodeId(null);
-          if (next === null) {
-            setPayload(null);
-            setText("panel payload unavailable");
-            return;
+    /**
+     * The workspace list from the client store.
+     * @param {Record<string, any>} ctx - client context.
+     * @returns {Promise<{id: string, name: string, path: string}[]>} workspaces.
+     */
+    function listWorkspaces(ctx) {
+      return firstAnswer((done) => {
+        ctx.inject(["workspaces"], (scope) => {
+          try {
+            done(workspaceItems(scope.workspaces?.list?.getSnapshot?.()));
+          } catch {
+            done([]);
           }
-          setPayload(next);
-          setText("");
-        } catch (error) {
-          setPayload(null);
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
+        });
+      }, 3000).then((value) => (Array.isArray(value) ? value : []));
+    }
 
-      /**
-       * Load the pending human tasks.
-       * @returns {Promise<void>} resolves once loaded.
-       */
-      const loadTasks = async () => {
-        setBusy(true);
+    /**
+     * The session id a global surface must name to run a command.
+     *
+     * `execute(undefined, …)` reports ok without running anything, so a real id
+     * is required (plan §14.2 M6.0 result).
+     * @param {Record<string, any>} ctx - client context.
+     * @returns {Promise<string | null>} current session id, or the first listed one.
+     */
+    function commandTarget(ctx) {
+      return firstAnswer((done) => {
+        ctx.inject(["uiSession", "sessions"], (scope) => {
+          try {
+            const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
+            if (current && typeof current.key === "string") return done(current.key);
+            const list = scope.sessions?.list?.getSnapshot?.();
+            if (Array.isArray(list?.ids) && list.ids.length > 0) return done(list.ids[0]);
+          } catch {
+            // fall through to "no session"
+          }
+          done(null);
+        });
+      }).then((value) => (typeof value === "string" ? value : null));
+    }
+
+    /**
+     * Run one `/workflow ui` op and parse its JSON answer.
+     * @param {Record<string, any>} ctx - client context.
+     * @param {string} op - one of tree / canvas / assetCanvas / monitor.
+     * @param {Record<string, any>} payload - op arguments.
+     * @returns {Promise<Record<string, any> | null>} parsed payload (null when unreadable).
+     */
+    async function runUi(ctx, op, payload) {
+      const sessionId = await commandTarget(ctx);
+      const line = `/workflow ui ${op} ${encodePayload(payload)}`;
+      /** @type {unknown} */
+      let lastError = null;
+      for (const id of sessionId === null ? [undefined] : [sessionId, undefined]) {
         try {
-          const next = parseInbox(await props.run("/workflow inbox"));
-          setTasks(next === null ? [] : next);
-          setTaskId(null);
-          setTaskDraft("");
-          setText(next === null ? "inbox payload unavailable" : "");
+          const result = await ctx.remote.commands.execute(id, line, []);
+          if (result && result.ok === false) {
+            const code = result.error && result.error.code ? result.error.code : "command-failed";
+            const message = result.error && result.error.message ? result.error.message : "";
+            lastError = new Error(`hnflow: ${code}: ${message}`);
+            continue;
+          }
+          return parseJson(readText(result));
         } catch (error) {
-          setTasks([]);
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
+          lastError = error;
         }
-      };
+      }
+      throw lastError ?? new Error("hnflow: no session available to run a command");
+    }
 
-      /**
-       * Answer the selected task.
-       * @returns {Promise<void>} resolves once submitted and reloaded.
-       */
-      const submitTask = async () => {
-        if (taskId === null) return;
-        setBusy(true);
-        try {
-          const message = await props.run(submitCommand(taskId, taskDraft));
-          await loadTasks();
-          setText(message);
-        } catch (error) {
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
+    /**
+     * The sidebar glyph.
+     * @param {{size?: number}} props - glyph size from the sidebar.
+     * @returns {unknown} element.
+     */
+    function HnflowIcon(props) {
+      const size = typeof props?.size === "number" ? props.size : 18;
+      return h("span", { style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.6)}px` }, "aria-hidden": "true" }, "\u25C6");
+    }
 
-      /**
-       * Open or close the popover.
-       * @returns {void}
-       */
-      const toggle = () => {
-        const next = !open;
-        setOpen(next);
-        if (!next) return;
-        setView("workflows");
-        void loadPanel(null);
-      };
-
-      const trigger = h(
-        "button",
-        {
-          type: "button",
-          ref: triggerRef,
-          "aria-haspopup": "dialog",
-          "aria-expanded": open ? "true" : "false",
-          "aria-controls": open ? menuId.current : undefined,
-          title: "HNFlow 工作流",
-          style: open ? { ...styles.trigger, ...styles.triggerOpen } : styles.trigger,
-          onClick: toggle,
-        },
-        h("span", { style: { fontSize: "10px", lineHeight: "1", opacity: 0.8 } }, "\u25C6"),
-        h("span", null, "HNFlow"),
+    /**
+     * The right-hand canvas, or the empty state when nothing is selected.
+     * @param {{canvas: Record<string, any> | null}} props - resolved canvas payload.
+     * @returns {unknown} element.
+     */
+    function CanvasStage(props) {
+      const canvas = props?.canvas ?? null;
+      if (canvas === null || canvas.definition === undefined) return h("div", { style: styles.empty }, "选择左侧的工作流查看画布");
+      const layout = layoutDefinition(canvas.definition);
+      return h(
+        "div",
+        { style: styles.canvasPane },
+        h("div", { style: { ...styles.meta, padding: "0 0 8px" } }, `${canvas.assetName || canvas.alias || canvas.key} · ${canvas.source} · r${canvas.revision ?? "?"}/${canvas.currentRevision ?? "?"}${canvas.drift ? " · 漂移" : ""}`),
+        h(
+          "svg",
+          { viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
+          ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
+          ...layout.nodes.map((node) =>
+            h("g", { key: node.id }, [
+              h("rect", { key: "r", x: node.x, y: node.y, width: node.width, height: node.height, rx: 8, style: styles.node }),
+              h("text", { key: "t", x: node.x + 8, y: node.y + 20, style: styles.nodeLabel }, node.id),
+              h("text", { key: "ty", x: node.x + 8, y: node.y + 36, style: styles.nodeLabel }, node.type),
+            ]),
+          ),
+        ),
       );
+    }
 
-      if (!open) return h("span", { ref: rootRef, style: styles.root }, trigger);
-
-      const selected = payload === null ? null : payload.selected;
-      const layout = selected === null ? null : layoutDefinition(selected.definition);
-      const activeNode = layout === null || nodeId === null ? null : layout.nodes.find((node) => node.id === nodeId) ?? null;
-      const definition = selected === null ? null : selected.definition;
-      const activeParams = activeNode === null || definition === null ? null : (definition.nodes ?? []).find((node) => String(node.id) === activeNode.id) ?? null;
-
-      /**
-       * Show one node on the canvas and load its params into the editor.
-       * @param {Record<string, any>} node - laid-out node.
-       * @returns {void}
-       */
-      const selectNode = (node) => {
-        setNodeId(node.id);
-        const entry = definition === null ? null : (definition.nodes ?? []).find((candidate) => String(candidate.id) === node.id) ?? null;
-        setDraft(JSON.stringify(entry === null || entry.params === undefined ? {} : entry.params, null, 2));
-      };
-
-      /**
-       * Store the edited params as the workspace override.
-       * @returns {Promise<void>} resolves once stored and reloaded.
-       */
-      const saveNode = async () => {
-        if (selected === null || nodeId === null) return;
-        setBusy(true);
-        try {
-          const message = await props.run(nodeCommand(selected.key, nodeId, draft));
-          await loadPanel(selected.key);
-          setText(message);
-        } catch (error) {
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Drop the workspace override for the selected workflow.
-       * @returns {Promise<void>} resolves once reloaded.
-       */
-      const resetOverride = async () => {
-        if (selected === null) return;
-        setBusy(true);
-        try {
-          const message = await props.run(`/workflow override reset ${selected.key}`);
-          await loadPanel(selected.key);
-          setText(message);
-        } catch (error) {
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Ask the host for the diff a save would apply (the dry run).
-       * @returns {Promise<void>} resolves once the diff is shown.
-       */
-      const previewSave = async () => {
-        if (selected === null) return;
-        setBusy(true);
-        try {
-          setText(await props.run(saveAssetCommand(selected.key, false)));
-          setConfirmSave(true);
-        } catch (error) {
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Write the workspace override back to the asset.
-       * @returns {Promise<void>} resolves once stored and reloaded.
-       */
-      const confirmSaveAsset = async () => {
-        if (selected === null) return;
-        setBusy(true);
-        try {
-          const message = await props.run(saveAssetCommand(selected.key, true));
-          setConfirmSave(false);
-          await loadPanel(selected.key);
-          setText(message);
-        } catch (error) {
-          setText(String(error && error.message ? error.message : error));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      const workflowSections = [
-        payload !== null && payload.workflows.length > 0
-          ? h(
-              "ul",
-              { style: styles.list, key: "workflows" },
-              ...payload.workflows.map((entry) =>
-                h(
-                  "li",
-                  { key: entry.assetId },
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      style: selected !== null && selected.key === (entry.alias || entry.assetId) ? { ...styles.item, ...styles.itemActive } : styles.item,
-                      onClick: () => void loadPanel(entry.alias || entry.assetId),
-                    },
-                    h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
-                    h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}${entry.description ? ` · ${entry.description}` : ""}`),
-                  ),
-                ),
-              ),
-            )
-          : null,
-        layout === null
-          ? null
+    /**
+     * The monitor board: every run on top, the pending tasks below.
+     * @param {{monitor: Record<string, any> | null}} props - monitor payload.
+     * @returns {unknown} element.
+     */
+    function TaskBoard(props) {
+      const monitor = props?.monitor ?? null;
+      if (monitor === null) return h("div", { style: styles.empty }, "读取任务状态…");
+      const runs = Array.isArray(monitor.runs) ? monitor.runs : [];
+      const tasks = Array.isArray(monitor.tasks) ? monitor.tasks : [];
+      const counts = runs.reduce((acc, run) => {
+        acc[run.status] = (acc[run.status] ?? 0) + 1;
+        return acc;
+      }, /** @type {Record<string, number>} */ ({}));
+      return h(
+        "div",
+        { style: styles.board },
+        h("div", { style: styles.meta }, `${runs.length} 次执行 · ${Object.entries(counts).map(([status, count]) => `${status} ${count}`).join(" · ") || "无"}`),
+        h("div", { style: styles.boardTitle }, "全部执行"),
+        runs.length === 0
+          ? h("div", { style: styles.meta }, "还没有执行记录")
           : h(
-              "svg",
-              { key: "canvas", viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
-              ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
-              ...layout.nodes.map((node) =>
-                h("g", { key: node.id, onClick: () => selectNode(node), style: { cursor: "pointer" } }, [
-                  h("rect", { key: "r", x: node.x, y: node.y, width: node.width, height: node.height, rx: 8, style: nodeId === node.id ? styles.nodeActive : styles.node }),
-                  h("text", { key: "t", x: node.x + 8, y: node.y + 20, style: styles.nodeLabel }, node.id),
-                  h("text", { key: "ty", x: node.x + 8, y: node.y + 36, style: styles.nodeLabel }, node.type),
+              "div",
+              null,
+              ...runs.map((run) =>
+                h("div", { key: run.runId, style: styles.row }, [
+                  h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(run.workspace)),
+                  h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(run.sessionId)),
+                  h("span", { key: "f", style: { ...styles.cell, flex: "1 1 auto" } }, run.workflow ?? "—"),
+                  h("span", { key: "t", style: { ...styles.cell, flex: "0 0 120px" } }, run.status),
+                  h("span", { key: "n", style: { ...styles.cell, flex: "0 0 120px" } }, run.node ?? "—"),
                 ]),
               ),
             ),
-        activeParams === null
-          ? null
+        h("div", { style: styles.boardTitle }, `需要你处理（${tasks.length}）`),
+        tasks.length === 0
+          ? h("div", { style: styles.meta }, "没有待处理的任务")
           : h(
               "div",
-              { key: "node-editor", style: styles.editor },
-              h("textarea", {
-                value: draft,
-                rows: 6,
-                spellCheck: false,
-                "aria-label": `params for ${activeParams.id}`,
-                style: styles.textarea,
-                onChange: (event) => setDraft(event.target.value),
-              }),
-              h(
-                "div",
-                { style: styles.tabs },
-                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void saveNode() }, "保存到工作区"),
-                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void resetOverride() }, "撤销覆盖"),
+              null,
+              ...tasks.map((task) =>
+                h("div", { key: task.taskId, style: styles.row }, [
+                  h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(task.workspace)),
+                  h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(task.sessionId)),
+                  h("span", { key: "k", style: { ...styles.cell, flex: "0 0 80px" } }, task.kind),
+                  h("span", { key: "d", style: { ...styles.cell, flex: "1 1 auto" } }, task.description || task.nodeId),
+                  h("span", { key: "id", style: { ...styles.cell, flex: "0 0 160px" } }, task.taskId),
+                ]),
               ),
             ),
-        confirmSave
+      );
+    }
+
+    /**
+     * Last two path segments, for a compact workspace label.
+     * @param {string | null} value - absolute path.
+     * @returns {string} short label.
+     */
+    function shortPath(value) {
+      if (typeof value !== "string" || value.length === 0) return "—";
+      const parts = value.split(/[\\/]+/u).filter((part) => part.length > 0);
+      return parts.slice(-2).join("/");
+    }
+
+    /**
+     * Compact session label (the id tail).
+     * @param {string | null} value - session id.
+     * @returns {string} short label.
+     */
+    function shortSession(value) {
+      if (typeof value !== "string" || value.length === 0) return "—";
+      return value.length <= 14 ? value : `…${value.slice(-12)}`;
+    }
+
+    /**
+     * The HNFlow page: three tabs over one tree+canvas layout.
+     * @param {{runUi: (op: string, payload: Record<string, any>) => Promise<Record<string, any> | null>}} props - injected command face.
+     * @returns {unknown} element.
+     */
+    function HnflowPage(props) {
+      const runUi = props?.runUi;
+      const [tab, setTab] = react.useState("workspaces");
+      const [tree, setTree] = react.useState(null);
+      const [canvas, setCanvas] = react.useState(null);
+      const [monitor, setMonitor] = react.useState(null);
+      const [error, setError] = react.useState("");
+      const [busy, setBusy] = react.useState(false);
+      const [selected, setSelected] = react.useState("");
+
+      /**
+       * Load the left tree (workspaces + library).
+       * @returns {Promise<void>} resolves once rendered.
+       */
+      const loadTree = async () => {
+        setBusy(true);
+        try {
+          const workspaces = await listWorkspaces(props.ctx);
+          const payload = await runUi("tree", { workspaces });
+          setTree(payload);
+          setError(payload === null ? "tree payload unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Load the monitor board.
+       * @returns {Promise<void>} resolves once rendered.
+       */
+      const loadMonitor = async () => {
+        setBusy(true);
+        try {
+          const payload = await runUi("monitor", {});
+          setMonitor(payload);
+          setError(payload === null ? "monitor payload unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Select one workflow and draw it.
+       * @param {string} workspace - workspace root.
+       * @param {Record<string, any>} entry - ref entry from the tree.
+       * @returns {Promise<void>} resolves once drawn.
+       */
+      const pickWorkflow = async (workspace, entry) => {
+        const key = entry.alias || entry.assetId;
+        setSelected(`w:${workspace}:${key}`);
+        setBusy(true);
+        try {
+          const payload = await runUi("canvas", { workspace, key });
+          setCanvas(payload);
+          setError(payload === null ? "canvas payload unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
+       * Select one library asset and draw it.
+       * @param {Record<string, any>} asset - asset summary.
+       * @returns {Promise<void>} resolves once drawn.
+       */
+      const pickAsset = async (asset) => {
+        setSelected(`a:${asset.id}`);
+        setBusy(true);
+        try {
+          const payload = await runUi("assetCanvas", { assetId: asset.id });
+          setCanvas(payload);
+          setError(payload === null ? "asset canvas unreadable" : "");
+        } catch (failure) {
+          setError(String(failure && failure.message ? failure.message : failure));
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      react.useEffect(() => {
+        void loadTree();
+      }, []);
+
+      react.useEffect(() => {
+        if (tab === "monitor" && monitor === null) void loadMonitor();
+      }, [tab]);
+
+      const workspaces = Array.isArray(tree?.workspaces) ? tree.workspaces : [];
+      const assets = Array.isArray(tree?.assets) ? tree.assets : [];
+
+      const left =
+        tab === "workspaces"
           ? h(
               "div",
-              { key: "confirm-save", style: styles.tabs },
-              h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void confirmSaveAsset() }, "确认写入资产"),
-              h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => setConfirmSave(false) }, "取消"),
+              { style: styles.tree },
+              workspaces.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
+              ...workspaces.map((workspace) =>
+                h(
+                  "div",
+                  { key: workspace.path, style: styles.group },
+                  h("div", { style: styles.groupTitle }, `${workspace.name}${workspace.error ? " · 读取失败" : ""}`),
+                  ...(workspace.workflows ?? []).map((entry) =>
+                    h(
+                      "button",
+                      {
+                        type: "button",
+                        key: `${workspace.path}:${entry.alias || entry.assetId}`,
+                        style: selected === `w:${workspace.path}:${entry.alias || entry.assetId}` ? { ...styles.item, ...styles.itemActive } : styles.item,
+                        onClick: () => void pickWorkflow(workspace.path, entry),
+                      },
+                      h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
+                      h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                    ),
+                  ),
+                  (workspace.workflows ?? []).length === 0 ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的工作流") : null,
+                ),
+              ),
             )
-          : selected !== null && selected.source === "override"
+          : tab === "assets"
             ? h(
                 "div",
-                { key: "save-asset", style: styles.tabs },
-                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void previewSave() }, "保存回资产…"),
-              )
-            : null,
-      ];
-
-      const inboxSections = [
-        tasks === null || tasks.length === 0
-          ? h("div", { key: "empty", style: styles.meta }, tasks === null ? "…" : "没有待办")
-          : h(
-              "ul",
-              { key: "tasks", style: styles.list },
-              ...tasks.map((task) =>
-                h(
-                  "li",
-                  { key: task.taskId },
+                { style: styles.tree },
+                assets.length === 0 ? h("div", { style: styles.meta }, "资产库是空的") : null,
+                ...assets.map((asset) =>
                   h(
                     "button",
                     {
                       type: "button",
-                      style: taskId === task.taskId ? { ...styles.item, ...styles.itemActive } : styles.item,
-                      onClick: () => {
-                        setTaskId(task.taskId);
-                        setTaskDraft(taskTemplate(task));
-                      },
+                      key: asset.id,
+                      style: selected === `a:${asset.id}` ? { ...styles.item, ...styles.itemActive } : styles.item,
+                      onClick: () => void pickAsset(asset),
                     },
-                    h("span", null, `${task.taskId} · ${task.kind}`),
-                    h("span", { style: styles.meta }, `run ${task.runId} · node ${task.nodeId}${task.description ? ` · ${task.description}` : ""}`),
+                    h("span", null, asset.name || asset.id),
+                    h("span", { style: styles.meta }, `${asset.id} · r${asset.revision ?? "?"}`),
                   ),
                 ),
-              ),
-            ),
-        taskId === null
-          ? null
-          : h(
-              "div",
-              { key: "task-editor", style: styles.editor },
-              h("textarea", {
-                value: taskDraft,
-                rows: 5,
-                spellCheck: false,
-                "aria-label": `payload for ${taskId}`,
-                style: styles.textarea,
-                onChange: (event) => setTaskDraft(event.target.value),
-              }),
-              h(
-                "div",
-                { style: styles.tabs },
-                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => void submitTask() }, "提交"),
-                h("button", { type: "button", disabled: busy, style: styles.tab, onClick: () => { setTaskId(null); setTaskDraft(""); } }, "取消"),
-              ),
-            ),
-      ];
+              )
+            : null;
 
-      /**
-       * Switch the popover to one row of the tab bar.
-       *
-       * View rows render content themselves; action rows only print command text.
-       * @param {{id: string, kind: "view" | "action", command?: string}} row - menu row.
-       * @returns {void}
-       */
-      const selectRow = (row) => {
-        if (row.kind !== "view") {
-          setView("text");
-          setText("");
-          void runText(row.command);
-          return;
-        }
-        if (row.id === "inbox") {
-          setView("inbox");
-          void loadTasks();
-          return;
-        }
-        setView("workflows");
-        void loadPanel(selectedKey);
-      };
+      const right = tab === "monitor" ? h(TaskBoard, { monitor }) : h(CanvasStage, { canvas });
 
-      const body = h(
+      return h(
         "div",
-        {
-          ref: menuRef,
-          role: "dialog",
-          "aria-label": "HNFlow",
-          id: menuId.current,
-          style: {
-            ...styles.menu,
-            ...(placement === null
-              ? { position: "fixed", left: "8px", bottom: "96px", visibility: "hidden" }
-              : {
-                  position: "fixed",
-                  left: `${placement.left}px`,
-                  width: `${placement.width}px`,
-                  maxHeight: `${placement.maxHeight}px`,
-                  ...(placement.placement === "above" ? { bottom: `${placement.bottom}px` } : { top: `${placement.top}px` }),
-                }),
-          },
-        },
+        { style: styles.page },
         h(
           "div",
-          { style: styles.tabs, role: "tablist" },
-          ...menuItems().map((row) =>
+          { style: styles.tabbar, role: "tablist" },
+          ...TABS.map((entry) =>
             h(
               "button",
               {
                 type: "button",
-                key: row.id,
-                role: row.kind === "view" ? "tab" : undefined,
-                "aria-selected": row.kind === "view" ? (view === row.id ? "true" : "false") : undefined,
-                title: row.hint,
-                style: { ...styles.tab, ...(row.kind === "view" && view === row.id ? styles.tabActive : {}) },
-                disabled: busy,
-                onClick: () => selectRow(row),
+                key: entry.id,
+                role: "tab",
+                "aria-selected": tab === entry.id ? "true" : "false",
+                style: tab === entry.id ? { ...styles.tab, ...styles.tabActive } : styles.tab,
+                onClick: () => setTab(entry.id),
               },
-              row.label,
+              entry.label,
             ),
           ),
+          h("span", { style: { flex: "1 1 auto" } }),
+          h("button", { type: "button", style: styles.tab, disabled: busy, onClick: () => (tab === "monitor" ? void loadMonitor() : void loadTree()) }, "刷新"),
         ),
-        ...(view === "inbox" ? inboxSections : view === "workflows" ? workflowSections : []),
-        text.length > 0 ? h("pre", { key: "text", style: styles.body }, text) : null,
-      );
-
-      return h(
-        "span",
-        { ref: rootRef, style: styles.root },
-        trigger,
-        typeof document === "undefined" || reactDom.createPortal === undefined ? body : reactDom.createPortal(body, document.body),
+        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
+        h("div", { style: styles.body }, tab === "monitor" ? null : left, right),
       );
     }
 
@@ -886,52 +590,26 @@ window.__ModuleLoader__.load({
 
     /**
      * Client plugin body.
-     * @param {Record<string, unknown>} ctx - client context.
+     * @param {Record<string, any>} ctx - client context.
      * @returns {void}
      */
     function apply(ctx) {
       if (wired.has(ctx)) return;
       wired.add(ctx);
-      ctx.slots.inject("conversation.input.left", () =>
-        ctx.slots.register(
-          {
-            name: "conversation.input.left",
-            id: ENTRY_ID,
-            order: 6,
-            inject: (sessionId) => ({
-              run: async (command) => {
-                const result = await ctx.remote.commands.execute(sessionId, command, []);
-                if (result && result.ok === false) {
-                  const code = result.error && result.error.code ? result.error.code : "command-failed";
-                  const message = result.error && result.error.message ? result.error.message : "";
-                  throw new Error("hnflow: " + code + ": " + message);
-                }
-                return readText(result);
-              },
-            }),
-          },
-          Panel,
-        ),
+
+      // Sidebar rail entry: the host calls `layout.selectPanel('hnflow')` on click.
+      ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 15, label: () => "HNFlow" }, HnflowIcon));
+
+      // The page itself; the layout key must equal the rail entry id.
+      ctx.slots.inject("main", () =>
+        ctx.slots.register({ name: "main", key: PANEL_ID, inject: () => ({ runUi: (op, payload) => runUi(ctx, op, payload), ctx }) }, HnflowPage),
       );
     }
 
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = {
-      parsePanelPayload,
-      layoutDefinition,
-      edgePath,
-      readText,
-      nodeCommand,
-      saveAssetCommand,
-      parseInbox,
-      taskTemplate,
-      submitCommand,
-      isHnflowPreset,
-      menuItems,
-      placeMenu,
-    };
+    exports.internals = { readText, encodePayload, parseJson, workspaceItems, layoutDefinition, edgePath, isHnflowPreset, shortPath, shortSession };
     return module.exports;
   },
 });

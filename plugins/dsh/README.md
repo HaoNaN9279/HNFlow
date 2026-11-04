@@ -114,25 +114,21 @@ Agent 的修改一律落到工作区覆盖。
 
 ## 界面
 
-HNFlow 模式下，输入框左栏会出现一个 **HNFlow** 控件（`conversation.input.left`）。
-点开后是一个弹层，页签：**工作流**、**待办**、**资产库**（只读命令）。
+左侧栏有一个 **◆ HNFlow** 入口（`sidebar.panellist` + 主面板 `main`），点开是 HNFlow 页面。
+页面顶部三个页签，统一"左树 + 右画布"布局（未选中时右侧空白）：
 
-弹层贴着控件定位：上方空间够就向上展开，不够就翻到下方，并且始终夹在窗口内
-（窗口边缘、窄窗口、滚动/缩放都会重算）；点击弹层外部或按 `Esc` 关闭。
+- **工作区**：左树按工作区分组，列出每个工作区的引用（带覆盖 / 漂移 / 缺失标记）；点一条在右侧画只读画布；
+- **通用工作流**：左树是资产库里的全部内置资产；点一条画该资产的定义；
+- **任务监视**：上方是全部执行（工作区 / 会话 / 工作流 / 状态 / 节点），下方是**需要你处理**的待办任务。
 
-- **工作流**：引用列表（带覆盖 / 漂移 / 缺失标记）、只读 SVG 画布（点节点改参数）、撤销覆盖、保存回资产；
-- **待办**：所有 pending 人工任务，点一条给出模板 JSON（review 是 `{"decision":true,"feedback":""}`，task 是各端口空值），
-  改完点提交即可继续运行；
-- **资产库**：只执行 `/workflow asset list`，结果只显示在弹层里（DSH 不把命令文本渲染进对话）。
+会话顶部页签（仅 HNFlow 模式的会话）与右侧栏任务面板在 M6.4 / M6.5 落地，复用同一套组件。
 
-画布数据来自 `/workflow panel [name]` 的一次调用：位置优先用 `metadata.canvas.positions`，
-否则用编辑器同款三列网格。点节点可编辑它的 `params`：
+数据一律经 `/workflow ui <op> <base64url(JSON)>` 取回（`tree` / `canvas` / `assetCanvas` / `monitor`），
+客户端不读文件、不连引擎，所以页面能做的事和手敲命令一致。
+画布位置优先用 `metadata.canvas.positions`，否则用编辑器同款三列网格。
 
-- **保存到工作区** → `/workflow node <name> <nodeId> <json>`，宿主改一个节点 → 引擎校验 → 写工作区覆盖（资产不动）；
-- **撤销覆盖** → `/workflow override reset <name>`；
-- **保存回资产** → 先执行 `/workflow save asset <name>` 看 diff（`rN → rN+1`），再点「确认写入资产」执行 `--yes`。
-
-客户端不读文件、不连引擎，所以面板能做的事和手敲命令完全一致；写资产永远是两步。
+参数编辑、保存回资产等写操作仍走命令：`/workflow node <name> <nodeId> <json>`（写工作区覆盖）、
+`/workflow override reset <name>`、`/workflow save asset <name>`（先 diff，再 `--yes`）。
 
 ## 数据布局
 

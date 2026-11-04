@@ -2,12 +2,12 @@
 
 | 项 | 值 |
 | --- | --- |
-| 文档版本 | 0.2（M0/M1 实施后修订） |
-| 日期 | 2026-11-03 |
+| 文档版本 | 0.3（新增三面 UI 与任务监视规划，见 §11.4–§11.6、§14.2） |
+| 日期 | 2026-11-04 |
 | 基线 | `v0.10.0`（`master`，DSH 改造前的最后一个 HNFlow 版本） |
 | 开发分支 | `feat/dsh-plugin` |
 | 范围 | 自用插件，不提交官方插件市场，不参与官方审核 |
-| 状态 | M0 完成，M1 主体完成（见 §14.1） |
+| 状态 | M0–M5 主体完成；M6（三面 UI + 任务监视）规划中（见 §14.2） |
 | DSH 插件开发文档 | <https://deepseek-harness.github.io/deepseek-harness/develop/basic/> |
 | DSH 源码 | <https://github.com/deepseek-ai/deepseek-harness> |
 
@@ -46,6 +46,12 @@ HNFlow 的定位是 **Agent 的确定性执行能力**：把 AI 产出、人工�
 | R7 | 面板可编辑、手动运行，并提供保存回资产 / 保存工作区覆盖的菜单 | §11 |
 | R8 | 不做 `@workflow` 输入语法，遵循 DSH 习惯 | §7.1 |
 | R9 | 插件自用，不走官方渠道审核 | §3.4、§14 |
+| R10 | 左侧栏新增 HNFlow 页面（插件加载即出现），页内页签：工作区 / 通用工作流 / 任务监视 | §11.4 |
+| R11 | 会话窗口顶部页签新增 HNFlow，左下角菜单（composer 控件）删除 | §11.4 |
+| R12 | 右侧栏新增 HNFlow 任务监视面板；三处页签布局统一 | §11.4、§11.5 |
+| R13 | 展示每个工作区下、由哪个会话发起的任务状态；顶部全部执行、下方待处理 | §11.5 |
+| R14 | 监视面板未打开时，新待办首次出现以右下角通知显示 | §11.5 |
+| R15 | 会话顶部 HNFlow 页签只在**使用 HNFlow 模式的会话**出现 | §11.4 |
 
 ---
 
@@ -442,6 +448,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 
 ### 11.1 面板结构（`main` keyed slot）
 
+> **已被 §11.4 取代（M6）**：composer 左栏控件 + 弹层的形态作废，改为左侧栏页面 / 会话顶部页签 / 右侧栏面板三处。
+> 本节保留为历史与画布数据格式说明（`layoutDefinition`、只读 SVG、`metadata.canvas.positions`）。
+
 ```
 ┌ 资产库 ──────────┬ 画布 ──────────────────────┬ 运行 / 任务 ──┐
 │ 目录树 / 搜索     │ 节点、连线、参数、校验       │ 运行列表       │
@@ -486,6 +495,81 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 导入接受三种文件形态（资产信封 / 引擎 `serialize()` 信封 / 裸定义），这就是现存 HNFlow 工作流的迁移入口；
 删除在**本工作区仍引用**时拒绝（`asset-in-use`），并顺带清理遗留覆盖。
 **剩余**：面板形态的资产库、跨工作区使用情况统计、版本历史浏览。
+
+### 11.4 三面统一布局（M6）
+
+三个宿主面，一套组件。
+
+| 面 | DSH 接入点（已核对 0.2.1-rc.5 客户端源码） | 内容 |
+| --- | --- | --- |
+| 左侧栏页面 | `sidebar.panellist`（列表项，点击由宿主调 `ctx.layout.selectPanel(id)`）+ `main`（keyed，`key` 同名） | 页签：**工作区** / **通用工作流** / **任务监视** |
+| 会话顶部页签 | `conversation.view`（列表项，`id`+`label` 即页签名） | 左：当前工作区工作流；右：画布 |
+| 右侧栏面板 | `ctx.sidebarRightTabs.register({id, kind, priority, title})` + `sidebar.right.pane.tab` / `sidebar.right.pane.tab.title`（keyed，key=kind） | 任务监视（与页面第三页签同组件） |
+
+- **工作区页签**：左树 = 全部工作区 → 每个工作区下**激活的工作流**（引用清单，带覆盖 / 漂移 / 缺失标记）；
+  右侧 = 选中工作流的只读画布，**未选中时空白**。
+- **通用工作流页签**：左树 = 资产库里的全部内置工作流（全局，不分工作区）；右侧同画布。
+- **会话页签**：左树只有一个分组——当前会话的工作区；右侧同画布。
+  **只在 HNFlow 模式的会话出现**：按当前会话的 `projectionValues.agentPreset` 动态注册 / 注销
+  `conversation.view` 条目（页签栏是全局槽，没有"按会话过滤"的选项，所以用注册生命周期实现）。
+- 服务访问：一律 `ctx.get(name)`。属性式 `ctx.foo` 只对 `inject` 声明过的服务有效，
+  未声明的访问直接抛 `cannot get property … without inject`（M6.0 实测）。
+- 三处共用：`PanelTabs`（页签条）、`WorkspaceTree`（左树）、`CanvasStage`（画布）、空态与字体/间距 token；
+  页签条对齐 DSH 的 `SegmentedTabs` / `Menu` 视觉，不另造一套控件。
+- 删除：`conversation.input.left` 的 HNFlow 控件与整个弹层（0.1.3 的行为）。命令与工具面不变，面板仍是"命令的图形壳"。
+
+### 11.5 任务监视与通知
+
+数据都来自引擎持久态（`run/list`、`task/list`），因此跨重启可见：
+
+| 列 | 来源 |
+| --- | --- |
+| 工作区 | run metadata `workspace` |
+| 会话 | run metadata `sessionId`（新增） |
+| 工作流 | run metadata `workflowAlias` / `workflowAssetId` |
+| 状态 | run `status`（queued/running/waiting_human/succeeded/failed/cancelled/interrupted） |
+| 节点 | 当前 / 最后节点 `nodeId` |
+| 时间 | `startedAt` / `endedAt`（`createdAt` 用于任务） |
+
+布局：
+
+```
+┌ 全部执行 ────────────────────────────────────────────────┐
+│ 12 进行中 · 3 等待人工 · 40 已完成        [工作区筛选 ▾]    │
+│ 工作区    会话      工作流      状态      节点     开始     │
+├ 需要你处理（3）──────────────────────────────────────────┤
+│ 工作区    会话      任务      节点      要求      操作     │
+│ …                                       查看/处理  → 表单  │
+└──────────────────────────────────────────────────────────┘
+```
+
+- 分组顺序：工作区 → 会话 → 任务；会话标题取客户端 `ctx.sessions.list`（引擎只存 id）。
+- 「处理」复用既有提交通道（`/workflow submit <taskId> <json>`），另给「在会话中打开」（`ctx.uiWorkspace.openSession`）。
+- **通知**：`shell.overlay` 常驻一个通知入口（root scope，与页面/面板是否打开无关）。
+  轮询 `monitor`（默认 5s，页面/面板可见时也复用同一份快照，避免三处各查一次）；
+  用 `taskId` 集合判重，**首次出现**弹右下角 Toast（primitives `Toast`），点击跳任务监视，关闭后同一 `taskId` 不再弹。
+  一次只展示一条，避免刷屏。
+
+### 11.6 客户端 ↔ 宿主契约：`/workflow ui`
+
+面板是"命令的图形壳"，页面同样如此：一条命令，一个 JSON payload。命令行为与手敲命令一致，便于测试与排错。
+
+```
+/workflow ui <op> <base64url(JSON 参数)>
+```
+
+| op | 参数 | 返回 |
+| --- | --- | --- |
+| `tree` | `{workspaces:[{id,name,path}]}` | `{workspaces:[{…, workflows:[ref…]}], assets:[…]}` |
+| `canvas` | `{workspace, key}` | `{definition, source, revision, override, checksum}` |
+| `assetCanvas` | `{assetId, revision?}` | 同上（资产侧） |
+| `monitor` | `{}` | `{runs:[…], tasks:[…]}` |
+
+- 用 base64url 是为了规避 Windows 路径的反斜杠、空格与引号，命令解析器只需要切 token；
+- `tree` 的**工作区清单由客户端提供**（客户端本来就持有 `ctx.workspaces.list`），宿主不猜；
+- `ui` 必须**无会话可用**（左侧栏页面不属于任何会话）：`commands.js` 现在从 `invocation.agent` 取 cwd，
+  需要让 `ui` 走"参数自带路径"分支。这是 M6 的宿主侧改动之一。
+- 不引入 typert Remote（D5 不变）；若后续需要推送，再评估 host 事件。
 
 ---
 
@@ -604,6 +688,96 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 `BridgeChatModel` + `llm/complete` 反向 RPC 让节点完成在 DSH 侧执行（凭据不落 HNFlow）。
 **剩余**：资产库独立页。
 
+### M6 三面 UI 与任务监视（规划，2026-11-04）
+
+目标：把"一个 composer 弹层"升级为**一个页面 + 两个页签 + 一块监视面板**，三处布局一致；
+删掉 composer 控件；新增任务监视与右下角通知。版本号 `0.1.x → 0.2.0`（破坏性：删除 composer 控件）。
+
+#### M6.0 前置验证（0.5 天）
+
+| # | 未知 | 验证 | 失败退路 |
+| --- | --- | --- | --- |
+| S1 | 第三方插件注册 `main` 面板 + `sidebar.panellist` 图标能否出现在左栏并被点击切换 | 注册一个空面板，重启后看左栏 | 退化：`shell.leading` 按钮 + 全屏覆盖层页面 |
+| S2 | 只注册 `conversation.view` 而不注册 `uiConversation.views` builder 时页签能否渲染 | 注册一个静态页签 | 注册空 builder（`create` 返回静态快照） |
+| S3 | `shell.overlay` 内能否稳定定位右下角 Toast | 渲染固定定位容器 | 自绘 toast（`position:fixed; right/bottom`） |
+| S4 | 第三方 bundle 能否 `require('@deepseek-ai/dsh-client-ui-primitives')`（Menu/Tooltip/Toast/图标） | 用其中一个图标渲染 | 自绘全部控件，只依赖 react |
+| S5 | `sidebarRightTabs` / `sidebarRight` 是否注入给第三方插件 | 注册一个 tab 类型并打开 | 退化：只在页面内做任务监视，不做右栏 |
+
+**M6.0 结果（2026-11-04，探针 0.1.9 → 0.1.14，四次实机重启）**
+
+| 检查 | 结果 |
+| --- | --- |
+| S1 左栏图标 / S1b `main` 页面 + `selectPanel` | **通过** |
+| S3 `shell.overlay` 右下角通知 | **通过** |
+| S4 `primitives` 平台模块（`Toast` / `SegmentedTabs` 可用） | **通过** |
+| S2/S6 会话页签 + 按模式开关 | **通过**：按当前会话 `projectionValues.agentPreset` 动态注册/注销；`preset=vibestack` 时不注册 |
+| S5 右栏页签 | **通过**，但要过三关：<br>1. `ctx.sidebarRightTabs` 属性访问 → 抛 `without inject`；<br>2. `ctx.get("sidebarRightTabs")` → `undefined`（不注入就取不到）；<br>3. **必须** `ctx.inject(["sidebarRightTabs"], scope => …)` 拿到服务 |
+| S5 打开方式 | 类型注册**不会**自动出现页签；必须 `sidebarRight.openTab(kind, {params})`。而且只能在**已挂载会话面**时调用（从全局页面调用报 `no session surface is mounted`），所以入口放在会话头部按钮 |
+| 命令行通道 | 全局页面发命令必须带**真实会话 id**（从注入的 `sessions`/`uiSession` 取）；`execute(undefined, …)` 返回 ok 但宿主不执行（假阳性） |
+| 结论 | 五个面全部可用；右栏的入口依赖会话面，M6.5 按此设计 |
+
+#### M6.1 宿主契约（1 周）
+
+- `lib/ui.js`：`tree` / `canvas` / `assetCanvas` / `monitor` 四个 op + base64url 解码，纯函数可测；
+- `commands.js`：`ui` 走"参数自带路径"，**无会话也可执行**（其余命令保持需要 cwd）；
+- 记录扩展：`runs` 增加 `sessionId`、`updatedAt`；`tasks` 增加 `sessionId`、`createdAt`、`answeredAt`；
+  命令行 `run … --session <id>`；工具面用 `agent.session.id`；
+- 引擎 `runner.py`：metadata 透传 `sessionId`，`run/list` 返回 `createdAt`/`updatedAt`；
+- 验收：`/workflow ui tree <b64>` 在无会话命令行可用；重启两次后 `monitor` 仍返回同一条待办。
+
+**已落地（2026-11-04）**
+
+| 项 | 结果 |
+| --- | --- |
+| `ui` 四个 op | `tree`（多工作区 + 资产库，单个工作区读失败只标 `error` 不中断）、`canvas`、`assetCanvas`（可按 revision）、`monitor` |
+| 无会话执行 | `commands.js` 的 `ui` 分支在 cwd 解析之前，`list` 等其它命令仍要求工作区 |
+| 会话归属 | `startRun({sessionId})` → metadata；命令行 `--session <id>` / `--session=<id>`；工具面自动取 `exec.agent.session.id` |
+| 引擎字段 | `RunState.summary()` 增加 `metadata` + `updatedAt`；`_summary(row)` 增加 `createdAt`/`updatedAt`；`monitor()` 把任务 join 到 run 的 workspace/session |
+| 测试 | 引擎 34 通过（新增 run/list metadata、task createdAt 两条）；插件 146 通过（新增 6 条：tree 容错、canvas 参数校验、assetCanvas revision、monitor、无 service、`--session` 解析） |
+| 实机冒烟 | `tree` 读到 1 个资产、`assetCanvas` 读到该资产 4 个节点（`wf-3ae1b61d98a5`） |
+
+#### M6.2 客户端重构（1 周）
+
+- 删除 `conversation.input.left` 注册与弹层；保留纯函数（`layoutDefinition` / `placeMenu` / `menuItems` 里仍有用到的）；
+- 拆 `lib/ui/`：`panelTabs.js`、`workspaceTree.js`、`canvasStage.js`、`taskBoard.js`、`commands.js`（`props.run` 封装）、`store.js`（三处共享一份快照 + 轮询）；
+- `client.js` 只做注册与装配；
+- 验收：测试数 134 → ≥150；代码里不再有 composer 入口。
+
+**已落地（2026-11-04，0.2.0）**：composer 控件与弹层整体删除（含 `placeMenu`/`menuItems`/节点编辑）；
+`client.js` 收敛为「数据层（`runUi`/`commandTarget`/`listWorkspaces`）+ 组件（`HnflowIcon` / `HnflowPage` / `CanvasStage` / `TaskBoard`）+ 注册」；
+纯函数 `readText`/`encodePayload`/`parseJson`/`workspaceItems`/`layoutDefinition`/`edgePath`/`isHnflowPreset`/`shortPath`/`shortSession` 由测试覆盖。
+（单文件而非 `lib/ui/`：客户端 bundle 只允许一个入口文件，拆目录需要在 bundle 内自带打包器。）
+
+#### M6.3 HNFlow 主页面（1 周）
+
+- `sidebar.panellist` 图标（`id: "hnflow"`）+ `main` keyed 面板 + 页内页签（工作区 / 通用工作流 / 任务监视）；
+- 左树两级（工作区 → 工作流），右侧画布，未选中空白；
+- 验收：插件加载即出现左栏图标；点开是页面；三页签切换正确；画布与所选一致。
+
+**已落地（2026-11-04，0.2.0）**：左侧栏 `◆ HNFlow` 入口 + `main` 面板；三页签；
+工作区页签按工作区分组列出引用（覆盖/漂移/缺失标记），通用工作流页签列资产库，任务监视页签复用 `TaskBoard`；
+画布未选中时显示空态；数据全部走 `tree` / `canvas` / `assetCanvas` / `monitor`。
+**待实机验收**：图标与页面需要重启 DSH 后确认。
+
+#### M6.4 会话顶部页签（0.5 周）
+
+- `conversation.view`（`id: "hnflow"`，`label: "HNFlow"`，`order` 排在 chat 之后）；
+- 内容：当前工作区左树 + 画布；每会话独立选择；
+- 验收：顶部出现页签；切回对话无副作用；换个会话互不影响。
+
+#### M6.5 右侧任务监视 + 通知（1 周）
+
+- `sidebarRightTabs.register` + 两个 keyed 槽；`ctx.sidebarRight.openTab(kind, {params})`；
+- `shell.overlay` 通知入口（轮询 + 判重 + 右下角）；
+- 验收：右栏出现 HNFlow 页签；面板未打开时新待办弹通知一次；点通知能打开面板并定位任务。
+
+#### M6.6 收尾（0.5 周）
+
+- 三处对齐（同一组件、同一空态、同一字号与间距）、README/本规划同步、打 `0.2.0`、实机验收；
+- 回归：`plugins/dsh/test`、引擎 `backend/tests/test_workflow_rpc.py`。
+
+总计约 5 周（按交付顺序：M6.0 → M6.1 → M6.3 → M6.4 → M6.5 → M6.2 收尾，M6.2 与 M6.3 可并行）。
+
 ---
 
 ## 15. 测试策略
@@ -613,7 +787,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - 解析优先级：override/ref/缺失/漂移/重复引用；
 - 保存语义：agent 编辑只写覆盖、`save_asset` 才提升 revision；
 - 客户端：面板 DOM 测试、命令与工具绑定；
-- 手工验收：Windows 桌面版 + Web profile 各一遍。
+- M6 新增：`/workflow ui` 四个 op 的纯函数（含 base64url 解码与非法输入）、`monitor` 记录字段、
+  三面注册形状（槽名/id/order/key）、通知判重（同一 `taskId` 只弹一次）、共享 store 不重复查询；
+- 手工验收：Windows 桌面版 + Web profile 各一遍（三面各点一遍：左栏图标、会话页签、右栏面板 + 通知）。
 
 ---
 
@@ -628,6 +804,9 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | 覆盖漂移 | 用户误以为是最新资产 | 面板徽标 + diff + 一键 rebase；run 记录 baseRevision |
 | 资产误删/误改 | 引用断裂 | 引用保护、revision 快照、二次确认 |
 | 宿主执行节点（app/python） | 安全边界 | 运行前审批、工具包信任开关、引擎仅本机 |
+| 主面板 / 会话页签 / 右栏 API 属 rc，可能变（M6 依赖 4 个客户端扩展点） | 某面失效 | §14.2 M6.0 前置验证；每面留退化路径（见退路列） |
+| 三处面各挂一份查询，重复读盘 / 重复轮询 | 卡顿、日志噪音 | 一份共享 store（单例），轮询器只在通知入口里跑 |
+| 轮询通知在高频任务下刷屏 | 打扰 | 只对"首次出现的 pending taskId"弹一次；一次一条，5s 节流 |
 
 ---
 
@@ -644,6 +823,12 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 | D7 | 引擎代码放哪里 | 放 harness（`deerflow/workflow/rpc/`），不建顶层 `engine/`（**已定**） |
 | D8 | 工具名 | `hnflow`（`workflow` 已被内置工具占用，**已定**） |
 | D9 | 只自用时的发布面 | 不做 npm 发布/市场上架；`dsh plugin add <path>` 本地链接（**已定**） |
+| D10 | 会话页签是否只在 `hnflow` 模式显示 | 是：只在 HNFlow 模式会话注册该页签；页面与右栏仍全局可见（**已定**，R15） |
+| D11 | 通知如何送达客户端 | 客户端轮询 `monitor`（5s）；不引入 typert Remote（**已定**，后续可换 host 事件） |
+| D12 | 页面数据通道 | 单条 `/workflow ui <op> <base64url JSON>`，客户端不直读文件、不直连引擎（**已定**） |
+| D13 | 删除 composer 控件 | 是，`0.2.0` 破坏性变更，README 记录迁移（**已定**） |
+| D14 | 任务「处理」入口 | 面板内表单提交（复用 `/workflow submit`）+ 「在会话中打开」（**已定**） |
+| D15 | 通用工作流的范围 | 资产库全部内置资产（全局）；工作区页签只列该工作区引用（**待确认**） |
 
 ---
 
@@ -667,4 +852,18 @@ queued → running → waiting_human → running → succeeded | failed | cancel
 - DSH 源码：<https://github.com/deepseek-ai/deepseek-harness>；
 - DSH 包（本机 0.2.1-rc.5）：`dsh-tools`、`dsh-tool-workflow`、`dsh-jobs`、`dsh-user-questions`、
   `dsh-user-approval`、`dsh-agent-preset`、`dsh-client-ui-layout`、`dsh-api-workspace-files`；
+
+### 18.3 M6 依赖的客户端扩展点（已核对 0.2.1-rc.5 源码）
+
+| 用途 | 接入方式 | 依据 |
+| --- | --- | --- |
+| 左栏图标入口 | `slots.register({name:"sidebar.panellist", id, order, label})` | `dsh-client-ui-sidebar`：`PanelRow` → `selectPanel(id)` |
+| 主页面 | `slots.inject("main", ...)` + `register({name:"main", key})`；`ctx.layout.selectPanel(key)` | `dsh-client-ui-layout`：`main` 为 keyed root 槽，`LayoutController.selectPanel` 校验 key 已注册 |
+| 会话顶部页签 | `slots.register({name:"conversation.view", id, label, order})` | `dsh-client-ui-conversation`：`viewTabs()` 由 `conversation.view` 槽项生成页签 |
+| 右栏页签类型 | `ctx.sidebarRightTabs.register({id, kind, priority, title})` | `dsh-client-ui-sidebar-right`：`SidebarRightTabRegistry.register` |
+| 右栏内容 | `slots.register({name:"sidebar.right.pane.tab", key:kind})` / `…tab.title` | 同上（schedule 插件同款接法） |
+| 右下角通知 | `slots.register({name:"shell.overlay", id})` | `dsh-client-ui-layout`：`overlayLayer` 绝对定位覆盖层、`pointer-events:none`，子元素可交互 |
+| 原生控件 | `require('@deepseek-ai/dsh-client-ui-primitives')`（`Toast`/`Menu`/`Tooltip`/`Button`/`SegmentedTabs`/图标） | `dsh-web-frontend` 启动映射表里作为平台模块暴露 |
+| 读服务 | `ctx.get("<service>")`，不要用 `ctx.<service>` | 未在 `inject` 声明的属性访问会抛 `cannot get property … without inject`（M6.0 实测）；DSH 自身用 `ctx.get("uiWorkspace")` |
+| 当前会话 preset | `ctx.get("uiSession").adapter.current.getSnapshot().key` + `ctx.get("sessions").list` 的 `byId[id].projectionValues.agentPreset` | 页签注册需要按会话模式开关 |
 - 外部插件参考：`dsh-vibestack`（`D:/workspace/VibeStack/plugins/dsh`）。
