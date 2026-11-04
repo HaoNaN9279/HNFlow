@@ -50,13 +50,15 @@ window.__ModuleLoader__.load({
       // Unselected is exactly the untouched look a tab has before any click:
       // no fill, no border, no weight — only dimmed. Selected keeps the accent
       // fill + underline, so one tab is unambiguous in every theme.
-      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
-      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", color: "var(--dsw-alias-label-primary, inherit)", opacity: 1, fontWeight: 600 },
+      // `appearance`/`outline`/`boxShadow` are reset because the host styles
+      // plain buttons, and a native focus ring reads as a white selected box.
+      tab: { padding: "4px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid transparent", borderBottom: "2px solid transparent", background: "transparent", backgroundImage: "none", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, cursor: "pointer" },
+      tabActive: { borderColor: "rgba(110,150,255,0.55)", borderBottomColor: "rgba(110,150,255,0.95)", background: "rgba(110,150,255,0.16)", backgroundImage: "none", boxShadow: "none", outline: "none", color: "var(--dsw-alias-label-primary, inherit)", opacity: 1, fontWeight: 600 },
       body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
       tree: { flex: "0 0 clamp(180px, 42%, 280px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
       group: { margin: "0 0 6px" },
-      groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", border: "none", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
-      item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
+      groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", border: "none", background: "transparent", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
+      item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", backgroundImage: "none", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       itemActive: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.16))" },
       meta: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary, inherit)" },
       canvasPane: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "14px", boxSizing: "border-box" },
@@ -609,8 +611,9 @@ window.__ModuleLoader__.load({
               {
                 type: "button",
                 key: entry.id,
-                role: "tab",
-                "aria-selected": tab === entry.id ? "true" : "false",
+                // Plain buttons: a `role="tab"` would pick up the host's tab
+                // styling, which is exactly the box this row must not show.
+                "aria-pressed": tab === entry.id ? "true" : "false",
                 style: tab === entry.id ? { ...styles.tab, ...styles.tabActive } : styles.tab,
                 onClick: () => setTab(entry.id),
               },
