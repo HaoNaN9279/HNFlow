@@ -74,7 +74,12 @@ function buildService(options) {
   const logger = options.logger ?? {}
   const now = options.now ?? (() => new Date())
 
-  const store = options.store ?? createStore({ storageDomain: ctx.storageDomain, config, logger })
+  // Service lookup goes through `ctx.get`: reading `ctx.storageDomain`
+  // directly is a Cordis property access that throws "without inject" when the
+  // provider lives in a nested scope, and that failure kills the whole core row
+  // (no routes, no service, no preset). `get` returns undefined instead, which
+  // takes the documented file-store fallback.
+  const store = options.store ?? createStore({ storageDomain: ctx.get?.('storageDomain'), config, logger })
   const runner = options.runner ?? createSubagentRunner({ subagents: ctx.get?.('subagents') })
 
   /** Serialized mutation chains, one per run. */

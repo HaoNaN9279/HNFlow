@@ -58,7 +58,19 @@ function fakeContext() {
     systemPrompt: { section(section) { registered.sections.push(section) } },
     connection: { fetch: { register(route) { routes.push(route) } } },
   }
-  return ctx
+  // Cordis throws on a direct access to a service the fiber never injected
+  // (`cannot get property "x" without inject`). Reproduce that here so a
+  // property access that kills the core row fails this test instead of the
+  // user's first launch.
+  return new Proxy(ctx, {
+    get(target, prop, receiver) {
+      if (prop in target) return Reflect.get(target, prop, receiver)
+      if (typeof prop === 'string' && /^[A-Za-z]/u.test(prop)) {
+        throw new Error(`cannot get property "${prop}" without inject`)
+      }
+      return undefined
+    },
+  })
 }
 
 /**

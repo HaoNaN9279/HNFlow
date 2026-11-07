@@ -104,7 +104,7 @@ window.__ModuleLoader__.load({
       } catch {
         payload = null;
       }
-      if (payload === null) throw new Error(`hnflow: ${response.status} ${text.slice(0, 120)}`);
+      if (payload === null) throw new Error(`hnflow: ${response.status} ${text.slice(0, 120)} (${url})`);
       if (response.ok === false || payload.ok === false) {
         const error = new Error(String(payload.message ?? `hnflow: ${response.status}`));
         error.code = payload.code;

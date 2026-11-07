@@ -20,7 +20,8 @@ import { fileURLToPath } from 'node:url'
 
 import { createFlowCommand } from './lib/commands.js'
 import { createAuthorTool } from './lib/author.js'
-import { resolveConfig } from './lib/config.js'
+import { PLUGIN_VERSION, resolveConfig } from './lib/config.js'
+import { writeBreadcrumb } from './lib/diagnostics.js'
 import { createRoutes } from './lib/routes.js'
 import { createService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
@@ -93,25 +94,58 @@ export function apply(ctx, rawConfig) {
  */
 export function applyCore(ctx, config) {
   const logger = ctx.logger
-  const service = createService({ ctx, config, logger })
+  /** @type {Record<string, any>} */
+  let service
+  try {
+    service = createService({ ctx, config, logger })
+  } catch (error) {
+    // A broken core row would silently take the whole preset with it (no
+    // service means the preset's injects never fire). Say so loudly and leave
+    // a breadcrumb the user can hand back.
+    logger?.error?.('hnflow: cannot construct the orchestrator; the HNFlow mode stays unavailable: %o', error)
+    void writeBreadcrumb('core', { role: 'core', version: PLUGIN_VERSION, error: String(error?.message ?? error) })
+    throw error
+  }
+  const facts = {
+    role: 'core',
+    version: PLUGIN_VERSION,
+    storageDomain: safeHas(ctx, 'storageDomain'),
+    subagents: safeHas(ctx, 'subagents'),
+    presets: safeHas(ctx, 'agentPresets'),
+    connection: safeHas(ctx, 'connection'),
+  }
+  void writeBreadcrumb('core', facts)
   try {
     if (typeof ctx.provide === 'function') ctx.provide('hnflow', service)
     else logger?.warn?.('hnflow: this harness cannot provide services; the preset row will not find ctx.hnflow')
   } catch (error) {
     logger?.warn?.('hnflow: cannot provide ctx.hnflow: %o', error)
+    void writeBreadcrumb('core', { ...facts, provideError: String(error?.message ?? error) })
   }
   void service.open().catch((error) => logger?.warn?.('hnflow: cannot open the run store: %o', error))
   ctx.inject(['connection'], (scope) => {
-    try {
-      const registry = scope.connection?.fetch
-      if (typeof registry?.register !== 'function') {
-        logger?.warn?.('hnflow: no Fetch route registry; the HNFlow page stays offline')
-        return
-      }
-      for (const route of createRoutes({ service })) registry.register(route)
-    } catch (error) {
-      logger?.warn?.('hnflow: cannot register the HNFlow routes: %o', error)
+    const registry = scope.connection?.fetch
+    if (typeof registry?.register !== 'function') {
+      logger?.warn?.('hnflow: no Fetch route registry; the HNFlow page stays offline')
+      void writeBreadcrumb('core', { ...facts, routes: 0, routeError: 'no fetch registry' })
+      return
     }
+    // One route failing must not take the others down with it: the page
+    // degrades per surface, not as a whole.
+    /** @type {{path: string, error: string}[]} */
+    const routeErrors = []
+    /** @type {string[]} */
+    const registered = []
+    for (const route of createRoutes({ service })) {
+      try {
+        registry.register(route)
+        registered.push(route.path)
+      } catch (error) {
+        routeErrors.push({ path: route.path, error: String(error?.message ?? error) })
+        logger?.warn?.('hnflow: cannot register the route %s: %o', route.path, error)
+      }
+    }
+    void writeBreadcrumb('core', { ...facts, routes: registered.length, registered, routeErrors })
   })
   ctx.effect(
     () => () => {
@@ -124,6 +158,20 @@ export function applyCore(ctx, config) {
 }
 
 /**
+ * Whether a service is readable without throwing.
+ * @param {Record<string, any>} ctx - plugin context.
+ * @param {string} name - service name.
+ * @returns {boolean} true when `ctx.get(name)` yields a value.
+ */
+function safeHas(ctx, name) {
+  try {
+    return ctx.get?.(name) !== undefined
+  } catch {
+    return false
+  }
+}
+
+/**
  * Preset row: the model-facing surface inside an HNFlow session.
  * @param {Record<string, any>} ctx - Cordis plugin context.
  * @param {ReturnType<typeof resolveConfig>} config - resolved config.
@@ -131,6 +179,7 @@ export function applyCore(ctx, config) {
  */
 function applyPreset(ctx, config) {
   const logger = ctx.logger
+  void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'started', service: safeHas(ctx, 'hnflow'), tools: safeHas(ctx, 'tools') })
 
   /**
    * Effective working directory of an agent session.
@@ -160,8 +209,10 @@ function applyPreset(ctx, config) {
         }
         scope.tools.register(createFlowTool({ defineTool, service, cwdOf }))
         scope.tools.register(createAuthorTool({ defineTool, service, cwdOf }))
+        void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'ready', tools: 2 })
       } catch (error) {
         logger?.warn?.('hnflow: cannot register the flow tools: %o', error)
+        void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'tool-error', error: String(error?.message ?? error) })
       }
     })()
   })
