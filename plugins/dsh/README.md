@@ -36,7 +36,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 | 行 | 角色 | 注册内容 |
 | --- | --- | --- |
 | `hnflow-core` | `role: core` | `ctx.hnflow`、`/api/hnflow/*` 路由、存储与调度 |
-| `preset-hnflow` → `hnflow` | `role: preset` | `hnflow` / `hnflow_author` 工具、`/hnflow`、`hnflow-flows` 技能、流程索引 |
+| `preset-hnflow` → `hnflow` | `role: preset` | `hnflow` / `hnflow_author` 工具、`/hnflow`、`hnflow-controls` / `hnflow-flows` 技能、流程索引 |
 | `hnflow-ui` | `host: false` | 浏览器 bundle：侧栏页面、会话页签、右栏收件箱、右下角通知 |
 
 ## 对话创建与管理
@@ -52,6 +52,17 @@ HNFlow 模式里的模型面现在是完整的“起草 + 管理 + 运行”闭�
 | 通用资产发现/引用 | `hnflow` 的 `list_library` / `add_ref` / `remove_ref` / `rename_ref` |
 | 版本与回滚信息 | `hnflow` 的 `history` / `pin`；真正 publish/rollback 仍由人经命令或页面操作 |
 | 运行与观察 | `hnflow` 的 `run` / `status` / `list_runs` / `cancel` / `resume` / `inbox` / `artifact` |
+
+### 插件自带的两个技能
+
+两个技能都由 `preset-hnflow` 行注册为 `source: "bundled"`，不依赖工作区，**任意工作区的任意 HNFlow 模式会话**都能加载：
+
+| 技能 | 内容 |
+| --- | --- |
+| `hnflow-controls` | 对话控制面全量参考：`hnflow` 的 15 个动作、`hnflow_author` 的 7 个动作、参数与返回、常见错误、人类专属动作边界、创建/修改/提升/引用/运行的标准做法 |
+| `hnflow-flows` | 流程定义语言：六种节点、节点信封、边契约、门禁/交付/验收规则 |
+
+`hnflow-controls` 由 `test/controls-skill.test.js` 与工具动作表做契约校验：新增工具动作却没有写进技能时测试会失败。
 
 约束仍然是：**发布已有资产是人的动作**。`create` 写的是新资产 r1，不提升任何已有 revision；之后修改它必须走
 `draft` + 人工 publish。项目草稿（`.hnflow/overrides/` 中 `local: true` 且无引用的文件）没有版本历史，
@@ -152,7 +163,7 @@ node test/run.mjs
 覆盖：schema 子集与 `type`+`oneOf` 禁止、信封、契约可赋值、调度/fallback 降级、CAS 与退回预算、
 发布/lockfile（含 preset 组合摘要）、storage 降级、门禁/交付/`needs_human`/重试/取消/重启、
 审计字段、交付路径越界、过期推进、verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、
-旧流程导入、项目草稿创建/运行/提升/删除、引用管理、页面路由与客户端契约。当前 **134 项**。
+旧流程导入、项目草稿创建/运行/提升/删除、引用管理、页面路由、技能动作覆盖与客户端契约。当前 **137 项**。
 
 ### 真机自测（隔离 web 实例）
 

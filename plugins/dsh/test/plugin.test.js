@@ -102,13 +102,16 @@ test('the preset row registers the tools, skill and prompt section', async () =>
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   apply(ctx, { role: 'preset' })
-  await waitFor(() => ctx.registered.tools.length === 2 && ctx.registered.skills.length === 1)
+  await waitFor(() => ctx.registered.tools.length === 2 && ctx.registered.skills.length === 2)
   assert.deepEqual(ctx.registered.tools.map((tool) => tool.name), ['hnflow', 'hnflow_author'])
   // The command is global (core row), so the preset must not double-register it.
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
-  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-flows'])
-  assert.equal(ctx.registered.skills[0].source, 'bundled')
-  assert.equal(typeof ctx.registered.skills[0].content, 'string')
+  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-controls', 'hnflow-flows'])
+  for (const skill of ctx.registered.skills) {
+    assert.equal(skill.source, 'bundled')
+    assert.equal(typeof skill.content, 'string')
+    assert.ok(skill.content.length > 100)
+  }
   assert.deepEqual(ctx.registered.sections.map((section) => section.name), ['hnflow:flows'])
   assert.equal(ctx.listeners['agent/pre-step'].length, 1)
   await ctx.services.hnflow.close()

@@ -119,7 +119,7 @@ session 记录证据、storage 保存流程状态；人通过门禁与交付请�
 | 页面读写 | `ctx.connection.fetch.register({path, methods:['GET','HEAD','POST'], requestBody:'buffered'})` | `GET /api/hnflow/inbox`；`POST /api/hnflow/gate` 与 `/api/hnflow/deliverable` | 不做 websocket、不让页面直读内部文件 |
 | 提示词 | `ctx.systemPrompt.section()` | 注入流程索引（名称+一句话，限额） | 不注入长流程正文 |
 | 命令 | `ctx.commands.register()` | `/hnflow`（列表/收件箱/打开页面） | 不做 `@flow` 输入语法 |
-| 技能 | `ctx.skills.register()` | `hnflow-flows` 技能（节点目录、契约规则、如何起草） | 不重复 VibeStack 的规则/技能 |
+| 技能 | `ctx.skills.register()` | `hnflow-controls`（全部对话控制动作）与 `hnflow-flows`（节点目录、契约规则、如何起草） | 不重复 VibeStack 的规则/技能；随插件注册为 `bundled`，不依赖工作区 |
 | 后台任务 | `ctx.jobs`（仅 bash kind、需 controller 附着） | **不用**；run 是插件状态机，不是 job | 不把 run 映射成 job 半成品 |
 
 ### 3.1 为什么用 service 而不是只加一个 tool
@@ -548,7 +548,7 @@ const result = await activation.result        // { output, structured, stopReaso
 | 独立可用 | `dsh-vibestack` 仍可单独安装、单独 `preset-vibestack` 使用；HNFlow 只引用其模块名、服务与 preset 行 |
 | 接入方式 | `preset-hnflow` 的子插件清单里放一行 `dsh-vibestack`；HNFlow core 行 `ctx.get('vibestack')` 取模型层服务 |
 | 节点侧生效 | 节点以 `agentPreset: 'hnflow'` 启动 → 子会话按 cwd 解析 `.vibestack/stack.json` → 规则/技能/命令/MCP/人设对该节点生效；节点 `model` 走 `agentOptions` |
-| 命名空间 | VibeStack 的能力组命令/技能在 DSH 里统一是 `vibestack-<group>-<name>`；HNFlow 自己的工具（`hnflow`、`hnflow_author`）、命令（`/hnflow`）、技能（`hnflow-flows`）**不使用** `vibestack-` 前缀 |
+| 命名空间 | VibeStack 的能力组命令/技能在 DSH 里统一是 `vibestack-<group>-<name>`；HNFlow 自己的工具（`hnflow`、`hnflow_author`）、命令（`/hnflow`）、技能（`hnflow-controls`、`hnflow-flows`）**不使用** `vibestack-` 前缀 |
 | 版本门槛 | 需要 VibeStack ≥ `0.3.0`（含 `resolve` schema v2 与 `ctx.vibestack` 服务）；插件启动时校验 `apiVersion`，不满足即 `degraded` |
 | 禁止 | HNFlow 不读 `.vibestack/` 内部结构、不解析能力组、不代管规则/技能/MCP、不自己维护模型目录 |
 | OpenCode 退场 | VibeStack 删除 OpenCode 适配器不影响 HNFlow；HNFlow 从未依赖它，文档只需更新版本门槛 |
@@ -582,8 +582,8 @@ const result = await activation.result        // { output, structured, stopReaso
 | 工具 | `hnflow_author` | `schema`、`validate{definition}`、`create{definition,scope?,name?,folder?,reference?}`、`draft{flow,definition,note}`、`promote{flow,folder?}`、`delete{flow}`、`rename{flow,name}` | **没有 publish**：发布已有资产只能由人经 `/hnflow publish` 或页面完成（I1 物理上无入口）；项目草稿可创建/编辑/删除/提升 |
 | 命令 | `/hnflow` | `list`、`inbox`、`runs`、`publish <flow>`、`open` | 除 `publish` 外都不进模型上下文；`publish` 先给 diff 再二次确认 |
 | 提示词 | section `hnflow:flows` | 流程索引（≤20 条：名称 + 一句话 + 何时用） | 不注入流程正文；索引由资产库生成并缓存 |
-| 技能 | `hnflow-flows` | 节点目录、信封三态、契约/边规则、起草步骤 | 大块参考资料按需加载，常驻上下文只留一行摘要 |
-| 命名空间 | `hnflow` / `hnflow_author` / `/hnflow` / `hnflow-flows` | 与 VibeStack 的 `vibestack-*` 命名空间并列、互不遮蔽 | 不占用 `vibestack-` 前缀 |
+| 技能 | `hnflow-controls` / `hnflow-flows` | `hnflow-controls` 覆盖全部工具动作、参数、返回、错误与人类专属边界；`hnflow-flows` 覆盖节点目录、信封三态、契约/边规则、起草步骤 | 两者都随 preset 行注册为 `bundled`，任意工作区可用；大块参考资料按需加载，常驻上下文只留摘要 |
+| 命名空间 | `hnflow` / `hnflow_author` / `/hnflow` / `hnflow-controls` / `hnflow-flows` | 与 VibeStack 的 `vibestack-*` 命名空间并列、互不遮蔽 | 不占用 `vibestack-` 前缀 |
 
 ---
 
@@ -616,6 +616,7 @@ plugins/dsh/
 │  ├─ routes.js            # GET inbox / POST gate / POST deliverable
 │  └─ state.js             # 页面只读快照
 ├─ client.js               # 三面 UI（复用画布/监视/通知骨架）
+├─ skills/hnflow-controls/SKILL.md
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/*.flow.json
 └─ test/                   # node:test
@@ -824,9 +825,10 @@ plugins/dsh/
 │  ├─ service.js             # 编排器（唯一状态持有者）
 │  ├─ tools.js  author.js  commands.js  routes.js
 │  └─ skill.js
+├─ skills/hnflow-controls/SKILL.md
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（134 项，`node test/run.mjs`）
+└─ test/                     # node:test（137 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -864,6 +866,8 @@ plugins/dsh/
 | E-26 | 左侧树改为“**通用资产库（全列表只出现一次）+ 工作区（各自可折叠）**”两段；两者都按资产的 library 相对 `folder` 渲染多级文件夹并支持逐级折叠；库中的流程不再按工作区标注“已引用”或禁用 | 旧实现把通用库重复挂在每个工作区下，既重复又暗示“归属”；库是全局的，引用动作以当前选中（或第一个）工作区为目标，并在操作结果里反馈，而不是在列表里做跨工作区标记 |
 | E-27 | 对话能力补齐为“创建/管理/运行”闭环：`hnflow_author` 增加 `create`（默认项目草稿，`scope:library` 建库资产 r1）、`promote`、`delete`、`rename`；`hnflow` 增加 `list_library`、`list_runs`、`add_ref`、`remove_ref`、`rename_ref`、`pin`、`history`；项目草稿复用 `.hnflow/overrides/<id>.flow.json`，以 `local: true` 且无引用识别，不新建第二套存储 | 原有模型面只能 `draft` 已引用流程，无法创建新流程、管理引用或发现库资产；项目草稿不需要独立存储，沿用工作区覆盖即可保持 resolver/run/页面一条路径。`create` 只写新资产 r1，不提升任何已有 revision；已有资产的 publish 仍是人类动作，I1 不破 |
 | E-28 | 执行层**不做**子流程嵌套；文件夹嵌套只是展示层级 | 六原语 + `merge`/gate/verify 已覆盖当前约束表达；子流程会引入版本钉住、父子 run、错误/取消传播、inbox 归属和递归限制，成本高于当前收益；出现稳定复用片段时再单独立项 |
+| E-29 | 新增 `hnflow-controls` 技能并由 preset 行以 `source: "bundled"` 注册；它覆盖 `hnflow` 的 15 个动作、`hnflow_author` 的 7 个动作、参数/返回/错误/人类专属边界；`test/controls-skill.test.js` 从动作表反查全文 | 工具动作已经增长到 22 个，单靠工具描述和 `hnflow-flows` 的节点知识不够；技能必须由插件管理、随包分发且不依赖 cwd，才能在任何工作区的 HNFlow 模式会话里一致可用。动作表 → 技能全文的契约测试防止新增动作漏文档 |
+| E-30 | 技能注册补 `source: "bundled"` | DSH `SkillRegistration` 的 `SkillSummary.source` 是必填字符串；缺省时加载报 `loaded skill "…" source must be a string`。补上后技能可加载，且与项目/用户技能区分来源 |
 
 ### E.3 状态机（实现）
 
@@ -899,11 +903,11 @@ conductor 模型路由（E-19）、usage 读回时机（E-20）。已知保留�
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：**134 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
+`plugins/dsh/test/`，`node test/run.mjs`：**137 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
 信封三态、调度（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile（含 preset 组合摘要）、
 storage 降级、编排（门禁/交付/needs_human/重试/取消/重启）、审计字段、交付路径越界、过期推进、
 verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、项目草稿创建/运行/提升/删除、
-引用管理、工具/命令/路由/装配/客户端契约。
+引用管理、控制技能动作覆盖、工具/命令/路由/装配/客户端契约。
 
 真机页面自测（隔离 web，Playwright）：三页签、流程树、版本历史、发布预览、钉住/回滚、启动、
 收件箱批准、产物展开、token 显示；浏览器 console 无 error。

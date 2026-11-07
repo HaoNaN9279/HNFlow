@@ -33,8 +33,11 @@ export const name = 'hnflow'
 /** Prompt-section order: after first-party guidance, before persona suffix. */
 const SECTION_ORDER = 10160
 
-/** Bundled skill file, resolved next to this module. */
-const SKILL_FILE = fileURLToPath(new URL('./skills/hnflow-flows/SKILL.md', import.meta.url))
+/** Bundled skill files, resolved next to this module. */
+const SKILL_FILES = Object.freeze([
+  fileURLToPath(new URL('./skills/hnflow-controls/SKILL.md', import.meta.url)),
+  fileURLToPath(new URL('./skills/hnflow-flows/SKILL.md', import.meta.url)),
+])
 
 /**
  * Optional Config schema.
@@ -237,15 +240,17 @@ function applyPreset(ctx, config) {
     const service = scope.hnflow
     ctx.inject(['skills'], (skillsScope) => {
       void (async () => {
-        try {
-          const skill = readSkillFile(await readFile(SKILL_FILE, 'utf8'))
-          if (skill.name.length === 0 || skill.description.length === 0) {
-            logger?.warn?.('hnflow: the bundled skill has no name/description frontmatter; skipping')
-            return
+        for (const skillFile of SKILL_FILES) {
+          try {
+            const skill = readSkillFile(await readFile(skillFile, 'utf8'))
+            if (skill.name.length === 0 || skill.description.length === 0) {
+              logger?.warn?.('hnflow: the bundled skill %s has no name/description frontmatter; skipping', skillFile)
+              continue
+            }
+            skillsScope.skills.register({ name: skill.name, description: skill.description, content: skill.content, source: 'bundled' })
+          } catch (error) {
+            logger?.warn?.('hnflow: cannot load the bundled skill %s: %o', skillFile, error)
           }
-          skillsScope.skills.register({ name: skill.name, description: skill.description, content: skill.content, source: 'bundled' })
-        } catch (error) {
-          logger?.warn?.('hnflow: cannot load the bundled skill: %o', error)
         }
       })()
     })

@@ -72,6 +72,9 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
   },
 })
 
+/** Actions the authoring tool accepts. */
+export const AUTHOR_ACTIONS = Object.freeze(['schema', 'validate', 'create', 'draft', 'promote', 'delete', 'rename'])
+
 /**
  * Build the `hnflow_author` tool definition.
  * @param {{service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
@@ -159,7 +162,7 @@ export function createAuthorTool(options) {
           return JSON.stringify({ ok: true, renamed: true, ...result }, null, 2)
         }
         default:
-          return 'error invalid-action: expected schema, validate, create, draft, promote, delete or rename'
+          return `error invalid-action: expected ${AUTHOR_ACTIONS.join(', ')}`
       }
     } catch (error) {
       return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
@@ -171,7 +174,7 @@ export function createAuthorTool(options) {
     description:
       'Author and manage HNFlow flows without publishing. `schema` returns the definition format, `validate` runs publish-time static checks, `create` creates a project-local draft (default) or a library asset r1, `draft` writes an agent draft, `promote` turns a project draft into a library asset, and `delete`/`rename` manage project-local drafts only. There is no publish action: changing an existing library asset still requires a human to publish it through /hnflow publish or the page.',
     parameters: {
-      action: { type: 'string', required: true, enum: ['schema', 'validate', 'create', 'draft', 'promote', 'delete', 'rename'], description: 'Operation to perform.' },
+      action: { type: 'string', required: true, enum: [...AUTHOR_ACTIONS], description: 'Operation to perform.' },
       flow: { type: 'string', description: 'Referenced/local flow alias, name or id (validate without a definition, draft, promote, delete, rename).' },
       definition: { type: 'object', additionalProperties: true, description: 'Complete flow definition for validate/create/draft.' },
       scope: { type: 'string', enum: ['project', 'library'], description: 'create only: project-local draft (default) or reusable library asset r1.' },
