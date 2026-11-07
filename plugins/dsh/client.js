@@ -65,6 +65,7 @@ window.__ModuleLoader__.load({
       tree: { flex: "0 0 clamp(190px, 40%, 290px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
       group: { margin: "0 0 8px" },
       groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left" },
+      headerButton: { display: "flex", alignItems: "center", gap: "6px", width: "100%", boxSizing: "border-box", padding: "4px 6px", border: "none", background: "transparent", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", backgroundImage: "none", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       itemActive: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.16))" },
       meta: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary, inherit)" },
@@ -272,6 +273,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * The label a flow row uses: alias first, then display name, then id.
+     * @param {Record<string, any>} entry - ref or asset.
+     * @returns {string} label.
+     */
+    function flowLabel(entry) {
+      return String(entry?.alias || entry?.name || entry?.flowId || "");
+    }
+
+    /**
      * The sidebar glyph.
      * @param {{size?: number}} props - glyph size from the sidebar.
      * @returns {unknown} element.
@@ -306,8 +316,39 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Left tree: workspaces, their referenced flows and the reusable library.
-     * @param {{groups: Record<string, any>[], assets: Record<string, any>[], selected: string, onPick: Function, onAdd: Function}} props - selection.
+     * Build a nested folder tree from asset/ref entries.
+     *
+     * Entries carry a library-relative `folder`; `a/b` becomes two nested
+     * folders. Files at the root live on the root node.
+     * @param {Record<string, any>[]} entries - entries with an optional `folder`.
+     * @returns {{folders: Map<string, any>, files: Record<string, any>[]}} tree.
+     */
+    function folderTree(entries) {
+      const root = { folders: new Map(), files: [] };
+      for (const entry of Array.isArray(entries) ? entries : []) {
+        const parts = String(entry?.folder ?? "")
+          .split("/")
+          .filter((part) => part.length > 0);
+        let node = root;
+        for (const part of parts) {
+          if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), files: [] });
+          node = node.folders.get(part);
+        }
+        node.files.push(entry);
+      }
+      const sortNode = (node) => {
+        node.folders = new Map([...node.folders.entries()].sort(([left], [right]) => left.localeCompare(right)));
+        node.files.sort((left, right) => String(left.name ?? left.alias ?? left.flowId ?? "").localeCompare(String(right.name ?? right.alias ?? right.flowId ?? "")));
+        for (const child of node.folders.values()) sortNode(child);
+      };
+      sortNode(root);
+      return root;
+    }
+
+    /**
+     * Left tree: one reusable library section plus collapsible workspaces,
+     * both rendered as nested folders.
+     * @param {{groups: Record<string, any>[], assets: Record<string, any>[], selected: string, targetWorkspace: string, onPick: Function, onAdd: Function}} props - selection.
      * @returns {unknown} element.
      */
     function FlowTree(props) {
@@ -315,54 +356,106 @@ window.__ModuleLoader__.load({
       const assets = Array.isArray(props?.assets) ? props.assets : [];
       const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
       const onAdd = typeof props?.onAdd === "function" ? props.onAdd : () => {};
+      const targetWorkspace = typeof props?.targetWorkspace === "string" ? props.targetWorkspace : "";
+      const [collapsed, setCollapsed] = react.useState({});
+      /**
+       * Toggle one section or folder.
+       * @param {string} key - stable key.
+       * @returns {void}
+       */
+      const toggle = (key) => setCollapsed((current) => ({ ...current, [key]: !current[key] }));
+
+      /**
+       * Render one folder node and its descendants.
+       * @param {{folders: Map<string, any>, files: Record<string, any>[]}} node - node.
+       * @param {string} prefix - folder path prefix.
+       * @param {number} depth - nesting depth.
+       * @param {'library'|'workspace'} mode - row kind.
+       * @param {string} groupPath - owning workspace path.
+       * @returns {unknown[]} rows.
+       */
+      const renderTree = (node, prefix, depth, mode, groupPath) => {
+        const rows = [];
+        for (const [name, child] of node.folders) {
+          const key = `${mode}:${groupPath}:${prefix}${name}`;
+          const closed = collapsed[key] === true;
+          rows.push(
+            h(
+              "button",
+              {
+                type: "button",
+                key,
+                style: { ...styles.headerButton, paddingLeft: `${6 + depth * 12}px` },
+                onClick: () => toggle(key),
+              },
+              `${closed ? "▸" : "▾"} ${name}`,
+            ),
+          );
+          if (!closed) rows.push(...renderTree(child, `${prefix}${name}/`, depth + 1, mode, groupPath));
+        }
+        for (const entry of node.files) {
+          if (mode === "library") {
+            rows.push(
+              h(
+                "div",
+                { key: `library:${entry.id}`, style: { ...styles.item, flexDirection: "row", alignItems: "center", gap: "6px", paddingLeft: `${10 + depth * 12}px`, cursor: "default" } },
+                h("span", { key: "name", style: { ...styles.cell, flex: "1 1 auto" } }, String(entry.name ?? entry.id)),
+                h("span", { key: "revision", style: styles.meta }, `r${entry.revision ?? "?"}`),
+                h(
+                  "button",
+                  { key: "add", type: "button", style: styles.linkButton, disabled: targetWorkspace.length === 0, title: targetWorkspace.length === 0 ? "没有可引用的工作区" : `引用到 ${shortPath(targetWorkspace)}`, onClick: () => onAdd(targetWorkspace, entry) },
+                  "引用",
+                ),
+              ),
+            );
+          } else {
+            const key = `${groupPath}:${flowLabel(entry)}`;
+            rows.push(
+              h(
+                "button",
+                { type: "button", key, style: { ...(props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item), paddingLeft: `${10 + depth * 12}px` }, onClick: () => onPick(groupPath, entry) },
+                h("span", null, `${flowLabel(entry)}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
+                h("span", { style: styles.meta }, `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+              ),
+            );
+          }
+        }
+        return rows;
+      };
+
+      const libraryClosed = collapsed.library === true;
       return h(
         "div",
         { style: styles.tree },
-        groups.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
+        h(
+          "div",
+          { style: styles.group },
+          h("button", { type: "button", style: styles.headerButton, onClick: () => toggle("library") }, `${libraryClosed ? "▸" : "▾"} 通用资产库${assets.length > 0 ? ` (${assets.length})` : ""}`),
+          libraryClosed
+            ? null
+            : h(
+                "div",
+                null,
+                h("div", { style: { ...styles.meta, paddingLeft: "10px" } }, targetWorkspace.length === 0 ? "没有可引用的工作区" : `引用目标：${shortPath(targetWorkspace)}`),
+                assets.length === 0
+                  ? h("div", { style: { ...styles.meta, paddingLeft: "10px" } }, "资产库是空的")
+                  : h("div", null, ...renderTree(folderTree(assets), "", 0, "library", "")),
+              ),
+        ),
         ...groups.map((group) =>
           h(
             "div",
             { key: group.path, style: styles.group },
-            h("div", { style: styles.groupTitle }, `${group.name || shortPath(group.path)}${group.error ? " · 读取失败" : ""}`),
-            (group.flows ?? []).length === 0
-              ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的流程")
-              : h(
-                  "div",
-                  null,
-                  ...(group.flows ?? []).map((entry) => {
-                    const key = `${group.path}:${entry.alias || entry.flowId}`;
-                    return h(
-                      "button",
-                      { type: "button", key, style: props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => onPick(group.path, entry) },
-                      h("span", null, `${entry.alias || entry.flowId}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
-                      h("span", { style: styles.meta }, `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
-                    );
-                  }),
-                ),
-            assets.length === 0
+            h(
+              "button",
+              { type: "button", style: styles.headerButton, onClick: () => toggle(`workspace:${group.path}`) },
+              `${collapsed[`workspace:${group.path}`] === true ? "▸" : "▾"} ${group.name || shortPath(group.path)}${group.error ? " · 读取失败" : ""}`,
+            ),
+            collapsed[`workspace:${group.path}`] === true
               ? null
-              : h(
-                  "div",
-                  { style: { marginTop: "4px" } },
-                  h("div", { style: { ...styles.groupTitle, opacity: 0.8 } }, "通用资产库"),
-                  ...assets.slice(0, 20).map((asset) => {
-                    const referenced = (group.flows ?? []).some((entry) => entry.flowId === asset.id);
-                    return h(
-                      "button",
-                      {
-                        type: "button",
-                        key: `${group.path}:asset:${asset.id}`,
-                        disabled: referenced,
-                        style: { ...styles.item, opacity: referenced ? 0.55 : 1, cursor: referenced ? "default" : "pointer" },
-                        onClick: () => {
-                          if (!referenced) onAdd(group.path, asset);
-                        },
-                      },
-                      h("span", null, `${referenced ? "·" : "+"} ${asset.name}`),
-                      h("span", { style: styles.meta }, `${asset.id} · r${asset.revision}${referenced ? " · 已引用" : ""}`),
-                    );
-                  }),
-                ),
+              : (group.flows ?? []).length === 0
+                ? h("div", { style: { ...styles.meta, paddingLeft: "10px" } }, "没有引用的流程")
+                : h("div", null, ...renderTree(folderTree(group.flows ?? []), "", 0, "workspace", group.path)),
           ),
         ),
       );
@@ -908,7 +1001,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const left = tab === "flows" ? h(FlowTree, { groups, assets, selected: selectedFlow === null ? "" : `${selectedFlow.workspace}:${selectedFlow.alias || selectedFlow.flowId}`, onPick: (workspace, entry) => void pickFlow(workspace, entry), onAdd: (workspace, asset) => void addAsset(workspace, asset) }) : tab === "runs" ? h(RunsBoard, { runs, selected: selectedRun?.runId ?? "", onPick: (run) => void pickRun(run) }) : null;
+      const left = tab === "flows" ? h(FlowTree, { groups, assets, selected: selectedFlow === null ? "" : `${selectedFlow.workspace}:${flowLabel(selectedFlow)}`, targetWorkspace: selectedFlow?.workspace ?? groups[0]?.path ?? "", onPick: (workspace, entry) => void pickFlow(workspace, entry), onAdd: (workspace, asset) => void addAsset(workspace, asset) }) : tab === "runs" ? h(RunsBoard, { runs, selected: selectedRun?.runId ?? "", onPick: (run) => void pickRun(run) }) : null;
 
       const right =
         tab === "flows"

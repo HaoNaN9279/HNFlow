@@ -112,6 +112,7 @@ export class AssetStore {
         revision: entry.asset.revision ?? 1,
         tags: Array.isArray(entry.asset.tags) ? entry.asset.tags : [],
         path: entry.path,
+        folder: this.#folderOf(entry.path),
         hash: hashOf(entry.definition),
       }))
       .sort((left, right) => left.name.localeCompare(right.name))
@@ -127,7 +128,20 @@ export class AssetStore {
     const found = await this.#scan()
     const entry = found.get(flowId)
     if (entry === undefined) throw new AssetError('asset-missing', `no flow asset named ${flowId}`, { flowId })
-    return { asset: entry.asset, definition: entry.definition, path: entry.path, hash: hashOf(entry.definition) }
+    return { asset: entry.asset, definition: entry.definition, path: entry.path, folder: this.#folderOf(entry.path), hash: hashOf(entry.definition) }
+  }
+
+  /**
+   * The library-relative folder of one asset file, with `/` separators.
+   * @param {string} filePath - absolute asset path.
+   * @returns {string} folder, or '' for the library root.
+   */
+  #folderOf(filePath) {
+    return path
+      .relative(this.root, path.dirname(filePath))
+      .split(/[\\/]+/u)
+      .filter((part) => part.length > 0 && part !== '.')
+      .join('/')
   }
 
   /**

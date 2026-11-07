@@ -150,6 +150,7 @@ export class Resolver {
         const assetEntry = await this.#readAsset(ref.flowId)
         entry.name = String(assetEntry.asset.name ?? '')
         entry.description = String(assetEntry.asset.description ?? '')
+        entry.folder = String(assetEntry.folder ?? '')
         entry.currentRevision = Number(assetEntry.asset.revision ?? 1)
         entry.missing = false
         entry.drift = override !== null ? entry.currentRevision > Number(entry.overrideBaseRevision ?? 0) : entry.pinnedRevision !== null && entry.currentRevision > entry.pinnedRevision
@@ -157,6 +158,7 @@ export class Resolver {
         entry.name = ''
         entry.missing = true
         entry.drift = false
+        entry.folder = ''
         entry.error = error instanceof ResolveError || error instanceof AssetError ? error.code : 'asset-unreadable'
       }
       entries.push(entry)
