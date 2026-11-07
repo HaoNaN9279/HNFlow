@@ -56,7 +56,7 @@ export function createFlowCommand(options) {
     const [verb, ...rest] = raw.split(/\s+/u).filter((part) => part.length > 0)
     const cwd = cwdOf(invocation?.agent)
     if (verb === undefined || verb === 'help') return { kind: 'success', text: USAGE }
-    if (cwd === null && verb !== 'inbox' && verb !== 'runs' && verb !== 'status') {
+    if (cwd === null && !['inbox', 'runs', 'status', 'assets', 'open', 'help'].includes(verb ?? '')) {
       return { kind: 'error', text: '这个会话没有工作区目录。' }
     }
     try {
