@@ -84,6 +84,8 @@ test('a modified gate decision can carry the modified artifact into the run', as
     ).settled
     assert.equal(settled.status, 'succeeded')
     assert.deepEqual(settled.nodes.approve.output.artifact, { points: ['a', 'b'] })
+    assert.deepEqual(settled.artifactRevisions[0].value, { points: ['a', 'b'] })
+    assert.equal(settled.artifactRevisions[0].nodeId, 'approve')
   } finally {
     await service.close()
     await rm(seeded.root, { recursive: true, force: true })

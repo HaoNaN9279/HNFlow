@@ -1175,6 +1175,7 @@ function buildService(options) {
       pending: [],
       fallbacks: [],
       degradations: [],
+      artifactRevisions: [],
       artifacts: {},
       usage: null,
       audit: [],
@@ -1322,6 +1323,20 @@ function buildService(options) {
           },
           endedAt: decidedAt,
           ...(rejected ? { diagnostic: { code: 'gate-rejected', message: outcome.decision.reason } } : {}),
+        }
+        if (outcome.decision.artifact !== undefined) {
+          // "Modified approval" is a new artifact revision, not a rewritten
+          // upstream artifact: history stays append-only and downstream nodes
+          // read the gate's output.
+          current.artifactRevisions = Array.isArray(current.artifactRevisions) ? current.artifactRevisions : []
+          current.artifactRevisions.push({
+            revision: current.artifactRevisions.length + 1,
+            gateId: pending.id,
+            nodeId: pending.nodeId,
+            value: outcome.decision.artifact,
+            at: decidedAt,
+            decidedBy: 'owner',
+          })
         }
       }
       current.audit = Array.isArray(current.audit) ? current.audit : []
@@ -1676,12 +1691,19 @@ function buildService(options) {
         groups.push({ ...workspace, flows: [], error: String(error?.message ?? error) })
       }
     }
+    /** @type {Record<string, any>[]} */
+    let library = []
+    try {
+      library = await libraryAssets()
+    } catch (error) {
+      logger.warn?.('hnflow: the library could not be listed: %o', error)
+    }
     return {
       ok: true,
       degraded: !vibestackAvailable(hosts.vibestack()),
       storage: store.mode(),
       warnings: store.warnings(),
-      library: await libraryAssets(),
+      library,
       workspaces: groups,
       runs: (await listRuns()).map(summariseRun),
       inbox: await inbox(),
@@ -1900,6 +1922,7 @@ export function summariseRun(run) {
     pending: (run.pending ?? []).filter((entry) => entry.decision === undefined && entry.delivery === undefined).length,
     usage: run.usage ?? null,
     degradations: Array.isArray(run.degradations) ? run.degradations : [],
+    artifactRevisions: Array.isArray(run.artifactRevisions) ? run.artifactRevisions : [],
     artifacts: artifactList(run),
   }
 }
