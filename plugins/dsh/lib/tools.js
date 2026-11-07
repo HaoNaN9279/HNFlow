@@ -1,111 +1,60 @@
 /**
- * The `hnflow` tool: start a run, and answer questions about one.
+ * The `hnflow` tool: a thin model-facing surface over the orchestrator.
  *
- * The model must pass `workflow` for anything that addresses one definition; the
- * tool never guesses between candidates. Errors come back as ordinary tool text
- * with a stable code, so a failed call does not end the turn.
- *
- * Starting is the only interactive job. `run` returns as soon as the engine has
- * accepted the definition — the session does not follow the run, because a run
- * outlives a turn and its progress belongs to the HNFlow page. The read actions
- * exist for a later question in the same session ("跑完没"), never for polling.
+ * It can list, describe, start, inspect and cancel — never publish, never
+ * decide a gate, never accept a delivery. Those are human actions. `run`
+ * returns as soon as the run exists: a run outlives the turn, and its progress
+ * belongs to the HNFlow page, not to a polling loop in the conversation.
  */
 
 /** Actions the tool accepts. */
-export const WORKFLOW_ACTIONS = ['list', 'get', 'run', 'status', 'cancel', 'resume', 'events', 'assets', 'task_list', 'task_submit']
+export const ACTIONS = Object.freeze(['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox'])
 
 /**
- * Render a run record as compact text.
- * @param {Record<string, any>} status - engine run record.
- * @returns {string} model-facing summary.
+ * Render a run summary.
+ * @param {Record<string, any>} run - summary from `summariseRun`.
+ * @returns {string} model-facing text.
  */
-export function formatRunStatus(status) {
-  const lines = [`run ${status.runId}: ${status.status}`]
-  if (typeof status.error === 'string' && status.error.length > 0) lines.push(`error: ${status.error}`)
-  if (Array.isArray(status.nodes) && status.nodes.length > 0) {
-    lines.push(`nodes: ${status.nodes.map((node) => `${node.nodeId}=${node.status}`).join(', ')}`)
+export function formatRun(run) {
+  const lines = [`run ${run.runId}: ${run.status} (${run.flowName ?? run.flowId} r${run.revision ?? 'latest'})`]
+  if (run.error !== null && run.error !== undefined) lines.push(`error: ${run.error.code}: ${run.error.message}`)
+  if (Array.isArray(run.nodes) && run.nodes.length > 0) {
+    lines.push(`nodes: ${run.nodes.map((node) => `${node.id}=${node.status}${node.attempts > 1 ? `(x${node.attempts})` : ''}`).join(', ')}`)
+    for (const node of run.nodes) {
+      if (node.diagnostic !== null && node.diagnostic !== undefined) lines.push(`  ${node.id}: ${node.diagnostic.code} — ${node.diagnostic.message}`)
+    }
   }
-  if (status.result !== null && status.result !== undefined) lines.push(`result: ${JSON.stringify(status.result)}`)
-  const tasks = Array.isArray(status.pendingTasks) ? status.pendingTasks : []
-  for (const task of tasks) lines.push(`waiting on task ${task.taskId} (${task.kind} node ${task.nodeId}): ${task.description}`)
+  if (run.pending > 0) lines.push(`waiting on ${run.pending} human item(s); see /hnflow inbox or the HNFlow page`)
   return lines.join('\n')
 }
 
 /**
- * Render a pending-task list.
- * @param {Record<string, any>[]} tasks - task summaries.
- * @returns {string} model-facing summary.
+ * Render the workspace catalogue.
+ * @param {Record<string, any>[]} entries - catalogue.
+ * @returns {string} model-facing text.
  */
-export function formatTasks(tasks) {
-  if (tasks.length === 0) return 'No pending human tasks.'
-  return tasks
-    .map((task) => {
-      const fields = (task.outputSpec?.ports ?? []).map((port) => `${port.name}:${port.type}${port.required ? '!' : ''}`).join(', ')
-      return `- ${task.taskId} (run ${task.runId}, node ${task.nodeId}, ${task.kind})${fields.length > 0 ? ` fields: ${fields}` : ''}${task.description ? ` — ${task.description}` : ''}`
-    })
-    .join('\n')
-}
-
-/**
- * Render a workflow index as a table-ish list.
- * @param {Record<string, any>[]} entries - catalogue entries.
- * @returns {string} model-facing summary.
- */
-export function formatWorkflowList(entries) {
-  if (entries.length === 0) return 'This workspace references no HNFlow workflows.'
+export function formatFlows(entries) {
+  if (entries.length === 0) return 'This workspace references no HNFlow flows.'
   return entries
     .map((entry) => {
-      const name = entry.alias.length > 0 ? entry.alias : entry.assetId
-      const flags = [entry.missing ? 'missing-asset' : '', entry.hasOverride ? 'override' : '', entry.drift ? 'drift' : ''].filter((flag) => flag.length > 0)
-      const revision = entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'}` : `pinned r${entry.pinnedRevision} of r${entry.currentRevision ?? '?'}`
-      return `- ${name} (${entry.assetId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `: ${entry.description}` : ''}`
+      const name = entry.alias.length > 0 ? entry.alias : entry.flowId
+      const flags = [entry.missing ? 'missing' : '', entry.hasOverride ? 'draft-override' : '', entry.drift ? 'drift' : ''].filter((flag) => flag.length > 0)
+      const revision = entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'} (follows latest)` : `pinned r${entry.pinnedRevision} of r${entry.currentRevision ?? '?'}`
+      return `- ${name} (${entry.flowId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `: ${entry.description}` : ''}`
     })
     .join('\n')
-}
-
-/**
- * Render a run's event log as a timeline.
- * @param {{events?: Record<string, any>[]}} log - `run/events` result.
- * @returns {string} model-facing summary.
- */
-export function formatTimeline(log) {
-  const events = Array.isArray(log?.events) ? log.events : []
-  if (events.length === 0) return 'no events recorded for this run'
-  return events
-    .map((event) => {
-      const node = typeof event.nodeId === 'string' && event.nodeId.length > 0 ? ` ${event.nodeId}` : ''
-      const detail = event.data && typeof event.data === 'object' ? summarise(event.data) : ''
-      return `${String(event.seq).padStart(3, ' ')}  ${String(event.at ?? '').slice(11, 23)}  ${event.type}${node}${detail.length > 0 ? `  ${detail}` : ''}`
-    })
-    .join('\n')
-}
-
-/**
- * One compact detail string for an event payload.
- * @param {Record<string, any>} data - event data.
- * @returns {string} detail, or an empty string.
- */
-function summarise(data) {
-  if (typeof data.error === 'string' && data.error.length > 0) return data.error.slice(0, 120)
-  if (data.output !== undefined) return JSON.stringify(data.output).slice(0, 120)
-  if (typeof data.status === 'string') return data.status
-  return ''
 }
 
 /**
  * Build the `hnflow` tool definition.
- * @param {{
- *   defineTool: Function,
- *   service: import('./service.js').HnflowService,
- *   cwdOf: (agent: unknown) => string | null,
- * }} options - wiring.
- * @returns {Record<string, any>} the tool definition handed to `ctx.tools.register`.
+ * @param {{defineTool: Function, service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
+ * @returns {Record<string, any>} tool definition.
  */
-export function createWorkflowTool(options) {
+export function createFlowTool(options) {
   const { defineTool, service, cwdOf } = options
 
   /**
-   * Run one action.
+   * Dispatch one action.
    * @param {Record<string, any>} args - validated arguments.
    * @param {{agent?: unknown}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
@@ -113,85 +62,66 @@ export function createWorkflowTool(options) {
   const execute = async (args, exec) => {
     const cwd = cwdOf(exec?.agent)
     try {
-      if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-      return await run(args, cwd, exec)
+      switch (args.action) {
+        case 'list_flows':
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          return formatFlows(await service.listFlows(cwd))
+        case 'describe_flow': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = requireKey(args)
+          const resolved = await service.describeFlow(cwd, key)
+          return [
+            `flow ${resolved.alias || resolved.flowId} (${resolved.flowId})`,
+            `source: ${resolved.source}; revision ${resolved.revision ?? 'latest'} of ${resolved.currentRevision}; drift: ${resolved.drift}`,
+            `definition: ${JSON.stringify(resolved.definition)}`,
+          ].join('\n')
+        }
+        case 'run': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = requireKey(args)
+          const sessionId = typeof exec?.agent?.session?.id === 'string' ? exec.agent.session.id : undefined
+          const started = await service.run({ cwd, key, input: args.input ?? {}, hostSessionId: sessionId })
+          return [
+            `started ${started.runId} (${key}); it continues without this turn.`,
+            'Report this run id and stop: do not poll, wait, or simulate its nodes. Human work appears in /hnflow inbox and on the HNFlow page.',
+          ].join('\n')
+        }
+        case 'status': {
+          const run = await service.getRun(requireRunId(args))
+          return formatRun(runSummary(run))
+        }
+        case 'cancel': {
+          const result = await service.cancel(requireRunId(args))
+          return `cancelled ${result.runId} (status ${result.status})`
+        }
+        case 'resume': {
+          const result = await service.resume(requireRunId(args))
+          return `resumed ${result.runId}; unfinished nodes continue without this turn.`
+        }
+        case 'inbox': {
+          const items = await service.inbox()
+          if (items.length === 0) return 'The HNFlow inbox is empty.'
+          return items
+            .map((item) => `- ${item.id} (${item.kind}, run ${item.runId}, node ${item.nodeId})${item.whyHuman ? `: ${item.whyHuman}` : ''}`)
+            .join('\n')
+        }
+        default:
+          return `error invalid-action: expected one of ${ACTIONS.join(', ')}`
+      }
     } catch (error) {
       return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
-    }
-  }
-
-  /**
-   * Dispatch one action against a resolved workspace.
-   * @param {Record<string, any>} args - validated arguments.
-   * @param {string} cwd - workspace root.
-   * @param {{agent?: unknown}} exec - execution context.
-   * @returns {Promise<string>} model-facing text.
-   */
-  const run = async (args, cwd, exec) => {
-    switch (args.action) {
-      case 'list':
-        return formatWorkflowList(await service.listWorkflows(cwd))
-      case 'assets': {
-        const assets = await service.listAssets(cwd)
-        if (assets.length === 0) return 'The HNFlow library has no workflow assets yet.'
-        return assets.map((asset) => `- ${asset.name} (${asset.id}, r${asset.revision})${asset.description ? `: ${asset.description}` : ''}`).join('\n')
-      }
-      case 'get': {
-        const resolved = await service.resolve(cwd, requireWorkflow(args))
-        return [
-          `workflow ${resolved.alias || resolved.assetId} (${resolved.assetId})`,
-          `source: ${resolved.source}; revision: ${resolved.revision ?? 'latest'} of ${resolved.currentRevision}; drift: ${resolved.drift}`,
-          `definition: ${JSON.stringify(resolved.definition)}`,
-        ].join('\n')
-      }
-      case 'run': {
-        const key = requireWorkflow(args)
-        // The tool runs inside a session, so it can name it without a flag.
-        const sessionId = typeof exec?.agent?.session?.id === 'string' ? exec.agent.session.id : null
-        const started = await service.startRun({ cwd, key, inputs: args.input ?? {}, sessionId })
-        const revision = started.resolved.revision === null || started.resolved.revision === undefined ? 'latest' : `r${started.resolved.revision}`
-        return [
-          `started ${started.runId} (${key}, ${started.resolved.source} ${revision}), status ${started.status ?? 'queued'}`,
-          'the run is owned by the HNFlow engine and continues without this session: report this one line and stop. Do not poll, wait, or answer its human tasks unless the user asks again.',
-        ].join('\n')
-      }
-      case 'status':
-        return formatRunStatus(await service.status(requireRunId(args)))
-      case 'cancel':
-        return JSON.stringify(await service.cancel(requireRunId(args)))
-      case 'resume': {
-        const resumed = await service.resume(requireRunId(args))
-        return `resumed ${resumed.runId} (status ${resumed.status ?? 'running'}); it continues without this session`
-      }
-      case 'events':
-        return formatTimeline(await service.events(requireRunId(args), 0))
-      case 'task_list':
-        return formatTasks((await service.tasks(requireRunId(args))).tasks)
-      case 'task_submit': {
-        const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
-        if (taskId.length === 0) return 'error task-id-required: pass task_id from action "task_list"'
-        const submitted = await service.submitTask({ taskId, payload: args.input ?? {}, revision: Number.isInteger(args.revision) ? args.revision : undefined })
-        return [
-          `submitted ${taskId}; run ${submitted.runId} continues (status ${submitted.status ?? 'running'})`,
-          'do not wait for it in this session: the HNFlow page reports progress.',
-        ].join('\n')
-      }
-      default:
-        return `error invalid-action: expected one of ${WORKFLOW_ACTIONS.join(', ')}`
     }
   }
 
   return defineTool({
     name: 'hnflow',
     description:
-      'Start and inspect HNFlow workflows referenced by this workspace. `run` names one workflow (alias or asset id from `list`, never guessed), derives the start-node `input` from the user request, and returns as soon as the engine accepts it — the run then continues without this session, so reply with its run id and stop. `status`/`events`/`task_list` answer a later question; `task_submit` answers a human task; nothing here polls.',
+      'Operate the workspace\'s HNFlow flows. `list_flows` lists them, `describe_flow` returns one definition, `run` starts one and returns immediately (never wait for it), `status`/`inbox` answer a later question, `cancel`/`resume` control a run. Publishing and deciding human gates/deliveries are human-only actions and are not available here.',
     parameters: {
-      action: { type: 'string', required: true, enum: WORKFLOW_ACTIONS, description: 'Operation to perform.' },
-      workflow: { type: 'string', description: 'Workflow alias or asset id; required by get and run.' },
-      run_id: { type: 'string', description: 'Run id returned by run; required by status, cancel, resume, events, and task_list.' },
-      input: { type: 'object', additionalProperties: true, description: 'Start-node port values for run, or the task fields for task_submit.' },
-      task_id: { type: 'string', description: 'Human task id from task_list; required by task_submit.' },
-      revision: { type: 'number', description: 'Task revision from task_list; rejects a stale submission when passed.' },
+      action: { type: 'string', required: true, enum: ACTIONS, description: 'Operation to perform.' },
+      flow: { type: 'string', description: 'Flow alias or id; required by describe_flow and run.' },
+      run_id: { type: 'string', description: 'Run id; required by status, cancel and resume.' },
+      input: { type: 'object', additionalProperties: true, description: 'Start input matching the flow input schema (run only).' },
     },
     output: {
       schema: { type: 'string' },
@@ -202,17 +132,32 @@ export function createWorkflowTool(options) {
 }
 
 /**
- * Require the workflow argument.
- * @param {Record<string, any>} args - tool arguments.
- * @returns {string} the workflow key.
+ * Compact run summary for the tool.
+ * @param {Record<string, any>} run - run record.
+ * @returns {Record<string, any>} summary.
  */
-function requireWorkflow(args) {
-  const key = typeof args.workflow === 'string' ? args.workflow.trim() : ''
+function runSummary(run) {
+  return {
+    runId: run.runId,
+    flowId: run.flowId,
+    flowName: run.flowName,
+    revision: run.revision,
+    status: run.status,
+    error: run.error,
+    nodes: Object.entries(run.nodes ?? {}).map(([id, state]) => ({ id, status: state.status, attempts: state.attempts, diagnostic: state.diagnostic })),
+    pending: (run.pending ?? []).filter((entry) => entry.decision === undefined && entry.delivery === undefined).length,
+  }
+}
+
+/**
+ * Require the flow argument.
+ * @param {Record<string, any>} args - tool arguments.
+ * @returns {string} key.
+ */
+function requireKey(args) {
+  const key = typeof args.flow === 'string' ? args.flow.trim() : ''
   if (key.length === 0) {
-    /** @type {Error & {code?: string}} */
-    const error = new Error('workflow is required: pass the alias or asset id from action "list"')
-    error.code = 'workflow-required'
-    throw error
+    throw Object.assign(new Error('flow is required: pass the alias or id from action "list_flows"'), { code: 'flow-required' })
   }
   return key
 }
@@ -220,15 +165,10 @@ function requireWorkflow(args) {
 /**
  * Require the run id argument.
  * @param {Record<string, any>} args - tool arguments.
- * @returns {string} the run id.
+ * @returns {string} run id.
  */
 function requireRunId(args) {
   const runId = typeof args.run_id === 'string' ? args.run_id.trim() : ''
-  if (runId.length === 0) {
-    /** @type {Error & {code?: string}} */
-    const error = new Error('run_id is required')
-    error.code = 'run-id-required'
-    throw error
-  }
+  if (runId.length === 0) throw Object.assign(new Error('run_id is required'), { code: 'run-id-required' })
   return runId
 }

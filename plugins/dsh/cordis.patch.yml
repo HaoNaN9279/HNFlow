@@ -3,65 +3,61 @@
 # This patch only INSERTS rows: the shipped presets (standard / minimal / ptc)
 # and the VibeStack mode keep their own rows untouched. Everything HNFlow
 # specific lives inside the `hnflow` agent preset, which becomes a new
-# selectable mode.
+# selectable mode, plus one root service row the page needs even when no HNFlow
+# session is open.
 #
 # The preset's child list mirrors
 # `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` (DSH 0.2.1-rc.5).
 # Presets have no inheritance, so this list is the anchor to revisit when the
 # DSH minor version changes.
 #
-# Two ownership rules make this safe to install next to `dsh-vibestack`:
+# Ownership rules:
 #
 # - `dsh-vibestack`'s own preset row is untouched; the `vibestack` row below
-#   mounts the same plugin inside THIS preset, which is how the HNFlow mode gets
-#   capability groups as well as workflows.
+#   mounts the same plugin inside THIS preset. HNFlow depends on VibeStack for
+#   capability groups and model layers; without it the mode is degraded.
 # - `dsh-tool-workflow` already owns the `workflow` tool name, so the HNFlow
 #   tool is called `hnflow`.
 
 - insert:
-    # Root row: the browser bundle plus the resident `/hnflow` command.
-    #
-    # It is a second host instance of the same package with `role: viewer`, so
-    # `/hnflow ui …` (page data) and the library commands exist in EVERY session
-    # and the page never depends on an HNFlow-mode session being open. The viewer
-    # registers no tools, starts no engine, and cannot start a run: it reads the
-    # engine's state files, which keeps it away from the checkpoint database the
-    # mode row owns.
+    # Root row: `ctx.hnflow` (the orchestrator) and the page's Fetch routes.
+    # It owns no session behaviour, so the page works without an HNFlow session.
+    - id: hnflow-core
+      name: dsh-hnflow
+      config:
+        role: core
+
+    # Client half. It registers the sidebar page, the session tab, the right
+    # sidebar page and the notice; it renders nothing outside its own surfaces.
     - id: hnflow-ui
       name: dsh-hnflow
       config:
-        role: viewer
+        role: ui
+        host: false
 
     - id: preset-hnflow
       name: '@deepseek-ai/dsh-agent-preset'
       config:
         id: hnflow
         name: HNFlow
-        description: 能力组 + HNFlow 确定性工作流（资产引用 / 工作区覆盖 / 人工节点）
+        description: 能力组 + HNFlow 约束式流程（节点契约 / 门禁 / 人工交付 / 独立验收）
         order: 10
         plugins:
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
               prefix: You are a VibeStack agent powered by the {{model}} model.
-          # Host half of the VibeStack plugin: capability groups (rules, skills,
-          # commands, MCP, agent persona) for the session, exactly as in the
-          # `vibestack` mode. Remove this row for a workflows-only mode.
+          # Capability groups (rules, skills, commands, MCP, agent persona) for
+          # the session. Remove this row for a flows-only mode; HNFlow itself
+          # only needs `ctx.vibestack` (the core row) for model layers.
           - id: vibestack
             name: dsh-vibestack
-          # Host half of this bundle: the `hnflow` tools, `/workflow` (a workflow
-          # reference plus your prompt, handed to the model), and the workflow
-          # index section. The model entry routes AI nodes through the harness
-          # (`ctx.llm`), so no provider credential lives in HNFlow.
+          # Host half of this bundle: the `hnflow` / `hnflow_author` tools,
+          # `/hnflow`, the `hnflow-flows` skill and the flow index section.
           - id: hnflow
             name: dsh-hnflow
             config:
-              models:
-                - name: dsh-default
-                  use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel
-                  model: deepseek-flash
-                  provider: deepseek-account
-                  context_window: 128000
+              role: preset
           - id: agent-instructions
             name: '@deepseek-ai/dsh-agent-instructions'
             config:

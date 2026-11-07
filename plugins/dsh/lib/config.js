@@ -6,43 +6,37 @@
  * the default instead of failing the mode.
  */
 
+/** Plugin version recorded in every lockfile. */
+export const PLUGIN_VERSION = '0.3.0'
+
 export const DEFAULT_CONFIG = Object.freeze({
   /** `false` turns this row into the client-only UI row. */
   host: true,
-  /** Workflow asset root; empty means `$DSH_HOME/hnflow/library`. */
+  /** `core` owns the service and routes; `preset` owns the session tools; `ui` owns only the bundle. */
+  role: 'preset',
+  /** Flow asset root; empty means `$DSH_HOME/hnflow/library`. */
   libraryRoot: '',
   /** Workspace-relative directory holding refs and overrides. */
   workspaceDir: '.hnflow',
-  /** Python interpreter that runs the engine; empty means auto-discovery. */
-  enginePython: '',
-  /** Engine entry module, imported with `-m`. */
-  engineModule: 'deerflow.workflow.rpc',
-  /** Working directory for the engine process; empty means auto-discovery. */
-  engineCwd: '',
-  /** Engine state directory (checkpoints + run/task records); empty means `$DSH_HOME/hnflow/state`. */
+  /** Degraded file store root; empty means `$DSH_HOME/hnflow/state`. */
   stateDir: '',
-  /** Upper bound for one engine request. */
-  requestTimeoutMs: 120000,
-  /** Upper bound for the stdio handshake. */
-  startupTimeoutMs: 20000,
-  /** Number of workflow names injected into the system prompt. */
+  /** Presets a node may name in `preset`. */
+  presetAllowlist: ['hnflow', 'standard'],
+  /** Nodes advanced concurrently inside one run (never above the host's activation cap). */
+  maxParallel: 3,
+  /** Default attempt budget for an agent/judge node without `budget.maxAttempts`. */
+  maxAttempts: 2,
+  /** Default per-node timeout. */
+  nodeTimeoutMs: 900000,
+  /** Flow names injected into the system prompt. */
   maxIndexEntries: 20,
-  /**
-   * `all` registers tools and the `/workflow` family (the mode row);
-   * `viewer` registers only `/hnflow ui` and reads state files (the global row
-   * that keeps the page alive without any HNFlow session).
-   */
-  role: 'all',
-  /**
-   * Model catalog the engine installs for AI nodes (HNFlow `models[]` entries:
-   * `name`, `use`, `model`, `api_base`, `api_key`, …). Empty means the engine
-   * falls back to its own `config.yaml`, and AI nodes fail loud when that is empty too.
-   */
-  models: [],
+  /** Use the DSH storage domain when it is mounted; `false` forces the file store. */
+  storage: true,
 })
 
-/** Keys whose value is a list of JSON objects rather than a scalar. */
-const OBJECT_LISTS = new Set(['models'])
+/** Keys whose value is a list of strings rather than a scalar. */
+const STRING_LISTS = new Set(['presetAllowlist'])
+const ROLES = new Set(['core', 'preset', 'ui'])
 
 /**
  * Coerce a raw row config into the plugin's shape.
@@ -52,12 +46,15 @@ const OBJECT_LISTS = new Set(['models'])
 export function resolveConfig(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}
   /** @type {Record<string, unknown>} */
-  const config = { ...DEFAULT_CONFIG }
+  const config = { ...DEFAULT_CONFIG, presetAllowlist: [...DEFAULT_CONFIG.presetAllowlist] }
   for (const [key, fallback] of Object.entries(DEFAULT_CONFIG)) {
     const value = source[key]
     if (value === undefined || value === null) continue
-    if (OBJECT_LISTS.has(key)) {
-      if (Array.isArray(value)) config[key] = value.filter((entry) => entry !== null && typeof entry === 'object' && !Array.isArray(entry))
+    if (STRING_LISTS.has(key)) {
+      if (Array.isArray(value)) {
+        const list = value.filter((entry) => typeof entry === 'string' && entry.trim().length > 0).map((entry) => entry.trim())
+        if (list.length > 0) config[key] = list
+      }
       continue
     }
     if (typeof fallback === 'boolean') {
@@ -68,7 +65,12 @@ export function resolveConfig(raw) {
       if (Number.isFinite(value) && value > 0) config[key] = Math.floor(value)
       continue
     }
-    if (typeof value === 'string') config[key] = value.trim()
+    if (typeof value === 'string') {
+      if (key === 'role' && !ROLES.has(value)) continue
+      config[key] = value.trim()
+    }
   }
+  if (!ROLES.has(config.role)) config.role = DEFAULT_CONFIG.role
+  if (config.maxParallel < 1) config.maxParallel = DEFAULT_CONFIG.maxParallel
   return config
 }

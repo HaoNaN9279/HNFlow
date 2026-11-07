@@ -2,19 +2,19 @@
  * Workspace state: refs and overrides.
  *
  * A workspace never copies an asset to use it. It records a reference
- * (`workflows.json`) and, when the project needs different behaviour, a full
+ * (`flows.json`) and, when the project needs different behaviour, a full
  * override copy. Deleting the override restores the asset revision — see
- * `docs/dsh-plugin-plan.md` §4.2, §4.3.
+ * `docs/dsh-plugin-plan-v2.md` §8.1.
  */
 
-import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
+import { readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
 import { readJsonOrNull, writeJson } from './assets.js'
 import { ASSET_SUFFIX, overridePath, overridesDir, refsPath } from './paths.js'
 
 /** Ref manifest version written by this plugin. */
-export const REFS_VERSION = 1
+export const REFS_VERSION = 2
 /** Overrides keep a bounded change history. */
 export const MAX_CHANGE_LOG = 20
 
@@ -59,8 +59,8 @@ export class WorkspaceStore {
   async readRefs() {
     const raw = await readJsonOrNull(refsPath(this.cwd, this.config))
     if (raw === null) return { version: REFS_VERSION, refs: [] }
-    if (!Array.isArray(raw?.refs)) throw new WorkspaceError('ref-manifest-invalid', 'workflows.json has no refs array')
-    return { version: Number(raw.version ?? REFS_VERSION), refs: raw.refs.filter((entry) => entry && typeof entry.assetId === 'string') }
+    if (!Array.isArray(raw?.refs)) throw new WorkspaceError('ref-manifest-invalid', 'flows.json has no refs array')
+    return { version: Number(raw.version ?? REFS_VERSION), refs: raw.refs.filter((entry) => entry && typeof entry.flowId === 'string') }
   }
 
   /**
@@ -74,24 +74,24 @@ export class WorkspaceStore {
 
   /**
    * Add (or refresh) a reference.
-   * @param {{assetId: string, alias?: string, revision?: number|null, enabled?: boolean}} input - reference to add.
+   * @param {{flowId: string, alias?: string, revision?: number|null, enabled?: boolean}} input - reference to add.
    * @returns {Promise<Record<string, any>>} the stored ref.
    */
   async addRef(input) {
     const document = await this.readRefs()
-    const assetId = String(input.assetId ?? '').trim()
-    if (assetId.length === 0) throw new WorkspaceError('ref-invalid', 'assetId must not be empty')
+    const flowId = String(input.flowId ?? '').trim()
+    if (flowId.length === 0) throw new WorkspaceError('ref-invalid', 'flowId must not be empty')
     const alias = String(input.alias ?? '').trim()
-    const clash = document.refs.find((ref) => ref.assetId === assetId || (alias.length > 0 && ref.alias === alias))
+    const clash = document.refs.find((ref) => ref.flowId === flowId || (alias.length > 0 && ref.alias === alias))
     if (clash !== undefined) {
-      throw new WorkspaceError('ref-duplicate', `workflow already referenced as ${clash.alias || clash.assetId}`, {
-        assetId: clash.assetId,
+      throw new WorkspaceError('ref-duplicate', `flow already referenced as ${clash.alias || clash.flowId}`, {
+        flowId: clash.flowId,
         alias: clash.alias ?? '',
       })
     }
     /** @type {Record<string, any>} */
     const ref = {
-      assetId,
+      flowId,
       revision: Number.isInteger(input.revision) ? input.revision : null,
       alias,
       enabled: input.enabled !== false,
@@ -103,13 +103,13 @@ export class WorkspaceStore {
   }
 
   /**
-   * Remove a reference by alias or asset id.
-   * @param {string} key - alias or asset id.
+   * Remove a reference by alias or flow id.
+   * @param {string} key - alias or flow id.
    * @returns {Promise<Record<string, any>>} the removed ref.
    */
   async removeRef(key) {
     const document = await this.readRefs()
-    const index = document.refs.findIndex((ref) => ref.assetId === key || ref.alias === key)
+    const index = document.refs.findIndex((ref) => ref.flowId === key || ref.alias === key)
     if (index < 0) throw new WorkspaceError('ref-missing', `no reference named ${key}`, { key })
     const [removed] = document.refs.splice(index, 1)
     await this.writeRefs(document)
@@ -117,24 +117,24 @@ export class WorkspaceStore {
   }
 
   /**
-   * Find a reference by alias or asset id.
-   * @param {string} key - alias or asset id.
+   * Find a reference by alias or flow id.
+   * @param {string} key - alias or flow id.
    * @returns {Promise<Record<string, any> | null>} the ref, or null.
    */
   async findRef(key) {
     const document = await this.readRefs()
-    return document.refs.find((ref) => ref.assetId === key || (typeof ref.alias === 'string' && ref.alias === key)) ?? null
+    return document.refs.find((ref) => ref.flowId === key || (typeof ref.alias === 'string' && ref.alias === key)) ?? null
   }
 
   /**
    * Change a reference's pin without touching any other field.
-   * @param {string} key - alias or asset id.
+   * @param {string} key - alias or flow id.
    * @param {{revision: number|null, alias?: string}} change - new pin (`null` follows latest).
    * @returns {Promise<Record<string, any>>} the updated ref.
    */
   async updateRef(key, change) {
     const document = await this.readRefs()
-    const ref = document.refs.find((entry) => entry.assetId === key || entry.alias === key)
+    const ref = document.refs.find((entry) => entry.flowId === key || entry.alias === key)
     if (ref === undefined) throw new WorkspaceError('ref-missing', `no reference named ${key}`, { key })
     if (change.revision === null) ref.revision = null
     else if (Number.isInteger(change.revision)) ref.revision = change.revision
@@ -148,32 +148,33 @@ export class WorkspaceStore {
   // ── overrides ───────────────────────────────────────────────────────────
 
   /**
-   * Read the override for an asset.
-   * @param {string} assetId - asset identity.
+   * Read the override for a flow.
+   * @param {string} flowId - flow identity.
    * @returns {Promise<Record<string, any> | null>} override document or null.
    */
-  async readOverride(assetId) {
-    return readJsonOrNull(overridePath(this.cwd, assetId, this.config))
+  async readOverride(flowId) {
+    return readJsonOrNull(overridePath(this.cwd, flowId, this.config))
   }
 
   /**
    * Write (or replace) an override.
    *
    * Every write appends to a bounded change log; the asset itself is untouched.
-   * @param {{assetId: string, definition: Record<string, any>, baseRevision: number, note?: string, origin?: 'agent'|'user', updatedBy?: string}} input - override content.
+   * @param {{flowId: string, definition: Record<string, any>, baseRevision: number, note?: string, origin?: 'agent'|'user', updatedBy?: string}} input - override content.
    * @returns {Promise<Record<string, any>>} the stored override.
    */
   async writeOverride(input) {
-    const assetId = String(input.assetId ?? '').trim()
-    if (assetId.length === 0) throw new WorkspaceError('override-invalid', 'assetId must not be empty')
-    const previous = await this.readOverride(assetId)
+    const flowId = String(input.flowId ?? '').trim()
+    if (flowId.length === 0) throw new WorkspaceError('override-invalid', 'flowId must not be empty')
+    const previous = await this.readOverride(flowId)
     const now = new Date().toISOString()
     const changeLog = Array.isArray(previous?.changeLog) ? [...previous.changeLog] : []
     const note = String(input.note ?? '').trim()
     if (note.length > 0) changeLog.push({ at: now, by: input.updatedBy ?? input.origin ?? 'user', summary: note.slice(0, 500) })
     /** @type {Record<string, any>} */
     const document = {
-      assetId,
+      flowId,
+      assetId: flowId,
       baseRevision: Number.isInteger(input.baseRevision) ? input.baseRevision : Number(previous?.baseRevision ?? 1),
       origin: input.origin === 'agent' ? 'agent' : 'user',
       note,
@@ -182,18 +183,18 @@ export class WorkspaceStore {
       changeLog: changeLog.slice(-MAX_CHANGE_LOG),
       definition: input.definition,
     }
-    await writeJson(overridePath(this.cwd, assetId, this.config), document)
+    await writeJson(overridePath(this.cwd, flowId, this.config), document)
     return document
   }
 
   /**
    * Delete the override, restoring the asset revision.
-   * @param {string} assetId - asset identity.
+   * @param {string} flowId - flow identity.
    * @returns {Promise<boolean>} true when a file was removed.
    */
-  async removeOverride(assetId) {
+  async removeOverride(flowId) {
     try {
-      await rm(overridePath(this.cwd, assetId, this.config))
+      await rm(overridePath(this.cwd, flowId, this.config))
       return true
     } catch (error) {
       if (error?.code === 'ENOENT') return false
@@ -203,7 +204,7 @@ export class WorkspaceStore {
 
   /**
    * Every override in this workspace.
-   * @returns {Promise<Map<string, Record<string, any>>>} asset id → override document.
+   * @returns {Promise<Map<string, Record<string, any>>>} flow id → override document.
    */
   async listOverrides() {
     const dir = overridesDir(this.cwd, this.config)
@@ -221,21 +222,11 @@ export class WorkspaceStore {
       if (!entry.isFile() || !entry.name.endsWith(ASSET_SUFFIX)) continue
       try {
         const parsed = JSON.parse(await readFile(path.join(dir, entry.name), 'utf8'))
-        if (typeof parsed?.assetId === 'string') found.set(parsed.assetId, parsed)
+        if (typeof parsed?.flowId === 'string') found.set(parsed.flowId, parsed)
       } catch (error) {
         this.logger.warn?.('hnflow: ignoring unreadable override %s: %o', entry.name, error)
       }
     }
     return found
   }
-}
-
-/**
- * Ensure the workspace state directory exists.
- * @param {string} cwd - workspace root.
- * @param {{workspaceDir?: string}} config - plugin config.
- * @returns {Promise<void>} resolves once the directory exists.
- */
-export async function ensureWorkspaceState(cwd, config) {
-  await mkdir(path.join(path.resolve(cwd), config?.workspaceDir ?? '.hnflow'), { recursive: true })
 }

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "flow": {
+    "id": "fl-demo-smoke",
+    "name": "冒烟流程",
+    "description": "一个 agent 节点 + 一个门禁：验证启动、信封、门禁裁决与终态",
+    "tags": ["demo"]
+  },
+  "input": {
+    "type": "object",
+    "required": ["brief"],
+    "properties": { "brief": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "nodes": [
+    {
+      "id": "draft",
+      "type": "agent",
+      "preset": "hnflow",
+      "instruction": "根据这段说明写三条要点：{{input.brief}}",
+      "input": {
+        "type": "object",
+        "properties": { "brief": { "type": "string" } }
+      },
+      "output": {
+        "type": "object",
+        "required": ["points"],
+        "properties": { "points": { "type": "array", "items": { "type": "string" } } },
+        "additionalProperties": false
+      },
+      "budget": { "maxAttempts": 2, "timeoutMs": 600000 }
+    },
+    {
+      "id": "approve",
+      "type": "gate",
+      "title": "确认要点",
+      "detail": "批准后流程完成；拒绝会让本次运行失败并记录理由。",
+      "options": ["需要重写"]
+    }
+  ],
+  "edges": [
+    { "id": "e1", "from": "draft", "to": "approve", "when": { "kind": "status", "is": "done" } }
+  ]
+}

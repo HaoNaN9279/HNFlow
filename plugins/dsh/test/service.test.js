@@ -1,327 +1,336 @@
 /**
- * The service facade: what a run freezes, and what stays workspace-local.
+ * Orchestrator behaviour, exercised with fake seams:
+ * runs, envelopes, gates, deliveries, retries, cancellation and restart.
  */
 
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
-import os from 'node:os'
-import path from 'node:path'
 import test from 'node:test'
+import { rm } from 'node:fs/promises'
 
-import { HnflowService } from '../lib/service.js'
+import { deliveryFlow, fakeRunner, gateFlow, makeService, memoryStore, seedWorkspace } from './helpers.js'
 
-/** A minimal start 鈫?assign 鈫?end definition. */
-function definition(value) {
-  return {
-    id: 'hello-workflow',
-    name: 'Hello workflow',
-    version: '0.1.0',
-    nodes: [
-      { id: 'start', type: 'flow:start', outputs: [{ name: 'out', type: 'data' }] },
-      { id: 'greet', type: 'data:assign', inputs: [{ name: 'in', type: 'data' }], outputs: [{ name: 'out', type: 'data' }], params: { value } },
-      { id: 'end', type: 'flow:end', inputs: [{ name: 'in', type: 'data' }] },
-    ],
-    edges: [
-      { source: 'start', source_port: 'out', target: 'greet', target_port: 'in' },
-      { source: 'greet', source_port: 'out', target: 'end', target_port: 'in' },
-    ],
-  }
+/**
+ * Start a run and wait for it to settle.
+ * @param {Record<string, any>} service - orchestrator.
+ * @param {string} cwd - workspace.
+ * @param {Record<string, any>} [input] - run input.
+ * @returns {Promise<Record<string, any>>} settled run.
+ */
+async function startAndWait(service, cwd, input = { brief: 'hi' }) {
+  const started = await service.run({ cwd, key: 'demo', input })
+  return started.settled
 }
 
 /**
- * A service with an isolated library and a scripted engine.
- * @param {string[]} calls - collects `run/start` payloads.
- * @returns {Promise<{service: HnflowService, cwd: string}>} fixture.
+ * Build a service over a seeded workspace.
+ * @param {Record<string, any>} definition - flow.
+ * @param {{script?: Record<string, any[]>, vibestack?: Record<string, any> | null}} [options] - seams.
+ * @returns {Promise<{service: Record<string, any>, seeded: Record<string, any>}>} service and paths.
  */
-async function makeService(calls = []) {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'hnflow-service-'))
-  const engine = {
-    ensureStarted: async () => ({ protocolVersion: 1 }),
-    request: async (method, params) => {
-      calls.push({ method, params })
-      if (method === 'run/start') return { runId: 'run-1', status: 'queued', startedAt: 'now' }
-      if (method === 'run/status') return { runId: 'run-1', status: 'succeeded', result: { in: 'ok' }, nodes: [], error: null }
-      if (method === 'run/cancel') return { runId: 'run-1', status: 'running', cancelled: true }
-      if (method === 'workflow/validate') return { valid: true, errors: [] }
-      return {}
-    },
-    stop: () => {},
-  }
-  const service = new HnflowService({ config: { libraryRoot: path.join(root, 'library') }, engine })
-  const cwd = path.join(root, 'workspace')
-  await mkdir(cwd, { recursive: true })
-  return { service, cwd }
+async function setup(definition, options = {}) {
+  const seeded = await seedWorkspace(definition)
+  const service = await makeService({
+    script: options.script ?? {},
+    config: { libraryRoot: seeded.library },
+    vibestack: options.vibestack,
+    runner: options.runner,
+  })
+  return { service, seeded }
 }
 
-test('a run freezes the resolved definition and its provenance', async () => {
-  const calls = []
-  const { service, cwd } = await makeService(calls)
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  await stores.workspace.writeOverride({ assetId: created.asset.id, definition: definition('override'), baseRevision: 1, origin: 'agent' })
+test('an agent node hands off to a gate, and approval succeeds the run', async () => {
+  const { service, seeded } = await setup(gateFlow(), { script: { draft: [{ status: 'done', output: { points: ['a', 'b'] } }] } })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.status, 'waiting_human')
+    assert.equal(run.nodes.draft.status, 'done')
+    assert.deepEqual(run.nodes.draft.output, { points: ['a', 'b'] })
+    const inbox = await service.inbox()
+    assert.equal(inbox.length, 1)
+    assert.equal(inbox[0].kind, 'gate')
 
-  const started = await service.startRun({ cwd, key: 'hello', inputs: { target: 'staging' } })
-
-  assert.equal(started.runId, 'run-1')
-  assert.equal(started.resolved.source, 'override')
-  const runStart = calls.find((call) => call.method === 'run/start')
-  assert.equal(runStart.params.definition.nodes[1].params.value, 'override')
-  assert.deepEqual(runStart.params.inputs, { target: 'staging' })
-  assert.equal(runStart.params.metadata.workflowSource, 'override')
-  assert.equal(runStart.params.metadata.workspace, cwd)
-  assert.equal(service.runs.get('run-1').key, 'hello')
-})
-
-test('writing an override never touches the asset', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-
-  const override = await service.writeOverride({ cwd, key: 'hello', definition: definition('local'), note: '本项目用途', origin: 'agent' })
-
-  assert.equal(override.baseRevision, 1)
-  assert.equal(override.origin, 'agent')
-  assert.equal((await stores.assets.read(created.asset.id)).asset.revision, 1)
-  assert.equal((await stores.assets.read(created.asset.id)).definition.nodes[1].params.value, 'asset')
-  assert.equal((await service.resolve(cwd, 'hello')).definition.nodes[1].params.value, 'local')
-})
-
-test('resetting an override restores the asset revision', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  await service.writeOverride({ cwd, key: 'hello', definition: definition('local') })
-
-  const reset = await service.resetOverride({ cwd, key: 'hello' })
-
-  assert.equal(reset.removed, true)
-  assert.equal((await service.resolve(cwd, 'hello')).definition.nodes[1].params.value, 'asset')
-})
-
-test('the prompt index lists refs and marks overrides', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset'), description: 'demo' })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-
-  const section = await service.indexSection(cwd)
-  assert.match(section, /Starting a run is the whole job of this session/u)
-  assert.match(section, /<hnflow_workflow name=/u)
-  assert.match(section, /- hello — demo/u)
-  assert.equal(await service.indexSection(path.join(cwd, 'empty')), '')
-})
-
-test('saving an asset bumps its revision and leaves refs pinned', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  const override = await service.writeOverride({ cwd, key: 'hello', definition: definition('local'), note: '本项目用途', origin: 'agent' })
-
-  const saved = await service.saveAsset({ cwd, key: 'hello', note: 'back to the asset' })
-
-  assert.equal(saved.previousRevision, 1)
-  assert.equal(saved.revision, 2)
-  assert.equal((await stores.assets.read(created.asset.id)).definition.nodes[1].params.value, 'local')
-  // The ref still pins r1, so this workspace keeps running what it ran before.
-  assert.equal((await service.resolve(cwd, 'hello')).definition.nodes[1].params.value, 'local')
-  assert.equal((await stores.assets.readRevision(created.asset.id, 1)).nodes[1].params.value, 'asset')
-})
-
-test('an asset cannot be saved without a workspace override', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-
-  await assert.rejects(service.saveAsset({ cwd, key: 'hello' }), (error) => error.code === 'nothing-to-save')
-})
-
-test('validation and schema go to the engine', async () => {
-  const calls = []
-  const { service } = await makeService(calls)
-  service.engine = {
-    ensureStarted: async () => ({}),
-    stop: () => {},
-    request: async (method, params) => {
-      calls.push({ method, params })
-      if (method === 'workflow/validate') return { valid: true, errors: [] }
-      return { nodeTypes: [], portTypes: [] }
-    },
-  }
-
-  assert.deepEqual(await service.validateDefinition({ id: 'w' }), { valid: true, errors: [] })
-  assert.deepEqual(await service.schema(), { nodeTypes: [], portTypes: [] })
-  assert.equal(calls[0].method, 'workflow/validate')
-  assert.equal(calls[1].method, 'workflow/describe')
-})
-
-test('a new asset starts as a runnable start → end scaffold', async () => {
-  const { service, cwd } = await makeService()
-  const created = await service.createAsset({ cwd, name: 'Release flow' })
-
-  assert.equal(created.name, 'Release flow')
-  assert.equal(created.revision, 1)
-  const stores = service.storesFor(cwd)
-  const stored = await stores.assets.read(created.assetId)
-  assert.deepEqual(
-    stored.definition.nodes.map((node) => node.type),
-    ['flow:start', 'flow:end'],
-  )
-  assert.equal(stored.definition.id, 'release-flow')
-
-  await stores.workspace.addRef({ assetId: created.assetId, alias: 'release', revision: 1 })
-  assert.equal((await service.resolve(cwd, 'release')).definition.id, 'release-flow')
-})
-
-test('import accepts the asset, engine, and bare shapes', async () => {
-  const { service, cwd } = await makeService()
-  const shapes = {
-    'asset.workflow.json': { asset: { id: 'wf-x' }, definition: definition('from-asset') },
-    'engine.workflow.json': { schema_version: 1, workflow: definition('from-engine') },
-    'bare.workflow.json': definition('from-bare'),
-  }
-  for (const [name, body] of Object.entries(shapes)) {
-    await writeFile(path.join(cwd, name), JSON.stringify(body), 'utf8')
-  }
-
-  for (const [name, expected] of [
-    ['asset.workflow.json', 'from-asset'],
-    ['engine.workflow.json', 'from-engine'],
-    ['bare.workflow.json', 'from-bare'],
-  ]) {
-    const imported = await service.importAsset({ cwd, path: name })
-    const stored = await service.storesFor(cwd).assets.read(imported.assetId)
-    assert.equal(stored.definition.nodes[1].params.value, expected)
+    const decided = await service.decide({ runId: run.runId, gateId: inbox[0].id, decision: 'approved', revision: inbox[0].revision })
+    const settled = await decided.settled
+    assert.equal(settled.status, 'succeeded')
+    assert.equal(settled.nodes.approve.status, 'done')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
   }
 })
 
-test('import failures are coded, not thrown raw', async () => {
-  const { service, cwd } = await makeService()
-  await writeFile(path.join(cwd, 'junk.json'), '{"nope": true}', 'utf8')
-
-  await assert.rejects(service.importAsset({ cwd, path: 'junk.json' }), (error) => error.code === 'import-invalid')
-  await assert.rejects(service.importAsset({ cwd, path: 'missing.json' }), (error) => error.code === 'import-unreadable')
-})
-
-test('an asset cannot be deleted while this workspace references it', async () => {
-  const { service, cwd } = await makeService()
-  const created = await service.createAsset({ cwd, name: 'Keep me' })
-  const stores = service.storesFor(cwd)
-  await stores.workspace.addRef({ assetId: created.assetId, alias: 'keep', revision: 1 })
-
-  await assert.rejects(service.deleteAsset({ cwd, assetId: created.assetId }), (error) => error.code === 'asset-in-use')
-
-  await stores.workspace.removeRef('keep')
-  const removed = await service.deleteAsset({ cwd, assetId: created.assetId })
-  assert.equal(removed.assetId, created.assetId)
-  assert.deepEqual(await stores.assets.list(), [])
-})
-
-test('repin moves a ref onto the saved revision', async () => {
-  const { service, cwd } = await makeService()
-  const created = await service.createAsset({ cwd, name: 'Release' })
-  const stores = service.storesFor(cwd)
-  await stores.workspace.addRef({ assetId: created.assetId, alias: 'release', revision: 1 })
-  await service.writeOverride({ cwd, key: 'release', definition: definition('local') })
-  await service.saveAsset({ cwd, key: 'release' })
-
-  const pinned = await service.repinRef({ cwd, key: 'release' })
-  assert.equal(pinned.revision, 2)
-  const after = await service.resolve(cwd, 'release')
-  // The override still wins, so behaviour stays the same until it is reset.
-  assert.equal(after.source, 'override')
-  await service.resetOverride({ cwd, key: 'release' })
-  assert.equal((await service.resolve(cwd, 'release')).definition.nodes[1].params.value, 'local')
-
-  const following = await service.repinRef({ cwd, key: 'release', revision: null })
-  assert.equal(following.revision, null)
-})
-
-test('editing one node writes an override and leaves the asset alone', async () => {
-  const calls = []
-  const { service, cwd } = await makeService(calls)
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-
-  const result = await service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: { value: 'edited' } })
-
-  assert.equal(result.nodeId, 'greet')
-  assert.equal((await stores.assets.read(created.asset.id)).definition.nodes[1].params.value, 'asset')
-  const override = await stores.workspace.readOverride(created.asset.id)
-  assert.equal(override.definition.nodes[1].params.value, 'edited')
-  assert.equal(override.origin, 'user')
-  assert.match(override.changeLog[0].summary, /panel: node greet/u)
-  assert.equal(calls.some((call) => call.method === 'workflow/validate'), true)
-})
-
-test('a rejected edit writes nothing', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-  const accepting = service.engine
-  service.engine = { ...accepting, request: async (method) => (method === 'workflow/validate' ? { valid: false, errors: ['bad params'] } : {}) }
-
-  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: { value: 'x' } }), (error) => error.code === 'definition-invalid')
-  assert.equal(await stores.workspace.readOverride(created.asset.id), null)
-})
-
-test('editing rejects an unknown node and non-object params', async () => {
-  const { service, cwd } = await makeService()
-  const stores = service.storesFor(cwd)
-  const created = await stores.assets.create({ name: 'Hello', definition: definition('asset') })
-  await stores.workspace.addRef({ assetId: created.asset.id, alias: 'hello', revision: 1 })
-
-  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'ghost', params: {} }), (error) => error.code === 'node-missing')
-  await assert.rejects(service.setNodeParams({ cwd, key: 'hello', nodeId: 'greet', params: [] }), (error) => error.code === 'params-invalid')
-})
-
-test('dispose stops the engine and clears caches', async () => {
-  let stopped = false
-  const { service, cwd } = await makeService()
-  service.engine = { stop: () => { stopped = true } }
-  service.storesFor(cwd)
-  service.dispose()
-
-  assert.equal(stopped, true)
-  assert.equal(service.engine, null)
-  assert.equal(service.storesByCwd.size, 0)
-})
-
-test('submitTask forwards the task id, payload, and optional revision', async () => {
-  const calls = []
-  const { service } = await makeService(calls)
-  const engine = {
-    ensureStarted: async () => ({}),
-    stop: () => {},
-    request: async (method, params) => {
-      calls.push({ method, params })
-      if (method === 'task/submit') return { taskId: params.taskId, runId: 'run-1', status: 'running', revision: 2 }
-      return {}
-    },
+test('rejecting a gate fails the run with an audit entry', async () => {
+  const { service, seeded } = await setup(gateFlow(), { script: { draft: [{ status: 'done', output: { points: [] } }] } })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    const [item] = await service.inbox()
+    const settled = await (await service.decide({ runId: run.runId, gateId: item.id, decision: 'rejected', reason: 'not good' })).settled
+    assert.equal(settled.status, 'failed')
+    assert.equal(settled.nodes.approve.status, 'failed')
+    assert.equal(settled.audit.length, 1)
+    assert.equal(settled.audit[0].decision.decision, 'rejected')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
   }
-  service.engine = engine
-
-  const submitted = await service.submitTask({ taskId: 'task-9', payload: { note: 'ok' } })
-  await service.submitTask({ taskId: 'task-9', payload: { note: 'ok' }, revision: 2 })
-
-  assert.equal(submitted.status, 'running')
-  assert.deepEqual(calls[0], { method: 'task/submit', params: { taskId: 'task-9', payload: { note: 'ok' } } })
-  assert.equal(calls[1].params.revision, 2)
 })
 
-test('tasks asks the engine for one run', async () => {
-  const calls = []
-  const { service } = await makeService(calls)
-  service.engine = { stop: () => {}, request: async (method, params) => ({ method, params, tasks: [] }) }
+test('a contract-violating output fails loud without a retry', async () => {
+  const runner = fakeRunner({ draft: [{ status: 'done', output: { nope: true } }, { status: 'done', output: { nope: true } }] })
+  const { service, seeded } = await setup(gateFlow(), { runner })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.status, 'failed')
+    assert.equal(run.nodes.draft.diagnostic.code, 'contract-unsatisfied')
+    // A contract violation is deterministic: the node is not retried.
+    assert.equal(runner.calls.filter((call) => call.nodeId === 'draft').length, 1)
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
 
-  const result = await service.tasks('run-1')
+test('needs_human opens a request and the same node continues with the delivery', async () => {
+  const definition = {
+    schemaVersion: 2,
+    flow: { id: 'fl-human', name: '人工缺口' },
+    input: { type: 'object', properties: {} },
+    nodes: [
+      {
+        id: 'explore',
+        type: 'agent',
+        preset: 'hnflow',
+        allowHuman: true,
+        instruction: '看看需要什么',
+        output: { type: 'object', required: ['answer'], properties: { answer: { type: 'string' } }, additionalProperties: false },
+      },
+    ],
+    edges: [],
+  }
+  const script = {
+    explore: [
+      { status: 'needs_human', needsHuman: { reason: 'capability_gap', deliverable: { type: 'object', required: ['files'] }, whyHuman: '需要真实文件' } },
+      { status: 'done', output: { answer: 'ok' } },
+    ],
+  }
+  const { service, seeded } = await setup(definition, { script })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.status, 'waiting_human')
+    assert.equal(run.nodes.explore.status, 'waiting')
+    const [item] = await service.inbox()
+    assert.equal(item.kind, 'request')
+    assert.equal(item.gap.whyHuman, '需要真实文件')
 
-  assert.deepEqual(result.params, { runId: 'run-1' })
-  assert.deepEqual(result.tasks, [])
+    const settled = await (await service.deliver({ runId: run.runId, requestId: item.id, payload: { files: ['a'] }, revision: item.revision })).settled
+    assert.equal(settled.status, 'succeeded')
+    assert.equal(settled.nodes.explore.status, 'done')
+    assert.equal(run.pending[0].gap.reason, 'capability_gap')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('a needs_human report is refused unless the node allows it', async () => {
+  const { service, seeded } = await setup(gateFlow(), {
+    script: { draft: [{ status: 'needs_human', needsHuman: { reason: 'authority', deliverable: {}, whyHuman: 'x' } }] },
+  })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.status, 'failed')
+    assert.equal(run.nodes.draft.diagnostic.code, 'human-not-allowed')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('a delivery is verified before it can be consumed', async () => {
+  const { service, seeded } = await setup(deliveryFlow(), { script: { integrate: [{ status: 'done', output: { changes: ['a'] } }] } })
+  try {
+    const run = await startAndWait(service, seeded.workspace, {})
+    assert.equal(run.status, 'waiting_human')
+    const [item] = await service.inbox()
+    assert.equal(item.kind, 'request')
+
+    const rejected = service.deliver({ runId: run.runId, requestId: item.id, payload: { files: 'nope' }, revision: item.revision })
+    await assert.rejects(() => rejected, (error) => error.code === 'delivery-rejected')
+    assert.equal((await service.getRun(run.runId)).status, 'waiting_human')
+
+    const settled = await (await service.deliver({ runId: run.runId, requestId: item.id, payload: { files: ['a.png'] }, revision: item.revision })).settled
+    assert.equal(settled.status, 'succeeded')
+    assert.equal(settled.nodes.accept.status, 'done')
+    assert.equal(settled.nodes.integrate.status, 'done')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('a judge rejection returns the delivery to the human within the budget', async () => {
+  const definition = deliveryFlow()
+  definition.nodes[1].checks = ['schema', 'judge']
+  definition.nodes[1].judge = { preset: 'standard', criteria: '像样', model: 'strong' }
+  const runner = fakeRunner({
+    'accept:judge': [{ status: 'done', output: { verdict: 'reject', reasons: ['太糊'] } }, { status: 'done', output: { verdict: 'accept', reasons: ['可以'] } }],
+    integrate: [{ status: 'done', output: { changes: [] } }],
+  })
+  const { service, seeded } = await setup(definition, { runner })
+  try {
+    const run = await startAndWait(service, seeded.workspace, {})
+    const first = (await service.inbox())[0]
+    const returned = await (await service.deliver({ runId: run.runId, requestId: first.id, payload: { files: ['a.png'] }, revision: first.revision })).settled
+    assert.equal(returned.status, 'waiting_human')
+    assert.equal(returned.nodes.accept.diagnostic.code, 'judge-reject')
+
+    const second = (await service.inbox())[0]
+    assert.equal(second.id, first.id)
+    assert.equal(second.attempts, 1)
+    const settled = await (await service.deliver({ runId: run.runId, requestId: second.id, payload: { files: ['a.png'] }, revision: second.revision })).settled
+    assert.equal(settled.status, 'succeeded')
+    assert.equal(settled.nodes.accept.output.judged, true)
+    // The verify judge may pin its own layer, independent of the producer.
+    const judgeCall = runner.calls.find((call) => call.nodeId === 'accept:judge')
+    assert.deepEqual(judgeCall.agentOptions, { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' })
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('a run pins its revision, content hash and model route', async () => {
+  const definition = gateFlow()
+  definition.nodes[0].model = 'strong'
+  const runner = fakeRunner({ draft: [{ status: 'done', output: { points: [] } }] })
+  const { service, seeded } = await setup(definition, { runner })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.match(run.contentHash, /^sha256:/u)
+    assert.equal(run.revision, 1)
+    assert.deepEqual(run.routes.draft, { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' })
+    assert.deepEqual(runner.calls[0].agentOptions, { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' })
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('a missing model layer refuses the run instead of falling back', async () => {
+  const definition = gateFlow()
+  definition.nodes[0].model = 'missing'
+  const { service, seeded } = await setup(definition, {})
+  try {
+    await assert.rejects(() => service.run({ cwd: seeded.workspace, key: 'demo', input: { brief: 'x' } }), (error) => error.code === 'flow-invalid')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('without VibeStack, starting and publishing are refused but listing still works', async () => {
+  const { service, seeded } = await setup(gateFlow(), { vibestack: null })
+  try {
+    const flows = await service.listFlows(seeded.workspace)
+    assert.equal(flows.length, 1)
+    await assert.rejects(() => service.run({ cwd: seeded.workspace, key: 'demo' }), (error) => error.code === 'vibestack-unavailable')
+    await assert.rejects(() => service.publish({ cwd: seeded.workspace, key: 'demo' }), (error) => error.code === 'vibestack-unavailable')
+    const snapshot = await service.snapshot([{ path: seeded.workspace }])
+    assert.equal(snapshot.degraded, true)
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('cancel stops a waiting run and records the reason', async () => {
+  const { service, seeded } = await setup(gateFlow(), { script: { draft: [{ status: 'done', output: { points: [] } }] } })
+  try {
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.status, 'waiting_human')
+    await service.cancel(run.runId)
+    const after = await service.getRun(run.runId)
+    assert.equal(after.status, 'cancelled')
+    assert.equal(after.error.code, 'cancelled')
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('gate branches converge through a merge that tolerates the skipped side', async () => {
+  const definition = {
+    schemaVersion: 2,
+    flow: { id: 'fl-branch', name: '分支汇合' },
+    input: { type: 'object', properties: {} },
+    nodes: [
+      { id: 'draft', type: 'agent', preset: 'hnflow', instruction: 'draft', output: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } }, additionalProperties: false } },
+      { id: 'approve', type: 'gate', title: '确认' },
+      { id: 'integrate', type: 'agent', preset: 'hnflow', instruction: 'integrate', output: { type: 'object', required: ['changes'], properties: { changes: { type: 'array' } }, additionalProperties: false } },
+      { id: 'decline', type: 'agent', preset: 'hnflow', instruction: 'decline', output: { type: 'object', required: ['reason'], properties: { reason: { type: 'string' } }, additionalProperties: false } },
+      { id: 'collect', type: 'merge', from: ['integrate', 'decline'], output: { type: 'object', required: ['changes'], properties: { changes: { type: 'array' }, reason: { type: 'string' } }, additionalProperties: false } },
+    ],
+    edges: [
+      { id: 'e1', from: 'draft', to: 'approve', when: { kind: 'status', is: 'done' } },
+      { id: 'e2', from: 'approve', to: 'integrate', when: { kind: 'gate', is: 'approved' } },
+      { id: 'e3', from: 'approve', to: 'integrate', when: { kind: 'gate', is: 'modified' } },
+      { id: 'e4', from: 'approve', to: 'decline', when: { kind: 'gate', is: 'rejected' } },
+      { id: 'e5', from: 'integrate', to: 'collect', when: { kind: 'status', is: 'done' } },
+      { id: 'e6', from: 'decline', to: 'collect', when: { kind: 'status', is: 'done' } },
+    ],
+  }
+  const { service, seeded } = await setup(definition, {
+    script: { draft: [{ status: 'done', output: { ok: true } }], integrate: [{ status: 'done', output: { changes: ['x'] } }] },
+  })
+  try {
+    const run = await startAndWait(service, seeded.workspace, {})
+    assert.equal(run.status, 'waiting_human')
+    const [item] = await service.inbox()
+    const settled = await (await service.decide({ runId: run.runId, gateId: item.id, decision: 'approved', revision: item.revision })).settled
+    assert.equal(settled.status, 'succeeded')
+    assert.equal(settled.nodes.decline.status, 'skipped')
+    assert.deepEqual(settled.nodes.collect.output, { changes: ['x'] })
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('publishing advances the revision and freezes the lockfile', async () => {
+  const { service, seeded } = await setup(gateFlow(), {})
+  try {
+    const published = await service.publish({ cwd: seeded.workspace, key: 'demo', note: 'test' })
+    assert.equal(published.revision, 2)
+    assert.match(published.contentHash, /^sha256:/u)
+    const { AssetStore } = await import('../lib/assets.js')
+    const record = await new AssetStore(seeded.library).readRevisionRecord('fl-test', 2)
+    assert.equal(record.lockfile.revision, 2)
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
+test('open() marks runs left by a previous process as interrupted', async () => {
+  const store = memoryStore()
+  await store.putRun({
+    runId: 'run-stale',
+    flowId: 'fl-test',
+    flowName: 'x',
+    workspace: '/w',
+    status: 'running',
+    revision: 1,
+    nodes: { draft: { status: 'running', attempts: 1 } },
+    pending: [],
+    startedAt: new Date().toISOString(),
+  })
+  const service = await makeService({ store, config: {} })
+  try {
+    const run = await service.getRun('run-stale')
+    assert.equal(run.status, 'interrupted')
+    assert.equal(run.nodes.draft.status, 'interrupted')
+    assert.equal(run.error.code, 'interrupted')
+  } finally {
+    await service.close()
+  }
 })

@@ -1,73 +1,81 @@
 /**
- * The `hnflow_author` tool: inspect, validate, and edit a workflow — inside the
- * workspace only.
+ * The `hnflow_author` tool: schema, validation and drafting.
  *
- * Guardrail: this tool has no action that writes an asset. Changing what every
- * workspace runs next is a user decision, and the surfaces that can do it are the
- * person's own: `/hnflow save asset` (explicit, with a diff) or the HNFlow page.
+ * Deliberately missing: publish. A draft is a workspace override, which a run
+ * may read but which never advances an asset revision — only `publish` does,
+ * and it exists on the human command and page surfaces. I1 is therefore a
+ * physical property of this file, not a promise.
  */
 
-import { diffDocuments } from './json.js'
+import { definitionProblems } from './assets.js'
+import { EDGE_WHEN_KINDS, GATE_DECISIONS, NODE_TYPES } from './flow/definition.js'
 
-/** Actions the authoring tool accepts. */
-export const AUTHOR_ACTIONS = ['schema', 'validate', 'save_override']
-
-/**
- * Render the engine catalog as a compact reference.
- * @param {Record<string, any>} catalog - `workflow/describe` result.
- * @returns {string} model-facing text.
- */
-export function formatSchema(catalog) {
-  const nodes = Array.isArray(catalog.nodeTypes) ? catalog.nodeTypes : []
-  const byCategory = new Map()
-  for (const node of nodes) {
-    const category = String(node.category ?? 'other')
-    const list = byCategory.get(category) ?? []
-    list.push(node.description ? `${node.type} — ${node.description}` : node.type)
-    byCategory.set(category, list)
-  }
-  const sections = [...byCategory.entries()].map(([category, entries]) => `${category}:\n  ${entries.join('\n  ')}`)
-  const ports = Array.isArray(catalog.portTypes) ? catalog.portTypes.join(', ') : ''
-  return [`node types (${nodes.length}):`, ...sections, '', `port types: ${ports}`].join('\n')
-}
-
-/**
- * Render a validation result.
- * @param {{valid: boolean, errors: string[]}} result - validation result.
- * @returns {string} model-facing text.
- */
-export function formatValidation(result) {
-  if (result.valid) return 'definition is valid'
-  const errors = Array.isArray(result.errors) ? result.errors : []
-  return [`definition is invalid (${errors.length} problem(s)):`, ...errors.map((error) => `- ${error}`)].join('\n')
-}
-
-/**
- * Render the difference between two definitions.
- * @param {Record<string, any>} before - current definition.
- * @param {Record<string, any>} after - proposed definition.
- * @returns {string} summary lines.
- */
-export function formatDefinitionDiff(before, after) {
-  const changes = diffDocuments(before, after, { maxEntries: 20 })
-  if (changes.length === 0) return 'no structural difference'
-  return changes.map((change) => `- ${change.path}: ${JSON.stringify(change.from)} → ${JSON.stringify(change.to)}`).join('\n')
-}
+/** Shape reference returned by the `schema` action. */
+export const FLOW_SCHEMA_REFERENCE = Object.freeze({
+  schemaVersion: 2,
+  flow: { id: 'fl-…', name: '示例流程', description: '一句话说明', tags: ['demo'] },
+  input: { type: 'object', properties: { brief: { type: 'string' } }, required: ['brief'], additionalProperties: false },
+  nodes: [
+    {
+      id: 'concept',
+      type: 'agent',
+      preset: 'hnflow',
+      model: '可选：VibeStack 模型层 id',
+      instruction: '根据 {{input.brief}} 产出 3 个方向。',
+      input: { type: 'object', properties: { brief: { type: 'string' } } },
+      output: {
+        type: 'object',
+        required: ['directions'],
+        properties: { directions: { type: 'array', items: { type: 'object' } } },
+        additionalProperties: false,
+      },
+      budget: { maxAttempts: 2, timeoutMs: 900000 },
+    },
+    { id: 'review', type: 'gate', title: '人工评审', detail: '确认概念方向', options: ['通过', '重做'] },
+    {
+      id: 'art',
+      type: 'request',
+      deliverable: { type: 'object', required: ['files'], properties: { files: { type: 'array', items: { type: 'string' } } } },
+      whyHuman: '精修需要真实美术判断',
+      deadline: { hours: 72 },
+      onExpire: 'remind',
+    },
+    { id: 'accept', type: 'verify', against: 'art', checks: ['schema'], onReject: { kind: 'return', maxAttempts: 2 } },
+    {
+      id: 'integrate',
+      type: 'agent',
+      preset: 'hnflow',
+      instruction: '接入通过验收的交付物。',
+      output: { type: 'object', required: ['changes'], properties: { changes: { type: 'array' } } },
+    },
+  ],
+  edges: [
+    { id: 'e1', from: 'concept', to: 'review', when: { kind: 'status', is: 'done' } },
+    { id: 'e2', from: 'review', to: 'art', when: { kind: 'gate', is: 'approved' } },
+    { id: 'e3', from: 'review', to: 'concept', when: { kind: 'gate', is: 'modified' } },
+    { id: 'e4', from: 'art', to: 'accept', when: { kind: 'artifact.accepted', is: true } },
+    { id: 'e5', from: 'accept', to: 'integrate', when: { kind: 'status', is: 'done' } },
+  ],
+  notes: {
+    nodeTypes: NODE_TYPES,
+    edgeWhenKinds: EDGE_WHEN_KINDS,
+    gateDecisions: GATE_DECISIONS,
+    schemas: '只支持 type/properties/required/additionalProperties/items/enum/const/oneOf',
+    humanGap: 'agent 节点声明 allowHuman:true 时，子 Agent 可用 needs_human 上抛缺口，插件创建交付请求并继续同一节点',
+    publish: '不可由工具调用；由人经 /hnflow publish 或页面按钮完成',
+  },
+})
 
 /**
  * Build the `hnflow_author` tool definition.
- * @param {{
- *   defineTool: Function,
- *   service: import('./service.js').HnflowService,
- *   cwdOf: (agent: unknown) => string | null,
- * }} options - wiring.
- * @returns {Record<string, any>} the tool definition.
+ * @param {{defineTool: Function, service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
+ * @returns {Record<string, any>} tool definition.
  */
-export function createWorkflowAuthorTool(options) {
+export function createAuthorTool(options) {
   const { defineTool, service, cwdOf } = options
 
   /**
-   * Run one action.
+   * Dispatch one action.
    * @param {Record<string, any>} args - validated arguments.
    * @param {{agent?: unknown}} exec - execution context.
    * @returns {Promise<string>} model-facing text.
@@ -75,57 +83,46 @@ export function createWorkflowAuthorTool(options) {
   const execute = async (args, exec) => {
     const cwd = cwdOf(exec?.agent)
     try {
-      if (args.action === 'schema') return formatSchema(await service.schema())
-      if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-      return await run(args, cwd)
+      switch (args.action) {
+        case 'schema':
+          return JSON.stringify(FLOW_SCHEMA_REFERENCE, null, 2)
+        case 'validate': {
+          const definition = await resolveDefinition(service, args, cwd)
+          if (definition.error !== undefined) return `error ${definition.error}`
+          const problems = definitionProblems(definition.value)
+          if (problems.length > 0) {
+            return JSON.stringify({ ok: false, errors: problems.map((message) => ({ code: 'definition-invalid', message })) }, null, 2)
+          }
+          const result = await service.validate(definition.value)
+          return JSON.stringify(result, null, 2)
+        }
+        case 'draft': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = typeof args.flow === 'string' ? args.flow.trim() : ''
+          if (key.length === 0) return 'error flow-required: draft needs the flow alias or id from list_flows'
+          if (args.definition === null || typeof args.definition !== 'object') return 'error definition-required: pass the complete flow definition'
+          const problems = definitionProblems(args.definition)
+          if (problems.length > 0) return `error definition-invalid: ${problems.join('; ')}`
+          const result = await service.draft({ cwd, key, definition: args.definition, note: typeof args.note === 'string' ? args.note : 'agent draft' })
+          return JSON.stringify({ ok: true, ...result }, null, 2)
+        }
+        default:
+          return 'error invalid-action: expected schema, validate or draft'
+      }
     } catch (error) {
       return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
-    }
-  }
-
-  /**
-   * Dispatch one workspace action.
-   * @param {Record<string, any>} args - validated arguments.
-   * @param {string} cwd - workspace root.
-   * @returns {Promise<string>} model-facing text.
-   */
-  const run = async (args, cwd) => {
-    switch (args.action) {
-      case 'validate':
-        return formatValidation(await service.validateDefinition(requireDefinition(args)))
-      case 'save_override': {
-        const key = requireWorkflow(args)
-        const definition = requireDefinition(args)
-        const validation = await service.validateDefinition(definition)
-        if (!validation.valid) return `nothing written\n${formatValidation(validation)}`
-        const before = (await service.resolve(cwd, key)).definition
-        const stored = await service.writeOverride({
-          cwd,
-          key,
-          definition,
-          note: String(args.note ?? '').slice(0, 500),
-          origin: 'agent',
-        })
-        return [
-          `saved the workspace override for ${key} (asset ${stored.assetId}, base r${stored.baseRevision})`,
-          'the asset is unchanged; `/hnflow override diff` shows this diff, `/hnflow override reset` drops it',
-          formatDefinitionDiff(before, definition),
-        ].join('\n')
-      }
-      default:
-        return `error invalid-action: expected one of ${AUTHOR_ACTIONS.join(', ')}`
     }
   }
 
   return defineTool({
     name: 'hnflow_author',
     description:
-      'Inspect, validate, and edit HNFlow workflow definitions inside this workspace. `schema` lists node and port types, `validate` checks a definition, and `save_override` stores the definition as the workspace override. There is deliberately no action that writes the shared asset: only the user can do that, through `/hnflow save asset` or the HNFlow page.',
+      'Author HNFlow flows without publishing them. `schema` returns the definition format, `validate` runs the publish-time static checks on a definition (or on a referenced flow), `draft` writes the definition as a workspace override. There is no publish action: only a human can publish, through /hnflow publish or the page.',
     parameters: {
-      action: { type: 'string', required: true, enum: AUTHOR_ACTIONS, description: 'Operation to perform.' },
-      workflow: { type: 'string', description: 'Workflow alias or asset id; required by save_override.' },
-      definition: { type: 'object', additionalProperties: true, description: 'Complete definition object; required by validate and save_override.' },
-      note: { type: 'string', description: 'Why this workspace overrides the asset; recorded in the change log.' },
+      action: { type: 'string', required: true, enum: ['schema', 'validate', 'draft'], description: 'Operation to perform.' },
+      flow: { type: 'string', description: 'Referenced flow alias or id (validate without a definition, draft).' },
+      definition: { type: 'object', additionalProperties: true, description: 'Complete flow definition for validate/draft.' },
+      note: { type: 'string', description: 'Optional draft note.' },
     },
     output: {
       schema: { type: 'string' },
@@ -136,31 +133,19 @@ export function createWorkflowAuthorTool(options) {
 }
 
 /**
- * Require the definition argument.
+ * Resolve the definition argument, or read the referenced flow's definition.
+ * @param {Record<string, any>} service - orchestrator.
  * @param {Record<string, any>} args - tool arguments.
- * @returns {Record<string, any>} the definition.
+ * @param {string | null} cwd - workspace root.
+ * @returns {Promise<{value?: Record<string, any>, error?: string}>} definition or an error string.
  */
-function requireDefinition(args) {
-  const definition = args.definition
-  if (definition === null || typeof definition !== 'object' || Array.isArray(definition)) {
-    const error = new Error('definition is required: pass the complete workflow definition object')
-    error.code = 'definition-required'
-    throw error
+async function resolveDefinition(service, args, cwd) {
+  if (args.definition !== null && typeof args.definition === 'object' && !Array.isArray(args.definition)) {
+    return { value: args.definition }
   }
-  return definition
-}
-
-/**
- * Require the workflow argument.
- * @param {Record<string, any>} args - tool arguments.
- * @returns {string} the workflow key.
- */
-function requireWorkflow(args) {
-  const key = typeof args.workflow === 'string' ? args.workflow.trim() : ''
-  if (key.length === 0) {
-    const error = new Error('workflow is required: pass the alias or asset id')
-    error.code = 'workflow-required'
-    throw error
-  }
-  return key
+  const key = typeof args.flow === 'string' ? args.flow.trim() : ''
+  if (key.length === 0) return { error: 'definition-required: pass a definition object or a referenced flow name' }
+  if (cwd === null) return { error: 'workspace-unavailable: this session has no workspace directory' }
+  const resolved = await service.describeFlow(cwd, key)
+  return { value: resolved.definition }
 }

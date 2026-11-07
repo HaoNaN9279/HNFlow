@@ -1,22 +1,22 @@
 /**
- * Workflow assets: the reusable, versioned definitions.
+ * Flow assets: the reusable, versioned definitions.
  *
  * An asset is one JSON file under the library root:
  *
  * ```jsonc
- * { "asset": { "id": "wf-…", "revision": 3, … }, "definition": { … } }
+ * { "asset": { "id": "fl-…", "revision": 3, … }, "definition": { … } }
  * ```
  *
- * Only an explicit `save` (a user action) increments `revision`; nothing in the
- * agent path may call it. See `docs/dsh-plugin-plan.md` §4.1 and invariant I1.
+ * Only an explicit publish (a user action) increments `revision`; nothing in
+ * the agent path may call it. See `docs/dsh-plugin-plan-v2.md` §4.5.
  */
 
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 import { hashOf } from './json.js'
-import { ASSET_SUFFIX } from './paths.js'
+import { ASSET_SUFFIX, REVISIONS_DIR } from './paths.js'
 
 /** A failure with a stable machine-readable code. */
 export class AssetError extends Error {
@@ -34,7 +34,7 @@ export class AssetError extends Error {
 }
 
 /** Directory (inside the library root) holding immutable revision snapshots. */
-export const REVISIONS_DIR = '.hnflow-revisions'
+export const REVISIONS_DIRECTORY = REVISIONS_DIR
 
 /**
  * Slugify an asset name into a file name.
@@ -48,25 +48,31 @@ export function assetFileName(name, id) {
     .replace(/[^a-z0-9]+/gu, '-')
     .replace(/^-+|-+$/gu, '')
     .slice(0, 40)
-  return `${slug.length > 0 ? slug : 'workflow'}-${id.slice(-6)}`
+  return `${slug.length > 0 ? slug : 'flow'}-${id.slice(-6)}`
 }
 
 /**
- * Cheap shape check for a workflow definition object.
+ * Cheap shape check for a flow definition object.
  * @param {unknown} definition - candidate definition.
  * @returns {string[]} problems; empty means it looks like a definition.
  */
 export function definitionProblems(definition) {
   if (definition === null || typeof definition !== 'object' || Array.isArray(definition)) return ['definition must be a JSON object']
+  const source = /** @type {Record<string, any>} */ (definition)
   const problems = []
-  if (typeof definition.id !== 'string' || definition.id.length === 0) problems.push('definition.id must be a non-empty string')
-  if (!Array.isArray(definition.nodes) || definition.nodes.length === 0) problems.push('definition.nodes must be a non-empty array')
-  if (!Array.isArray(definition.edges)) problems.push('definition.edges must be an array')
+  const flow = source.flow
+  if (flow === null || typeof flow !== 'object' || Array.isArray(flow)) problems.push('definition.flow must be an object')
+  else {
+    if (typeof flow.id !== 'string' || flow.id.length === 0) problems.push('definition.flow.id must be a non-empty string')
+    if (typeof flow.name !== 'string' || flow.name.trim().length === 0) problems.push('definition.flow.name must be a non-empty string')
+  }
+  if (!Array.isArray(source.nodes) || source.nodes.length === 0) problems.push('definition.nodes must be a non-empty array')
+  if (!Array.isArray(source.edges)) problems.push('definition.edges must be an array')
   return problems
 }
 
 /**
- * The library of workflow assets.
+ * The library of flow assets.
  */
 export class AssetStore {
   /**
@@ -113,14 +119,14 @@ export class AssetStore {
 
   /**
    * Read one asset by id.
-   * @param {string} assetId - stable identity.
+   * @param {string} flowId - stable identity.
    * @returns {Promise<{asset: Record<string, unknown>, definition: Record<string, unknown>, path: string, hash: string}>} the asset record.
    * @throws {AssetError} `asset-missing` when the id is unknown.
    */
-  async read(assetId) {
+  async read(flowId) {
     const found = await this.#scan()
-    const entry = found.get(assetId)
-    if (entry === undefined) throw new AssetError('asset-missing', `no workflow asset named ${assetId}`, { assetId })
+    const entry = found.get(flowId)
+    if (entry === undefined) throw new AssetError('asset-missing', `no flow asset named ${flowId}`, { flowId })
     return { asset: entry.asset, definition: entry.definition, path: entry.path, hash: hashOf(entry.definition) }
   }
 
@@ -129,27 +135,50 @@ export class AssetStore {
    *
    * Snapshots are what makes `revision` a real contract: a workspace ref pinned
    * to revision 3 keeps resolving to that definition after the asset advances.
-   * @param {string} assetId - asset identity.
+   * @param {string} flowId - flow identity.
    * @param {number} revision - revision number.
    * @returns {Promise<Record<string, unknown> | null>} the definition, or null when that revision has no snapshot.
    */
-  async readRevision(assetId, revision) {
-    const filePath = path.join(this.root, REVISIONS_DIR, assetId, `r${revision}.json`)
+  async readRevision(flowId, revision) {
+    const record = await this.readRevisionRecord(flowId, revision)
+    return record === null ? null : record.definition
+  }
+
+  /**
+   * Read one immutable revision snapshot including its lockfile.
+   * @param {string} flowId - flow identity.
+   * @param {number} revision - revision number.
+   * @returns {Promise<{definition: Record<string, any>, lockfile: Record<string, any> | null, snapshotAt: string | null} | null>} the record, or null.
+   */
+  async readRevisionRecord(flowId, revision) {
+    const filePath = path.join(this.root, REVISIONS_DIRECTORY, flowId, `r${revision}.json`)
     const raw = await readJsonOrNull(filePath)
     if (raw === null || typeof raw.definition !== 'object' || raw.definition === null) return null
-    return raw.definition
+    return {
+      definition: raw.definition,
+      lockfile: raw.lockfile !== null && typeof raw.lockfile === 'object' ? raw.lockfile : null,
+      snapshotAt: typeof raw.snapshotAt === 'string' ? raw.snapshotAt : null,
+    }
   }
 
   /**
    * Write the snapshot for a stored revision.
-   * @param {string} assetId - asset identity.
+   * @param {string} flowId - flow identity.
    * @param {number} revision - revision number.
    * @param {Record<string, unknown>} definition - definition stored at that revision.
+   * @param {Record<string, unknown> | null} [lockfile] - frozen contracts of that revision.
    * @returns {Promise<void>} resolves once written.
    */
-  async #snapshot(assetId, revision, definition) {
-    const filePath = path.join(this.root, REVISIONS_DIR, assetId, `r${revision}.json`)
-    await writeJson(filePath, { assetId, revision, snapshotAt: new Date().toISOString(), definition })
+  async writeSnapshot(flowId, revision, definition, lockfile = null) {
+    const filePath = path.join(this.root, REVISIONS_DIRECTORY, flowId, `r${revision}.json`)
+    await writeJson(filePath, {
+      flowId,
+      assetId: flowId,
+      revision,
+      snapshotAt: new Date().toISOString(),
+      definition,
+      ...(lockfile === null ? {} : { lockfile }),
+    })
   }
 
   /**
@@ -163,7 +192,7 @@ export class AssetStore {
     const problems = definitionProblems(input.definition)
     if (problems.length > 0) throw new AssetError('asset-invalid', problems.join('; '), { problems })
     const now = new Date().toISOString()
-    const id = `wf-${randomUUID().replace(/-/gu, '').slice(0, 12)}`
+    const id = `fl-${randomUUID().replace(/-/gu, '').slice(0, 12)}`
     /** @type {Record<string, unknown>} */
     const asset = {
       id,
@@ -174,22 +203,24 @@ export class AssetStore {
       createdAt: now,
       updatedAt: now,
     }
+    const definition = withFlowIdentity(input.definition, id, name)
     const filePath = this.pathFor(String(input.folder ?? '').trim(), name, id)
-    await writeJson(filePath, { asset, definition: input.definition })
-    await this.#snapshot(id, 1, input.definition)
+    await writeJson(filePath, { asset, definition })
+    await this.writeSnapshot(id, 1, definition)
     return { asset, path: filePath }
   }
 
   /**
    * Store a new revision of an existing asset (explicit user action only).
-   * @param {{assetId: string, definition: unknown, note?: string}} input - new content.
-   * @returns {Promise<{asset: Record<string, unknown>, path: string, revision: number}>} the updated record.
+   * @param {{assetId: string, definition: unknown, note?: string, lockfile?: Record<string, any> | null}} input - new content.
+   * @returns {Promise<{asset: Record<string, unknown>, path: string, revision: number, definition: Record<string, any>}>} the updated record.
    */
   async save(input) {
     const current = await this.read(input.assetId)
     const problems = definitionProblems(input.definition)
     if (problems.length > 0) throw new AssetError('asset-invalid', problems.join('; '), { problems })
     const revision = Number(current.asset.revision ?? 1) + 1
+    const definition = withFlowIdentity(input.definition, String(current.asset.id), String(current.asset.name ?? ''))
     /** @type {Record<string, unknown>} */
     const asset = {
       ...current.asset,
@@ -197,18 +228,18 @@ export class AssetStore {
       updatedAt: new Date().toISOString(),
       lastNote: String(input.note ?? '').slice(0, 500),
     }
-    await writeJson(current.path, { asset, definition: input.definition })
-    await this.#snapshot(input.assetId, revision, input.definition)
-    return { asset, path: current.path, revision }
+    await writeJson(current.path, { asset, definition })
+    await this.writeSnapshot(input.assetId, revision, definition, input.lockfile ?? null)
+    return { asset, path: current.path, revision, definition }
   }
 
   /**
    * Delete an asset file.
-   * @param {string} assetId - stable identity.
+   * @param {string} flowId - stable identity.
    * @returns {Promise<{path: string}>} the removed path.
    */
-  async remove(assetId) {
-    const current = await this.read(assetId)
+  async remove(flowId) {
+    const current = await this.read(flowId)
     await rm(current.path)
     return { path: current.path }
   }
@@ -245,7 +276,7 @@ export class AssetStore {
   }
 
   /**
-   * Recursively list `*.workflow.json` files, skipping dot-directories.
+   * Recursively list `*.flow.json` files, skipping dot-directories.
    * @param {string} dir - directory to walk.
    * @returns {Promise<string[]>} file paths.
    */
@@ -266,6 +297,27 @@ export class AssetStore {
       else if (entry.isFile() && entry.name.endsWith(ASSET_SUFFIX)) files.push(full)
     }
     return files
+  }
+}
+
+/**
+ * Force the definition's own identity to match its asset record.
+ * @param {unknown} definition - candidate definition.
+ * @param {string} id - asset id.
+ * @param {string} name - asset display name.
+ * @returns {Record<string, any>} definition with `flow.id`/`flow.name` set.
+ */
+export function withFlowIdentity(definition, id, name) {
+  const source = /** @type {Record<string, any>} */ (definition)
+  const flow = source.flow !== null && typeof source.flow === 'object' && !Array.isArray(source.flow) ? source.flow : {}
+  return {
+    ...source,
+    schemaVersion: Number.isInteger(source.schemaVersion) ? source.schemaVersion : 2,
+    flow: {
+      ...flow,
+      id,
+      name: typeof flow.name === 'string' && flow.name.trim().length > 0 ? flow.name : name,
+    },
   }
 }
 

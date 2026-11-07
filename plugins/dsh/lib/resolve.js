@@ -1,7 +1,7 @@
 /**
  * Resolve a workspace key to a runnable definition.
  *
- * Order (docs/dsh-plugin-plan.md §4.6):
+ * Order (docs/dsh-plugin-plan-v2.md §8.1):
  *
  * 1. an override in this workspace;
  * 2. the ref's pinned revision snapshot;
@@ -45,28 +45,29 @@ export class Resolver {
   }
 
   /**
-   * Resolve one workspace key (alias or asset id).
-   * @param {string} key - alias or asset id.
-   * @returns {Promise<{key: string, alias: string, assetId: string, assetName: string, definition: Record<string, any>, source: 'override'|'ref'|'latest', revision: number|null, currentRevision: number, baseRevision: number|null, overrideChangedAt: string|null, drift: boolean, hash: string}>} resolved definition and its provenance.
+   * Resolve one workspace key (alias or flow id).
+   * @param {string} key - alias or flow id.
+   * @returns {Promise<{key: string, alias: string, flowId: string, flowName: string, definition: Record<string, any>, lockfile: Record<string, any> | null, source: 'override'|'ref'|'latest', revision: number|null, currentRevision: number, baseRevision: number|null, overrideChangedAt: string|null, drift: boolean, hash: string}>} resolved definition and its provenance.
    * @throws {ResolveError} when the ref, asset, or pinned revision is missing.
    */
   async resolve(key) {
     const ref = await this.workspace.findRef(key)
     if (ref === null) {
-      throw new ResolveError('ref-missing', `no workflow named ${key} in this workspace`, { key })
+      throw new ResolveError('ref-missing', `no flow named ${key} in this workspace`, { key })
     }
-    const assetEntry = await this.#readAsset(ref.assetId)
+    const assetEntry = await this.#readAsset(ref.flowId)
     const currentRevision = Number(assetEntry.asset.revision ?? 1)
-    const override = await this.workspace.readOverride(ref.assetId)
+    const override = await this.workspace.readOverride(ref.flowId)
 
     if (override !== null) {
       const baseRevision = Number.isInteger(override.baseRevision) ? override.baseRevision : null
       return {
         key,
         alias: String(ref.alias ?? ''),
-        assetId: ref.assetId,
-        assetName: String(assetEntry.asset.name ?? ''),
+        flowId: ref.flowId,
+        flowName: String(assetEntry.asset.name ?? ''),
         definition: override.definition,
+        lockfile: null,
         source: 'override',
         revision: Number.isInteger(ref.revision) ? ref.revision : currentRevision,
         currentRevision,
@@ -78,10 +79,10 @@ export class Resolver {
     }
 
     if (Number.isInteger(ref.revision)) {
-      const snapshot = await this.assets.readRevision(ref.assetId, ref.revision)
-      if (snapshot === null) {
-        throw new ResolveError('revision-missing', `asset ${ref.assetId} has no snapshot for revision ${ref.revision}`, {
-          assetId: ref.assetId,
+      const record = await this.assets.readRevisionRecord(ref.flowId, ref.revision)
+      if (record === null) {
+        throw new ResolveError('revision-missing', `asset ${ref.flowId} has no snapshot for revision ${ref.revision}`, {
+          flowId: ref.flowId,
           revision: ref.revision,
           currentRevision,
         })
@@ -89,25 +90,27 @@ export class Resolver {
       return {
         key,
         alias: String(ref.alias ?? ''),
-        assetId: ref.assetId,
-        assetName: String(assetEntry.asset.name ?? ''),
-        definition: snapshot,
+        flowId: ref.flowId,
+        flowName: String(assetEntry.asset.name ?? ''),
+        definition: record.definition,
+        lockfile: record.lockfile,
         source: 'ref',
         revision: ref.revision,
         currentRevision,
         baseRevision: null,
         overrideChangedAt: null,
         drift: currentRevision > ref.revision,
-        hash: hashOf(snapshot),
+        hash: hashOf(record.definition),
       }
     }
 
     return {
       key,
       alias: String(ref.alias ?? ''),
-      assetId: ref.assetId,
-      assetName: String(assetEntry.asset.name ?? ''),
+      flowId: ref.flowId,
+      flowName: String(assetEntry.asset.name ?? ''),
       definition: assetEntry.definition,
+      lockfile: null,
       source: 'latest',
       revision: currentRevision,
       currentRevision,
@@ -131,11 +134,12 @@ export class Resolver {
     /** @type {Record<string, any>[]} */
     const entries = []
     for (const ref of document.refs) {
-      const override = overrides.get(ref.assetId) ?? null
+      const override = overrides.get(ref.flowId) ?? null
       /** @type {Record<string, any>} */
       const entry = {
         alias: String(ref.alias ?? ''),
-        assetId: ref.assetId,
+        flowId: ref.flowId,
+        assetId: ref.flowId,
         enabled: ref.enabled !== false,
         pinnedRevision: Number.isInteger(ref.revision) ? ref.revision : null,
         hasOverride: override !== null,
@@ -143,7 +147,7 @@ export class Resolver {
         overrideBaseRevision: override?.baseRevision ?? null,
       }
       try {
-        const assetEntry = await this.#readAsset(ref.assetId)
+        const assetEntry = await this.#readAsset(ref.flowId)
         entry.name = String(assetEntry.asset.name ?? '')
         entry.description = String(assetEntry.asset.description ?? '')
         entry.currentRevision = Number(assetEntry.asset.revision ?? 1)
@@ -162,12 +166,12 @@ export class Resolver {
 
   /**
    * Read an asset, translating store errors into resolver codes.
-   * @param {string} assetId - asset identity.
+   * @param {string} flowId - flow identity.
    * @returns {Promise<{asset: Record<string, any>, definition: Record<string, any>}>} the asset record.
    */
-  async #readAsset(assetId) {
+  async #readAsset(flowId) {
     try {
-      return await this.assets.read(assetId)
+      return await this.assets.read(flowId)
     } catch (error) {
       if (error instanceof AssetError) throw new ResolveError(error.code, error.message, error.data)
       throw error

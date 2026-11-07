@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 2,
+  "flow": {
+    "id": "fl-demo-art-review",
+    "name": "美术评审",
+    "description": "概念 → 人交付精修稿 → 独立验收 → 接入",
+    "tags": ["demo", "human"]
+  },
+  "input": {
+    "type": "object",
+    "required": ["brief"],
+    "properties": { "brief": { "type": "string" } },
+    "additionalProperties": false
+  },
+  "nodes": [
+    {
+      "id": "concept",
+      "type": "agent",
+      "preset": "hnflow",
+      "instruction": "根据 {{input.brief}} 产出 3 个概念方向，每个含一句话定位与视觉关键词。",
+      "input": {
+        "type": "object",
+        "properties": { "brief": { "type": "string" } }
+      },
+      "output": {
+        "type": "object",
+        "required": ["directions"],
+        "properties": {
+          "directions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "line", "keywords"],
+              "properties": {
+                "name": { "type": "string" },
+                "line": { "type": "string" },
+                "keywords": { "type": "array", "items": { "type": "string" } }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "budget": { "maxAttempts": 2, "timeoutMs": 900000 }
+    },
+    {
+      "id": "refined-art",
+      "type": "request",
+      "deliverable": {
+        "type": "object",
+        "required": ["files", "notes"],
+        "properties": {
+          "files": { "type": "array", "items": { "type": "string" } },
+          "notes": { "type": "string" },
+          "styleTags": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      },
+      "whyHuman": "精修稿需要真实美术判断与手感，当前模型无法可靠产出",
+      "deadline": { "hours": 72 },
+      "onExpire": "remind"
+    },
+    {
+      "id": "accept-art",
+      "type": "verify",
+      "against": "refined-art",
+      "checks": ["schema", "judge"],
+      "judge": {
+        "preset": "standard",
+        "criteria": "交付文件是否满足 concept 已确认的方向、风格关键词与命名规范；notes 是否足以让下游接入"
+      },
+      "onReject": { "kind": "return", "maxAttempts": 2 }
+    },
+    {
+      "id": "integrate",
+      "type": "agent",
+      "preset": "hnflow",
+      "instruction": "把通过验收的精修稿按项目规范接入，产出变更清单。交付物：{{nodes.refined-art.output}}",
+      "input": {
+        "type": "object",
+        "properties": { "artifact": { "type": "object" } }
+      },
+      "output": {
+        "type": "object",
+        "required": ["changes"],
+        "properties": { "changes": { "type": "array", "items": { "type": "string" } } },
+        "additionalProperties": false
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e1", "from": "concept", "to": "refined-art", "when": { "kind": "status", "is": "done" } },
+    { "id": "e2", "from": "refined-art", "to": "accept-art", "when": { "kind": "status", "is": "done" } },
+    { "id": "e3", "from": "accept-art", "to": "integrate", "when": { "kind": "status", "is": "done" } }
+  ]
+}

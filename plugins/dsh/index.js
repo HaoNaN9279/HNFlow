@@ -1,29 +1,30 @@
 /**
- * HNFlow mode for DeepSeek Harness.
+ * HNFlow for DeepSeek Harness.
  *
- * The plugin is mounted as a child row of the `hnflow` agent preset, so every
- * registration — the `hnflow` tools, the `/workflow` reference command, and the
- * workflow index in the system prompt — belongs to that mode. The `vibestack`
- * mode keeps its capability groups and gains no workflow entry point.
+ * Three rows, one plugin:
  *
- * A session never runs a workflow by itself: `/workflow <name> <prompt>` turns
- * the reference into one user turn, that turn calls the tool, and the tool only
- * starts the run. The engine owns the rest; the page reports it.
+ * - `hnflow-core` (root): provides `ctx.hnflow`, the orchestrator, and the
+ *   Fetch routes the page and the notice read. It owns no session behaviour and
+ *   its service is a singleton for the whole host.
+ * - `hnflow` (inside the `hnflow` preset): the model-facing surface — the
+ *   `hnflow` / `hnflow_author` tools, `/hnflow`, the `hnflow-flows` skill and
+ *   the flow index in the system prompt. It never publishes.
+ * - `hnflow-ui` (host:false): the browser bundle, whose page reads the routes.
  *
- * Everything here is failure-open: a missing interpreter, an unreadable
- * library, or an unexpected payload degrades to a log line, never to a broken
- * session.
+ * Everything a session does goes through the same service as the page, so the
+ * page and the conversation cannot disagree about a run.
  */
 
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
-import { USAGE, createViewerCommand, createWorkflowCommand } from './lib/commands.js'
-import { createWorkflowAuthorTool } from './lib/author.js'
-import { createMonitorRoute } from './lib/route.js'
-import { HnflowService } from './lib/service.js'
+import { createFlowCommand } from './lib/commands.js'
+import { createAuthorTool } from './lib/author.js'
+import { resolveConfig } from './lib/config.js'
+import { createRoutes } from './lib/routes.js'
+import { createService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
-import { createWorkflowTool } from './lib/tools.js'
+import { createFlowTool } from './lib/tools.js'
 
 /** Plugin name shown in Loader diagnostics. */
 export const name = 'hnflow'
@@ -32,29 +33,104 @@ export const name = 'hnflow'
 const SECTION_ORDER = 10160
 
 /** Bundled skill file, resolved next to this module. */
-const SKILL_FILE = fileURLToPath(new URL('./skills/hnflow-workflow/SKILL.md', import.meta.url))
+const SKILL_FILE = fileURLToPath(new URL('./skills/hnflow-flows/SKILL.md', import.meta.url))
 
 /**
- * Register the HNFlow mode.
- * @param {Record<string, unknown>} ctx - Cordis plugin context.
+ * Optional Config schema.
+ *
+ * The schema lives in `@deepseek-ai/schemastery`, a harness-provided package.
+ * The dynamic import keeps the module usable under plain Node tests, where the
+ * package is absent; the Loader resolves it in a real DSH composition.
+ * @type {object | undefined}
+ */
+let Config
+try {
+  const schemastery = await import('@deepseek-ai/schemastery')
+  const z = schemastery.default?.z ?? schemastery.z ?? schemastery.default
+  if (z && typeof z.object === 'function') {
+    Config = z.object({
+      host: z.boolean().default(true),
+      role: z.string().default('preset'),
+      libraryRoot: z.string().default(''),
+      workspaceDir: z.string().default('.hnflow'),
+      stateDir: z.string().default(''),
+      presetAllowlist: z.array(z.string()).default(['hnflow', 'standard']),
+      maxParallel: z.number().default(3),
+      maxAttempts: z.number().default(2),
+      nodeTimeoutMs: z.number().default(900000),
+      maxIndexEntries: z.number().default(20),
+      storage: z.boolean().default(true),
+    })
+  }
+} catch {
+  // Plain Node tests and degraded compositions keep the defensive resolver.
+}
+export { Config }
+
+/**
+ * Register the HNFlow rows.
+ * @param {Record<string, any>} ctx - Cordis plugin context.
  * @param {unknown} rawConfig - row config.
  * @returns {void}
  */
 export function apply(ctx, rawConfig) {
-  const logger = ctx.logger
-  /**
-   * Warn without ever throwing from the plugin body.
-   * @param {string} message - format string.
-   * @param {...unknown} args - format arguments.
-   * @returns {void}
-   */
-  const warn = (message, ...args) => {
-    try {
-      logger?.warn?.(message, ...args)
-    } catch {
-      // Diagnostics must never break the mode.
-    }
+  const config = resolveConfig(rawConfig)
+  // UI rows own no host behaviour at all.
+  if (config.host === false) return
+  if (config.role === 'core') {
+    applyCore(ctx, config)
+    return
   }
+  if (config.role !== 'preset') return
+  applyPreset(ctx, config)
+}
+
+/**
+ * Root row: provide the orchestrator and the page routes.
+ * @param {Record<string, any>} ctx - Cordis plugin context.
+ * @param {ReturnType<typeof resolveConfig>} config - resolved config.
+ * @returns {Record<string, any>} the service instance.
+ */
+export function applyCore(ctx, config) {
+  const logger = ctx.logger
+  const service = createService({ ctx, config, logger })
+  try {
+    if (typeof ctx.provide === 'function') ctx.provide('hnflow', service)
+    else logger?.warn?.('hnflow: this harness cannot provide services; the preset row will not find ctx.hnflow')
+  } catch (error) {
+    logger?.warn?.('hnflow: cannot provide ctx.hnflow: %o', error)
+  }
+  void service.open().catch((error) => logger?.warn?.('hnflow: cannot open the run store: %o', error))
+  ctx.inject(['connection'], (scope) => {
+    try {
+      const registry = scope.connection?.fetch
+      if (typeof registry?.register !== 'function') {
+        logger?.warn?.('hnflow: no Fetch route registry; the HNFlow page stays offline')
+        return
+      }
+      for (const route of createRoutes({ service })) registry.register(route)
+    } catch (error) {
+      logger?.warn?.('hnflow: cannot register the HNFlow routes: %o', error)
+    }
+  })
+  ctx.effect(
+    () => () => {
+      void service.close()
+      return undefined
+    },
+    'hnflow: stop the orchestrator and close its store',
+  )
+  return service
+}
+
+/**
+ * Preset row: the model-facing surface inside an HNFlow session.
+ * @param {Record<string, any>} ctx - Cordis plugin context.
+ * @param {ReturnType<typeof resolveConfig>} config - resolved config.
+ * @returns {void}
+ */
+function applyPreset(ctx, config) {
+  const logger = ctx.logger
 
   /**
    * Effective working directory of an agent session.
@@ -64,217 +140,87 @@ export function apply(ctx, rawConfig) {
   const cwdOf = (agent) => {
     const handle = /** @type {{session?: object} | undefined} */ (agent ?? undefined)
     if (handle?.session === undefined) return null
-    const workingDirectory = ctx.get('workingDirectory')
     try {
-      const cwd = workingDirectory?.get?.(handle.session)
+      const cwd = ctx.get('workingDirectory')?.get?.(handle.session)
       return typeof cwd === 'string' && cwd.length > 0 ? cwd : null
     } catch {
       return null
     }
   }
 
-  const service = new HnflowService({ config: rawConfig, logger, llm: llmAdapter(ctx) })
-  // The root row exists only so the client half is always available; it owns no
-  // host behaviour and must not touch any session.
-  if (service.config.host === false) return
-  // The resident viewer row: page data and the library for every session, no
-  // tools, no engine, and no way to start a run.
-  if (service.config.role === 'viewer') {
-    ctx.inject(['commands'], (scope) => {
-      try {
-        scope.commands.register(createViewerCommand({ service, cwdOf }))
-      } catch (error) {
-        warn('hnflow: cannot register /hnflow: %o', error)
-      }
-    })
-    // The bottom-right notice reads this route instead of running a command:
-    // a command would write its lifecycle pair into whichever session it names,
-    // and the notice belongs to no session at all.
-    ctx.inject(['connection'], (scope) => {
-      try {
-        const registry = scope.connection?.fetch
-        if (typeof registry?.register !== 'function') {
-          warn('hnflow: this harness has no Fetch route registry; the task notice stays off')
-          return
-        }
-        registry.register(createMonitorRoute({ service }))
-      } catch (error) {
-        warn('hnflow: cannot register the monitor route: %o', error)
-      }
-    })
-    ctx.effect(() => () => {
-      service.dispose()
-      return undefined
-    }, 'hnflow: stop the viewer row')
-    return
-  }
-  /** @type {Map<string, string>} */
-  const indexCache = new Map()
-  /** Lazily imported `@deepseek-ai/dsh-llm`; reset on failure so a retry can succeed. */
-  let llmModule = null
-
-  /**
-   * Hand one composed prompt to the model as an ordinary user turn.
-   *
-   * `/workflow <name> <prompt>` only references a workflow; the model decides to
-   * start it through the `hnflow` tool, which is what keeps the choice of run —
-   * and its input — in one place. The message is a plain user message, so it
-   * replays, forks, and renders like anything else the person types.
-   * @param {unknown} agent - the command's agent handle.
-   * @param {string} text - complete prompt for the new turn.
-   * @returns {Promise<void>} resolves once the message is queued.
-   */
-  const startTurn = async (agent, text) => {
-    const handle = /** @type {{followup?: Function} | undefined} */ (agent ?? undefined)
-    if (typeof handle?.followup !== 'function') {
-      throw Object.assign(new Error('this session cannot accept a new turn'), { code: 'turn-unavailable' })
-    }
-    if (llmModule === null) {
-      llmModule = loadHarnessModule(ctx, '@deepseek-ai/dsh-llm').catch((error) => {
-        llmModule = null
-        throw error
-      })
-    }
-    const createUserMessage = (await llmModule)?.createUserMessage
-    if (typeof createUserMessage !== 'function') {
-      throw Object.assign(new Error('@deepseek-ai/dsh-llm does not export createUserMessage'), { code: 'turn-unavailable' })
-    }
-    handle.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
-  }
-
-  /**
-   * Refresh the cached workflow index for one workspace.
-   * @param {string} cwd - workspace root.
-   * @returns {Promise<void>} resolves after the cache update.
-   */
-  const refreshIndex = async (cwd) => {
-    try {
-      indexCache.set(cwd, await service.indexSection(cwd))
-    } catch (error) {
-      warn('hnflow: cannot build the workflow index: %o', error)
-    }
-  }
-
-  ctx.inject(['tools'], (scope) => {
+  ctx.inject(['hnflow', 'tools'], (scope) => {
+    const service = scope.hnflow
     void (async () => {
       try {
         const module = await loadHarnessModule(ctx, '@deepseek-ai/dsh-tools')
         const defineTool = module?.defineTool
         if (typeof defineTool !== 'function') {
-          warn('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the workflow tools stay unregistered')
+          logger?.warn?.('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the flow tools stay unregistered')
           return
         }
-        scope.tools.register(createWorkflowTool({ defineTool, service, cwdOf }))
-        scope.tools.register(createWorkflowAuthorTool({ defineTool, service, cwdOf }))
+        scope.tools.register(createFlowTool({ defineTool, service, cwdOf }))
+        scope.tools.register(createAuthorTool({ defineTool, service, cwdOf }))
       } catch (error) {
-        warn('hnflow: cannot register the workflow tool: %o', error)
+        logger?.warn?.('hnflow: cannot register the flow tools: %o', error)
       }
     })()
   })
 
-  ctx.inject(['commands'], (scope) => {
+  ctx.inject(['hnflow', 'commands'], (scope) => {
     try {
-      scope.commands.register(createWorkflowCommand({ service, cwdOf, startTurn, primeIndex: refreshIndex }))
+      scope.commands.register(createFlowCommand({ service: scope.hnflow, cwdOf, config, logger }))
     } catch (error) {
-      warn('hnflow: cannot register /workflow: %o', error)
+      logger?.warn?.('hnflow: cannot register /hnflow: %o', error)
     }
   })
 
-  ctx.inject(['skills'], (scope) => {
-    void (async () => {
+  ctx.inject(['hnflow'], (scope) => {
+    const service = scope.hnflow
+    ctx.inject(['skills'], (skillsScope) => {
+      void (async () => {
+        try {
+          const skill = readSkillFile(await readFile(SKILL_FILE, 'utf8'))
+          if (skill.name.length === 0 || skill.description.length === 0) {
+            logger?.warn?.('hnflow: the bundled skill has no name/description frontmatter; skipping')
+            return
+          }
+          skillsScope.skills.register({ name: skill.name, description: skill.description, content: skill.content })
+        } catch (error) {
+          logger?.warn?.('hnflow: cannot load the bundled skill: %o', error)
+        }
+      })()
+    })
+    ctx.inject(['systemPrompt'], (promptScope) => {
       try {
-        const skill = readSkillFile(await readFile(SKILL_FILE, 'utf8'))
-        if (skill.name.length === 0 || skill.description.length === 0) {
-          warn('hnflow: the bundled skill has no name/description frontmatter; skipping')
-          return
-        }
-        scope.skills.register({ name: skill.name, description: skill.description, content: skill.content })
+        promptScope.systemPrompt.section({
+          name: 'hnflow:flows',
+          order: SECTION_ORDER,
+          text: (assembly) => {
+            const cwd = cwdOf(assembly?.agent)
+            if (cwd === null) return ''
+            return service.cachedIndex(cwd)
+          },
+        })
       } catch (error) {
-        warn('hnflow: cannot load the bundled skill: %o', error)
+        logger?.warn?.('hnflow: cannot register the flow prompt section: %o', error)
       }
-    })()
-  })
-
-  ctx.inject(['systemPrompt'], (scope) => {
-    try {
-      scope.systemPrompt.section({
-        name: 'hnflow:workflows',
-        order: SECTION_ORDER,
-        text: (assembly) => {
-          const cwd = cwdOf(assembly?.agent)
-          if (cwd === null) return ''
-          return indexCache.get(cwd) ?? ''
-        },
-      })
-    } catch (error) {
-      warn('hnflow: cannot register the workflow prompt section: %o', error)
-    }
-  })
-
-  ctx.on('agent/pre-step', async (payload, next) => {
-    const decision = await next()
-    try {
-      if (decision?.kind === 'reject' || payload?.signal?.aborted === true) return decision
-      const cwd = cwdOf(payload?.agent)
-      if (cwd !== null) await refreshIndex(cwd)
+    })
+    ctx.on('agent/pre-step', async (payload, next) => {
+      const decision = await next()
+      try {
+        if (decision?.kind === 'reject' || payload?.signal?.aborted === true) return decision
+        const cwd = cwdOf(payload?.agent)
+        if (cwd !== null) await service.indexSection(cwd)
+      } catch (error) {
+        logger?.warn?.('hnflow: refreshing the flow index failed: %o', error)
+      }
       return decision
-    } catch (error) {
-      warn('hnflow: pre-step failed: %o', error)
-      return decision
-    }
+    })
   })
-
-  ctx.effect(() => () => {
-    indexCache.clear()
-    service.dispose()
-    return undefined
-  }, 'hnflow: stop the workflow engine and drop cached state')
-}
-
-/**
- * Adapt the harness LLM service to the engine's completion request.
- *
- * Stage 2 of the model bridge: an AI node configured with
- * `use: deerflow.workflow.rpc.llm_bridge:BridgeChatModel` sends its messages
- * here, and this runs them on DSH's own provider route and credentials and
- * returns the assembled text.
- * @param {Record<string, any>} ctx - plugin context.
- * @returns {{complete: (payload: Record<string, any>) => Promise<{text: string}>}} adapter.
- */
-export function llmAdapter(ctx) {
-  return {
-    complete: async (payload) => {
-      const llm = ctx.get('llm')
-      if (typeof llm?.stream !== 'function') {
-        throw Object.assign(new Error('this session has no DSH LLM service to complete with'), { code: 'llm-unavailable' })
-      }
-      const messages = (Array.isArray(payload?.messages) ? payload.messages : []).map((message) => ({
-        role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
-        content: [{ type: 'text', text: String(message.text ?? '') }],
-      }))
-      /** @type {Record<string, any>} */
-      const request = { model: String(payload?.model ?? ''), messages }
-      if (typeof payload?.provider === 'string' && payload.provider.length > 0) request.provider = payload.provider
-      let text = ''
-      for await (const chunk of llm.stream(request)) {
-        if (typeof chunk?.text === 'string') text += chunk.text
-        else if (typeof chunk?.delta === 'string') text += chunk.delta
-        if (chunk?.kind === 'finish' && chunk.failure) {
-          const failure = chunk.failure
-          throw Object.assign(new Error(String(failure.message ?? 'the model call failed')), { code: String(failure.code ?? 'llm-error') })
-        }
-      }
-      return { text }
-    },
-  }
 }
 
 /**
  * Import a harness package the way the Loader does, falling back to plain ESM.
- *
- * A linked bundle lives outside the harness `node_modules`, so a bare import may
- * not resolve through Node alone; the Loader's internal importer applies the
- * harness resolution rules, while the plain import keeps tests usable.
  * @param {Record<string, unknown>} ctx - plugin context.
  * @param {string} specifier - package specifier.
  * @returns {Promise<Record<string, unknown>>} module namespace.
@@ -293,4 +239,4 @@ async function loadHarnessModule(ctx, specifier) {
 }
 
 /** Exported for tests and for the usage hint in plugin documentation. */
-export const COMMAND_USAGE = USAGE
+export { USAGE as COMMAND_USAGE } from './lib/commands.js'

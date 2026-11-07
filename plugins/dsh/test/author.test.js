@@ -1,110 +1,75 @@
 /**
- * `hnflow_author`: validate and edit inside the workspace, never the asset.
+ * The `hnflow_author` tool: schema, validation and drafting (never publishing).
  */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { AUTHOR_ACTIONS, createWorkflowAuthorTool, formatSchema, formatValidation } from '../lib/author.js'
+import { FLOW_SCHEMA_REFERENCE, createAuthorTool } from '../lib/author.js'
 
-/** A `defineTool` stand-in that keeps the spec addressable. */
-const defineTool = (spec) => spec
+const defineTool = (definition) => definition
+const cwdOf = () => '/w'
 
-/**
- * Build the tool over a scripted service.
- * @param {Partial<Record<string, Function>>} overrides - per-method behaviour.
- * @returns {{tool: Record<string, any>, calls: Record<string, any>[]}} tool and call log.
- */
-function makeTool(overrides = {}) {
-  /** @type {Record<string, any>[]} */
-  const calls = []
-  const service = {
-    schema: async () => ({
-      nodeTypes: [
-        { type: 'flow:start', category: 'flow', description: 'Entry node' },
-        { type: 'data:assign', category: 'data', description: 'Static value' },
-      ],
-      portTypes: ['data', 'file'],
-    }),
-    validateDefinition: async (definition) => ({ valid: Array.isArray(definition.nodes) && definition.nodes.length > 0, errors: [] }),
-    resolve: async (_cwd, key) => ({ key, definition: { id: 'w', nodes: [{ id: 'start', type: 'flow:start' }], edges: [] } }),
-    writeOverride: async (input) => {
-      calls.push({ method: 'writeOverride', input })
-      return { assetId: 'wf-1', baseRevision: 3, definition: input.definition }
-    },
-    ...overrides,
-  }
-  return { tool: createWorkflowAuthorTool({ defineTool, service, cwdOf: () => '/ws' }), calls }
+const validFlow = {
+  schemaVersion: 2,
+  flow: { id: 'fl-a', name: 'a' },
+  input: { type: 'object', properties: {} },
+  nodes: [{ id: 'n', type: 'agent', preset: 'hnflow', instruction: 'x', output: { type: 'object', required: ['ok'], properties: { ok: { type: 'boolean' } } } }],
+  edges: [],
 }
 
-const VALID = { id: 'w', name: 'W', nodes: [{ id: 'start', type: 'flow:start' }], edges: [] }
+/**
+ * A service stub that validates real definitions and records drafts.
+ * @returns {Record<string, any>} service.
+ */
+function stubService() {
+  const calls = []
+  return {
+    calls,
+    validate: async () => ({ ok: true, errors: [], warnings: [] }),
+    describeFlow: async () => ({ flowId: 'fl-a', flowName: 'a', definition: validFlow, currentRevision: 1 }),
+    draft: async (input) => {
+      calls.push(input)
+      return { draft: true, flowId: 'fl-a', baseRevision: 1, updatedAt: 'now', validation: { ok: true, errors: [] }, next: 'a human must publish it (/hnflow publish <flow>) before it becomes a revision' }
+    },
+  }
+}
 
-test('the authoring tool exposes no action that writes an asset', () => {
-  const { tool } = makeTool()
-  assert.equal(tool.name, 'hnflow_author')
-  assert.deepEqual(tool.parameters.action.enum, AUTHOR_ACTIONS)
-  assert.equal(AUTHOR_ACTIONS.includes('save_asset'), false)
-  assert.equal(AUTHOR_ACTIONS.includes('create_asset'), false)
-})
-
-test('schema renders categories and port types', async () => {
-  const { tool } = makeTool()
+test('the schema action documents the six primitives and no publish', async () => {
+  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
   const text = await tool.execute({ action: 'schema' }, {})
-  assert.match(text, /node types \(2\)/u)
-  assert.match(text, /flow:\n {2}flow:start — Entry node/u)
-  assert.match(text, /port types: data, file/u)
+  const reference = JSON.parse(text)
+  assert.deepEqual(reference.notes.nodeTypes, ['agent', 'judge', 'merge', 'gate', 'request', 'verify'])
+  assert.match(reference.notes.publish, /不可由工具调用/u)
+  assert.equal(FLOW_SCHEMA_REFERENCE.schemaVersion, 2)
 })
 
-test('validate reports a valid and an invalid definition', async () => {
-  const { tool } = makeTool()
-  assert.equal(await tool.execute({ action: 'validate', definition: VALID }, {}), 'definition is valid')
-
-  const invalid = makeTool({ validateDefinition: async () => ({ valid: false, errors: ['nodes must not be empty', 'missing end'] }) })
-  const text = await invalid.tool.execute({ action: 'validate', definition: { nodes: [] } }, {})
-  assert.match(text, /definition is invalid \(2 problem\(s\)\)/u)
-  assert.match(text, /- missing end/u)
+test('validate reports definition problems before touching the service', async () => {
+  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  const text = await tool.execute({ action: 'validate', definition: { nodes: [] } }, {})
+  const result = JSON.parse(text)
+  assert.equal(result.ok, false)
+  assert.equal(result.errors[0].code, 'definition-invalid')
 })
 
-test('validate requires a definition object', async () => {
-  const { tool } = makeTool()
-  const text = await tool.execute({ action: 'validate' }, {})
-  assert.match(text, /^error definition-required:/u)
+test('validate accepts a definition object and delegates host checks', async () => {
+  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  const result = JSON.parse(await tool.execute({ action: 'validate', definition: validFlow }, {}))
+  assert.equal(result.ok, true)
 })
 
-test('save_override writes the workspace copy and reports the diff', async () => {
-  const { tool, calls } = makeTool()
-  const changed = { ...VALID, nodes: [...VALID.nodes, { id: 'end', type: 'flow:end' }] }
-  const text = await tool.execute({ action: 'save_override', workflow: 'publish', definition: changed, note: 'local tweak' }, {})
-
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].input.cwd, '/ws')
-  assert.equal(calls[0].input.key, 'publish')
-  assert.equal(calls[0].input.origin, 'agent')
-  assert.equal(calls[0].input.note, 'local tweak')
-  assert.match(text, /saved the workspace override for publish \(asset wf-1, base r3\)/u)
-  assert.match(text, /the asset is unchanged/u)
-  assert.match(text, /nodes\.1/u)
+test('draft writes an agent override with the note', async () => {
+  const service = stubService()
+  const tool = createAuthorTool({ defineTool, service, cwdOf })
+  const result = JSON.parse(await tool.execute({ action: 'draft', flow: 'a', definition: validFlow, note: 'first pass' }, {}))
+  assert.equal(result.ok, true)
+  assert.equal(service.calls.length, 1)
+  assert.equal(service.calls[0].note, 'first pass')
+  assert.match(result.next, /human must publish/u)
 })
 
-test('an invalid definition is not written', async () => {
-  const { tool, calls } = makeTool({ validateDefinition: async () => ({ valid: false, errors: ['dangling edge'] }) })
-  const text = await tool.execute({ action: 'save_override', workflow: 'publish', definition: { nodes: [] } }, {})
-
-  assert.equal(calls.length, 0)
-  assert.match(text, /^nothing written/u)
-  assert.match(text, /dangling edge/u)
-})
-
-test('save_override needs a workflow name and a workspace', async () => {
-  const missingName = await makeTool().tool.execute({ action: 'save_override', definition: VALID }, {})
-  assert.match(missingName, /^error workflow-required:/u)
-
-  const noWorkspace = createWorkflowAuthorTool({ defineTool, service: makeTool().tool.service ?? {}, cwdOf: () => null })
-  const text = await noWorkspace.execute({ action: 'validate', definition: VALID }, {})
-  assert.match(text, /^error workspace-unavailable:/u)
-})
-
-test('format helpers are stable', () => {
-  assert.equal(formatValidation({ valid: true, errors: [] }), 'definition is valid')
-  assert.match(formatSchema({ nodeTypes: [], portTypes: [] }), /node types \(0\)/u)
+test('there is no publish action', async () => {
+  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  assert.match(await tool.execute({ action: 'publish' }, {}), /invalid-action/u)
+  assert.equal(tool.parameters.action.enum.includes('publish'), false)
 })

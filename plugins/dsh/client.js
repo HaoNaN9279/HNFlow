@@ -4,18 +4,19 @@
 // loader. Only React and react-dom (platform-seeded modules) are required, so no
 // build step is involved.
 //
-// Surfaces (docs/dsh-plugin-plan.md §11.4):
+// Surfaces (docs/dsh-plugin-plan-v2.md §9):
 //
 // - a left-sidebar page (`sidebar.panellist` + the keyed `main` slot) with three
-//   tabs: 工作区 / 通用工作流 / 任务监视;
-// - one shared left-tree + right-canvas layout, so the session tab (M6.4) and
-//   the task panel (M6.5) can reuse the same components.
+//   tabs: 流程 / 运行 / 收件箱;
+// - a session tab (`conversation.view`) showing this session's runs and a
+//   read-only canvas;
+// - a right-sidebar page (`sidebarRightTabs`) with the same inbox;
+// - a bottom-right notice for the first sighting of a new inbox item.
 //
-// The client never reads asset files and never talks to the engine: every piece
-// of data goes through `/hnflow ui <op> <base64url>` (the resident viewer row, so
-// the page does not depend on any session), and the page has no way to start a
-// run. Starting belongs to `/workflow <name> <prompt>` in a session, or to a
-// future page action.
+// Every read goes through the host's Fetch routes (`/api/hnflow/*`), never
+// through a slash command: a command would append `command/run` + `command/done`
+// to whichever session it named, and the page belongs to no session. Every
+// write is an explicit POST with the pending item's revision.
 window.__ModuleLoader__.load({
   id: "dsh-hnflow",
   factory: (require) => {
@@ -28,164 +29,164 @@ window.__ModuleLoader__.load({
     const h = react.createElement;
 
     /** Services this client plugin consumes directly. */
-    const inject = ["slots", "remote", "remote.commands"];
+    const inject = ["slots"];
 
     /** Sidebar entry id; also the `main` panel key (the layout pairs them). */
     const PANEL_ID = "hnflow";
 
-    /** Agent preset that owns the session tab (M6.4). */
+    /** Agent preset that owns the session tab. */
     const PRESET_ID = "hnflow";
 
-    /** Read-only canvas geometry. Mirrors the editor's grid fallback. */
-    const CANVAS = { columns: 3, stepX: 220, stepY: 130, width: 170, height: 62, padding: 16 };
+    /** Read-only canvas geometry. */
+    const CANVAS = { columns: 4, stepX: 240, stepY: 140, width: 176, height: 64, padding: 18 };
 
     const TABS = [
-      { id: "workspaces", label: "工作区" },
-      { id: "assets", label: "通用工作流" },
-      { id: "monitor", label: "任务监视" },
+      { id: "flows", label: "流程" },
+      { id: "runs", label: "运行" },
+      { id: "inbox", label: "收件箱" },
     ];
+
+    const NODE_COLORS = {
+      done: "rgba(64,160,110,0.85)",
+      running: "rgba(240,170,60,0.9)",
+      waiting: "rgba(90,140,240,0.9)",
+      failed: "rgba(220,90,90,0.9)",
+      blocked: "rgba(150,90,90,0.9)",
+      skipped: "rgba(120,120,120,0.6)",
+      pending: "rgba(127,127,127,0.55)",
+    };
 
     const styles = {
       page: { height: "100%", minHeight: "320px", boxSizing: "border-box", display: "flex", flexDirection: "column", fontFamily: "var(--dsw-font-sans, inherit)", color: "var(--dsw-alias-label-primary, inherit)" },
-      tabbar: { display: "flex", alignItems: "center", gap: "4px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
-      // Unselected keeps the untouched look (no fill, no border, no weight) and
-      // only dims; selected adds an accent underline. `all: unset` is required
-      // because the host styles every `button`.
+      tabbar: { display: "flex", alignItems: "center", gap: "14px", padding: "10px 14px", borderBottom: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))" },
       tab: { all: "unset", padding: "2px 0", background: "transparent", color: "inherit", opacity: 0.72, fontFamily: "inherit", fontSize: "13px", fontWeight: 400, lineHeight: "20px", borderBottom: "2px solid transparent", cursor: "pointer" },
       tabActive: { opacity: 1, fontWeight: 600, borderBottomColor: "rgba(110,150,255,0.95)", color: "var(--dsw-alias-label-primary, inherit)" },
       body: { flex: "1 1 auto", minHeight: 0, display: "flex" },
-      tree: { flex: "0 0 clamp(180px, 42%, 280px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
-      group: { margin: "0 0 6px" },
-      groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", border: "none", background: "transparent", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
+      tree: { flex: "0 0 clamp(190px, 40%, 290px)", minWidth: 0, minHeight: 0, overflow: "auto", padding: "8px", borderRight: "1px solid var(--dsw-alias-border-l3, rgba(127,127,127,0.18))", boxSizing: "border-box" },
+      group: { margin: "0 0 8px" },
+      groupTitle: { display: "flex", alignItems: "center", gap: "6px", width: "100%", padding: "4px 6px", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left" },
       item: { display: "flex", flexDirection: "column", gap: "1px", width: "100%", padding: "5px 8px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "none", background: "transparent", backgroundImage: "none", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-primary, inherit)", fontFamily: "inherit", fontSize: "12px", textAlign: "left", cursor: "pointer" },
       itemActive: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.16))" },
       meta: { fontSize: "11px", color: "var(--dsw-alias-label-tertiary, inherit)" },
-      canvasPane: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "14px", boxSizing: "border-box" },
-      canvas: { width: "100%", height: "100%", minHeight: "240px", display: "block", borderRadius: "var(--dsw-radius-sm, 6px)", background: "rgba(127,127,127,0.06)" },
-      node: { fill: "rgba(127,127,127,0.14)", stroke: "rgba(127,127,127,0.45)", strokeWidth: 1 },
-      nodeLabel: { fontSize: "9px", fill: "currentColor", pointerEvents: "none" },
+      pane: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "14px", boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "10px" },
+      canvas: { width: "100%", minHeight: "220px", display: "block", borderRadius: "var(--dsw-radius-sm, 6px)", background: "rgba(127,127,127,0.06)" },
       edge: { stroke: "rgba(127,127,127,0.55)", strokeWidth: 1.2, fill: "none" },
-      empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "200px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
-      errorBox: { margin: "10px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      nodeLabel: { fontSize: "9px", fill: "currentColor", pointerEvents: "none" },
+      nodeType: { fontSize: "8px", fill: "currentColor", opacity: 0.7, pointerEvents: "none" },
+      empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "180px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
+      errorBox: { margin: "8px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      okBox: { padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid rgba(64,160,110,0.5)", color: "rgba(64,160,110,1)", fontSize: "12px", whiteSpace: "pre-wrap" },
       linkButton: { padding: 0, border: "none", background: "transparent", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textDecoration: "underline", cursor: "pointer" },
-      toast: { position: "fixed", right: "16px", bottom: "16px", zIndex: 2000, maxWidth: "320px", padding: "10px 12px", borderRadius: "12px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "var(--dsw-specific-menu, #1f1f1f)", boxShadow: "0 8px 24px rgba(0,0,0,0.3)", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary, inherit)" },
-      board: { flex: "1 1 auto", minWidth: 0, minHeight: 0, overflow: "auto", padding: "12px 14px", boxSizing: "border-box" },
-      boardTitle: { margin: "10px 0 6px", fontSize: "13px", fontWeight: 600 },
-      row: { display: "flex", alignItems: "baseline", gap: "10px", padding: "4px 6px", borderRadius: "var(--dsw-radius-sm, 6px)", fontSize: "12px" },
+      button: { all: "unset", padding: "4px 10px", borderRadius: "999px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", fontSize: "12px", cursor: "pointer", color: "inherit", fontFamily: "inherit", boxSizing: "border-box" },
+      buttonPrimary: { borderColor: "rgba(110,150,255,0.9)", color: "rgba(110,150,255,1)" },
+      row: { display: "flex", alignItems: "baseline", gap: "10px", padding: "5px 6px", borderRadius: "var(--dsw-radius-sm, 6px)", fontSize: "12px", cursor: "pointer" },
+      rowActive: { background: "var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,0.16))" },
       cell: { minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+      card: { border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", borderRadius: "10px", padding: "10px 12px", display: "flex", flexDirection: "column", gap: "6px" },
+      cardTitle: { fontSize: "12px", fontWeight: 600 },
+      input: { width: "100%", boxSizing: "border-box", minHeight: "54px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "transparent", color: "inherit", fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)", fontSize: "11px", padding: "6px 8px" },
+      field: { width: "100%", boxSizing: "border-box", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "transparent", color: "inherit", fontFamily: "inherit", fontSize: "12px", padding: "5px 8px" },
+      toast: { position: "fixed", right: "16px", bottom: "16px", zIndex: 2000, maxWidth: "320px", padding: "10px 12px", borderRadius: "12px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", background: "var(--dsw-specific-menu, #1f1f1f)", boxShadow: "0 8px 24px rgba(0,0,0,0.3)", fontSize: "12px", lineHeight: "18px", color: "var(--dsw-alias-label-primary, inherit)" },
     };
 
     /**
-     * Read the text out of a command result.
-     *
-     * `remote.commands.execute` answers `{ok, value: {commandId, result}}`, and
-     * the handler's own `{kind, text}` sits in `value.result`. Every earlier
-     * version read the outer object, so every payload looked like
-     * `{"result":{…}}` and nothing could be parsed.
-     * @param {unknown} result - `remote.commands.execute` result.
-     * @returns {string} display text.
+     * Fetch JSON from a route.
+     * @param {string} url - route URL.
+     * @param {Record<string, any>} [options] - fetch options.
+     * @returns {Promise<Record<string, any>>} parsed body.
      */
-    function readText(result) {
-      if (result === null || typeof result !== "object") return String(result ?? "");
-      const envelope = result.value;
-      if (envelope !== null && typeof envelope === "object" && "result" in envelope) {
-        const inner = envelope.result;
-        if (inner !== null && typeof inner === "object") {
-          if (typeof inner.text === "string") return inner.text;
-          return JSON.stringify(inner);
-        }
-        if (typeof inner === "string") return inner;
-      }
-      for (const key of ["text", "output", "message"]) {
-        const value = result[key];
-        if (typeof value === "string" && value.length > 0) return value;
-      }
-      if (envelope !== undefined) return typeof envelope === "string" ? envelope : JSON.stringify(envelope);
-      return JSON.stringify(result);
-    }
-
-    /**
-     * base64url-encode a `/workflow ui` payload (the host decodes it).
-     * @param {unknown} value - payload.
-     * @returns {string} encoded text without padding.
-     */
-    function encodePayload(value) {
-      const bytes = new TextEncoder().encode(JSON.stringify(value ?? {}));
-      let binary = "";
-      for (const byte of bytes) binary += String.fromCharCode(byte);
-      return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
-    }
-
-    /**
-     * Parse a JSON payload returned by the host.
-     * @param {string} text - command text.
-     * @returns {Record<string, any> | null} parsed object, or null.
-     */
-    function parseJson(text) {
+    async function requestJson(url, options) {
+      const response = await fetch(url, { credentials: "same-origin", cache: "no-store", ...(options ?? {}) });
+      const text = await response.text();
+      let payload = null;
       try {
-        const parsed = JSON.parse(String(text ?? ""));
-        return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+        payload = JSON.parse(text);
       } catch {
-        return null;
+        payload = null;
       }
+      if (payload === null) throw new Error(`hnflow: ${response.status} ${text.slice(0, 120)}`);
+      if (response.ok === false || payload.ok === false) {
+        const error = new Error(String(payload.message ?? `hnflow: ${response.status}`));
+        error.code = payload.code;
+        error.data = payload.data;
+        throw error;
+      }
+      return payload;
     }
 
     /**
-     * Map a Workspace store snapshot to the `{id, name, path}` list the tree needs.
-     * @param {unknown} snapshot - `ctx.workspaces.list.getSnapshot()` value.
-     * @returns {{id: string, name: string, path: string}[]} workspaces with a path.
+     * Read the page snapshot for a set of workspaces.
+     * @param {{path: string}[]} workspaces - workspaces.
+     * @returns {Promise<Record<string, any>>} snapshot.
      */
-    function workspaceItems(snapshot) {
-      const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
-      /** @type {{id: string, name: string, path: string}[]} */
-      const out = [];
-      for (const item of items) {
-        const path = typeof item?.path === "string" ? item.path : "";
-        if (path.length === 0) continue;
-        const id = typeof item.workspaceId === "string" ? item.workspaceId : typeof item.id === "string" ? item.id : path;
-        const name = typeof item.title === "string" && item.title.length > 0 ? item.title : path;
-        out.push({ id, name, path });
-      }
-      return out;
+    function fetchState(workspaces) {
+      const params = new URLSearchParams();
+      for (const workspace of Array.isArray(workspaces) ? workspaces : []) params.append("workspace", workspace.path);
+      return requestJson(`/api/hnflow/state?${params.toString()}`);
     }
 
     /**
-     * Place a definition's nodes on a canvas.
-     *
-     * Stored `metadata.canvas.positions` wins; otherwise the editor's grid
-     * fallback (three columns) keeps the picture stable across renders.
-     * @param {Record<string, any> | null} definition - workflow definition.
+     * Read the inbox (the notice uses this).
+     * @returns {Promise<Record<string, any>>} inbox payload.
+     */
+    function fetchInbox() {
+      return requestJson("/api/hnflow/inbox");
+    }
+
+    /**
+     * Read one resolved flow.
+     * @param {string} workspace - workspace root.
+     * @param {string} key - flow alias or id.
+     * @returns {Promise<Record<string, any>>} resolved flow.
+     */
+    function fetchFlow(workspace, key) {
+      return requestJson(`/api/hnflow/flow?workspace=${encodeURIComponent(workspace)}&flow=${encodeURIComponent(key)}`);
+    }
+
+    /**
+     * Read one full run.
+     * @param {string} runId - run identity.
+     * @returns {Promise<Record<string, any>>} run payload.
+     */
+    function fetchRun(runId) {
+      return requestJson(`/api/hnflow/run?runId=${encodeURIComponent(runId)}`);
+    }
+
+    /**
+     * POST a JSON body to a route.
+     * @param {string} path - route.
+     * @param {Record<string, any>} body - body.
+     * @returns {Promise<Record<string, any>>} response.
+     */
+    function postJson(path, body) {
+      return requestJson(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    }
+
+    /**
+     * Place a flow's nodes on a canvas.
+     * @param {Record<string, any>} definition - flow definition.
      * @returns {{nodes: Record<string, any>[], edges: Record<string, any>[], width: number, height: number}} layout.
      */
-    function layoutDefinition(definition) {
+    function layoutFlow(definition) {
       const nodes = Array.isArray(definition?.nodes) ? definition.nodes : [];
       const edges = Array.isArray(definition?.edges) ? definition.edges : [];
-      const stored = definition?.metadata?.canvas?.positions ?? {};
       /** @type {Map<string, Record<string, any>>} */
       const placed = new Map();
       nodes.forEach((node, index) => {
-        const position = stored[node.id];
-        const x = Number.isFinite(position?.x) ? position.x : (index % CANVAS.columns) * CANVAS.stepX;
-        const y = Number.isFinite(position?.y) ? position.y : Math.floor(index / CANVAS.columns) * CANVAS.stepY;
-        placed.set(node.id, {
-          id: String(node.id),
-          type: String(node.type ?? ""),
-          x: x * 0.55 + CANVAS.padding,
-          y: y * 0.34 + CANVAS.padding,
-          width: CANVAS.width,
-          height: CANVAS.height,
-        });
+        const x = (index % CANVAS.columns) * CANVAS.stepX + CANVAS.padding;
+        const y = Math.floor(index / CANVAS.columns) * CANVAS.stepY + CANVAS.padding;
+        placed.set(node.id, { id: String(node.id), type: String(node.type ?? ""), x, y, width: CANVAS.width, height: CANVAS.height });
       });
       const laid = [...placed.values()];
       const width = Math.max(...laid.map((node) => node.x + node.width), CANVAS.width) + CANVAS.padding;
       const height = Math.max(...laid.map((node) => node.y + node.height), CANVAS.height) + CANVAS.padding;
       const drawn = edges
-        .filter((edge) => placed.has(edge.source) && placed.has(edge.target))
+        .filter((edge) => placed.has(edge.from) && placed.has(edge.to))
         .map((edge, index) => ({
-          id: `${edge.source}:${edge.source_port}->${edge.target}:${edge.target_port}:${index}`,
-          from: edge.source,
-          to: edge.target,
-          path: edgePath(placed.get(edge.source), placed.get(edge.target)),
+          id: String(edge.id ?? `${edge.from}:${edge.to}:${index}`),
+          from: edge.from,
+          to: edge.to,
+          path: edgePath(placed.get(edge.from), placed.get(edge.to)),
         }));
       return { nodes: laid, edges: drawn, width, height };
     }
@@ -206,250 +207,17 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Whether the session runs the HNFlow preset.
-     *
-     * The `agentPreset` projection is the preset id as a plain string; an older
-     * shape carried `{ id }`. An absent projection means "not known yet".
-     * @param {unknown} preset - projection value.
-     * @returns {boolean} true when the session tab belongs to this session.
+     * Node state by id for a run summary.
+     * @param {Record<string, any> | null} run - run summary.
+     * @returns {Map<string, string>} node id → status.
      */
-    function isHnflowPreset(preset) {
-      if (preset === null || preset === undefined) return true;
-      if (typeof preset === "string") return preset === PRESET_ID;
-      if (typeof preset === "object" && typeof preset.id === "string") return preset.id === PRESET_ID;
-      return true;
-    }
-
-    /**
-     * Resolve once, or after a timeout, with whatever the injection produced.
-     * @param {function(function(any): void): void} start - begins an async probe.
-     * @param {number} waitMs - fallback delay.
-     * @returns {Promise<any>} the first answer.
-     */
-    function firstAnswer(start, waitMs = 2000) {
-      return new Promise((resolve) => {
-        let settled = false;
-        const done = (value) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        };
-        try {
-          start(done);
-        } catch {
-          done(undefined);
-        }
-        setTimeout(() => done(undefined), waitMs);
-      });
-    }
-
-    /**
-     * The workspace list from the client store.
-     * @param {Record<string, any>} ctx - client context.
-     * @returns {Promise<{id: string, name: string, path: string}[]>} workspaces.
-     */
-    function listWorkspaces(ctx) {
-      return firstAnswer((done) => {
-        ctx.inject(["workspaces"], (scope) => {
-          try {
-            done(workspaceItems(scope.workspaces?.list?.getSnapshot?.()));
-          } catch {
-            done([]);
-          }
-        });
-      }, 3000).then((value) => (Array.isArray(value) ? value : []));
-    }
-
-    /**
-     * Session ids a surface may name to run a command, best first.
-     *
-     * `execute(undefined, …)` reports ok without running anything, so a real id
-     * is required (plan §14.2 M6.0 result). The window pins the first session
-     * that answered, otherwise every newly opened session would collect our
-     * command log lines; HNFlow sessions sort ahead of the rest.
-     * @param {Record<string, any>} ctx - client context.
-     * @returns {Promise<string[]>} candidate session ids.
-     */
-    function commandTargets(ctx) {
-      return firstAnswer((done) => {
-        ctx.inject(["uiSession", "sessions"], (scope) => {
-          /** @type {string[]} */
-          const ids = [];
-          try {
-            const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
-            if (current && typeof current.key === "string") ids.push(current.key);
-          } catch {
-            // the current-session face is optional
-          }
-          /** @type {string[]} */
-          const rest = [];
-          /** @type {Set<string>} */
-          const hnflow = new Set();
-          try {
-            const list = scope.sessions?.list?.getSnapshot?.();
-            for (const id of Array.isArray(list?.ids) ? list.ids : []) {
-              if (typeof id !== "string" || ids.includes(id)) continue;
-              if ((list?.byId?.[id]?.projectionValues?.agentPreset ?? null) === PRESET_ID) hnflow.add(id);
-              rest.push(id);
-            }
-          } catch {
-            // the session list is optional
-          }
-          rest.sort((left, right) => Number(hnflow.has(right)) - Number(hnflow.has(left)));
-          ids.push(...rest);
-          done(ids);
-        });
-      }, 3000).then((value) => {
-        const ids = Array.isArray(value) ? value.filter((id) => typeof id === "string") : [];
-        if (pinnedSession === null) return ids;
-        return [pinnedSession, ...ids.filter((id) => id !== pinnedSession)];
-      });
-    }
-
-    /**
-     * Run one `ui` op and parse its JSON answer.
-     *
-     * `/hnflow` is the resident viewer command (registered in every session by
-     * the root row); `/workflow` is the mode-scoped fallback for older hosts.
-     * Session ids are tried in order because a command only answers inside a
-     * session that has it.
-     * @param {Record<string, any>} ctx - client context.
-     * @param {string} op - one of tree / canvas / assetCanvas / monitor / wait.
-     * @param {Record<string, any>} payload - op arguments.
-     * @returns {Promise<Record<string, any> | null>} parsed payload (null when unreadable).
-     */
-    async function runUi(ctx, op, payload) {
-      const encoded = encodePayload(payload);
-      const lines = [`/hnflow ui ${op} ${encoded}`, `/workflow ui ${op} ${encoded}`];
-      const ids = await commandTargets(ctx);
-      /** @type {unknown} */
-      let lastError = null;
-      for (const line of lines) {
-        for (const id of [...ids, undefined]) {
-          try {
-            const result = await ctx.remote.commands.execute(id, line, []);
-            if (result && result.ok === false) {
-              const code = result.error && result.error.code ? result.error.code : "command-failed";
-              const message = result.error && result.error.message ? result.error.message : "";
-              // An old host only knows `ping`: the browser bundle and the host
-              // plugin were reloaded separately, so say what actually fixes it.
-              lastError = new Error(/unknown ui op/u.test(message) ? `hnflow: ${code}: ${message}（宿主插件仍是旧版本，请完全退出 DSH 再启动，而不是只刷新窗口）` : `hnflow: ${code}: ${message}`);
-              continue;
-            }
-            // `undefined` value means the host did not recognise the line at all,
-            // which is how a host without the viewer row answers `/hnflow`.
-            if (result && result.value === undefined) {
-              lastError = new Error(`hnflow: unknown command: ${line.slice(0, 60)}…`);
-              continue;
-            }
-            const inner = result && result.value && typeof result.value === "object" ? result.value.result : null;
-            if (inner !== null && typeof inner === "object" && inner.kind === "error") {
-              lastError = new Error(String(inner.text ?? "command failed"));
-              continue;
-            }
-            if (typeof id === "string") pinnedSession = id;
-            return parseJson(readText(result));
-          } catch (error) {
-            lastError = error;
-          }
-        }
+    function nodeStatuses(run) {
+      /** @type {Map<string, string>} */
+      const map = new Map();
+      for (const node of Array.isArray(run?.nodes) ? run.nodes : []) {
+        if (typeof node?.id === "string") map.set(node.id, String(node.status ?? "pending"));
       }
-      throw lastError ?? new Error("hnflow: 没有可用的会话运行命令；打开一个 HNFlow 模式的会话后重试");
-    }
-
-    /**
-     * The sidebar glyph.
-     * @param {{size?: number}} props - glyph size from the sidebar.
-     * @returns {unknown} element.
-     */
-    function HnflowIcon(props) {
-      const size = typeof props?.size === "number" ? props.size : 18;
-      return h("span", { style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.6)}px` }, "aria-hidden": "true" }, "\u25C6");
-    }
-
-    /**
-     * The right-hand canvas, or the empty state when nothing is selected.
-     * @param {{canvas: Record<string, any> | null}} props - resolved canvas payload.
-     * @returns {unknown} element.
-     */
-    function CanvasStage(props) {
-      const canvas = props?.canvas ?? null;
-      if (canvas === null || canvas.definition === undefined) return h("div", { style: styles.empty }, "选择左侧的工作流查看画布");
-      const layout = layoutDefinition(canvas.definition);
-      return h(
-        "div",
-        { style: styles.canvasPane },
-        h("div", { style: { ...styles.meta, padding: "0 0 8px" } }, `${canvas.assetName || canvas.alias || canvas.key} · ${canvas.source} · r${canvas.revision ?? "?"}/${canvas.currentRevision ?? "?"}${canvas.drift ? " · 漂移" : ""}`),
-        h(
-          "svg",
-          { viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "workflow canvas" },
-          ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
-          ...layout.nodes.map((node) =>
-            h("g", { key: node.id }, [
-              h("rect", { key: "r", x: node.x, y: node.y, width: node.width, height: node.height, rx: 8, style: styles.node }),
-              h("text", { key: "t", x: node.x + 8, y: node.y + 20, style: styles.nodeLabel }, node.id),
-              h("text", { key: "ty", x: node.x + 8, y: node.y + 36, style: styles.nodeLabel }, node.type),
-            ]),
-          ),
-        ),
-      );
-    }
-
-    /**
-     * The monitor board: every run on top, the pending tasks below.
-     * @param {{monitor: Record<string, any> | null}} props - monitor payload.
-     * @returns {unknown} element.
-     */
-    function TaskBoard(props) {
-      const monitor = props?.monitor ?? null;
-      if (monitor === null) return h("div", { style: styles.empty }, "读取任务状态…");
-      const runs = Array.isArray(monitor.runs) ? monitor.runs : [];
-      const tasks = Array.isArray(monitor.tasks) ? monitor.tasks : [];
-      const counts = runs.reduce((acc, run) => {
-        acc[run.status] = (acc[run.status] ?? 0) + 1;
-        return acc;
-      }, /** @type {Record<string, number>} */ ({}));
-      return h(
-        "div",
-        { style: styles.board },
-        h("div", { style: styles.meta }, `${runs.length} 次执行 · ${Object.entries(counts).map(([status, count]) => `${status} ${count}`).join(" · ") || "无"}`),
-        h("div", { style: styles.boardTitle }, "全部执行"),
-        runs.length === 0
-          ? h("div", { style: styles.meta }, "还没有执行记录")
-          : h(
-              "div",
-              null,
-              ...runs.map((run) =>
-                h("div", { key: run.runId, style: styles.row }, [
-                  h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(run.workspace)),
-                  h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(run.sessionId)),
-                  h("span", { key: "f", style: { ...styles.cell, flex: "1 1 auto" } }, run.workflow ?? "—"),
-                  h("span", { key: "t", style: { ...styles.cell, flex: "0 0 120px" } }, run.status),
-                  h("span", { key: "n", style: { ...styles.cell, flex: "0 0 120px" } }, run.node ?? "—"),
-                ]),
-              ),
-            ),
-        h("div", { style: styles.boardTitle }, `需要你处理（${tasks.length}）`),
-        tasks.length === 0
-          ? h("div", { style: styles.meta }, "没有待处理的任务")
-          : h(
-              "div",
-              null,
-              ...tasks.map((task) =>
-                h("div", { key: task.taskId, style: { ...styles.row, flexDirection: "column", alignItems: "stretch", marginBottom: "4px" } }, [
-                  h("div", { key: "head", style: { display: "flex", alignItems: "baseline", gap: "10px" } }, [
-                    h("span", { key: "w", style: { ...styles.cell, flex: "0 0 140px" } }, shortPath(task.workspace)),
-                    h("span", { key: "s", style: { ...styles.cell, flex: "0 0 120px" } }, shortSession(task.sessionId)),
-                    h("span", { key: "k", style: { ...styles.cell, flex: "0 0 80px" } }, task.kind),
-                    h("span", { key: "d", style: { ...styles.cell, flex: "1 1 auto" } }, task.description || task.nodeId),
-                    h("span", { key: "id", style: { ...styles.cell, flex: "0 0 150px" } }, task.taskId),
-                  ]),
-                  // Until the in-panel form lands, the row says what to ask for.
-                  h("div", { key: "cmd", style: { ...styles.meta, fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)" } }, `在会话里说：处理待办 ${task.taskId}`),
-                ]),
-              ),
-            ),
-      );
+      return map;
     }
 
     /**
@@ -464,18 +232,201 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Compact session label (the id tail).
-     * @param {string | null} value - session id.
-     * @returns {string} short label.
+     * Compact run label.
+     * @param {Record<string, any>} run - run summary.
+     * @returns {string} label.
      */
-    function shortSession(value) {
-      if (typeof value !== "string" || value.length === 0) return "—";
-      return value.length <= 14 ? value : `…${value.slice(-12)}`;
+    function runLabel(run) {
+      return `${run.flowName ?? run.key ?? run.flowId} · ${run.status}`;
     }
 
     /**
-     * Catch a render failure inside the page and show it instead of a blank
-     * surface. Built lazily because the contract tests use a React stub without
+     * The sidebar glyph.
+     * @param {{size?: number}} props - glyph size from the sidebar.
+     * @returns {unknown} element.
+     */
+    function HnflowIcon(props) {
+      const size = typeof props?.size === "number" ? props.size : 18;
+      return h("span", { style: { display: "inline-flex", alignItems: "center", justifyContent: "center", width: `${size}px`, height: `${size}px`, fontSize: `${Math.round(size * 0.6)}px` }, "aria-hidden": "true" }, "\u25C6");
+    }
+
+    /**
+     * Read-only flow canvas, optionally coloured by a run.
+     * @param {{definition: Record<string, any> | null, run?: Record<string, any> | null}} props - flow and run.
+     * @returns {unknown} element.
+     */
+    function FlowCanvas(props) {
+      const definition = props?.definition ?? null;
+      if (definition === null || !Array.isArray(definition.nodes)) return h("div", { style: styles.empty }, "选择左侧的流程查看画布");
+      const layout = layoutFlow(definition);
+      const statuses = nodeStatuses(props?.run ?? null);
+      return h(
+        "svg",
+        { viewBox: `0 0 ${layout.width} ${layout.height}`, style: styles.canvas, role: "img", "aria-label": "flow canvas" },
+        ...layout.edges.map((edge) => h("path", { key: edge.id, d: edge.path, style: styles.edge })),
+        ...layout.nodes.map((node) =>
+          h("g", { key: node.id }, [
+            h("rect", { key: "r", x: node.x, y: node.y, width: node.width, height: node.height, rx: 8, fill: "rgba(127,127,127,0.10)", stroke: NODE_COLORS[statuses.get(node.id) ?? "pending"] ?? NODE_COLORS.pending, strokeWidth: 1.6 }),
+            h("text", { key: "t", x: node.x + 9, y: node.y + 21, style: styles.nodeLabel }, node.id),
+            h("text", { key: "ty", x: node.x + 9, y: node.y + 38, style: styles.nodeType }, `${node.type}${statuses.has(node.id) ? ` · ${statuses.get(node.id)}` : ""}`),
+          ]),
+        ),
+      );
+    }
+
+    /**
+     * Left tree: workspaces and their referenced flows.
+     * @param {{groups: Record<string, any>[], selected: string, onPick: Function}} props - selection.
+     * @returns {unknown} element.
+     */
+    function FlowTree(props) {
+      const groups = Array.isArray(props?.groups) ? props.groups : [];
+      const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
+      return h(
+        "div",
+        { style: styles.tree },
+        groups.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
+        ...groups.map((group) =>
+          h(
+            "div",
+            { key: group.path, style: styles.group },
+            h("div", { style: styles.groupTitle }, `${group.name || shortPath(group.path)}${group.error ? " · 读取失败" : ""}`),
+            (group.flows ?? []).length === 0
+              ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的流程")
+              : h(
+                  "div",
+                  null,
+                  ...(group.flows ?? []).map((entry) => {
+                    const key = `${group.path}:${entry.alias || entry.flowId}`;
+                    return h(
+                      "button",
+                      { type: "button", key, style: props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => onPick(group.path, entry) },
+                      h("span", null, `${entry.alias || entry.flowId}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
+                      h("span", { style: styles.meta }, `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                    );
+                  }),
+                ),
+          ),
+        ),
+      );
+    }
+
+    /**
+     * The flow pane: canvas, publish and run controls.
+     * @param {{flow: Record<string, any> | null, busy: boolean, onPublish: Function, onRun: Function, message: string}} props - pane.
+     * @returns {unknown} element.
+     */
+    function FlowPane(props) {
+      const flow = props?.flow;
+      const [input, setInput] = react.useState("{}");
+      if (flow === null) return h("div", { style: styles.empty }, "选择左侧的流程查看画布");
+      return h(
+        "div",
+        { style: styles.pane },
+        h("div", { style: styles.meta }, `${flow.alias || flow.flowId} · ${flow.source} · r${flow.revision ?? "?"}/${flow.currentRevision ?? "?"}${flow.drift ? " · 漂移" : ""}`),
+        h(FlowCanvas, { definition: flow.definition, run: null }),
+        h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, [
+          h("button", { key: "publish", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: props.busy, onClick: () => props.onPublish(flow) }, "发布新版本"),
+          h("span", { key: "hint", style: styles.meta }, "发布是人工动作：Agent 只能起草"),
+        ]),
+        h("div", { style: styles.cardTitle }, "启动输入（JSON）"),
+        h("textarea", { style: styles.input, value: input, onChange: (event) => setInput(event.target.value), spellCheck: false }),
+        h("div", null, h("button", { type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onRun(flow, input) }, "用这份输入运行")),
+        props.message.length > 0 ? h("div", { style: styles.okBox }, props.message) : null,
+      );
+    }
+
+    /**
+     * The runs board.
+     * @param {{runs: Record<string, any>[], selected: string, onPick: Function}} props - board.
+     * @returns {unknown} element.
+     */
+    function RunsBoard(props) {
+      const runs = Array.isArray(props?.runs) ? props.runs : [];
+      if (runs.length === 0) return h("div", { style: styles.empty }, "还没有运行记录");
+      return h(
+        "div",
+        { style: styles.tree },
+        ...runs.map((run) =>
+          h(
+            "button",
+            { type: "button", key: run.runId, style: props.selected === run.runId ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => props.onPick(run) },
+            h("span", null, `${runLabel(run)}${run.pending > 0 ? ` · 待人工 ${run.pending}` : ""}`),
+            h("span", { style: styles.meta }, `${run.runId} · ${shortPath(run.workspace)} · r${run.revision ?? "latest"}`),
+          ),
+        ),
+      );
+    }
+
+    /**
+     * One run's node timeline.
+     * @param {{run: Record<string, any> | null, definition: Record<string, any> | null}} props - run.
+     * @returns {unknown} element.
+     */
+    function RunPane(props) {
+      const run = props?.run;
+      if (run === null) return h("div", { style: styles.empty }, "选择左侧的运行查看节点状态");
+      return h(
+        "div",
+        { style: styles.pane },
+        h("div", { style: styles.meta }, `${run.runId} · ${run.status} · r${run.revision ?? "latest"} · ${shortPath(run.workspace)}`),
+        run.error !== null && run.error !== undefined ? h("div", { style: styles.errorBox }, `${run.error.code}: ${run.error.message}`) : null,
+        props.definition !== null ? h(FlowCanvas, { definition: props.definition, run }) : null,
+        h("div", { style: styles.cardTitle }, "节点"),
+        ...(run.nodes ?? []).map((node) =>
+          h("div", { key: node.id, style: styles.row }, [
+            h("span", { key: "id", style: { ...styles.cell, flex: "0 0 130px" } }, node.id),
+            h("span", { key: "st", style: { ...styles.cell, flex: "0 0 90px" } }, node.status),
+            h("span", { key: "at", style: { ...styles.cell, flex: "0 0 60px" } }, node.attempts > 1 ? `×${node.attempts}` : ""),
+            h("span", { key: "dg", style: { ...styles.cell, flex: "1 1 auto" } }, node.diagnostic ? `${node.diagnostic.code}: ${node.diagnostic.message}` : ""),
+          ]),
+        ),
+      );
+    }
+
+    /**
+     * The inbox: gates and deliveries.
+     * @param {{items: Record<string, any>[], busy: boolean, onGate: Function, onDeliver: Function}} props - inbox.
+     * @returns {unknown} element.
+     */
+    function InboxView(props) {
+      const items = Array.isArray(props?.items) ? props.items : [];
+      const [drafts, setDrafts] = react.useState({});
+      if (items.length === 0) return h("div", { style: styles.empty }, "收件箱是空的");
+      return h(
+        "div",
+        { style: styles.pane },
+        ...items.map((item) => {
+          const draft = drafts[item.id] ?? "";
+          return h(
+            "div",
+            { key: item.id, style: styles.card },
+            h("div", { style: styles.cardTitle }, `${item.kind === "gate" ? "门禁" : "人工交付"} · ${item.flowName ?? ""} · ${item.nodeId}`),
+            h("div", { style: styles.meta }, `run ${item.runId} · ${item.id}${item.attempts > 0 ? ` · 已退回 ${item.attempts} 次` : ""}`),
+            item.kind === "gate"
+              ? h(
+                  "div",
+                  { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+                  h("button", { type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: props.busy, onClick: () => props.onGate(item, { decision: "approved", reason: draft }) }, "批准"),
+                  h("button", { type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onGate(item, { decision: "modified", reason: draft || "修改后批准" }) }, "修改后批准"),
+                  h("button", { type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onGate(item, { decision: "rejected", reason: draft }) }, "拒绝"),
+                )
+              : null,
+            item.whyHuman ? h("div", { style: styles.meta }, `为什么必须由人完成：${item.whyHuman}`) : null,
+            item.kind === "gate" ? null : h("div", { style: styles.cardTitle }, "交付物（JSON）"),
+            item.kind === "gate" ? null : h("textarea", { style: styles.input, value: draft, spellCheck: false, onChange: (event) => setDrafts({ ...drafts, [item.id]: event.target.value }) }),
+            item.kind === "gate"
+              ? h("input", { style: styles.field, placeholder: "理由（拒绝时必填）", value: draft, onChange: (event) => setDrafts({ ...drafts, [item.id]: event.target.value }) })
+              : h("div", null, h("button", { type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onDeliver(item, draft) }, "提交交付")),
+            item.deliverable ? h("div", { style: styles.meta }, `契约：${JSON.stringify(item.deliverable).slice(0, 320)}`) : null,
+          );
+        }),
+      );
+    }
+
+    /**
+     * Catch a render failure inside a surface and show it instead of a blank
+     * panel. Built lazily because the contract tests use a React stub without
      * class components.
      * @returns {unknown} a boundary component, or null when unavailable.
      */
@@ -487,11 +438,9 @@ window.__ModuleLoader__.load({
           super(props);
           this.state = { message: "" };
         }
-
         static getDerivedStateFromError(error) {
           return { message: String(error && error.message ? error.message : error) };
         }
-
         render() {
           if (this.state.message.length > 0) {
             return h("div", { style: { padding: "16px", fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)", fontSize: "12px", color: "var(--dsw-alias-label-danger, #e5534b)", whiteSpace: "pre-wrap" } }, `HNFlow 页面渲染失败：${this.state.message}`);
@@ -502,7 +451,7 @@ window.__ModuleLoader__.load({
     })();
 
     /**
-     * Wrap the page so a render failure is visible rather than blank.
+     * Wrap a page so a render failure is visible rather than blank.
      * @param {unknown} node - page element.
      * @returns {unknown} wrapped element.
      */
@@ -511,221 +460,192 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The left tree of workspace refs, shared by the page and the session tab.
-     * @param {{groups: Record<string, any>[], selected: string, onPick: Function}} props - groups and selection.
-     * @returns {unknown} element.
+     * List workspaces from the client store.
+     * @param {Record<string, any>} ctx - client context.
+     * @returns {Promise<{id: string, name: string, path: string}[]>} workspaces.
      */
-    function WorkflowTree(props) {
-      const groups = Array.isArray(props?.groups) ? props.groups : [];
-      const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
-      return h(
-        "div",
-        { style: styles.tree },
-        groups.length === 0 ? h("div", { style: styles.meta }, "还没有工作区") : null,
-        ...groups.map((group) =>
-          h(
-            "div",
-            { key: group.path, style: styles.group },
-            h("div", { style: styles.groupTitle }, `${group.name}${group.error ? " · 读取失败" : ""}`),
-            (group.workflows ?? []).length === 0
-              ? h("div", { style: { ...styles.meta, padding: "2px 8px" } }, "没有引用的工作流")
-              : h(
-                  "div",
-                  null,
-                  ...(group.workflows ?? []).map((entry) =>
-                    h(
-                      "button",
-                      {
-                        type: "button",
-                        key: `${group.path}:${entry.alias || entry.assetId}`,
-                        style: props.selected === `${group.path}:${entry.alias || entry.assetId}` ? { ...styles.item, ...styles.itemActive } : styles.item,
-                        onClick: () => onPick(group.path, entry),
-                      },
-                      h("span", null, `${entry.alias || entry.assetId}${entry.hasOverride ? " ·覆盖" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
-                      h("span", { style: styles.meta }, `${entry.assetId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
-                    ),
-                  ),
-                ),
-          ),
-        ),
-      );
+    function workspaceList(ctx) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const done = (value) => {
+          if (settled) return;
+          settled = true;
+          resolve(Array.isArray(value) ? value : []);
+        };
+        try {
+          ctx.inject(["workspaces"], (scope) => {
+            try {
+              const items = Array.isArray(scope.workspaces?.list?.getSnapshot?.()?.items) ? scope.workspaces.list.getSnapshot().items : [];
+              done(items.filter((item) => typeof item?.path === "string" && item.path.length > 0).map((item) => ({ id: item.workspaceId ?? item.id ?? item.path, name: item.title ?? shortPath(item.path), path: item.path })));
+            } catch {
+              done([]);
+            }
+          });
+        } catch {
+          done([]);
+        }
+        setTimeout(() => done([]), 2000);
+      });
     }
 
     /**
-     * The left tree of library assets.
-     * @param {{assets: Record<string, any>[], selected: string, onPick: Function}} props - assets and selection.
-     * @returns {unknown} element.
-     */
-    function AssetTree(props) {
-      const assets = Array.isArray(props?.assets) ? props.assets : [];
-      const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
-      return h(
-        "div",
-        { style: styles.tree },
-        assets.length === 0 ? h("div", { style: styles.meta }, "资产库是空的") : null,
-        ...assets.map((asset) =>
-          h(
-            "button",
-            {
-              type: "button",
-              key: asset.id,
-              style: props.selected === asset.id ? { ...styles.item, ...styles.itemActive } : styles.item,
-              onClick: () => onPick(asset),
-            },
-            h("span", null, asset.name || asset.id),
-            h("span", { style: styles.meta }, `${asset.id} · r${asset.revision ?? "?"}`),
-          ),
-        ),
-      );
-    }
-
-    /**
-     * The page's tab row.
-     *
-     * Plain buttons whose style is fully reset with `all: unset`: the host
-     * styles every `button`, and that chrome is what kept showing as a white box
-     * around unselected tabs. Only the selected tab draws an accent underline.
-     * @param {{value: string, onChange: Function}} props - selection.
-     * @returns {unknown} element.
-     */
-    function PanelTabs(props) {
-      const value = props?.value;
-      const onChange = typeof props?.onChange === "function" ? props.onChange : () => {};
-      return h(
-        "div",
-        { style: { display: "flex", alignItems: "center", gap: "16px" } },
-        ...TABS.map((entry) =>
-          h(
-            "button",
-            {
-              type: "button",
-              key: entry.id,
-              style: entry.id === value ? { ...styles.tab, ...styles.tabActive } : styles.tab,
-              onClick: () => onChange(entry.id),
-            },
-            entry.label,
-          ),
-        ),
-      );
-    }
-
-    /**
-     * The HNFlow page: three tabs over one tree+canvas layout.
-     * @param {{runUi: (op: string, payload: Record<string, any>) => Promise<Record<string, any> | null>}} props - injected command face.
+     * The main page: three tabs over the Fetch routes.
+     * @param {{ctx: Record<string, any>}} props - injected context.
      * @returns {unknown} element.
      */
     function HnflowPage(props) {
-      const runUi = props?.runUi;
-      const [tab, setTab] = react.useState("workspaces");
-      const [tree, setTree] = react.useState(null);
-      const [canvas, setCanvas] = react.useState(null);
-      const [monitor, setMonitor] = react.useState(null);
+      const ctx = props.ctx;
+      const [tab, setTab] = react.useState("flows");
+      const [state, setState] = react.useState(null);
       const [error, setError] = react.useState("");
+      const [message, setMessage] = react.useState("");
       const [busy, setBusy] = react.useState(false);
-      const [selected, setSelected] = react.useState("");
+      const [selectedFlow, setSelectedFlow] = react.useState(null);
+      const [selectedRun, setSelectedRun] = react.useState(null);
 
       /**
-       * Load the left tree (workspaces + library).
+       * Reload the snapshot.
        * @returns {Promise<void>} resolves once rendered.
        */
-      const loadTree = async () => {
+      const reload = async () => {
         setBusy(true);
         try {
-          const workspaces = await listWorkspaces(props.ctx);
-          const payload = await runUi("tree", { workspaces });
-          setTree(payload);
-          setError(payload === null ? "tree payload unreadable" : "");
+          const workspaces = await workspaceList(ctx);
+          const payload = await fetchState(workspaces);
+          setState(payload);
+          setError("");
         } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Load the monitor board.
-       * @returns {Promise<void>} resolves once rendered.
-       */
-      const loadMonitor = async () => {
-        setBusy(true);
-        try {
-          const payload = await runUi("monitor", {});
-          setMonitor(payload);
-          setError(payload === null ? "monitor payload unreadable" : "");
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Select one workflow and draw it.
-       * @param {string} workspace - workspace root.
-       * @param {Record<string, any>} entry - ref entry from the tree.
-       * @returns {Promise<void>} resolves once drawn.
-       */
-      const pickWorkflow = async (workspace, entry) => {
-        const key = entry.alias || entry.assetId;
-        setSelected(`${workspace}:${key}`);
-        setBusy(true);
-        try {
-          const payload = await runUi("canvas", { workspace, key });
-          setCanvas(payload);
-          setError(payload === null ? "canvas payload unreadable" : "");
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
-       * Select one library asset and draw it.
-       * @param {Record<string, any>} asset - asset summary.
-       * @returns {Promise<void>} resolves once drawn.
-       */
-      const pickAsset = async (asset) => {
-        setSelected(asset.id);
-        setBusy(true);
-        try {
-          const payload = await runUi("assetCanvas", { assetId: asset.id });
-          setCanvas(payload);
-          setError(payload === null ? "asset canvas unreadable" : "");
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
+          setError(String(failure?.message ?? failure));
         } finally {
           setBusy(false);
         }
       };
 
       react.useEffect(() => {
-        void loadTree();
+        void reload();
       }, []);
 
-      react.useEffect(() => {
-        if (tab === "monitor" && monitor === null) void loadMonitor();
-      }, [tab]);
+      /**
+       * Publish the selected flow.
+       * @param {Record<string, any>} flow - tree entry.
+       * @returns {Promise<void>} resolves once published.
+       */
+      const publish = async (flow) => {
+        setBusy(true);
+        try {
+          const result = await postJson("/api/hnflow/publish", { workspace: flow.workspace, flow: flow.alias || flow.flowId });
+          setMessage(`已发布 r${result.revision}（${result.contentHash}）`);
+          await reload();
+        } catch (failure) {
+          setError(`${failure.code ?? "publish-failed"}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
 
-      // Switching tabs drops the previous selection so a workspace canvas can
-      // never appear under the library tab (the three surfaces stay identical).
-      react.useEffect(() => {
-        setCanvas(null);
-        setSelected("");
-      }, [tab]);
+      /**
+       * Start a run with the pane's JSON input.
+       * @param {Record<string, any>} flow - selected flow.
+       * @param {string} text - JSON input.
+       * @returns {Promise<void>} resolves once started.
+       */
+      const startRun = async (flow, text) => {
+        setBusy(true);
+        try {
+          let input = {};
+          try {
+            input = text.trim().length === 0 ? {} : JSON.parse(text);
+          } catch (failure) {
+            throw Object.assign(new Error(`输入不是合法 JSON：${String(failure.message ?? failure)}`), { code: "input-invalid" });
+          }
+          const started = await postJson("/api/hnflow/start", { workspace: flow.workspace, flow: flow.alias || flow.flowId, input });
+          setMessage(`已启动 ${started.runId}`);
+          await reload();
+        } catch (failure) {
+          setError(`${failure.code ?? "run-failed"}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
 
-      const workspaces = Array.isArray(tree?.workspaces) ? tree.workspaces : [];
-      const assets = Array.isArray(tree?.assets) ? tree.assets : [];
+      /**
+       * Submit a gate decision.
+       * @param {Record<string, any>} item - inbox item.
+       * @param {{decision: string, reason: string}} decision - decision.
+       * @returns {Promise<void>} resolves once submitted.
+       */
+      const decide = async (item, decision) => {
+        setBusy(true);
+        try {
+          await postJson("/api/hnflow/gate", { runId: item.runId, gateId: item.id, decision: decision.decision, reason: decision.reason, revision: item.revision });
+          setMessage(`已提交 ${item.id}`);
+          await reload();
+        } catch (failure) {
+          setError(`${failure.code ?? "gate-failed"}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
 
-      const left =
-        tab === "workspaces"
-          ? h(WorkflowTree, { groups: workspaces, selected, onPick: (path, entry) => void pickWorkflow(path, entry) })
-          : tab === "assets"
-            ? h(AssetTree, { assets, selected, onPick: (asset) => void pickAsset(asset) })
-            : null;
+      /**
+       * Submit a delivery.
+       * @param {Record<string, any>} item - inbox item.
+       * @param {string} text - JSON payload.
+       * @returns {Promise<void>} resolves once submitted.
+       */
+      const deliver = async (item, text) => {
+        setBusy(true);
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(text);
+          } catch (failure) {
+            throw Object.assign(new Error(`交付物不是合法 JSON：${String(failure.message ?? failure)}`), { code: "payload-invalid" });
+          }
+          await postJson("/api/hnflow/deliverable", { runId: item.runId, requestId: item.id, payload, revision: item.revision });
+          setMessage(`已提交 ${item.id}`);
+          await reload();
+        } catch (failure) {
+          setError(`${failure.code ?? "deliver-failed"}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
 
-      const right = tab === "monitor" ? h(TaskBoard, { monitor }) : h(CanvasStage, { canvas });
-      const refresh = () => (tab === "monitor" ? void loadMonitor() : void loadTree());
+      const groups = Array.isArray(state?.workspaces) ? state.workspaces : [];
+      const runs = Array.isArray(state?.runs) ? state.runs : [];
+      const inbox = Array.isArray(state?.inbox) ? state.inbox : [];
+
+      const pickFlow = async (workspace, entry) => {
+        setSelectedFlow({ ...entry, workspace, definition: null });
+        try {
+          const resolved = await fetchFlow(workspace, entry.alias || entry.flowId);
+          setSelectedFlow({ ...entry, workspace, definition: resolved.flow.definition, lockfile: resolved.flow.lockfile });
+        } catch {
+          // the tree entry is still shown; the canvas stays empty
+        }
+      };
+
+      const pickRun = async (run) => {
+        setSelectedRun({ ...run, nodes: run.nodes ?? [] });
+        try {
+          const full = await fetchRun(run.runId);
+          setSelectedRun(full.run);
+          const resolved = await fetchFlow(run.workspace, run.flowId);
+          setSelectedFlow({ ...resolved.flow, workspace: run.workspace, alias: run.key ?? run.flowId });
+        } catch {
+          // the summary is enough for the timeline
+        }
+      };
+
+      const left = tab === "flows" ? h(FlowTree, { groups, selected: selectedFlow === null ? "" : `${selectedFlow.workspace}:${selectedFlow.alias || selectedFlow.flowId}`, onPick: (workspace, entry) => void pickFlow(workspace, entry) }) : tab === "runs" ? h(RunsBoard, { runs, selected: selectedRun?.runId ?? "", onPick: (run) => void pickRun(run) }) : null;
+
+      const right =
+        tab === "flows"
+          ? h(FlowPane, { flow: selectedFlow, busy, message, onPublish: (flow) => void publish(flow), onRun: (flow, text) => void startRun(flow, text) })
+          : tab === "runs"
+            ? h(RunPane, { run: selectedRun, definition: selectedFlow?.definition ?? null })
+            : h(InboxView, { items: inbox, busy, onGate: (item, decision) => void decide(item, decision), onDeliver: (item, text) => void deliver(item, text) });
 
       return h(
         "div",
@@ -733,232 +653,92 @@ window.__ModuleLoader__.load({
         h(
           "div",
           { style: styles.tabbar },
-          h(PanelTabs, { value: tab, onChange: setTab }),
+          ...TABS.map((entry) =>
+            h(
+              "button",
+              { type: "button", key: entry.id, style: entry.id === tab ? { ...styles.tab, ...styles.tabActive } : styles.tab, onClick: () => setTab(entry.id) },
+              `${entry.label}${entry.id === "inbox" && inbox.length > 0 ? ` (${inbox.length})` : ""}`,
+            ),
+          ),
           h("span", { style: { flex: "1 1 auto" } }),
-          h("button", { type: "button", style: styles.linkButton, disabled: busy, onClick: refresh }, "刷新"),
+          h("button", { type: "button", style: styles.linkButton, disabled: busy, onClick: () => void reload() }, "刷新"),
         ),
+        state?.degraded === true ? h("div", { style: styles.errorBox }, "VibeStack 未就绪：可以查看流程与运行，但发布和启动会被拒绝。") : null,
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
-        withBoundary(h("div", { style: styles.body }, tab === "monitor" ? null : left, right)),
+        message.length > 0 ? h("div", { style: { ...styles.okBox, margin: "8px 14px" } }, message) : null,
+        withBoundary(h("div", { style: styles.body }, tab === "inbox" ? null : left, right)),
       );
     }
 
-    /** Contexts already wired; a repeated apply must not register a second panel. */
-    const wired = new WeakSet();
-
-    /** Session-tab view id (the tab strip is built from `conversation.view` entries). */
-    const VIEW_ID = "hnflow";
-
-    /** Right-sidebar page type (the tab kind and its title slot share it). */
-    const RIGHT_KIND = "hnflow.monitor";
-
-    /** Overlay notice id. */
-    const NOTICE_ID = "hnflow.notice";
-
-    /** Exact Fetch route the host registers for the task notice (no session involved). */
-    const MONITOR_PATH = "/api/hnflow/tasks";
-
-    /** Notice poll cadence, and the slower cadence after a failure. */
-    const NOTICE_POLL_MS = 15000;
-    const NOTICE_RETRY_MS = 60000;
-
-    /** Task ids already announced; module-level so a remount cannot re-notify. */
-    const announced = new Set();
-
     /**
-     * The session that answered first.
-     *
-     * Every command writes a `command/run`/`command/done` pair into the session
-     * it names, so the window keeps using one session instead of following the
-     * user into whichever session they open next.
-     */
-    let pinnedSession = null;
-
-    /**
-     * The current session's id, workspace directory, and preset.
-     * @param {Record<string, any>} ctx - client context.
-     * @returns {Promise<{sessionId: string | null, cwd: string | null, preset: string | null}>} session info.
-     */
-    function sessionInfo(ctx) {
-      return firstAnswer((done) => {
-        ctx.inject(["uiSession", "sessions"], (scope) => {
-          try {
-            const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
-            const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
-            const id = current && typeof current.key === "string" ? current.key : Array.isArray(snapshot?.ids) ? snapshot.ids[0] : null;
-            const entry = id === null ? null : (snapshot?.byId?.[id] ?? null);
-            done({ sessionId: typeof id === "string" ? id : null, cwd: typeof entry?.cwd === "string" ? entry.cwd : null, preset: entry?.projectionValues?.agentPreset ?? null });
-          } catch {
-            done({ sessionId: null, cwd: null, preset: null });
-          }
-        });
-      }, 3000).then((value) => value ?? { sessionId: null, cwd: null, preset: null });
-    }
-
-    /**
-     * The workspace directory of one session.
-     * @param {Record<string, any>} ctx - client context.
-     * @param {string | null} sessionId - session to look up.
-     * @returns {Promise<string | null>} absolute path, or null.
-     */
-    function cwdOfSession(ctx, sessionId) {
-      if (typeof sessionId !== "string" || sessionId.length === 0) return Promise.resolve(null);
-      return firstAnswer((done) => {
-        ctx.inject(["sessions"], (scope) => {
-          try {
-            const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
-            const cwd = snapshot?.byId?.[sessionId]?.cwd ?? null;
-            done(typeof cwd === "string" ? cwd : null);
-          } catch {
-            done(null);
-          }
-        });
-      }, 2000).then((value) => (typeof value === "string" ? value : null));
-    }
-
-    /**
-     * The right-sidebar tab type registration.
-     * @returns {{id: string, kind: string, priority: string, title: () => string}} definition.
-     */
-    function rightTabDefinition() {
-      return {
-        id: RIGHT_KIND,
-        kind: RIGHT_KIND,
-        priority: "extension",
-        title: () => "HNFlow",
-        // The start page lists guide entries; this one opens the same three-tab
-        // page the rail entry opens, just inside the right sidebar.
-        guide: [{ id: "page", kind: RIGHT_KIND, title: () => "HNFlow", description: () => "工作区 / 通用工作流 / 任务监视" }],
-      };
-    }
-
-    /**
-     * Split pending tasks into the ones never announced and the new seen set.
-     * @param {Set<string>} seen - ids already announced.
-     * @param {Record<string, any>[]} tasks - pending task summaries.
-     * @returns {{fresh: Record<string, any>[], seen: Set<string>}} fresh tasks and the updated set.
-     */
-    function freshTasks(seen, tasks) {
-      const next = new Set(seen);
-      /** @type {Record<string, any>[]} */
-      const fresh = [];
-      for (const task of Array.isArray(tasks) ? tasks : []) {
-        const id = typeof task?.taskId === "string" ? task.taskId : "";
-        if (id.length === 0 || next.has(id)) continue;
-        next.add(id);
-        fresh.push(task);
-      }
-      return { fresh, seen: next };
-    }
-
-    /**
-     * One workflow in the session tab: left list of this workspace's refs, right canvas.
-     * @param {{runUi: Function, sessionId: string}} props - injected face.
+     * The session tab: this session's runs.
+     * @param {{sessionId: string, ctx: Record<string, any>}} props - session.
      * @returns {unknown} element.
      */
-    function SessionHnflowView(props) {
-      const runUi = props?.runUi;
-      const [tree, setTree] = react.useState(null);
-      const [canvas, setCanvas] = react.useState(null);
+    function SessionView(props) {
+      const [state, setState] = react.useState(null);
+      const [selected, setSelected] = react.useState(null);
       const [error, setError] = react.useState("");
-      const [selected, setSelected] = react.useState("");
-
-      /**
-       * Load this session's workspace refs.
-       * @returns {Promise<void>} resolves once rendered.
-       */
-      const load = async () => {
-        try {
-          const cwd = (await cwdOfSession(props.ctx, props.sessionId)) ?? (await sessionInfo(props.ctx)).cwd;
-          if (cwd === null) {
-            setError("这个会话没有工作区目录");
-            return;
-          }
-          const payload = await runUi("tree", { workspaces: [{ id: "session", name: shortPath(cwd), path: cwd }] });
-          setTree(payload);
-          setError(payload === null ? "tree payload unreadable" : "");
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        }
-      };
-
-      /**
-       * Draw one ref.
-       * @param {string} workspace - workspace root.
-       * @param {Record<string, any>} entry - ref entry.
-       * @returns {Promise<void>} resolves once drawn.
-       */
-      const pick = async (workspace, entry) => {
-        const key = entry.alias || entry.assetId;
-        setSelected(key);
-        try {
-          setCanvas(await runUi("canvas", { workspace, key }));
-        } catch (failure) {
-          setError(String(failure && failure.message ? failure.message : failure));
-        }
-      };
-
       react.useEffect(() => {
-        void load();
+        void (async () => {
+          try {
+            const workspaces = await workspaceList(props.ctx);
+            const payload = await fetchState(workspaces);
+            setState(payload);
+            const mine = (payload.runs ?? []).filter((run) => run.hostSessionId === props.sessionId);
+            if (mine.length > 0) setSelected(mine[0]);
+          } catch (failure) {
+            setError(String(failure?.message ?? failure));
+          }
+        })();
       }, []);
-
-      const workspace = Array.isArray(tree?.workspaces) ? tree.workspaces[0] : null;
+      const runs = Array.isArray(state?.runs) ? state.runs.filter((run) => run.hostSessionId === props.sessionId) : [];
       return h(
         "div",
         { style: styles.page },
-        h(
-          "div",
-          { style: styles.tabbar },
-          h("span", { style: styles.meta }, workspace === null ? "读取中…" : workspace.name),
-          h("span", { style: { flex: "1 1 auto" } }),
-          h("button", { type: "button", style: styles.tab, onClick: () => void load() }, "刷新"),
-        ),
+        h("div", { style: styles.tabbar }, h("span", { style: styles.meta }, runs.length === 0 ? "这个会话还没有运行" : `${runs.length} 次运行`)),
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
-        workspace === null
-          ? h("div", { style: styles.empty }, "读取中…")
+        runs.length === 0
+          ? h("div", { style: styles.empty }, "用 `hnflow` 工具的 run 动作在这个会话里启动流程")
           : h(
               "div",
               { style: styles.body },
-              h(WorkflowTree, { groups: [workspace], selected: `${workspace.path}:${selected}`, onPick: (path, entry) => void pick(path, entry) }),
-              h(CanvasStage, { canvas }),
+              h(RunsBoard, { runs, selected: selected?.runId ?? "", onPick: (run) => setSelected(run) }),
+              h(RunPane, { run: selected, definition: null }),
             ),
       );
     }
 
+    /** Inbox item ids already announced; module-level so a remount cannot repeat. */
+    const announced = new Set();
+
     /**
-     * The overlay host that announces the first sighting of a pending task.
-     *
-     * It never runs a command: `remote.commands.execute` appends a
-     * `command/run` + `command/done` pair to whichever session it names, and the
-     * notice belongs to no session. It reads the host's exact Fetch route
-     * instead — the same state files the page reads, with nothing written into
-     * any conversation.
-     * @param {{ctx: Record<string, any>}} props - injected face.
+     * Bottom-right notice for the first sighting of an inbox item.
      * @returns {unknown} element.
      */
-    function HnflowNotifier(props) {
+    function Notifier() {
       const [notice, setNotice] = react.useState(null);
-
       react.useEffect(() => {
         let live = true;
         let timer = null;
         let failures = 0;
         const poll = async () => {
           try {
-            const payload = await fetchTasks(props?.ctx);
+            const payload = await fetchInbox();
             if (!live) return;
             failures = 0;
-            if (payload !== null && Array.isArray(payload.tasks)) {
-              const outcome = freshTasks(announced, payload.tasks);
-              for (const id of outcome.seen) announced.add(id);
-              if (outcome.fresh.length > 0) setNotice({ task: outcome.fresh[0], extra: outcome.fresh.length - 1 });
+            const fresh = [];
+            for (const item of Array.isArray(payload.items) ? payload.items : []) {
+              if (typeof item?.id !== "string" || announced.has(item.id)) continue;
+              announced.add(item.id);
+              fresh.push(item);
             }
+            if (fresh.length > 0) setNotice({ item: fresh[0], extra: fresh.length - 1 });
           } catch {
             failures += 1;
           }
           if (!live) return;
-          // Back off after repeated failures, but keep trying: the host may be
-          // restarting, and the notice must come back when it does.
-          timer = setTimeout(() => void poll(), failures === 0 ? NOTICE_POLL_MS : NOTICE_RETRY_MS);
+          timer = setTimeout(() => void poll(), failures === 0 ? 15000 : 60000);
         };
         void poll();
         return () => {
@@ -966,34 +746,14 @@ window.__ModuleLoader__.load({
           if (timer !== null) clearTimeout(timer);
         };
       }, []);
-
       if (notice === null) return null;
       return h(
         "div",
         { style: styles.toast, role: "status" },
-        h("div", { style: { fontWeight: 600, marginBottom: "4px" } }, "HNFlow 有待处理任务"),
-        h("div", { style: styles.meta }, `${notice.task.description || notice.task.nodeId || notice.task.taskId}${notice.extra > 0 ? ` 等 ${notice.extra + 1} 条` : ""}`),
-        h(
-          "div",
-          { style: { display: "flex", gap: "6px", marginTop: "8px" } },
-          h("button", { type: "button", style: styles.tab, onClick: () => setNotice(null) }, "关闭"),
-        ),
+        h("div", { style: { fontWeight: 600, marginBottom: "4px" } }, "HNFlow 有一项待处理"),
+        h("div", { style: styles.meta }, `${notice.item.kind === "gate" ? "门禁" : "交付"} · ${notice.item.flowName ?? ""} · ${notice.item.nodeId}${notice.extra > 0 ? ` 等 ${notice.extra + 1} 条` : ""}`),
+        h("div", { style: { display: "flex", gap: "6px", marginTop: "8px" } }, h("button", { type: "button", style: styles.linkButton, onClick: () => setNotice(null) }, "关闭")),
       );
-    }
-
-    /**
-     * Read the pending tasks from the host's exact Fetch route.
-     *
-     * A browser request carries the harness cookie, so the route answers without
-     * any command, session, or model turn.
-     * @param {Record<string, any>} ctx - client context (unused; kept for symmetry).
-     * @returns {Promise<Record<string, any>>} `{ok, runs, tasks}`.
-     */
-    async function fetchTasks(ctx) {
-      void ctx;
-      const response = await fetch(MONITOR_PATH, { credentials: "same-origin", cache: "no-store" });
-      if (!response.ok) throw new Error(`hnflow: monitor ${response.status}`);
-      return await response.json();
     }
 
     /**
@@ -1012,6 +772,32 @@ window.__ModuleLoader__.load({
       }
     }
 
+    /** Contexts already wired; a repeated apply must not register a second panel. */
+    const wired = new WeakSet();
+
+    /** Session-tab view id. */
+    const VIEW_ID = "hnflow";
+
+    /** Right-sidebar page type. */
+    const RIGHT_KIND = "hnflow.inbox";
+
+    /** Overlay notice id. */
+    const NOTICE_ID = "hnflow.notice";
+
+    /**
+     * The right-sidebar tab type registration.
+     * @returns {Record<string, any>} definition.
+     */
+    function rightTabDefinition() {
+      return {
+        id: RIGHT_KIND,
+        kind: RIGHT_KIND,
+        priority: "extension",
+        title: () => "HNFlow",
+        guide: [{ id: "inbox", kind: RIGHT_KIND, title: () => "HNFlow 收件箱", description: () => "门禁与人工交付" }],
+      };
+    }
+
     /**
      * Client plugin body.
      * @param {Record<string, any>} ctx - client context.
@@ -1021,31 +807,10 @@ window.__ModuleLoader__.load({
       if (wired.has(ctx)) return;
       wired.add(ctx);
 
-      const face = () => ({ runUi: (op, payload) => runUi(ctx, op, payload), ctx });
-
-      // Sidebar rail entry: the host calls `layout.selectPanel('hnflow')` on click.
       registerSlot(ctx, "sidebar.panellist", (slots) => slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 15, label: () => "HNFlow" }, HnflowIcon));
+      registerSlot(ctx, "main", (slots) => slots.register({ name: "main", key: PANEL_ID, inject: () => ({ ctx }) }, HnflowPage));
 
-      // The page itself; the layout key must equal the rail entry id.
-      registerSlot(ctx, "main", (slots) => slots.register({ name: "main", key: PANEL_ID, inject: face }, HnflowPage));
-
-      // Session tab, registered only while the current session runs HNFlow
-      // (plan R15): the tab strip is global, so the registration is the switch.
       let disposeView = null;
-      const syncView = (info) => {
-        const wanted = info.preset === PRESET_ID;
-        if (wanted && disposeView === null) {
-          disposeView = ctx.slots.inject("conversation.view", () =>
-            ctx.slots.register(
-              { name: "conversation.view", id: VIEW_ID, order: 20, label: () => "HNFlow", inject: (sessionId) => ({ ...face(), sessionId }) },
-              SessionHnflowView,
-            ),
-          );
-        } else if (!wanted && disposeView !== null) {
-          disposeView();
-          disposeView = null;
-        }
-      };
       try {
         ctx.inject(["sessions", "uiSession"], (scope) => {
           let last = null;
@@ -1057,7 +822,14 @@ window.__ModuleLoader__.load({
               const preset = id === null ? null : (snapshot?.byId?.[id]?.projectionValues?.agentPreset ?? null);
               if (preset === last) return;
               last = preset;
-              syncView({ preset });
+              if (preset === PRESET_ID && disposeView === null) {
+                disposeView = ctx.slots.inject("conversation.view", () =>
+                  ctx.slots.register({ name: "conversation.view", id: VIEW_ID, order: 20, label: () => "HNFlow", inject: (sessionId) => ({ ctx, sessionId }) }, SessionView),
+                );
+              } else if (preset !== PRESET_ID && disposeView !== null) {
+                disposeView();
+                disposeView = null;
+              }
             } catch {
               // a store that is not ready yet simply retries on the next frame
             }
@@ -1071,33 +843,26 @@ window.__ModuleLoader__.load({
         // no session services: the tab stays off
       }
 
-      // Right-sidebar page: the type (with its start-page guide entry) plus the
-      // body and the chip title. No session-header button: the monitor is
-      // entered from the HNFlow page tab or from the right sidebar's start page.
       try {
         ctx.inject(["sidebarRightTabs", "sidebarRight"], (scope) => {
           const tabs = scope.sidebarRightTabs;
           if (!tabs || typeof tabs.register !== "function") return;
           if (typeof scope.effect === "function") scope.effect(() => tabs.register(rightTabDefinition()), "hnflow: right tab type");
           else tabs.register(rightTabDefinition());
-          // Same page as the rail entry, so the right sidebar shows the same
-          // three tabs instead of a second, monitor-only surface.
-          registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: face }, HnflowPage));
+          registerSlot(ctx, "sidebar.right.pane.tab", (slots) => slots.register({ name: "sidebar.right.pane.tab", key: RIGHT_KIND, inject: () => ({ ctx }) }, HnflowPage));
           registerSlot(ctx, "sidebar.right.pane.tab.title", (slots) => slots.register({ name: "sidebar.right.pane.tab.title", key: RIGHT_KIND }, () => h("span", null, "HNFlow")));
         });
       } catch {
-        // this profile has no right sidebar; the page tab still shows the board
+        // this profile has no right sidebar; the page still shows the inbox
       }
 
-      // First-sighting announcement, bottom-right. It reads the host's Fetch
-      // route, so it exists in every window and touches no session.
-      registerSlot(ctx, "shell.overlay", (slots) => slots.register({ name: "shell.overlay", id: NOTICE_ID, inject: () => ({ ctx }) }, HnflowNotifier));
+      registerSlot(ctx, "shell.overlay", (slots) => slots.register({ name: "shell.overlay", id: NOTICE_ID }, Notifier));
     }
 
     exports.apply = apply;
     exports.inject = inject;
     /** Pure helpers, exported for the contract tests. */
-    exports.internals = { readText, encodePayload, parseJson, workspaceItems, layoutDefinition, edgePath, isHnflowPreset, shortPath, shortSession, rightTabDefinition, freshTasks };
+    exports.internals = { layoutFlow, edgePath, shortPath, nodeStatuses, rightTabDefinition, runLabel };
     return module.exports;
   },
 });
