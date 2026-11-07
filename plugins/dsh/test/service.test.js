@@ -296,6 +296,23 @@ test('gate branches converge through a merge that tolerates the skipped side', a
   }
 })
 
+test('a workspace override runs as a draft snapshot, not the published revision', async () => {
+  const runner = fakeRunner({ draft: [{ status: 'done', output: { points: ['a'] } }] })
+  const { service, seeded } = await setup(gateFlow(), { runner })
+  try {
+    const { WorkspaceStore } = await import('../lib/workspace.js')
+    const definition = gateFlow()
+    definition.nodes[0].instruction = '覆盖后的指令：{{input.brief}}'
+    await new WorkspaceStore(seeded.workspace, {}).writeOverride({ flowId: 'fl-test', definition, baseRevision: 1, origin: 'user' })
+    const run = await startAndWait(service, seeded.workspace)
+    assert.equal(run.source, 'override')
+    assert.match(runner.calls[0].prompt, /覆盖后的指令/u)
+  } finally {
+    await service.close()
+    await rm(seeded.root, { recursive: true, force: true })
+  }
+})
+
 test('publishing advances the revision and freezes the lockfile', async () => {
   const { service, seeded } = await setup(gateFlow(), {})
   try {

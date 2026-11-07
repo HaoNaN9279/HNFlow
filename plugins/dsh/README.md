@@ -84,6 +84,25 @@ domain 没有跨表事务，一次推进必须原子）。
 
 `examples/art-review.flow.json` 演示 `request` + `verify` + 独立 judge。
 
+### 已预置的两条测试流程（本机）
+
+| 引用（alias） | 位置 | 做什么 |
+| --- | --- | --- |
+| `smoke-general` | 通用资产库 `library/test/general-smoke.flow.json` | `agent` 写摘要与要点 → `gate` 人工确认；验证启动、信封、门禁、终态 |
+| `project-delivery` | 通用库 `library/test/project-delivery.flow.json` + **本工作区覆盖** `.hnflow/overrides/fl-demo-project-delivery.flow.json` | 人工交付 `{files, notes}` → `verify` schema 验收 → `agent` 变更清单；验证投递、CAS、覆盖优先 |
+
+使用：
+
+```text
+/hnflow list
+```
+
+- `smoke-general`：页面「流程」选中 → 输入 `{"brief":"随便写一段测试说明"}` → 运行 → 收件箱批准。
+- `project-delivery`：运行后在收件箱提交 `{"files":["a.txt"],"notes":"测试交付"}`；它带工作区覆盖，列表里显示「草稿」，运行记录标「草稿覆盖」，child 简报里能看到“（本项目覆盖）”。
+
+两条流程都不写 `model`，直接用会话当前模型，不需要先在 VibeStack 里定义模型层。
+
+
 ## 测试
 
 ```sh

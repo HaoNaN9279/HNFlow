@@ -157,10 +157,16 @@ function buildService(options) {
 
   /**
    * Read the flow definition a run pinned.
+   *
+   * A run carries its own definition snapshot. That is what makes a draft
+   * override executable without pretending it is a published revision, and it
+   * keeps a run reproducible even if the library file or revision snapshot is
+   * edited or removed afterwards.
    * @param {Record<string, any>} run - run record.
    * @returns {Promise<Record<string, any>>} definition.
    */
   async function flowOf(run) {
+    if (run.definition !== null && typeof run.definition === 'object' && Array.isArray(run.definition.nodes)) return run.definition
     const { assets } = storesFor(run.workspace)
     if (Number.isInteger(run.revision)) {
       const record = await assets.readRevisionRecord(run.flowId, run.revision)
@@ -847,6 +853,10 @@ function buildService(options) {
       flowName: resolved.flowName || resolved.definition?.flow?.name || resolved.key,
       key: resolved.key,
       revision: Number.isInteger(resolved.revision) ? resolved.revision : null,
+      source: resolved.source,
+      // Self-contained: a draft override is executable even though it has no
+      // published revision, and a later library edit cannot change this run.
+      definition: resolved.definition,
       contentHash: contentHash(resolved.definition),
       lockfile,
       routes,
@@ -1273,6 +1283,7 @@ export function summariseRun(run) {
     workspace: run.workspace,
     hostSessionId: run.hostSessionId,
     revision: run.revision,
+    source: run.source ?? 'latest',
     startedAt: run.startedAt,
     endedAt: run.endedAt,
     error: run.error,

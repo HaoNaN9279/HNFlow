@@ -842,6 +842,7 @@ plugins/dsh/
 | E-10 | lockfile 不记录 DSH 版本 | 没有稳定可读的版本 API；记录 `pluginVersion` + VibeStack `apiVersion`，`engines.dsh` 管住大版本 |
 | E-11 | `model` 路由按**层 id** 去重存于 `lockfile.models` | 同一层被多个节点引用时只解析一次；节点级 `model` 仍逐节点记录 |
 | E-12 | 新增 `POST /api/hnflow/publish` | 发布仍是人的动作（页面按钮），不是 Agent 工具 |
+| E-13 | run 记录内嵌 `definition` 快照（含来源 `source`） | 草稿覆盖没有发布 revision，却必须可执行；快照同时保证库文件／revision 之后的改动不影响已启动的 run |
 
 ### E.3 状态机（实现）
 

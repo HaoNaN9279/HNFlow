@@ -369,7 +369,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: styles.pane },
-        h("div", { style: styles.meta }, `${run.runId} · ${run.status} · r${run.revision ?? "latest"} · ${shortPath(run.workspace)}`),
+        h("div", { style: styles.meta }, `${run.runId} · ${run.status} · ${run.source === "override" ? "草稿覆盖" : `r${run.revision ?? "latest"}`} · ${shortPath(run.workspace)}`),
         run.error !== null && run.error !== undefined ? h("div", { style: styles.errorBox }, `${run.error.code}: ${run.error.message}`) : null,
         props.definition !== null ? h(FlowCanvas, { definition: props.definition, run }) : null,
         h("div", { style: styles.cardTitle }, "节点"),
