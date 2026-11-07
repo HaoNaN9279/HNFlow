@@ -820,7 +820,7 @@ plugins/dsh/
 │  └─ skill.js
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（91 项，`node test/run.mjs`）
+└─ test/                     # node:test（92 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -869,7 +869,7 @@ running ─(宿主进程结束)─▶ interrupted ─resume(显式)─▶ runnin
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：91 项，覆盖 schema 子集、契约可赋值、信封三态、调度
+`plugins/dsh/test/`，`node test/run.mjs`：92 项，覆盖 schema 子集、契约可赋值、信封三态、调度
 （就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile、storage 降级、
 编排（门禁/交付/needs_human/重试/取消/重启）、工具/命令/路由/装配/客户端契约。
 
