@@ -1,84 +1,31 @@
-# DeerFlow docker image cache
-docker/.cache/
-# oh-my-claudecode state
-.omc/
-# OS generated files
-.DS_Store
-*.local
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
+# Dependencies
+node_modules/
+.pnpm-store/
 
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
+# Built package and local install artifacts
+plugins/dsh/dist/
+*.tgz
 
-# Virtual environments
-.venv
-venv/
-
-# Benchmark outputs
-bench_results.jsonl
-bench_optimized.jsonl
-results.jsonl
-backend/scripts/benchmark/*.jsonl
-
-# Environment variables
-.env
-
-# Unified user data (config, capability groups, tools, prompts, DB, workspaces)
-/hnflow-data/
-/backend/hnflow-data/
-
-# Configuration files
-config.yaml
-mcp_config.json
-extensions_config.json
-
-# IDE
-.idea/
-.vscode/
-
-# Coverage report
-coverage.xml
-coverage/
-.deer-flow/
-.claude/
-skills/custom/*
+# Local runtime state, test harnesses and logs
+temp/
+.hnflow/
+.vibestack/
 logs/
 log/
-debug.log
+*.log
+coverage/
+test-results/
+playwright-report/
 
-# Local git hooks (keep only on this machine, do not push)
-.githooks/
+# Environment and secrets
+.env
+.env.*
+config.yaml
+extensions_config.json
 
-# pnpm
-.pnpm-store
-sandbox_image_cache.tar
-
-# ignore the legacy `web` folder
-web/
-
-# Deployment artifacts
-backend/Dockerfile.langgraph
-config.yaml.bak
-.playwright-mcp
-/frontend/test-results/
-/frontend/playwright-report/
-.gstack/
-.worktrees
-
-# Monocle agent-observability trace output (local file exporter)
-.monocle/
-
-# codegraph local index (never commit)
-.codegraph/
-
-#opencode
-.opencode/
-
-# dsh plugin install artifacts
-/plugins/dsh/dist/
+# IDE / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.local

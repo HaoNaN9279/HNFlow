@@ -4,12 +4,12 @@
 | --- | --- |
 | 文档版本 | 2.0（基于《新开发理念》重写执行模型） |
 | 日期 | 2026-11-07 |
-| 分支 | `feat/dsh-plugin` |
+| 分支 | `feat/dsh-v2` |
 | 目标运行环境 | DSH `0.2.1-rc.5`（桌面版 / web profile） |
 | 插件 | `dsh-hnflow`（private，本地 `dsh plugin add`，不上架） |
 | 依赖 | `D:\workspace\VibeStack\plugins\dsh`（`dsh-vibestack` ≥ 0.3.0，独立插件；HNFlow 单向强依赖，缺它进入 `degraded`） |
-| 取代范围 | 取代 `docs/dsh-plugin-plan.md` 与 `HNFlow 开发方案.md` 的**执行模型**（LangGraph 图 + Python 引擎 + AI 节点）；保留其资产/引用/覆盖/人工治理的产品结论 |
-| 文档状态 | 方案稿 v2.1；v0.3.0 已按本文落地（实现差异见附录 E） |
+| 取代范围 | 取代已移除的旧 `docs/dsh-plugin-plan.md` 与 `HNFlow 开发方案.md` 的**执行模型**（LangGraph 图 + Python 引擎 + AI 节点）；保留其资产/引用/覆盖/人工治理的产品结论 |
+| 文档状态 | 方案稿 v2.1；v0.6.0 已按本文落地（实现差异见附录 E） |
 
 > 本文只讨论**一个目标**：把 HNFlow 改造成 DSH 插件，且遵循 `docs/新开发理念.md` 的三条结论——
 > 用户编排的是**约束**而非步骤；**人**是有交付契约的生产能力；**验证与问责不能外包给生成者**。
@@ -632,8 +632,8 @@ plugins/dsh/
 | `lib/service.js`（引擎 RPC） | **替换** | 改为 `HnflowService`（状态机 + storage） |
 | `lib/engine.js`、`lib/tools.js`（engine action）、`lib/author.js`（engine validate）、`llmAdapter`、`models[]` | **删除** | 不再有 Python 引擎与模型桥 |
 | `lib/state.js`（读 `state/*.json`） | 改造 | 读 service 快照 |
-| `backend/packages/harness/deerflow/workflow/rpc/` | **停用**（不删代码，仅解除依赖） | 插件不再启动它；后续可整体归档 |
-| `docs/dsh-plugin-plan.md` | 保留为历史 | 本文取代其执行模型 |
+| 旧 `backend/packages/harness/deerflow/workflow/rpc/` | **已删除** | 本分支只保留 DSH 插件；不再有 Python 引擎、DeerFlow 后端或 Next.js 前端 |
+| 旧 `docs/dsh-plugin-plan.md`、`HNFlow 开发方案.md` | **已删除** | 执行模型由本文取代，旧方案不再作为仓库导航的一部分 |
 
 净效果：
 
@@ -737,7 +737,7 @@ plugins/dsh/
 | preset 只能声明 persona/工具组合；工具配置里的 `persona`/`toolFilter` 会报迁移错误 | `dsh-tool-subagent` README.zh |
 | 自定义 session 事件必须 `ignorable`，活跃会话无法写该标记 → 插件不写自定义事件 | VibeStack README（踩坑记录） |
 | 内置 `workflow` 工具名已被占用 | 工具清单；故插件工具名用 `hnflow` |
-| VibeStack 提供 `ctx.vibestack`（`apiVersion` / `listLayers` / `resolveLayer`），是 HNFlow 唯一的模型层入口 | VibeStack 方案 `docs/dsh-plugin-plan.md` §7.6 |
+| VibeStack 提供 `ctx.vibestack`（`apiVersion` / `listLayers` / `resolveLayer`），是 HNFlow 唯一的模型层入口 | VibeStack 插件文档 |
 | 模型层只存 `provider/model/reasoningEffort/展示文案`；能力组只写 `model: <layer id>` | 同上 §7.1 |
 | 子 Agent 会话不公开模型选择入口 → 节点路由只能在 spawn 时用 `agentOptions` 指定 | `dsh-client-ui-model-selection` 已知限制 |
 | VibeStack 命令/技能统一为 `vibestack-<group>-<name>`（DSH 只接受小写 kebab，`VibeStack-` 大写无法注册） | VibeStack 方案 §3/§6 |
@@ -783,7 +783,7 @@ plugins/dsh/
 
 ## 附录 D：与旧文档的差异摘要
 
-| 主题 | `docs/dsh-plugin-plan.md`（v0.4） | 本文（v2） |
+| 主题 | 旧方案 v0.4（已移除） | 本文（v2） |
 | --- | --- | --- |
 | 执行 | Python + LangGraph + 引擎 RPC | DSH subagent（spawn）+ 插件状态机 |
 | 流程形态 | 节点图（含 ai/tool/data 节点） | 契约图（6 原语，边承载语义） |
@@ -868,6 +868,7 @@ plugins/dsh/
 | E-28 | 执行层**不做**子流程嵌套；文件夹嵌套只是展示层级 | 六原语 + `merge`/gate/verify 已覆盖当前约束表达；子流程会引入版本钉住、父子 run、错误/取消传播、inbox 归属和递归限制，成本高于当前收益；出现稳定复用片段时再单独立项 |
 | E-29 | 新增 `hnflow-controls` 技能并由 preset 行以 `source: "bundled"` 注册；它覆盖 `hnflow` 的 15 个动作、`hnflow_author` 的 7 个动作、参数/返回/错误/人类专属边界；`test/controls-skill.test.js` 从动作表反查全文 | 工具动作已经增长到 22 个，单靠工具描述和 `hnflow-flows` 的节点知识不够；技能必须由插件管理、随包分发且不依赖 cwd，才能在任何工作区的 HNFlow 模式会话里一致可用。动作表 → 技能全文的契约测试防止新增动作漏文档 |
 | E-30 | 技能注册补 `source: "bundled"` | DSH `SkillRegistration` 的 `SkillSummary.source` 是必填字符串；缺省时加载报 `loaded skill "…" source must be a string`。补上后技能可加载，且与项目/用户技能区分来源 |
+| E-31 | 分支清理为单交付物：删除旧 `backend/`、`frontend/`、`docker/`、`scripts/`、`contracts/`、`config-examples/`、`.agent/`、旧 CI、旧 plan/方案、旧 dist 包与测试缓存；根 README/AGENTS 改为插件入口 | 方案 §2.1 明确“只做 DSH 插件、无独立后端/前端/Nginx/Python”；把旧实现留在分支会制造第二套入口和失效链接。清理后仓库只保留 `plugins/dsh`、当前 docs、LICENSE |
 
 ### E.3 状态机（实现）
 

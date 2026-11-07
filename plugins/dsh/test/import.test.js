@@ -17,7 +17,7 @@ import { makeService, seedWorkspace } from './helpers.js'
  * @returns {Promise<Record<string, any>>} parsed document.
  */
 async function legacy(name) {
-  const url = new URL(`../../../config-examples/workflows/${name}`, import.meta.url)
+  const url = new URL(`./fixtures/${name}`, import.meta.url)
   return JSON.parse(await readFile(url, 'utf8'))
 }
 

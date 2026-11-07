@@ -133,27 +133,6 @@ domain 没有跨表事务，一次推进必须原子）。
 
 `examples/art-review.flow.json` 演示 `request` + `verify` + 独立 judge。
 
-### 已预置的两条测试流程（本机）
-
-| 引用（alias） | 位置 | 做什么 |
-| --- | --- | --- |
-| `smoke-general` | 通用资产库 `library/test/general-smoke.flow.json` | `agent` 写摘要与要点 → `gate` 人工确认；验证启动、信封、门禁、终态 |
-| `project-delivery` | 通用库 `library/test/project-delivery.flow.json` + **本工作区覆盖** `.hnflow/overrides/fl-demo-project-delivery.flow.json` | 人工交付 `{files, notes}` → `verify` schema 验收 → `agent` 变更清单；验证投递、CAS、覆盖优先 |
-
-使用：
-
-```text
-/hnflow list
-```
-
-- `smoke-general`：页面「流程」选中 → 输入 `{"brief":"随便写一段测试说明"}` → 运行 → 收件箱批准。
-- `project-delivery`：运行后在收件箱提交 `{"files":["a.txt"],"notes":"测试交付"}`；它带工作区覆盖，列表里显示「草稿」，运行记录标「草稿覆盖」，child 简报里能看到“（本项目覆盖）”。
-
-两条流程都不写 `model`，直接用会话当前模型，不需要先在 VibeStack 里定义模型层。
-
-`smoke-general` 是**通用**资产：别的项目里用 `/hnflow assets` 找到它，再 `/hnflow add fl-demo-general-smoke smoke` 就能引用；`project-delivery` 只在本工作区被引用，并带了一份工作区覆盖。
-
-
 ## 测试
 
 ```sh
@@ -167,8 +146,8 @@ node test/run.mjs
 
 ### 真机自测（隔离 web 实例）
 
-已用 `DSH_HOME=temp/dshhome` + `dsh --profile ztest --no-open --port 3999` + Playwright/Chrome
-完成一轮端到端自测（不碰桌面端真实会话）：
+已用隔离 `DSH_HOME` + `dsh --profile ztest --no-open --port 3999` + Playwright/Chrome
+完成端到端自测（不碰桌面端真实会话）：
 
 - 页面可打开、切换三页签、选流程、看到版本历史与发布预览；
 - 从页面启动 `smoke-general`：**conductor 自动创建**、agent 子会话用 `hnflow` preset 跑通、
