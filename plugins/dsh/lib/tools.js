@@ -10,7 +10,7 @@
 import { defineTool } from './tool-schema.js'
 
 /** Actions the tool accepts. */
-export const ACTIONS = Object.freeze(['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox'])
+export const ACTIONS = Object.freeze(['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox', 'artifact'])
 
 /**
  * Render a run summary.
@@ -27,6 +27,15 @@ export function formatRun(run) {
     }
   }
   if (run.pending > 0) lines.push(`waiting on ${run.pending} human item(s); see /hnflow inbox or the HNFlow page`)
+  if (Array.isArray(run.degradations) && run.degradations.length > 0) {
+    lines.push(`degraded: ${run.degradations.map((entry) => `${entry.nodeId}->${(entry.fallbackNodeIds ?? []).join('|')} (${entry.code})`).join(', ')}`)
+  }
+  if (run.usage !== null && run.usage !== undefined) {
+    lines.push(`usage: ${run.usage.totalTokens} tokens (in ${run.usage.inputTokens} / out ${run.usage.outputTokens}, ${run.usage.calls} call(s))`)
+  }
+  if (Array.isArray(run.artifacts) && run.artifacts.length > 0) {
+    lines.push(`artifacts: ${run.artifacts.map((artifact) => `${artifact.artifactId}${artifact.degraded ? ' [degraded]' : ''}`).join(', ')}`)
+  }
   return lines.join('\n')
 }
 
@@ -107,6 +116,11 @@ export function createFlowTool(options) {
             .map((item) => `- ${item.id} (${item.kind}, run ${item.runId}, node ${item.nodeId})${item.whyHuman ? `: ${item.whyHuman}` : ''}`)
             .join('\n')
         }
+        case 'artifact': {
+          const artifactId = requireArtifactId(args)
+          const artifact = await service.getArtifact(artifactId)
+          return JSON.stringify(artifact, null, 2)
+        }
         default:
           return `error invalid-action: expected one of ${ACTIONS.join(', ')}`
       }
@@ -118,11 +132,12 @@ export function createFlowTool(options) {
   return defineTool({
     name: 'hnflow',
     description:
-      'Operate the workspace\'s HNFlow flows. `list_flows` lists them, `describe_flow` returns one definition, `run` starts one and returns immediately (never wait for it), `status`/`inbox` answer a later question, `cancel`/`resume` control a run. Publishing and deciding human gates/deliveries are human-only actions and are not available here.',
+      'Operate the workspace\'s HNFlow flows. `list_flows` lists them, `describe_flow` returns one definition, `run` starts one and returns immediately (never wait for it), `status`/`inbox` answer a later question, `cancel`/`resume` control a run, and `artifact` returns one node output by id. Publishing and deciding human gates/deliveries are human-only actions and are not available here.',
     parameters: {
       action: { type: 'string', required: true, enum: ACTIONS, description: 'Operation to perform.' },
       flow: { type: 'string', description: 'Flow alias or id; required by describe_flow and run.' },
       run_id: { type: 'string', description: 'Run id; required by status, cancel and resume.' },
+      artifact_id: { type: 'string', description: 'Artifact id from status; required by artifact.' },
       input: { type: 'object', additionalProperties: true, description: 'Start input matching the flow input schema (run only).' },
     },
     output: {
@@ -146,9 +161,23 @@ function runSummary(run) {
     revision: run.revision,
     status: run.status,
     error: run.error,
-    nodes: Object.entries(run.nodes ?? {}).map(([id, state]) => ({ id, status: state.status, attempts: state.attempts, diagnostic: state.diagnostic })),
+    nodes: Object.entries(run.nodes ?? {}).map(([id, state]) => ({ id, status: state.status, attempts: state.attempts, diagnostic: state.diagnostic, usage: state.usage ?? null, artifactId: state.artifactId ?? null })),
     pending: (run.pending ?? []).filter((entry) => entry.decision === undefined && entry.delivery === undefined).length,
+    usage: run.usage ?? null,
+    degradations: Array.isArray(run.degradations) ? run.degradations : [],
+    artifacts: Object.values(run.artifacts ?? {}).map((entry) => ({ artifactId: entry.artifactId, nodeId: entry.nodeId, kind: entry.kind, degraded: entry.degraded === true })),
   }
+}
+
+/**
+ * Require the artifact id argument.
+ * @param {Record<string, any>} args - tool arguments.
+ * @returns {string} artifact id.
+ */
+function requireArtifactId(args) {
+  const artifactId = typeof args.artifact_id === 'string' ? args.artifact_id.trim() : ''
+  if (artifactId.length === 0) throw Object.assign(new Error('artifact_id is required: pass one from action "status"'), { code: 'artifact-id-required' })
+  return artifactId
 }
 
 /**

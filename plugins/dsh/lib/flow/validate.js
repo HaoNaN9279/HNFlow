@@ -108,6 +108,10 @@ export async function validateFlow(definition, options = {}) {
         checkAgentLike(node, at, fail)
         assertSchemaField(node.output, `${id}.output`, fail, at, { required: true })
         checkBudget(node, at, fail)
+        if (node.allowHuman !== undefined && typeof node.allowHuman !== 'boolean') {
+          fail('definition-invalid', `agent ${id}.allowHuman must be a boolean`, at)
+        }
+        checkRejectPolicy(node, at, fail)
         break
       case 'judge':
         checkAgentLike(node, at, fail)
@@ -116,17 +120,25 @@ export async function validateFlow(definition, options = {}) {
         }
         break
       case 'merge':
-        if (!Array.isArray(node.from) || node.from.length === 0) {
-          fail('definition-invalid', `merge ${id} needs a non-empty from array`, at)
+        if (!Array.isArray(node.from)) {
+          fail('definition-invalid', `merge ${id} needs a from array`, at)
         } else {
           for (const source of node.from) {
             if (typeof source !== 'string' || !nodes.has(source)) fail('definition-invalid', `merge ${id} reads unknown node ${JSON.stringify(source)}`, at)
           }
+          if (node.from.length === 0 && (node.set === null || typeof node.set !== 'object' || Array.isArray(node.set) || Object.keys(node.set).length === 0)) {
+            fail('definition-invalid', `merge ${id} needs at least one from source or a non-empty set`, at)
+          }
         }
+        checkMergeSet(node, at, fail)
+        checkMergeMap(node, at, fail)
         assertSchemaField(node.output, `${id}.output`, fail, at, { required: true })
         break
       case 'gate':
         if (node.title !== undefined && typeof node.title !== 'string') fail('definition-invalid', `gate ${id}.title must be a string`, at)
+        if (node.detail !== undefined && typeof node.detail !== 'string') fail('definition-invalid', `gate ${id}.detail must be a string`, at)
+        checkDeadline(node, at, fail)
+        checkExpirePolicy(node, at, fail)
         break
       case 'request':
         assertSchemaField(node.deliverable, `${id}.deliverable`, fail, at, { required: true })
@@ -136,9 +148,9 @@ export async function validateFlow(definition, options = {}) {
         if (node.deliverable === undefined) {
           fail('request-contract-missing', `request ${id} must declare a deliverable schema`, at)
         }
-        if (node.onExpire !== undefined && !['remind', 'fail'].includes(node.onExpire)) {
-          fail('definition-invalid', `request ${id}.onExpire must be "remind" or "fail"`, at)
-        }
+        checkDeadline(node, at, fail)
+        checkExpirePolicy(node, at, fail)
+        checkRejectPolicy(node, at, fail)
         break
       case 'verify': {
         const target = nodes.get(node.against)
@@ -160,6 +172,10 @@ export async function validateFlow(definition, options = {}) {
             fail('vibestack-unavailable', `verify ${id} references model layer ${node.judge.model} but VibeStack is unavailable`, at)
           }
         }
+        if (node.onInconclusive !== undefined && !['gate', 'fail'].includes(node.onInconclusive)) {
+          fail('definition-invalid', `verify ${id}.onInconclusive must be "gate" or "fail"`, at)
+        }
+        checkRejectPolicy(node, at, fail)
         break
       }
       default:
@@ -353,6 +369,127 @@ function whenValueValid(when) {
       return typeof when.is === 'boolean'
     default:
       return false
+  }
+}
+
+/**
+ * Validate a merge's constant set.
+ * @param {Record<string, any>} node - merge node.
+ * @param {{nodeId: string}} at - location.
+ * @param {(code: string, message: string, where?: object) => void} fail - collector.
+ * @returns {void}
+ */
+function checkMergeSet(node, at, fail) {
+  if (node.set === undefined) return
+  if (node.set === null || typeof node.set !== 'object' || Array.isArray(node.set)) {
+    fail('definition-invalid', `merge ${node.id}.set must be an object`, at)
+    return
+  }
+  for (const key of Object.keys(node.set)) {
+    if (key.trim().length === 0) fail('definition-invalid', `merge ${node.id}.set has an empty key`, at)
+    try {
+      JSON.stringify(node.set[key])
+    } catch {
+      fail('definition-invalid', `merge ${node.id}.set.${key} is not JSON-serializable`, at)
+    }
+  }
+}
+
+/**
+ * Validate a merge's declarative map.
+ *
+ * Every mapped value names one of the merge's own sources, optionally followed
+ * by a dot path. An unknown source would silently produce `undefined` at run
+ * time, which is exactly the class of mistake static validation exists to stop.
+ * @param {Record<string, any>} node - merge node.
+ * @param {{nodeId: string}} at - location.
+ * @param {(code: string, message: string, where?: object) => void} fail - collector.
+ * @returns {void}
+ */
+function checkMergeMap(node, at, fail) {
+  if (node.map === undefined) return
+  if (node.map === null || typeof node.map !== 'object' || Array.isArray(node.map)) {
+    fail('merge-map-invalid', `merge ${node.id}.map must be an object`, at)
+    return
+  }
+  const sources = new Set(Array.isArray(node.from) ? node.from.filter((entry) => typeof entry === 'string') : [])
+  for (const [target, source] of Object.entries(node.map)) {
+    if (target.trim().length === 0) {
+      fail('merge-map-invalid', `merge ${node.id}.map has an empty target name`, at)
+      continue
+    }
+    if (typeof source !== 'string' || source.trim().length === 0) {
+      fail('merge-map-invalid', `merge ${node.id}.map.${target} must be a non-empty source path`, at)
+      continue
+    }
+    const [from, ...rest] = source.split('.')
+    if (!sources.has(from)) {
+      fail('merge-map-invalid', `merge ${node.id}.map.${target} reads ${from}, which is not one of [${[...sources].join(', ')}]`, at)
+      continue
+    }
+    if (rest.some((part) => part.trim().length === 0)) {
+      fail('merge-map-invalid', `merge ${node.id}.map.${target} has an empty path segment`, at)
+    }
+  }
+}
+
+/**
+ * Validate a deadline declaration.
+ * @param {Record<string, any>} node - gate/request node.
+ * @param {{nodeId: string}} at - location.
+ * @param {(code: string, message: string, where?: object) => void} fail - collector.
+ * @returns {void}
+ */
+function checkDeadline(node, at, fail) {
+  if (node.deadline === undefined) return
+  if (node.deadline === null || typeof node.deadline !== 'object' || Array.isArray(node.deadline)) {
+    fail('definition-invalid', `${node.type} ${node.id}.deadline must be an object`, at)
+    return
+  }
+  if (node.deadline.hours !== undefined && (!Number.isFinite(node.deadline.hours) || node.deadline.hours <= 0)) {
+    fail('definition-invalid', `${node.type} ${node.id}.deadline.hours must be a positive number`, at)
+  }
+}
+
+/**
+ * Validate an expiry policy.
+ * @param {Record<string, any>} node - gate/request node.
+ * @param {{nodeId: string}} at - location.
+ * @param {(code: string, message: string, where?: object) => void} fail - collector.
+ * @returns {void}
+ */
+function checkExpirePolicy(node, at, fail) {
+  if (node.onExpire !== undefined && !['remind', 'fail'].includes(node.onExpire)) {
+    fail('definition-invalid', `${node.type} ${node.id}.onExpire must be "remind" or "fail"`, at)
+  }
+}
+
+/**
+ * Validate a rejection policy.
+ * @param {Record<string, any>} node - agent/request/verify node.
+ * @param {{nodeId: string}} at - location.
+ * @param {(code: string, message: string, where?: object) => void} fail - collector.
+ * @returns {void}
+ */
+function checkRejectPolicy(node, at, fail) {
+  if (node.onReject === undefined) return
+  const policy = node.onReject
+  if (policy === null || typeof policy !== 'object' || Array.isArray(policy)) {
+    fail('reject-policy-invalid', `${node.type} ${node.id}.onReject must be an object`, at)
+    return
+  }
+  if (!['return', 'fallback', 'arbitrate', 'fail'].includes(policy.kind)) {
+    fail('reject-policy-invalid', `${node.type} ${node.id}.onReject.kind must be return, fallback, arbitrate or fail`, at)
+  }
+  if (policy.maxAttempts !== undefined && (!Number.isInteger(policy.maxAttempts) || policy.maxAttempts < 1)) {
+    fail('reject-policy-invalid', `${node.type} ${node.id}.onReject.maxAttempts must be a positive integer`, at)
+  }
+  if (policy.kind === 'arbitrate' && policy.judge !== undefined) {
+    if (policy.judge === null || typeof policy.judge !== 'object' || Array.isArray(policy.judge)) {
+      fail('reject-policy-invalid', `${node.type} ${node.id}.onReject.judge must be an object`, at)
+    } else if (policy.judge.preset !== undefined && (typeof policy.judge.preset !== 'string' || policy.judge.preset.trim().length === 0)) {
+      fail('reject-policy-invalid', `${node.type} ${node.id}.onReject.judge.preset must be a non-empty preset id`, at)
+    }
   }
 }
 

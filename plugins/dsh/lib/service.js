@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 
 import { createStore } from './store.js'
 import { contentHash, buildLockfile, lockfileProblems, publishFlow } from './flow/publish.js'
-import { nodeIndex } from './flow/definition.js'
+import { nodeIndex, outgoingEdges } from './flow/definition.js'
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from './flow/envelope.js'
 import { validateValue } from './flow/schema.js'
 import { validateFlow } from './flow/validate.js'
@@ -28,6 +28,11 @@ import { checkDelivery, createRequestPending, rejectionStep } from './requests.j
 import { PLUGIN_VERSION } from './config.js'
 import { createStores } from './resolve.js'
 import { libraryRoot } from './paths.js'
+import { hashOf } from './json.js'
+import { diffDefinitions } from './diff.js'
+import { artifactList, artifactView, registerArtifact } from './artifacts.js'
+import { checkDeliverablePaths } from './deliverable.js'
+import { addUsage, usageFromSession } from './usage.js'
 
 /** Run statuses that never advance again. */
 const TERMINAL_RUN = new Set(['succeeded', 'failed', 'cancelled'])
@@ -80,7 +85,7 @@ function buildService(options) {
   // (no routes, no service, no preset). `get` returns undefined instead, which
   // takes the documented file-store fallback.
   const store = options.store ?? createStore({ storageDomain: ctx.get?.('storageDomain'), config, logger })
-  const runner = options.runner ?? createSubagentRunner({ subagents: ctx.get?.('subagents') })
+  const runner = options.runner ?? createSubagentRunner({ subagents: () => ctx.get?.('subagents') })
 
   /** Serialized mutation chains, one per run. */
   const chains = new Map()
@@ -125,6 +130,62 @@ function buildService(options) {
     questions() {
       return ctx.get?.('userQuestions')
     },
+    /**
+     * @returns {Record<string, any> | undefined} live session store (usage evidence).
+     */
+    sessions() {
+      return ctx.get?.('sessions')
+    },
+    /**
+     * @returns {Record<string, any> | undefined} filesystem service (delivery path containment).
+     */
+    fs() {
+      return ctx.get?.('fs')
+    },
+  }
+
+  /**
+   * Read the token usage of one child session, when it is still live.
+   * @param {string | undefined} childId - child session id.
+   * @returns {Record<string, number> | null} usage, or null when unavailable.
+   */
+  function usageOf(childId) {
+    const sessions = hosts.sessions()
+    if (sessions === undefined || typeof sessions.get !== 'function' || typeof childId !== 'string') return null
+    try {
+      return usageFromSession(sessions.get(childId))
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Stamp a pending gate/request with the audit facts §6.5 requires.
+   *
+   * The facts are written when the question is opened — not when it is answered
+   * — because "which revision was the human looking at" must not depend on a
+   * later mutable read.
+   * @param {Record<string, any>} flow - definition.
+   * @param {Record<string, any>} run - run record.
+   * @param {Record<string, any>} node - node definition.
+   * @param {Record<string, any>} pending - pending record.
+   * @param {Record<string, any>} [snapshot] - upstream snapshot.
+   * @returns {Record<string, any>} the pending record.
+   */
+  function openPending(flow, run, node, pending, snapshot) {
+    const upstream =
+      snapshot ?? Object.fromEntries(upstreamArtifacts(flow, run, node.id).map((artifact) => [artifact.from, artifact.value]))
+    pending.revision = run.revisionCounter ?? 0
+    pending.askedAt = pending.createdAt
+    pending.askedVia = 'inbox'
+    pending.flowRevision = Number.isInteger(run.revision) ? run.revision : null
+    pending.flowSource = run.source ?? 'latest'
+    pending.contentHash = run.contentHash ?? null
+    pending.upstreamHash = hashOf(upstream)
+    pending.consumerNodeIds = outgoingEdges(flow, node.id).map((edge) => String(edge.to))
+    pending.decidedBy = null
+    run.pending.push(pending)
+    return pending
   }
 
   /**
@@ -270,7 +331,23 @@ function buildService(options) {
         if (presets === undefined || typeof presets.resolve !== 'function') return { ok: true }
         try {
           const record = await presets.resolve(id)
-          return record?.broken === undefined ? { ok: true } : { ok: false, broken: String(record.broken) }
+          if (record?.broken !== undefined) return { ok: false, broken: String(record.broken) }
+          // The preset's plugin rows are part of what "this revision was
+          // published against" means: a later preset edit changes a node's
+          // tools even though the flow JSON did not change.
+          let composition = null
+          try {
+            if (typeof presets.compositionInventory === 'function') {
+              const inventory = await presets.compositionInventory()
+              const entry = Array.isArray(inventory) ? inventory.find((candidate) => candidate?.id === id) : undefined
+              if (Array.isArray(entry?.rows)) {
+                composition = entry.rows.map((row) => ({ moduleName: String(row.moduleName ?? ''), enabled: row.enabled }))
+              }
+            }
+          } catch {
+            composition = null
+          }
+          return { ok: true, ...(composition === null ? {} : { composition }) }
         } catch (error) {
           return { ok: false, broken: String(error?.message ?? error) }
         }
@@ -319,6 +396,40 @@ function buildService(options) {
   }
 
   /**
+   * Resolve the model route a conductor session should use.
+   *
+   * A conductor is created outside any UI session, so it has no session-level
+   * model selection to inherit: without an explicit route its children cannot
+   * start a model turn. Prefer the host's current default selection, then the
+   * VibeStack default layer.
+   * @returns {Record<string, any> | null} agent options, or null for the host default.
+   */
+  function conductorAgentOptions() {
+    try {
+      const selection = ctx.get?.('agentDefaultModel')?.currentSelection?.()
+      if (typeof selection?.provider === 'string' && typeof selection?.model === 'string') {
+        return {
+          provider: selection.provider,
+          model: selection.model,
+          ...(typeof selection.reasoningEffort === 'string' ? { reasoningEffort: selection.reasoningEffort } : {}),
+        }
+      }
+    } catch {
+      // fall through to the layer default
+    }
+    const vibestack = hosts.vibestack()
+    if (typeof vibestack?.defaultLayer === 'function' && typeof vibestack?.resolveLayer === 'function') {
+      try {
+        const layer = vibestack.resolveLayer(vibestack.defaultLayer())
+        if (typeof layer?.provider === 'string' && typeof layer?.model === 'string') return agentOptionsOf(layer)
+      } catch {
+        // fall through to the host default
+      }
+    }
+    return null
+  }
+
+  /**
    * Resolve the parent agent a run may spawn from.
    * @param {Record<string, any>} run - run record.
    * @returns {Promise<Record<string, any> | null>} host agent.
@@ -333,7 +444,9 @@ function buildService(options) {
     if (conductor === null && typeof agents.create === 'function') {
       conductor = (async () => {
         try {
-          conductorHandle = await agents.create({ sessionId: randomUUID() })
+          const options = conductorAgentOptions()
+          if (process.env.HNFLOW_TRACE === '1') process.stderr.write(`[hnflow] conductor agentOptions: ${JSON.stringify(options)}\n`)
+          conductorHandle = await agents.create({ sessionId: randomUUID(), ...(options === null ? {} : { agentOptions: options }) })
           return conductorHandle?.agent ?? null
         } catch (error) {
           logger.warn?.('hnflow: cannot create the conductor session; page-started runs stay unavailable: %o', error)
@@ -363,6 +476,8 @@ function buildService(options) {
     const timeoutMs = Number.isFinite(node.budget?.timeoutMs) ? node.budget.timeoutMs : config.nodeTimeoutMs
     /** @type {Record<string, any> | null} */
     let last = null
+    /** @type {Record<string, number> | null} */
+    let lastUsage = null
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (run.cancelRequested === true) return { kind: 'cancelled' }
       /** @type {Record<string, any>} */
@@ -382,7 +497,20 @@ function buildService(options) {
         continue
       }
       active.get(run.runId)?.add(activation)
+      // The child session is disposed before `result` resolves, so usage must
+      // be sampled while it is live; otherwise the run has no cost evidence.
+      /** @type {Record<string, number> | null} */
+      let observedUsage = null
+      // Keep the live Session object itself: after disposal the store lookup is
+      // gone, but the captured object still holds the final assistant event.
+      const liveSession = hosts.sessions()?.get?.(activation.childId) ?? null
+      const pollUsage = setInterval(() => {
+        const sampled = usageOf(activation.childId)
+        if (sampled !== null && sampled.calls > 0) observedUsage = sampled
+      }, 1000)
+      if (typeof pollUsage.unref === 'function') pollUsage.unref()
       const outcome = await withTimeout(activation.result, timeoutMs)
+      clearInterval(pollUsage)
       active.get(run.runId)?.delete(activation)
       if (outcome.timedOut === true) {
         await activation.dispose().catch(() => {})
@@ -390,23 +518,27 @@ function buildService(options) {
         continue
       }
       const result = outcome.value
+      const finalUsage = usageFromSession(liveSession)
+      const usage = finalUsage !== null && finalUsage.calls > 0 ? finalUsage : (observedUsage ?? usageOf(result?.childId))
       const envelope = parseEnvelope(result?.structured)
       if (envelope.kind === 'done') {
-        return { kind: 'done', output: envelope.output, evidence: envelope.evidence, notes: envelope.notes, childId: result.childId }
+        return { kind: 'done', output: envelope.output, evidence: envelope.evidence, notes: envelope.notes, childId: result.childId, usage }
       }
       if (envelope.kind === 'needs_human') {
-        return { kind: 'needs_human', gap: envelope.gap, childId: result.childId }
+        return { kind: 'needs_human', gap: envelope.gap, childId: result.childId, usage }
       }
       if (envelope.kind === 'failed') {
         last = envelope.error
+        lastUsage = usage
         continue
       }
       last = {
         code: result?.stopReason === 'completed' ? 'node-envelope-invalid' : 'node-failed',
         message: envelope.message ?? `stopReason=${String(result?.stopReason ?? 'unknown')}`,
       }
+      lastUsage = usage
     }
-    return { kind: 'failed', diagnostic: last ?? { code: 'node-failed', message: `node ${node.id} failed` } }
+    return { kind: 'failed', diagnostic: last ?? { code: 'node-failed', message: `node ${node.id} failed` }, usage: lastUsage }
   }
 
   /**
@@ -426,11 +558,11 @@ function buildService(options) {
     const result = await spawnNode({ run, node, host, prompt, schema: envelopeSchema(node.output) })
     if (result.kind === 'needs_human') {
       if (node.allowHuman !== true) {
-        return { status: 'failed', diagnostic: { code: 'human-not-allowed', message: `node ${node.id} reported a human gap but does not declare allowHuman` } }
+        return { status: 'failed', diagnostic: { code: 'human-not-allowed', message: `node ${node.id} reported a human gap but does not declare allowHuman` }, usage: result.usage }
       }
-      return { status: 'human', gap: result.gap, childSessionId: result.childId }
+      return { status: 'human', gap: result.gap, childSessionId: result.childId, usage: result.usage }
     }
-    if (result.kind === 'failed') return { status: 'failed', diagnostic: result.diagnostic, childSessionId: result.childId }
+    if (result.kind === 'failed') return { status: 'failed', diagnostic: result.diagnostic, childSessionId: result.childId, usage: result.usage }
     if (result.kind === 'cancelled') return { status: 'failed', diagnostic: { code: 'cancelled', message: 'the run was cancelled' } }
     const checked = validateValue(result.output, node.output)
     if (!checked.ok) {
@@ -438,9 +570,10 @@ function buildService(options) {
         status: 'failed',
         diagnostic: { code: 'contract-unsatisfied', message: 'the output does not satisfy the node contract', violations: checked.violations },
         childSessionId: result.childId,
+        usage: result.usage,
       }
     }
-    return { status: 'done', output: result.output, childSessionId: result.childId, evidence: result.evidence }
+    return { status: 'done', output: result.output, childSessionId: result.childId, evidence: result.evidence, usage: result.usage }
   }
 
   /**
@@ -467,19 +600,13 @@ function buildService(options) {
       '不要向用户提问，不要委派。',
     ].join('\n')
     const result = await spawnNode({ run, node, host, prompt, schema: judgeEnvelopeSchema() })
-    if (result.kind === 'failed') return { status: 'failed', diagnostic: result.diagnostic, childSessionId: result.childId }
-    if (result.kind !== 'done') return { status: 'failed', diagnostic: { code: 'judge-inconclusive', message: 'the judge did not return a verdict' }, childSessionId: result.childId }
+    if (result.kind === 'failed') return { status: 'failed', diagnostic: result.diagnostic, childSessionId: result.childId, usage: result.usage }
+    if (result.kind !== 'done') return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the judge did not return a verdict' }, childSessionId: result.childId, usage: result.usage }
     const verdict = parseVerdict(result.output)
-    if (verdict === null) return { status: 'failed', diagnostic: { code: 'judge-inconclusive', message: 'the verdict is malformed' }, childSessionId: result.childId }
-    if (verdict.verdict === 'reject') {
-      return {
-        status: 'failed',
-        diagnostic: { code: 'judge-rejected', message: verdict.reasons.join('; ') || 'the judge rejected the artifact', verdict },
-        output: result.output,
-        childSessionId: result.childId,
-      }
-    }
-    return { status: 'done', output: result.output, verdict: verdict.verdict, childSessionId: result.childId }
+    if (verdict === null) return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the verdict is malformed' }, childSessionId: result.childId, usage: result.usage }
+    // A reject is a **valid verdict**, not a node failure: outgoing edges route
+    // on `when.verdict` and the run's success is decided downstream.
+    return { status: 'done', output: result.output, verdict: verdict.verdict, childSessionId: result.childId, usage: result.usage }
   }
 
   /**
@@ -502,13 +629,17 @@ function buildService(options) {
       }
       values.push({ from: sourceId, value: state.output })
     }
-    if (values.length === 0) {
-      return { status: 'failed', diagnostic: { code: 'merge-source-missing', message: `merge ${node.id}: every source was skipped` } }
-    }
     /** @type {Record<string, any>} */
     let merged = {}
-    if (values.length === 1) merged = values[0].value
+    const constants = node.set !== null && typeof node.set === 'object' && !Array.isArray(node.set) ? node.set : null
+    if (values.length === 0) {
+      if (constants === null || Object.keys(constants).length === 0) {
+        return { status: 'failed', diagnostic: { code: 'merge-source-missing', message: `merge ${node.id}: every source was skipped` } }
+      }
+      merged = { ...constants }
+    } else if (values.length === 1) merged = { ...(constants ?? {}), ...(values[0].value !== null && typeof values[0].value === 'object' && !Array.isArray(values[0].value) ? values[0].value : {}) }
     else {
+      merged = { ...(constants ?? {}) }
       for (const entry of values) {
         if (entry.value !== null && typeof entry.value === 'object' && !Array.isArray(entry.value)) Object.assign(merged, entry.value)
         else merged[entry.from] = entry.value
@@ -571,14 +702,25 @@ function buildService(options) {
         route: judgeRoute,
       })
       if (result.kind !== 'done') {
-        return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the judge did not return a verdict', childSessionId: result.childId } }
+        return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the judge did not return a verdict', childSessionId: result.childId }, childSessionId: result.childId, usage: result.usage }
       }
       const verdict = parseVerdict(result.output)
-      if (verdict === null) return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the verdict is malformed' } }
-      if (verdict.verdict !== 'accept') {
-        return { status: 'rejected', diagnostic: { code: `judge-${verdict.verdict}`, message: verdict.reasons.join('; ') || 'the judge did not accept the delivery', verdict } }
+      if (verdict === null) {
+        return { status: 'inconclusive', diagnostic: { code: 'judge-inconclusive', message: 'the verdict is malformed' }, childSessionId: result.childId, usage: result.usage }
       }
-      return { status: 'done', output: { accepted: true, violations: [], judged: true }, childSessionId: result.childId, verdict: 'accept' }
+      if (verdict.verdict === 'reject') {
+        return { status: 'rejected', diagnostic: { code: 'judge-reject', message: verdict.reasons.join('; ') || 'the judge did not accept the delivery', verdict }, verdict, childSessionId: result.childId, usage: result.usage }
+      }
+      if (verdict.verdict === 'needs_more') {
+        return {
+          status: 'inconclusive',
+          diagnostic: { code: 'judge-needs-more', message: verdict.reasons.join('; ') || 'the judge needs more before deciding', verdict },
+          verdict,
+          childSessionId: result.childId,
+          usage: result.usage,
+        }
+      }
+      return { status: 'done', output: { accepted: true, violations: [], judged: true }, childSessionId: result.childId, verdict: 'accept', usage: result.usage }
     }
     return { status: 'done', output: { accepted: true, violations: [], judged: false } }
   }
@@ -603,15 +745,11 @@ function buildService(options) {
         return executeVerify(flow, run, node, host)
       case 'gate': {
         const snapshot = Object.fromEntries(upstreamArtifacts(flow, run, node.id).map((artifact) => [artifact.from, artifact.value]))
-        const pending = createGatePending(node, { now: now(), snapshot })
-        pending.revision = run.revisionCounter ?? 0
-        run.pending.push(pending)
+        const pending = openPending(flow, run, node, createGatePending(node, { now: now(), snapshot }), snapshot)
         return { status: 'waiting', pending }
       }
       case 'request': {
-        const pending = createRequestPending(node, { now: now() })
-        pending.revision = run.revisionCounter ?? 0
-        run.pending.push(pending)
+        const pending = openPending(flow, run, node, createRequestPending(node, { now: now() }))
         return { status: 'waiting', pending }
       }
       default:
@@ -636,6 +774,7 @@ function buildService(options) {
     const questions = hosts.questions()
     if (typeof questions?.ask !== 'function' || pending.asked === 'card') return
     pending.asked = 'card'
+    pending.askedVia = 'card'
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 10 * 60_000)
     if (typeof timer.unref === 'function') timer.unref()
@@ -653,6 +792,10 @@ function buildService(options) {
           logger.warn?.('hnflow: the gate card decision was refused: %o', error)
         })
       } catch (error) {
+        // The card is a convenience, never the source of truth: record that it
+        // failed and leave the inbox as the effective channel.
+        pending.askedVia = 'inbox'
+        pending.askError = String(error?.message ?? error)
         logger.info?.('hnflow: the gate card was not answered; the inbox remains authoritative: %o', error)
       } finally {
         clearTimeout(timer)
@@ -661,47 +804,177 @@ function buildService(options) {
   }
 
   /**
+   * Ask an independent judge whether a rejected delivery can still be accepted
+   * after its attempt budget ran out (`onReject.kind: 'arbitrate'`).
+   *
+   * The judge sees the contract, the rejection evidence and the delivery — not
+   * the producer's history. Accepting records the conditions in the audit and
+   * marks the artifact arbitrated; anything else still fails.
+   * @param {Record<string, any>} flow - definition.
+   * @param {Record<string, any>} run - run record.
+   * @param {Record<string, any>} pending - request pending record.
+   * @param {Record<string, any>} rejection - the rejected verify result.
+   * @param {Record<string, any>} host - live parent agent.
+   * @returns {Promise<{accepted: boolean, verdict?: Record<string, any>, diagnostic?: Record<string, any>, usage?: Record<string, number> | null}>} outcome.
+   */
+  async function arbitrateDelivery(flow, run, pending, rejection, host) {
+    const requestNode = findNode(flow, pending.nodeId)
+    const policy = pending.rejectPolicy ?? requestNode?.onReject ?? {}
+    const judge = policy.judge !== null && typeof policy.judge === 'object' ? policy.judge : {}
+    const preset = typeof judge.preset === 'string' ? judge.preset : typeof requestNode?.judge?.preset === 'string' ? requestNode.judge.preset : 'standard'
+    const route = typeof judge.model === 'string' ? routeForLayer(run, judge.model, `${pending.nodeId}:arbitrate`) : undefined
+    const prompt = [
+      `你是交付仲裁者（request \`${pending.nodeId}\`）。生产者与验收者已经发生分歧，你只判断“部分满足是否可接受”。`,
+      '',
+      '## 为什么需要人',
+      String(requestNode?.whyHuman ?? pending.whyHuman ?? ''),
+      '',
+      '## 交付契约',
+      '```json',
+      JSON.stringify(requestNode?.deliverable ?? pending.deliverable ?? {}, null, 2).slice(0, 4000),
+      '```',
+      '',
+      '## 人的交付',
+      '```json',
+      JSON.stringify(pending.delivery?.payload ?? null, null, 2).slice(0, 8000),
+      '```',
+      '',
+      '## 拒绝证据',
+      '```json',
+      JSON.stringify({ code: rejection.diagnostic?.code, message: rejection.diagnostic?.message, violations: rejection.diagnostic?.violations ?? [], verdict: rejection.diagnostic?.verdict ?? null }, null, 2).slice(0, 4000),
+      '```',
+      '',
+      '只输出 `{status:"done", output:{verdict:"accept"|"reject"|"needs_more", reasons:[...], conditions:[...]}}`。',
+      'accept 表示“在给出的条件下可以接受”，conditions 必须写清限制；不要向用户提问，不要委派。',
+    ].join('\n')
+    const result = await spawnNode({
+      run,
+      node: { ...judge, id: `${pending.nodeId}:arbitrate`, preset, budget: requestNode?.budget },
+      host,
+      prompt,
+      schema: judgeEnvelopeSchema(),
+      route,
+    })
+    if (result.kind !== 'done') return { accepted: false, usage: result.usage }
+    const verdict = parseVerdict(result.output)
+    if (verdict === null || verdict.verdict !== 'accept') return { accepted: false, verdict: verdict ?? undefined, usage: result.usage }
+    return { accepted: true, verdict, usage: result.usage }
+  }
+
+  /**
    * Fold one node result into the run record.
    * @param {Record<string, any>} flow - definition.
    * @param {Record<string, any>} run - run record.
    * @param {string} id - node id.
    * @param {Record<string, any>} result - execution result.
-   * @returns {void}
+   * @param {Record<string, any>} host - live parent agent (arbitration needs it).
+   * @returns {Promise<void>} resolves once folded.
    */
-  function applyNodeResult(flow, run, id, result) {
+  async function applyNodeResult(flow, run, id, result, host) {
     const state = nodeState(run, id)
+    const node = findNode(flow, id)
     const base = { ...state, endedAt: now().toISOString() }
+    run.usage = addUsage(run.usage, result.usage ?? null)
     switch (result.status) {
-      case 'done':
-        run.nodes[id] = { ...base, status: 'done', output: result.output, childSessionId: result.childSessionId, verdict: result.verdict }
+      case 'done': {
+        const degraded = typeof state.degradedFrom === 'string'
+        const artifact = registerArtifact(run, node, {
+          degraded,
+          degradedReason: degraded ? `fallback from ${state.degradedFrom}` : undefined,
+          ...(result.verdict === 'accept' ? { accepted: true } : {}),
+        })
+        run.nodes[id] = {
+          ...base,
+          status: 'done',
+          output: result.output,
+          childSessionId: result.childSessionId,
+          verdict: result.verdict,
+          ...(artifact === null ? {} : { artifactId: artifact.artifactId }),
+          ...(result.usage === null || result.usage === undefined ? {} : { usage: result.usage }),
+        }
         return
+      }
       case 'waiting':
         run.nodes[id] = { ...base, status: 'waiting', pendingId: result.pending.id }
         return
-      case 'human':
-        run.pending.push(
+      case 'human': {
+        const pending = openPending(
+          flow,
+          run,
+          node,
           createRequestPending(
             { id, deliverable: result.gap.deliverable, whyHuman: result.gap.whyHuman, onExpire: 'remind' },
             { now: now(), gap: result.gap },
           ),
         )
-        run.nodes[id] = { ...base, status: 'waiting', childSessionId: result.childSessionId }
+        run.nodes[id] = { ...base, status: 'waiting', childSessionId: result.childSessionId, pendingId: pending.id }
         return
+      }
       case 'rejected': {
-        const requestId = findNode(flow, id)?.against
+        const requestId = node?.against
+        const requestNode = findNode(flow, requestId)
         const pending = run.pending.find((entry) => entry.kind === 'request' && entry.nodeId === requestId)
         if (pending !== undefined) {
           pending.attempts = Number(pending.attempts ?? 0) + 1
-          const next = rejectionStep(findNode(flow, pending.nodeId), pending.attempts)
           pending.lastViolations = result.diagnostic?.violations ?? []
+          pending.lastDiagnostic = result.diagnostic ?? null
+          // The rejection policy lives on the request (who is asked), with the
+          // verify node's declaration as a per-check override.
+          const policy = requestNode?.onReject ?? node?.onReject
+          pending.rejectPolicy = policy
+          const next = rejectionStep({ onReject: policy }, pending.attempts)
           if (next === 'return') {
             delete pending.delivery
             delete pending.decision
+            delete pending.deliveryId
             run.nodes[pending.nodeId] = { ...nodeState(run, pending.nodeId), status: 'waiting' }
             run.nodes[id] = { ...base, status: 'pending', diagnostic: result.diagnostic }
             return
           }
-          if (next === 'fallback') activateFallbacks(flow, run, pending.nodeId)
+          if (next === 'arbitrate') {
+            const outcome = await arbitrateDelivery(flow, run, pending, result, host)
+            run.usage = addUsage(run.usage, outcome.usage ?? null)
+            if (outcome.accepted) {
+              pending.arbitrated = true
+              pending.arbitration = outcome.verdict
+              pending.delivery = { ...(pending.delivery ?? {}), accepted: true, arbitrated: true, conditions: outcome.verdict.conditions ?? [] }
+              const requestState = nodeState(run, pending.nodeId)
+              run.nodes[pending.nodeId] = { ...requestState, status: 'done', output: pending.delivery.payload }
+              const artifact = run.artifacts?.[requestState.artifactId]
+              if (artifact !== undefined) artifact.accepted = true
+              const verifyArtifact = registerArtifact(run, node, { accepted: true })
+              run.nodes[id] = {
+                ...base,
+                status: 'done',
+                output: { accepted: true, violations: pending.lastViolations, judged: true, arbitrated: true, conditions: outcome.verdict.conditions ?? [] },
+                verdict: 'accept',
+                ...(verifyArtifact === null ? {} : { artifactId: verifyArtifact.artifactId }),
+              }
+              run.audit = Array.isArray(run.audit) ? run.audit : []
+              run.audit.push({
+                at: now().toISOString(),
+                kind: 'arbitration',
+                pendingId: pending.id,
+                nodeId: pending.nodeId,
+                verdict: outcome.verdict ?? null,
+                decidedBy: 'judge',
+              })
+              return
+            }
+            pending.arbitration = { verdict: outcome.verdict ?? null, accepted: false }
+            run.nodes[id] = {
+              ...base,
+              status: 'failed',
+              diagnostic: { code: 'arbitration-rejected', message: outcome.verdict?.reasons?.join('; ') || 'the arbitration did not accept the delivery', verdict: outcome.verdict },
+            }
+            run.nodes[pending.nodeId] = {
+              ...nodeState(run, pending.nodeId),
+              status: 'failed',
+              diagnostic: { code: 'delivery-rejected', message: 'the delivery was rejected after arbitration' },
+            }
+            return
+          }
+          if (next === 'fallback') activateFallbacks(flow, run, pending.nodeId, { code: 'delivery-rejected', message: result.diagnostic?.message })
           run.nodes[id] = { ...base, status: 'failed', diagnostic: result.diagnostic }
           run.nodes[pending.nodeId] = {
             ...nodeState(run, pending.nodeId),
@@ -713,12 +986,41 @@ function buildService(options) {
         run.nodes[id] = { ...base, status: 'failed', diagnostic: result.diagnostic }
         return
       }
-      case 'inconclusive':
+      case 'inconclusive': {
+        // A verify/judge that cannot decide is not a silent failure: by
+        // default it parks on a gate, and the human sees the verdict, the
+        // violations and the diagnostics before deciding whether to accept it.
+        const gateable = (node?.type === 'verify' || node?.type === 'judge') && node.onInconclusive !== 'fail'
+        if (gateable) {
+          const snapshot = {
+            verdict: result.verdict ?? null,
+            diagnostic: result.diagnostic ?? null,
+            violations: result.diagnostic?.violations ?? [],
+          }
+          const pending = openPending(
+            flow,
+            run,
+            node,
+            createGatePending(
+              { id, title: `验收不确定：${id}`, detail: '验收无法给出明确结论，请裁决是否接受当前交付。' },
+              { now: now(), snapshot },
+            ),
+            snapshot,
+          )
+          pending.origin = 'inconclusive'
+          pending.verdict = result.verdict ?? null
+          run.nodes[id] = { ...base, status: 'waiting', pendingId: pending.id }
+          return
+        }
         run.nodes[id] = { ...base, status: 'failed', diagnostic: result.diagnostic }
+        activateFallbacks(flow, run, id, { code: result.diagnostic?.code ?? 'inconclusive', message: result.diagnostic?.message })
         return
+      }
       default:
         run.nodes[id] = { ...base, status: 'failed', diagnostic: result.diagnostic ?? { code: 'node-failed', message: 'the node failed' } }
-        if (result.diagnostic?.code !== 'cancelled') activateFallbacks(flow, run, id)
+        if (result.diagnostic?.code !== 'cancelled') {
+          activateFallbacks(flow, run, id, { code: result.diagnostic?.code ?? 'node-failed', message: result.diagnostic?.message })
+        }
     }
   }
 
@@ -810,7 +1112,7 @@ function buildService(options) {
           }
         }),
       )
-      for (const { id, result } of results) applyNodeResult(flow, run, id, result)
+      for (const { id, result } of results) await applyNodeResult(flow, run, id, result, host)
       for (const pending of run.pending) {
         if (pending.kind !== 'gate' || pending.decision !== undefined || pending.asked !== undefined) continue
         const node = nodeIndex(flow).get(pending.nodeId)
@@ -871,6 +1173,9 @@ function buildService(options) {
       nodes: Object.fromEntries([...nodeIndex(resolved.definition).keys()].map((id) => [id, { status: 'pending', attempts: 0 }])),
       pending: [],
       fallbacks: [],
+      degradations: [],
+      artifacts: {},
+      usage: null,
       audit: [],
       warnings: problems.warnings,
       cancelRequested: false,
@@ -937,22 +1242,90 @@ function buildService(options) {
       if (pending === undefined || pending.kind !== 'gate') throw new HnflowError('gate-missing', `no gate ${input.gateId} in run ${input.runId}`)
       const outcome = decideGate(pending, input, { now: now(), runRevision: pending.revision })
       if (!outcome.ok) throw new HnflowError(outcome.code, outcome.message)
+      if (input.artifact !== undefined) {
+        if (outcome.decision.decision !== 'modified') {
+          throw new HnflowError('invalid-decision', 'a modified artifact is only accepted with the "modified" decision')
+        }
+        try {
+          JSON.stringify(input.artifact)
+        } catch {
+          throw new HnflowError('payload-invalid', 'the modified artifact must be JSON-serializable')
+        }
+        outcome.decision.artifact = input.artifact
+      }
+      const flow = await flowOf(current)
+      const nodeDef = findNode(flow, pending.nodeId)
       pending.decision = outcome.decision
-      const node = nodeState(current, pending.nodeId)
+      pending.decidedBy = 'owner'
+      pending.decidedAt = outcome.decision.decidedAt
       const rejected = outcome.decision.decision === 'rejected'
-      current.nodes[pending.nodeId] = {
-        ...node,
-        status: rejected ? 'failed' : 'done',
-        output: { decision: outcome.decision.decision, reason: outcome.decision.reason, decidedAt: outcome.decision.decidedAt },
-        endedAt: now().toISOString(),
-        ...(rejected ? { diagnostic: { code: 'gate-rejected', message: outcome.decision.reason } } : {}),
+      const decidedAt = now().toISOString()
+      const node = nodeState(current, pending.nodeId)
+      const audit = {
+        at: decidedAt,
+        pendingId: pending.id,
+        nodeId: pending.nodeId,
+        flowRevision: pending.flowRevision ?? null,
+        contentHash: pending.contentHash ?? null,
+        upstreamHash: pending.upstreamHash ?? null,
+        askedVia: pending.askedVia ?? 'inbox',
+        consumerNodeIds: pending.consumerNodeIds ?? [],
+        decision: outcome.decision,
+        decidedBy: 'owner',
+      }
+      if (pending.origin === 'inconclusive' && (nodeDef?.type === 'verify' || nodeDef?.type === 'judge')) {
+        // The gate is arbitrating an inconclusive verdict: approving accepts
+        // the result with the doubt recorded, rejecting makes it a clear
+        // `reject` verdict for a judge (so `when.verdict` edges still route).
+        const artifact = rejected ? null : registerArtifact(current, nodeDef, { accepted: true })
+        if (nodeDef.type === 'judge') {
+          const verdict = rejected ? 'reject' : 'accept'
+          current.nodes[pending.nodeId] = {
+            ...node,
+            status: 'done',
+            endedAt: decidedAt,
+            output: { verdict, reasons: outcome.decision.reason.length > 0 ? [outcome.decision.reason] : [], conditions: [] },
+            verdict,
+            ...(artifact === null ? {} : { artifactId: artifact.artifactId }),
+          }
+        } else {
+          current.nodes[pending.nodeId] = rejected
+            ? {
+                ...node,
+                status: 'failed',
+                endedAt: decidedAt,
+                diagnostic: {
+                  code: 'inconclusive-rejected',
+                  message: outcome.decision.reason,
+                  verdict: pending.verdict ?? null,
+                  violations: pending.snapshot?.violations ?? [],
+                },
+              }
+            : {
+                ...node,
+                status: 'done',
+                endedAt: decidedAt,
+                output: { accepted: true, violations: pending.snapshot?.violations ?? [], judged: true, arbitrated: true },
+                ...(artifact === null ? {} : { artifactId: artifact.artifactId }),
+              }
+        }
+      } else {
+        current.nodes[pending.nodeId] = {
+          ...node,
+          status: rejected ? 'failed' : 'done',
+          output: {
+            decision: outcome.decision.decision,
+            reason: outcome.decision.reason,
+            decidedAt: outcome.decision.decidedAt,
+            ...(outcome.decision.artifact === undefined ? {} : { artifact: outcome.decision.artifact }),
+          },
+          endedAt: decidedAt,
+          ...(rejected ? { diagnostic: { code: 'gate-rejected', message: outcome.decision.reason } } : {}),
+        }
       }
       current.audit = Array.isArray(current.audit) ? current.audit : []
-      current.audit.push({ at: now().toISOString(), kind: 'gate', pendingId: pending.id, nodeId: pending.nodeId, decision: outcome.decision })
-      if (rejected) {
-        const flow = await flowOf(current)
-        activateFallbacks(flow, current, pending.nodeId)
-      }
+      current.audit.push(audit)
+      if (rejected) activateFallbacks(flow, current, pending.nodeId, { code: 'gate-rejected', message: outcome.decision.reason })
       current.status = 'running'
       await store.putRun(current)
       return current
@@ -973,7 +1346,26 @@ function buildService(options) {
       if (pending === undefined || pending.kind !== 'request') throw new HnflowError('request-missing', `no request ${input.requestId} in run ${input.runId}`)
       const outcome = checkDelivery(pending, input.payload, { now: now(), revision: pending.revision })
       if (!outcome.ok) throw new HnflowError(outcome.code, outcome.message, { violations: outcome.violations })
-      pending.delivery = outcome.delivery
+      // A delivery is data, not authority: its paths must stay inside the
+      // workspace before any downstream node can act on them.
+      const pathCheck = await checkDeliverablePaths(input.payload, { cwd: current.workspace, fs: hosts.fs() })
+      if (!pathCheck.ok) {
+        throw new HnflowError('path-outside-workspace', `the delivery has ${pathCheck.violations.length} unsafe path(s)`, {
+          violations: pathCheck.violations,
+        })
+      }
+      const flow = await flowOf(current)
+      const nodeDef = findNode(flow, pending.nodeId)
+      const deliveryId = `del-${randomUUID().replace(/-/gu, '').slice(0, 12)}`
+      pending.delivery = {
+        ...outcome.delivery,
+        deliveryId,
+        decidedBy: 'owner',
+        paths: pathCheck.warnings,
+      }
+      pending.deliveryId = deliveryId
+      pending.decidedBy = 'owner'
+      pending.decidedAt = outcome.delivery.submittedAt
       pending.decision = { decision: 'approved', reason: '', decidedAt: outcome.delivery.submittedAt }
       const node = nodeState(current, pending.nodeId)
       if (pending.gap !== null && pending.gap !== undefined) {
@@ -981,10 +1373,30 @@ function buildService(options) {
         // same agent node with the delivery attached, rather than completing it.
         current.nodes[pending.nodeId] = { ...node, status: 'pending', humanDelivery: outcome.delivery.payload }
       } else {
-        current.nodes[pending.nodeId] = { ...node, status: 'done', output: outcome.delivery.payload, endedAt: now().toISOString() }
+        const artifact = registerArtifact(current, nodeDef, { accepted: true, source: 'human' })
+        current.nodes[pending.nodeId] = {
+          ...node,
+          status: 'done',
+          output: outcome.delivery.payload,
+          endedAt: now().toISOString(),
+          ...(artifact === null ? {} : { artifactId: artifact.artifactId }),
+        }
       }
       current.audit = Array.isArray(current.audit) ? current.audit : []
-      current.audit.push({ at: now().toISOString(), kind: 'delivery', pendingId: pending.id, nodeId: pending.nodeId, delivery: outcome.delivery })
+      current.audit.push({
+        at: now().toISOString(),
+        kind: 'delivery',
+        pendingId: pending.id,
+        nodeId: pending.nodeId,
+        flowRevision: pending.flowRevision ?? null,
+        contentHash: pending.contentHash ?? null,
+        upstreamHash: pending.upstreamHash ?? null,
+        askedVia: pending.askedVia ?? 'inbox',
+        consumerNodeIds: pending.consumerNodeIds ?? [],
+        deliveryId,
+        delivery: outcome.delivery,
+        decidedBy: 'owner',
+      })
       current.status = 'running'
       await store.putRun(current)
       return current
@@ -1047,6 +1459,103 @@ function buildService(options) {
   }
 
   /**
+   * List a flow's immutable revision history.
+   * @param {string} cwd - workspace root.
+   * @param {string} key - alias or flow id.
+   * @returns {Promise<Record<string, any>>} history.
+   */
+  async function history(cwd, key) {
+    const resolved = await resolveKey(cwd, key)
+    const { assets, workspace } = storesFor(cwd)
+    const ref = await workspace.findRef(key)
+    const revisions = await assets.listRevisions(resolved.flowId)
+    return {
+      flowId: resolved.flowId,
+      flowName: resolved.flowName,
+      alias: resolved.alias,
+      source: resolved.source,
+      currentRevision: resolved.currentRevision,
+      // A reference that follows latest still resolves to a number; the
+      // history must say "follows latest", so read the pin, not the resolution.
+      pinnedRevision: ref === null ? null : ref.revision ?? null,
+      revisions,
+    }
+  }
+
+  /**
+   * Prepare a publish: validate the candidate and diff it against the published
+   * asset. No revision is created here — a human still has to confirm.
+   * @param {string} cwd - workspace root.
+   * @param {string} key - alias or flow id.
+   * @returns {Promise<Record<string, any>>} preview.
+   */
+  async function previewPublish(cwd, key) {
+    requireVibestack()
+    const resolved = await resolveKey(cwd, key)
+    const validation = await validate(resolved.definition)
+    const { assets } = storesFor(cwd)
+    const current = await assets.read(resolved.flowId)
+    return {
+      flowId: resolved.flowId,
+      flowName: resolved.flowName,
+      alias: resolved.alias,
+      source: resolved.source,
+      currentRevision: resolved.currentRevision,
+      pinnedRevision: resolved.revision,
+      nextRevision: Number(resolved.currentRevision ?? 1) + 1,
+      validation,
+      diff: diffDefinitions(current.definition, resolved.definition),
+      contentHash: contentHash(resolved.definition),
+    }
+  }
+
+  /**
+   * Re-pin a workspace reference.
+   * @param {string} cwd - workspace root.
+   * @param {string} key - alias or flow id.
+   * @param {number | 'latest' | null} target - revision, latest, or null.
+   * @returns {Promise<Record<string, any>>} updated ref.
+   */
+  async function pinRef(cwd, key, target) {
+    const resolved = await resolveKey(cwd, key)
+    const { workspace, assets } = storesFor(cwd)
+    const revision = target === 'latest' || target === null || target === undefined ? null : Number(target)
+    if (revision !== null) {
+      if (!Number.isInteger(revision) || revision < 1) throw new HnflowError('revision-invalid', `revision must be a positive integer or "latest"`)
+      const exists = await assets.readRevisionRecord(resolved.flowId, revision)
+      if (exists === null) throw new HnflowError('revision-missing', `revision ${revision} of ${resolved.flowId} has no snapshot`)
+    }
+    const updated = await workspace.updateRef(key, { revision })
+    indexCache.delete(String(cwd))
+    return { flowId: resolved.flowId, alias: resolved.alias, revision: updated.revision ?? null }
+  }
+
+  /**
+   * Restore an old revision as a new revision (never rewrites history).
+   * @param {{cwd: string, key: string, revision: number, note?: string}} input - rollback input.
+   * @returns {Promise<Record<string, any>>} publish result plus `restoredFrom`.
+   */
+  async function rollback(input) {
+    requireVibestack()
+    const resolved = await resolveKey(input.cwd, input.key)
+    const { assets } = storesFor(input.cwd)
+    const record = await assets.readRevisionRecord(resolved.flowId, Number(input.revision))
+    if (record === null) throw new HnflowError('revision-missing', `revision ${input.revision} of ${resolved.flowId} has no snapshot`)
+    const validation = await validate(record.definition)
+    if (!validation.ok) throw new HnflowError('flow-invalid', `revision ${input.revision} does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
+    const nextRevision = Number(resolved.currentRevision ?? 1) + 1
+    const lockfile = await lockfileFor({ ...resolved, definition: record.definition, revision: nextRevision, lockfile: null })
+    const published = await publishFlow({
+      assets,
+      definition: record.definition,
+      note: input.note ?? `rollback to r${input.revision}`,
+      lockfile,
+    })
+    indexCache.delete(String(input.cwd))
+    return { ...published, restoredFrom: Number(input.revision) }
+  }
+
+  /**
    * List the workspace's referenced flows.
    * @param {string} cwd - workspace root.
    * @returns {Promise<Record<string, any>[]>} catalogue entries.
@@ -1102,13 +1611,26 @@ function buildService(options) {
           flowName: run.flowName,
           nodeId: pending.nodeId,
           createdAt: pending.createdAt,
+          askedAt: pending.askedAt ?? pending.createdAt,
+          askedVia: pending.askedVia ?? 'inbox',
           expiresAt: pending.expiresAt,
+          expired: pending.expired === true,
           revision: pending.revision,
           attempts: pending.attempts ?? 0,
           whyHuman: pending.whyHuman,
           deliverable: pending.deliverable,
           snapshot: pending.snapshot,
           gap: pending.gap,
+          // Audit facts §6.5: which revision was the human looking at, and which
+          // nodes will consume the answer.
+          flowRevision: pending.flowRevision ?? null,
+          flowSource: pending.flowSource ?? run.source ?? 'latest',
+          contentHash: pending.contentHash ?? null,
+          upstreamHash: pending.upstreamHash ?? null,
+          consumerNodeIds: pending.consumerNodeIds ?? [],
+          origin: pending.origin ?? (pending.kind === 'gate' ? 'gate' : 'request'),
+          lastViolations: pending.lastViolations ?? [],
+          lastDiagnostic: pending.lastDiagnostic ?? null,
         })
       }
     }
@@ -1172,30 +1694,78 @@ function buildService(options) {
    */
   async function sweepExpired() {
     if (disposed) return
+    /** @type {string[]} */
+    const touched = []
     try {
       const runs = await store.listRuns()
       for (const run of runs) {
         if (TERMINAL_RUN.has(run.status)) continue
         let changed = false
-        for (const pending of run.pending) {
+        for (const pending of Array.isArray(run.pending) ? run.pending : []) {
           if (pending.decision !== undefined || pending.delivery !== undefined) continue
           if (typeof pending.expiresAt !== 'string' || pending.expired === true) continue
           if (Date.parse(pending.expiresAt) > now().getTime()) continue
           pending.expired = true
+          pending.expiredAt = now().toISOString()
           changed = true
-          if (pending.kind === 'request' && pending.onExpire === 'fail') {
-            run.nodes[pending.nodeId] = {
-              ...nodeState(run, pending.nodeId),
-              status: 'failed',
-              diagnostic: { code: 'request-expired', message: 'the deliverable was not provided before its deadline' },
-            }
+          run.audit = Array.isArray(run.audit) ? run.audit : []
+          run.audit.push({
+            at: now().toISOString(),
+            kind: 'expired',
+            pendingId: pending.id,
+            nodeId: pending.nodeId,
+            flowRevision: pending.flowRevision ?? null,
+            contentHash: pending.contentHash ?? null,
+            decision: null,
+            onExpire: pending.onExpire ?? 'remind',
+          })
+          if (pending.onExpire !== 'fail') continue
+          // `fail` is a real state transition, not a badge: the node fails, its
+          // fallback activates, and the run continues to a verdict.
+          run.nodes[pending.nodeId] = {
+            ...nodeState(run, pending.nodeId),
+            status: 'failed',
+            diagnostic: {
+              code: pending.kind === 'request' ? 'request-expired' : 'gate-expired',
+              message: pending.kind === 'request' ? 'the deliverable was not provided before its deadline' : 'the gate was not decided before its deadline',
+            },
           }
+          const flow = await flowOf(run)
+          // Closing the pending record is what lets the run advance: without a
+          // decision marker, `step` would park on it again as waiting_human.
+          pending.decision = { decision: 'expired', reason: 'the deadline passed', decidedAt: now().toISOString() }
+          pending.closedBy = 'expiry'
+          activateFallbacks(flow, run, pending.nodeId, { code: 'expired', message: pending.onExpire })
+          run.status = 'running'
         }
-        if (changed) await store.putRun(run)
+        if (changed) {
+          await store.putRun(run)
+          touched.push(run.runId)
+        }
       }
     } catch (error) {
       logger.warn?.('hnflow: the expiry sweep failed: %o', error)
     }
+    for (const runId of touched) {
+      if (disposed) return
+      void enqueue(runId, () => step(runId)).catch((error) => logger.warn?.('hnflow: advancing an expired run failed: %o', error))
+    }
+  }
+
+  /**
+   * Read one artifact plus its current value.
+   * @param {string} artifactId - artifact id.
+   * @returns {Promise<Record<string, any>>} artifact view.
+   * @throws {HnflowError} `artifact-missing`.
+   */
+  async function getArtifact(artifactId) {
+    await ready()
+    const runs = await store.listRuns()
+    for (const run of runs) {
+      const view = artifactView(run, artifactId)
+      if (view !== null) return view
+    }
+    throw new HnflowError('artifact-missing', `no artifact named ${artifactId}`)
   }
 
   /**
@@ -1254,16 +1824,22 @@ function buildService(options) {
     deliver,
     draft,
     publish,
+    previewPublish,
+    history,
+    rollback,
+    pinRef,
     listFlows,
     describeFlow,
     getRun,
     listRuns,
     inbox,
     snapshot,
+    getArtifact,
     indexSection,
     cachedIndex,
     validate,
     resolveKey,
+    sweepExpired,
     status: () => ({ degraded: !vibestackAvailable(hosts.vibestack()), storage: store.mode(), warnings: store.warnings(), runner: runner.available() }),
   }
 }
@@ -1295,5 +1871,8 @@ export function summariseRun(run) {
       diagnostic: state.diagnostic ?? null,
     })),
     pending: (run.pending ?? []).filter((entry) => entry.decision === undefined && entry.delivery === undefined).length,
+    usage: run.usage ?? null,
+    degradations: Array.isArray(run.degradations) ? run.degradations : [],
+    artifacts: artifactList(run),
   }
 }

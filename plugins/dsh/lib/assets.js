@@ -162,6 +162,34 @@ export class AssetStore {
   }
 
   /**
+   * List the immutable snapshots that exist for one flow.
+   * @param {string} flowId - flow identity.
+   * @returns {Promise<{revision: number, snapshotAt: string | null, contentHash: string}[]>} revisions, newest first.
+   */
+  async listRevisions(flowId) {
+    const directory = path.join(this.root, REVISIONS_DIRECTORY, flowId)
+    /** @type {string[]} */
+    let entries
+    try {
+      entries = await readdir(directory)
+    } catch (error) {
+      if (error?.code === 'ENOENT') return []
+      throw error
+    }
+    /** @type {{revision: number, snapshotAt: string | null, contentHash: string}[]} */
+    const revisions = []
+    for (const entry of entries) {
+      const match = /^r(\d+)\.json$/u.exec(entry)
+      if (match === null) continue
+      const revision = Number(match[1])
+      const record = await this.readRevisionRecord(flowId, revision)
+      if (record === null) continue
+      revisions.push({ revision, snapshotAt: record.snapshotAt, contentHash: hashOf(record.definition) })
+    }
+    return revisions.sort((left, right) => right.revision - left.revision)
+  }
+
+  /**
    * Write the snapshot for a stored revision.
    * @param {string} flowId - flow identity.
    * @param {number} revision - revision number.

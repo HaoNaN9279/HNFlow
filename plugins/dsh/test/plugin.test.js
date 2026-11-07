@@ -91,7 +91,7 @@ test('the core row provides ctx.hnflow, the page routes and the global command',
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
-  assert.equal(ctx.routes.length, 8)
+  assert.equal(ctx.routes.length, 15)
   assert.equal(typeof ctx.services.hnflow.status, 'function')
   assert.equal(ctx.effects.length, 1)
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])

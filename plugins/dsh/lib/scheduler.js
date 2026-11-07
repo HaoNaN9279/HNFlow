@@ -148,13 +148,16 @@ export function runnableNodes(flow, run, limit = 3) {
 
 /**
  * Formal fallback activation: a failed node's outgoing edge may name another
- * node to run instead. Mutates the run's `fallbacks` list.
+ * node to run instead. Mutates the run's `fallbacks` list and records the
+ * degradation, so a fallback-produced artifact is never silently equivalent to
+ * the primary path.
  * @param {Record<string, any>} flow - definition.
  * @param {Record<string, any>} run - run record.
  * @param {string} failedId - node that failed.
+ * @param {{code?: string, message?: string, now?: Date}} [meta] - why the fallback ran.
  * @returns {string[]} fallback node ids activated.
  */
-export function activateFallbacks(flow, run, failedId) {
+export function activateFallbacks(flow, run, failedId, meta = {}) {
   /** @type {string[]} */
   const activated = []
   const fallbacks = Array.isArray(run.fallbacks) ? [...run.fallbacks] : []
@@ -166,10 +169,20 @@ export function activateFallbacks(flow, run, failedId) {
     const state = nodeState(run, target)
     if (state.status !== 'pending') continue
     fallbacks.push(target)
-    run.nodes[target] = { ...state, status: 'pending' }
+    run.nodes[target] = { ...state, status: 'pending', degradedFrom: failedId }
     activated.push(target)
   }
   if (fallbacks.length > 0) run.fallbacks = fallbacks
+  if (activated.length > 0) {
+    run.degradations = Array.isArray(run.degradations) ? run.degradations : []
+    run.degradations.push({
+      at: (meta.now ?? new Date()).toISOString(),
+      nodeId: failedId,
+      code: String(meta.code ?? 'fallback'),
+      ...(typeof meta.message === 'string' && meta.message.length > 0 ? { message: meta.message } : {}),
+      fallbackNodeIds: activated,
+    })
+  }
   return activated
 }
 

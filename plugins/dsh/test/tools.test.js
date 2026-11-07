@@ -39,7 +39,7 @@ const cwdOf = () => '/w'
 test('the tool definition exposes only non-publishing actions', () => {
   const tool = createFlowTool({ service: stubService(), cwdOf })
   assert.equal(tool.name, 'hnflow')
-  assert.deepEqual(tool.parameters.properties.action.enum, ['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox'])
+  assert.deepEqual(tool.parameters.properties.action.enum, ['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox', 'artifact'])
 })
 
 test('list_flows renders the catalogue', async () => {

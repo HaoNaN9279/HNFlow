@@ -13,6 +13,7 @@ import { AssetStore } from './assets.js'
 import { createStores } from './resolve.js'
 import { libraryRoot } from './paths.js'
 import { summariseRun } from './service.js'
+import { convertDefinition, formatImportReport } from './import.js'
 
 /** Command name. */
 export const COMMAND_NAME = 'hnflow'
@@ -24,12 +25,15 @@ export const USAGE = [
   '  /hnflow runs                   最近运行',
   '  /hnflow status <runId>         一次运行的节点状态',
   '  /hnflow inbox                  待处理的门禁与交付',
-  '  /hnflow publish <流程>         预览发布（校验 + 版本信息）',
+  '  /hnflow publish <流程>         预览发布（校验 + 变更 diff + 版本信息）',
   '  /hnflow publish <流程> confirm 确认发布为新的不可变 revision',
+  '  /hnflow history <流程>         版本历史',
+  '  /hnflow rollback <流程> rN     预览回滚（以旧版本为新 revision）',
+  '  /hnflow rollback <流程> rN confirm 确认回滚',
   '  /hnflow pin <流程> <latest|rN> 改引用钉住的版本',
   '  /hnflow assets                 列出通用资产库里的流程',
   '  /hnflow add <流程id> [别名]     把通用资产引用到本工作区',
-  '  /hnflow import <名称> <文件>    从工作区内的 JSON 文件新建流程资产（人工操作）',
+  '  /hnflow import <名称> <文件>    导入流程（兼容旧 WorkflowDefinition，转换结果先报告再落库）',
   '  /hnflow open                   打开左侧 HNFlow 页面',
 ].join('\n')
 
@@ -114,6 +118,10 @@ export function createFlowCommand(options) {
         }
         case 'publish':
           return await publish(rest, cwd)
+        case 'history':
+          return await history(rest, cwd)
+        case 'rollback':
+          return await rollback(rest, cwd)
         case 'pin':
           return await pin(rest, cwd)
         case 'assets':
@@ -143,24 +151,76 @@ export function createFlowCommand(options) {
     const key = args[0]
     if (key === undefined) return { kind: 'error', text: '用法：/hnflow publish <流程> [confirm]' }
     const confirm = args[1] === 'confirm'
-    const resolved = await service.describeFlow(cwd, key)
-    if (!confirm) {
-      const validation = await service.validate(resolved.definition)
-      const lines = [
-        `流程 ${resolved.alias || resolved.flowId}（${resolved.flowId}）`,
-        `来源：${resolved.source}，当前 r${resolved.currentRevision}，发布后为 r${resolved.currentRevision + 1}`,
-        `校验：${validation.ok ? '通过' : `失败（${validation.errors.length} 项）`}`,
-        ...validation.errors.map((entry) => `  × ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ''}: ${entry.message}`),
-      ]
-      if (!validation.ok) lines.push('', '修正后再执行 /hnflow publish。')
-      else lines.push('', `确认发布：/hnflow publish ${key} confirm`)
-      return { kind: 'success', text: lines.join('\n') }
+    if (confirm) {
+      const resolved = await service.describeFlow(cwd, key)
+      const published = await service.publish({ cwd, key, note: 'published by /hnflow' })
+      return {
+        kind: 'success',
+        text: `已发布 ${resolved.alias || resolved.flowId} 为 r${published.revision}（${published.contentHash}）。\n钉住旧版本的引用不会自动跟随；需要时用 /hnflow pin 改钉。`,
+      }
     }
-    const published = await service.publish({ cwd, key, note: 'published by /hnflow' })
-    return {
-      kind: 'success',
-      text: `已发布 ${resolved.alias || resolved.flowId} 为 r${published.revision}（${published.contentHash}）。\n钉住旧版本的引用不会自动跟随；需要时用 /hnflow pin 改钉。`,
+    const preview = await service.previewPublish(cwd, key)
+    const lines = [
+      `流程 ${preview.alias || preview.flowId}（${preview.flowId}）`,
+      `来源：${preview.source}，当前 r${preview.currentRevision}，发布后为 r${preview.nextRevision}`,
+      `校验：${preview.validation.ok ? '通过' : `失败（${preview.validation.errors.length} 项）`}`,
+      ...preview.validation.errors.map((entry) => `  × ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ''}: ${entry.message}`),
+      '',
+      ...(preview.diff?.changed === false ? ['变更：无内容变化'] : ['变更：', ...(preview.diff?.summary ?? []).map((line) => `  ${line}`)]),
+    ]
+    if (!preview.validation.ok) lines.push('', '修正后再执行 /hnflow publish。')
+    else lines.push('', `确认发布：/hnflow publish ${key} confirm`)
+    return { kind: 'success', text: lines.join('\n') }
+  }
+
+  /**
+   * Show one flow's revision history.
+   * @param {string[]} args - `<flow>`.
+   * @param {string | null} cwd - workspace root.
+   * @returns {Promise<{kind: string, text: string}>} result.
+   */
+  async function history(args, cwd) {
+    const key = args[0]
+    if (key === undefined) return { kind: 'error', text: '用法：/hnflow history <流程>' }
+    const found = await service.history(cwd, key)
+    const lines = [
+      `流程 ${found.alias || found.flowId}（${found.flowId}）`,
+      `当前 r${found.currentRevision}，引用${found.pinnedRevision === null ? '跟随最新' : `钉住 r${found.pinnedRevision}`}，来源 ${found.source}`,
+      `版本（${found.revisions.length}）：`,
+    ]
+    for (const entry of found.revisions) {
+      const mark = entry.revision === found.currentRevision ? ' ← 当前' : ''
+      lines.push(`  r${entry.revision}${entry.revision === found.pinnedRevision ? '（引用）' : ''} ${entry.contentHash}${entry.snapshotAt ? ` @ ${entry.snapshotAt}` : ''}${mark}`)
     }
+    return { kind: 'success', text: lines.join('\n') }
+  }
+
+  /**
+   * Preview or confirm rolling an old revision forward as a new revision.
+   * @param {string[]} args - `<flow> <rN> [confirm]`.
+   * @param {string | null} cwd - workspace root.
+   * @returns {Promise<{kind: string, text: string}>} result.
+   */
+  async function rollback(args, cwd) {
+    const [key, target, confirm] = args
+    if (key === undefined || target === undefined) return { kind: 'error', text: '用法：/hnflow rollback <流程> <rN> [confirm]' }
+    const revision = Number(target.replace(/^r/u, ''))
+    if (!Number.isInteger(revision) || revision < 1) return { kind: 'error', text: `无法识别的版本：${target}（用 r3）` }
+    if (confirm !== 'confirm') {
+      const found = await service.history(cwd, key)
+      const entry = found.revisions.find((candidate) => candidate.revision === revision)
+      if (entry === undefined) return { kind: 'error', text: `流程 ${key} 没有 r${revision} 的快照。` }
+      return {
+        kind: 'success',
+        text: [
+          `回滚 ${found.alias || found.flowId}：把 r${revision}（${entry.contentHash}）发布为新的 r${found.currentRevision + 1}`,
+          '历史不会被改写；旧 revision 仍保留。',
+          `确认回滚：/hnflow rollback ${key} r${revision} confirm`,
+        ].join('\n'),
+      }
+    }
+    const restored = await service.rollback({ cwd, key, revision, note: `rollback to r${revision} by /hnflow` })
+    return { kind: 'success', text: `已把 r${revision} 发布为 r${restored.revision}（${restored.contentHash}）。` }
   }
 
   /**
@@ -172,13 +232,12 @@ export function createFlowCommand(options) {
   async function pin(args, cwd) {
     const [key, target] = args
     if (key === undefined || target === undefined) return { kind: 'error', text: '用法：/hnflow pin <流程> <latest|rN>' }
-    const { workspace } = createStores({ cwd, config, libraryRoot: libraryRoot(config), logger })
-    const revision = target === 'latest' ? null : Number(target.replace(/^r/u, ''))
-    if (revision !== null && (!Number.isInteger(revision) || revision < 1)) {
+    const revision = target === 'latest' ? 'latest' : Number(target.replace(/^r/u, ''))
+    if (revision !== 'latest' && (!Number.isInteger(revision) || revision < 1)) {
       return { kind: 'error', text: `无法识别的版本：${target}（用 latest 或 r3）` }
     }
-    const updated = await workspace.updateRef(key, { revision })
-    return { kind: 'success', text: `${key} 现在${updated.revision === null ? '跟随最新版本' : `钉住 r${updated.revision}`}。` }
+    const updated = await service.pinRef(cwd, key, revision)
+    return { kind: 'success', text: `${updated.alias || updated.flowId} 现在${updated.revision === null ? '跟随最新版本' : `钉住 r${updated.revision}`}。` }
   }
 
   /**
@@ -215,6 +274,11 @@ export function createFlowCommand(options) {
 
   /**
    * Import a definition file as a new asset and reference it (human action).
+   *
+   * Legacy `WorkflowDefinition` documents are converted best-effort first, and
+   * the conversion report is shown before anything is written. A definition
+   * that fails static validation is refused, so a half-converted flow never
+   * enters the library.
    * @param {string[]} args - `<name> <file>`.
    * @param {string | null} cwd - workspace root.
    * @returns {Promise<{kind: string, text: string}>} result.
@@ -227,12 +291,33 @@ export function createFlowCommand(options) {
       return { kind: 'error', text: '只允许导入工作区目录内的文件。' }
     }
     const parsed = JSON.parse(await readFile(absolute, 'utf8'))
-    const definition = parsed.definition ?? parsed
+    const { definition, report } = convertDefinition(parsed.definition ?? parsed)
+    const reportLines = report.changed || report.legacy ? [formatImportReport(report), ''] : []
+    const validation = await service.validate(definition)
+    if (!validation.ok) {
+      return {
+        kind: 'error',
+        text: [
+          ...reportLines,
+          `转换后的定义没有通过校验（${validation.errors.length} 项）：`,
+          ...validation.errors.map((entry) => `  × ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ''}: ${entry.message}`),
+          '',
+          '没有写入资产库；原文件未修改。',
+        ].join('\n'),
+      }
+    }
     const assets = new AssetStore(libraryRoot(config), { logger })
     const created = await assets.create({ name, definition, description: typeof definition.flow?.description === 'string' ? definition.flow.description : '' })
     const { workspace } = createStores({ cwd, config, libraryRoot: libraryRoot(config), logger })
     await workspace.addRef({ flowId: String(created.asset.id) })
-    return { kind: 'success', text: `已导入 ${name}（${created.asset.id}，r1）并加入本工作区引用。` }
+    return {
+      kind: 'success',
+      text: [
+        ...reportLines,
+        `已导入 ${name}（${created.asset.id}，r1）并加入本工作区引用。`,
+        `校验：通过（${validation.warnings.length} 条警告）`,
+      ].join('\n'),
+    }
   }
 
   return {

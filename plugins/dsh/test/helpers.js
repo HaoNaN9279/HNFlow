@@ -66,6 +66,10 @@ export function fakePresets() {
       if (id === 'hnflow' || id === 'standard') return { id }
       throw Object.assign(new Error(`Unknown agent preset: ${id}`), { code: 'agent-preset/not-found' })
     },
+    compositionInventory: async () => [
+      { id: 'hnflow', isDefault: false, rows: [{ entryId: 'preset-hnflow', moduleName: 'dsh-vibestack', enabled: true }] },
+      { id: 'standard', isDefault: true, rows: [{ entryId: null, moduleName: 'dsh-agent-loop', enabled: true }] },
+    ],
   }
 }
 
@@ -222,10 +226,13 @@ export async function makeService(options = {}) {
       if (key === 'vibestack') return options.vibestack === undefined ? fakeVibestack() : options.vibestack
       if (key === 'agentPresets') return fakePresets()
       if (key === 'agents') return agents
+      if (key === 'fs') return options.fs
+      if (key === 'sessions') return options.sessions
+      if (key === 'userQuestions') return options.questions
       return undefined
     },
   }
-  const service = createService({ ctx, config, logger: {}, store, runner: options.runner ?? fakeRunner(options.script ?? {}) })
+  const service = createService({ ctx, config, logger: {}, store, runner: options.runner ?? fakeRunner(options.script ?? {}), now: options.now })
   await service.open()
   return service
 }

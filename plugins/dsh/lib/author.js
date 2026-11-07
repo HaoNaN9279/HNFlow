@@ -61,8 +61,10 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
     nodeTypes: NODE_TYPES,
     edgeWhenKinds: EDGE_WHEN_KINDS,
     gateDecisions: GATE_DECISIONS,
-    schemas: '只支持 type/properties/required/additionalProperties/items/enum/const/oneOf',
+    schemas: '只支持 type/properties/required/additionalProperties/items/enum/const/oneOf；顶层必须是 type:"object"；同一 schema 不能同时声明 type 与 oneOf（宿主 structured_output 校验器会拒绝）',
     humanGap: 'agent 节点声明 allowHuman:true 时，子 Agent 可用 needs_human 上抛缺口，插件创建交付请求并继续同一节点',
+    policies: 'gate/request 可用 deadline.hours + onExpire(remind|fail)；verify 的 onInconclusive(gate|fail) 决定 judge 不确定时是否转人工门禁；request 的 onReject 支持 return|fallback|arbitrate|fail',
+    mergeSet: 'merge 可用 set 声明常量（from 可为空）；data:assign 旧节点导入后就是这种 merge',
     publish: '不可由工具调用；由人经 /hnflow publish 或页面按钮完成',
   },
 })

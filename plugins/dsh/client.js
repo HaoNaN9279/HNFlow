@@ -76,6 +76,8 @@ window.__ModuleLoader__.load({
       empty: { display: "flex", alignItems: "center", justifyContent: "center", height: "100%", minHeight: "180px", color: "var(--dsw-alias-label-tertiary, inherit)", fontSize: "12px" },
       errorBox: { margin: "8px 14px", padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))", color: "var(--dsw-alias-label-danger, #e5534b)", fontSize: "12px", whiteSpace: "pre-wrap" },
       okBox: { padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid rgba(64,160,110,0.5)", color: "rgba(64,160,110,1)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      warnBox: { padding: "8px 10px", borderRadius: "var(--dsw-radius-sm, 6px)", border: "1px solid rgba(240,170,60,0.55)", color: "rgba(200,140,30,1)", fontSize: "12px", whiteSpace: "pre-wrap" },
+      pre: { margin: 0, padding: "8px", borderRadius: "var(--dsw-radius-sm, 6px)", background: "rgba(127,127,127,0.10)", fontFamily: "var(--dsw-font-mono, ui-monospace, monospace)", fontSize: "11px", whiteSpace: "pre-wrap", wordBreak: "break-word", maxHeight: "320px", overflow: "auto" },
       linkButton: { padding: 0, border: "none", background: "transparent", boxShadow: "none", outline: "none", appearance: "none", WebkitAppearance: "none", color: "var(--dsw-alias-label-secondary, inherit)", fontFamily: "inherit", fontSize: "12px", textDecoration: "underline", cursor: "pointer" },
       button: { all: "unset", padding: "4px 10px", borderRadius: "999px", border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.3))", fontSize: "12px", cursor: "pointer", color: "inherit", fontFamily: "inherit", boxSizing: "border-box" },
       buttonPrimary: { borderColor: "rgba(110,150,255,0.9)", color: "rgba(110,150,255,1)" },
@@ -150,6 +152,35 @@ window.__ModuleLoader__.load({
      */
     function fetchRun(runId) {
       return requestJson(`/api/hnflow/run?runId=${encodeURIComponent(runId)}`);
+    }
+
+    /**
+     * Read a flow's revision history.
+     * @param {string} workspace - workspace root.
+     * @param {string} key - flow alias or id.
+     * @returns {Promise<Record<string, any>>} history payload.
+     */
+    function fetchHistory(workspace, key) {
+      return requestJson(`/api/hnflow/history?workspace=${encodeURIComponent(workspace)}&flow=${encodeURIComponent(key)}`);
+    }
+
+    /**
+     * Preview a publish without creating a revision.
+     * @param {string} workspace - workspace root.
+     * @param {string} key - flow alias or id.
+     * @returns {Promise<Record<string, any>>} preview payload.
+     */
+    function fetchPreview(workspace, key) {
+      return requestJson(`/api/hnflow/preview?workspace=${encodeURIComponent(workspace)}&flow=${encodeURIComponent(key)}`);
+    }
+
+    /**
+     * Read one artifact and its value.
+     * @param {string} artifactId - artifact id.
+     * @returns {Promise<Record<string, any>>} artifact payload.
+     */
+    function fetchArtifact(artifactId) {
+      return requestJson(`/api/hnflow/artifact?artifactId=${encodeURIComponent(artifactId)}`);
     }
 
     /**
@@ -312,26 +343,134 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The flow pane: canvas, publish and run controls.
-     * @param {{flow: Record<string, any> | null, busy: boolean, onPublish: Function, onRun: Function, message: string}} props - pane.
+     * The flow pane: canvas, revision history, publish preview and run controls.
+     * @param {{flow: Record<string, any> | null, busy: boolean, onRun: Function, onChanged: Function, message: string}} props - pane.
      * @returns {unknown} element.
      */
     function FlowPane(props) {
       const flow = props?.flow;
       const [input, setInput] = react.useState("{}");
+      const [history, setHistory] = react.useState(null);
+      const [preview, setPreview] = react.useState(null);
+      const [confirmRollback, setConfirmRollback] = react.useState(null);
+      const [error, setError] = react.useState("");
+      const [note, setNote] = react.useState("");
+      const [working, setWorking] = react.useState(false);
+      const flowKey = flow === null || flow === undefined ? "" : flow.alias || flow.flowId;
+      const workspace = flow === null || flow === undefined ? "" : flow.workspace;
+
+      /**
+       * Refresh the revision list for the selected flow.
+       * @returns {Promise<void>} resolves once loaded.
+       */
+      const loadHistory = async () => {
+        if (workspace.length === 0 || flowKey.length === 0) return;
+        try {
+          const payload = await fetchHistory(workspace, flowKey);
+          setHistory(payload.history);
+        } catch (failure) {
+          setError(`${failure.code ?? "history-failed"}: ${failure.message}`);
+        }
+      };
+
+      react.useEffect(() => {
+        setHistory(null);
+        setPreview(null);
+        setConfirmRollback(null);
+        setError("");
+        setNote("");
+        void loadHistory();
+      }, [workspace, flowKey]);
+
+      /**
+       * Run one human action with shared busy/error handling.
+       * @param {() => Promise<string>} action - action returning a message.
+       * @returns {Promise<void>} resolves once done.
+       */
+      const act = async (action) => {
+        setWorking(true);
+        setError("");
+        try {
+          setNote(await action());
+          await loadHistory();
+          if (typeof props.onChanged === "function") props.onChanged();
+        } catch (failure) {
+          setError(`${failure.code ?? "action-failed"}: ${failure.message}`);
+        } finally {
+          setWorking(false);
+        }
+      };
+
       if (flow === null) return h("div", { style: styles.empty }, "选择左侧的流程查看画布");
+      const busy = props.busy || working;
+      const revisions = Array.isArray(history?.revisions) ? history.revisions : [];
       return h(
         "div",
         { style: styles.pane },
         h("div", { style: styles.meta }, `${flow.alias || flow.flowId} · ${flow.source} · r${flow.revision ?? "?"}/${flow.currentRevision ?? "?"}${flow.drift ? " · 漂移" : ""}`),
         h(FlowCanvas, { definition: flow.definition, run: null }),
-        h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } }, [
-          h("button", { key: "publish", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: props.busy, onClick: () => props.onPublish(flow) }, "发布新版本"),
-          h("span", { key: "hint", style: styles.meta }, "发布是人工动作：Agent 只能起草"),
+        h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, [
+          h("button", { key: "publish", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy, onClick: () => act(async () => {
+            const payload = await fetchPreview(flow.workspace, flow.alias || flow.flowId);
+            setPreview(payload.preview);
+            return "已生成发布预览：确认后才会新增 revision。";
+          }) }, "发布新版本"),
+          h("span", { key: "hint", style: styles.meta }, "发布是人工动作：Agent 只能起草；先看 diff 再确认"),
         ]),
+        note.length > 0 ? h("div", { style: styles.okBox }, note) : null,
+        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
+        preview === null
+          ? null
+          : h(
+              "div",
+              { style: styles.card },
+              h("div", { style: styles.cardTitle }, `发布预览：r${preview.currentRevision} → r${preview.nextRevision}`),
+              h("div", { style: styles.meta }, preview.validation.ok ? "校验通过" : `校验失败（${preview.validation.errors.length} 项）`),
+              ...preview.validation.errors.map((entry) => h("div", { key: `${entry.code}:${entry.nodeId ?? ""}`, style: styles.meta }, `× ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ""}: ${entry.message}`)),
+              h("div", { style: styles.cardTitle }, "变更"),
+              preview.diff?.changed === false
+                ? h("div", { style: styles.meta }, "没有内容变化（仍会生成新 revision）")
+                : h("div", { style: { ...styles.meta, whiteSpace: "pre-wrap" } }, (preview.diff?.summary ?? []).join("\n")),
+              h("div", { style: { display: "flex", gap: "8px" } }, [
+                h("button", { key: "ok", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy || !preview.validation.ok, onClick: () => act(async () => {
+                  const result = await postJson("/api/hnflow/publish", { workspace: flow.workspace, flow: flow.alias || flow.flowId, note: "published from the HNFlow page" });
+                  setPreview(null);
+                  return `已发布 r${result.revision}（${result.contentHash}）`;
+                }) }, "确认发布"),
+                h("button", { key: "cancel", type: "button", style: styles.button, disabled: busy, onClick: () => setPreview(null) }, "取消"),
+              ]),
+            ),
+        h("div", { style: styles.cardTitle }, `版本历史（${revisions.length}）`),
+        h(
+          "div",
+          { style: styles.card },
+          ...revisions.map((entry) =>
+            h("div", { key: entry.revision, style: { ...styles.row, cursor: "default", alignItems: "center" } }, [
+              h("span", { key: "r", style: { ...styles.cell, flex: "0 0 54px" } }, `r${entry.revision}`),
+              h("span", { key: "h", style: { ...styles.cell, flex: "1 1 auto" } }, `${entry.contentHash}${entry.revision === history.pinnedRevision ? " · 引用钉住" : ""}${entry.revision === history.currentRevision ? " · 当前" : ""}`),
+              h("button", { key: "pin", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+                await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
+                return `已钉住 r${entry.revision}`;
+              }) }, "钉住"),
+              h("button", { key: "rollback", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+                if (confirmRollback !== entry.revision) {
+                  setConfirmRollback(entry.revision);
+                  return `再点一次确认：把 r${entry.revision} 发布为新的 r${(history?.currentRevision ?? 0) + 1}`;
+                }
+                setConfirmRollback(null);
+                const result = await postJson("/api/hnflow/rollback", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
+                return `已把 r${entry.revision} 发布为 r${result.revision}`;
+              }) }, confirmRollback === entry.revision ? "确认回滚" : "回滚"),
+            ]),
+          ),
+          h("div", { style: { display: "flex", gap: "8px" } }, [h("button", { key: "latest", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+            await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: null });
+            return "引用改为跟随最新版本";
+          }) }, "跟随最新")]),
+        ),
         h("div", { style: styles.cardTitle }, "启动输入（JSON）"),
         h("textarea", { style: styles.input, value: input, onChange: (event) => setInput(event.target.value), spellCheck: false }),
-        h("div", null, h("button", { type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onRun(flow, input) }, "用这份输入运行")),
+        h("div", null, h("button", { type: "button", style: styles.button, disabled: busy, onClick: () => props.onRun(flow, input) }, "用这份输入运行")),
         props.message.length > 0 ? h("div", { style: styles.okBox }, props.message) : null,
       );
     }
@@ -359,28 +498,90 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * One run's node timeline.
-     * @param {{run: Record<string, any> | null, definition: Record<string, any> | null}} props - run.
+     * One run's node timeline, artifacts, usage and controls.
+     * @param {{run: Record<string, any> | null, definition: Record<string, any> | null, onCancel?: Function, onResume?: Function, busy?: boolean}} props - run.
      * @returns {unknown} element.
      */
     function RunPane(props) {
       const run = props?.run;
+      const [artifact, setArtifact] = react.useState(null);
+      const [error, setError] = react.useState("");
+      react.useEffect(() => {
+        setArtifact(null);
+        setError("");
+      }, [run === null || run === undefined ? "" : run.runId]);
       if (run === null) return h("div", { style: styles.empty }, "选择左侧的运行查看节点状态");
+      /**
+       * Load one artifact on demand.
+       * @param {string} artifactId - artifact id.
+       * @returns {Promise<void>} resolves once shown.
+       */
+      const viewArtifact = async (artifactId) => {
+        try {
+          const payload = await fetchArtifact(artifactId);
+          setArtifact(payload.artifact);
+        } catch (failure) {
+          setError(`${failure.code ?? "artifact-failed"}: ${failure.message}`);
+        }
+      };
+      const artifacts = Array.isArray(run.artifacts) ? run.artifacts : Object.values(run.artifacts ?? {});
+      const nodes = Array.isArray(run.nodes) ? run.nodes : Object.entries(run.nodes ?? {}).map(([id, state]) => ({ id, ...state }));
+      const cancellable = run.status === "running" || run.status === "waiting_human" || run.status === "interrupted";
       return h(
         "div",
         { style: styles.pane },
         h("div", { style: styles.meta }, `${run.runId} · ${run.status} · ${run.source === "override" ? "草稿覆盖" : `r${run.revision ?? "latest"}`} · ${shortPath(run.workspace)}`),
         run.error !== null && run.error !== undefined ? h("div", { style: styles.errorBox }, `${run.error.code}: ${run.error.message}`) : null,
+        error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
+        cancellable && typeof props.onCancel === "function"
+          ? h("div", { style: { display: "flex", gap: "8px" } }, [
+              h("button", { key: "cancel", type: "button", style: styles.button, disabled: props.busy, onClick: () => props.onCancel(run) }, "取消运行"),
+              run.status === "interrupted"
+                ? h("button", { key: "resume", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: props.busy, onClick: () => props.onResume(run) }, "继续运行")
+                : null,
+            ])
+          : null,
         props.definition !== null ? h(FlowCanvas, { definition: props.definition, run }) : null,
+        run.usage !== null && run.usage !== undefined
+          ? h("div", { style: styles.meta }, `累计 token：${run.usage.totalTokens}（输入 ${run.usage.inputTokens} / 输出 ${run.usage.outputTokens}，${run.usage.calls} 次模型调用）`)
+          : h("div", { style: styles.meta }, "累计 token：未采集（子会话已结束）"),
+        (run.degradations ?? []).length > 0
+          ? h("div", { style: styles.warnBox }, `降级：${run.degradations.map((entry) => `${entry.nodeId}→${(entry.fallbackNodeIds ?? []).join("|")}（${entry.code}）`).join("；")}`)
+          : null,
         h("div", { style: styles.cardTitle }, "节点"),
-        ...(run.nodes ?? []).map((node) =>
+        ...nodes.map((node) =>
           h("div", { key: node.id, style: styles.row }, [
             h("span", { key: "id", style: { ...styles.cell, flex: "0 0 130px" } }, node.id),
             h("span", { key: "st", style: { ...styles.cell, flex: "0 0 90px" } }, node.status),
             h("span", { key: "at", style: { ...styles.cell, flex: "0 0 60px" } }, node.attempts > 1 ? `×${node.attempts}` : ""),
             h("span", { key: "dg", style: { ...styles.cell, flex: "1 1 auto" } }, node.diagnostic ? `${node.diagnostic.code}: ${node.diagnostic.message}` : ""),
+            node.usage !== null && node.usage !== undefined ? h("span", { key: "tok", style: styles.meta }, `${node.usage.totalTokens} tok`) : null,
+            typeof node.artifactId === "string" ? h("button", { key: "art", type: "button", style: styles.linkButton, onClick: () => void viewArtifact(node.artifactId) }, "产物") : null,
           ]),
         ),
+        artifacts.length > 0 ? h("div", { style: styles.cardTitle }, "产物") : null,
+        artifacts.length > 0
+          ? h(
+              "div",
+              { style: styles.card },
+              ...artifacts.map((entry) =>
+                h("div", { key: entry.artifactId, style: { ...styles.row, cursor: "default" } }, [
+                  h("span", { key: "n", style: { ...styles.cell, flex: "0 0 130px" } }, entry.nodeId),
+                  h("span", { key: "k", style: styles.meta }, `${entry.kind}${entry.degraded ? " · 降级" : ""}${entry.accepted === true ? " · 已接受" : ""}`),
+                  h("button", { key: "v", type: "button", style: styles.linkButton, onClick: () => void viewArtifact(entry.artifactId) }, "查看"),
+                ]),
+              ),
+            )
+          : null,
+        artifact === null
+          ? null
+          : h(
+              "div",
+              { style: styles.card },
+              h("div", { style: styles.cardTitle }, `产物 ${artifact.artifactId} · ${artifact.nodeId}`),
+              h("div", { style: styles.meta }, `${artifact.kind} · ${artifact.source}${artifact.degraded ? " · 降级" : ""}${artifact.accepted === true ? " · 已接受" : ""}`),
+              h("pre", { style: styles.pre }, JSON.stringify(artifact.value ?? null, null, 2)),
+            ),
       );
     }
 
@@ -402,7 +603,11 @@ window.__ModuleLoader__.load({
             "div",
             { key: item.id, style: styles.card },
             h("div", { style: styles.cardTitle }, `${item.kind === "gate" ? "门禁" : "人工交付"} · ${item.flowName ?? ""} · ${item.nodeId}`),
-            h("div", { style: styles.meta }, `run ${item.runId} · ${item.id}${item.attempts > 0 ? ` · 已退回 ${item.attempts} 次` : ""}`),
+            h("div", { style: styles.meta }, `run ${item.runId} · ${item.id}${item.attempts > 0 ? ` · 已退回 ${item.attempts} 次` : ""}${item.expired === true ? " · 已过期（仍可处理）" : ""}`),
+            h("div", { style: styles.meta }, `流程 r${item.flowRevision ?? "?"}（${item.flowSource ?? "latest"}）· 提问通道 ${item.askedVia ?? "inbox"} · 下游节点 ${(item.consumerNodeIds ?? []).join(", ") || "无"}`),
+            item.lastDiagnostic
+              ? h("div", { style: { ...styles.meta, whiteSpace: "pre-wrap" } }, `上次未通过：${item.lastDiagnostic.code}: ${item.lastDiagnostic.message}${(item.lastViolations ?? []).length > 0 ? `（${item.lastViolations.length} 处不满足契约）` : ""}`)
+              : null,
             item.kind === "gate"
               ? h(
                   "div",
@@ -526,24 +731,6 @@ window.__ModuleLoader__.load({
       }, []);
 
       /**
-       * Publish the selected flow.
-       * @param {Record<string, any>} flow - tree entry.
-       * @returns {Promise<void>} resolves once published.
-       */
-      const publish = async (flow) => {
-        setBusy(true);
-        try {
-          const result = await postJson("/api/hnflow/publish", { workspace: flow.workspace, flow: flow.alias || flow.flowId });
-          setMessage(`已发布 r${result.revision}（${result.contentHash}）`);
-          await reload();
-        } catch (failure) {
-          setError(`${failure.code ?? "publish-failed"}: ${failure.message}`);
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      /**
        * Start a run with the pane's JSON input.
        * @param {Record<string, any>} flow - selected flow.
        * @param {string} text - JSON input.
@@ -569,6 +756,27 @@ window.__ModuleLoader__.load({
       };
 
       /**
+       * Cancel or resume a run, then refresh its detail.
+       * @param {'cancel'|'resume'} action - route.
+       * @param {Record<string, any>} run - run summary.
+       * @returns {Promise<void>} resolves once done.
+       */
+      const controlRun = async (action, run) => {
+        setBusy(true);
+        try {
+          await postJson(`/api/hnflow/${action}`, { runId: run.runId });
+          setMessage(action === "cancel" ? `已请求取消 ${run.runId}` : `已继续 ${run.runId}`);
+          await reload();
+          const full = await fetchRun(run.runId);
+          setSelectedRun(full.run);
+        } catch (failure) {
+          setError(`${failure.code ?? `${action}-failed`}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      /**
        * Submit a gate decision.
        * @param {Record<string, any>} item - inbox item.
        * @param {{decision: string, reason: string}} decision - decision.
@@ -580,6 +788,14 @@ window.__ModuleLoader__.load({
           await postJson("/api/hnflow/gate", { runId: item.runId, gateId: item.id, decision: decision.decision, reason: decision.reason, revision: item.revision });
           setMessage(`已提交 ${item.id}`);
           await reload();
+          if (selectedRun !== null && selectedRun.runId === item.runId) {
+            try {
+              const full = await fetchRun(item.runId);
+              setSelectedRun(full.run);
+            } catch {
+              // the list still reflects the new status
+            }
+          }
         } catch (failure) {
           setError(`${failure.code ?? "gate-failed"}: ${failure.message}`);
         } finally {
@@ -605,6 +821,14 @@ window.__ModuleLoader__.load({
           await postJson("/api/hnflow/deliverable", { runId: item.runId, requestId: item.id, payload, revision: item.revision });
           setMessage(`已提交 ${item.id}`);
           await reload();
+          if (selectedRun !== null && selectedRun.runId === item.runId) {
+            try {
+              const full = await fetchRun(item.runId);
+              setSelectedRun(full.run);
+            } catch {
+              // the list still reflects the new status
+            }
+          }
         } catch (failure) {
           setError(`${failure.code ?? "deliver-failed"}: ${failure.message}`);
         } finally {
@@ -620,7 +844,7 @@ window.__ModuleLoader__.load({
         setSelectedFlow({ ...entry, workspace, definition: null });
         try {
           const resolved = await fetchFlow(workspace, entry.alias || entry.flowId);
-          setSelectedFlow({ ...entry, workspace, definition: resolved.flow.definition, lockfile: resolved.flow.lockfile });
+          setSelectedFlow({ ...entry, ...resolved.flow, workspace, alias: resolved.flow.alias || entry.alias || resolved.flow.flowId, definition: resolved.flow.definition, lockfile: resolved.flow.lockfile });
         } catch {
           // the tree entry is still shown; the canvas stays empty
         }
@@ -642,9 +866,9 @@ window.__ModuleLoader__.load({
 
       const right =
         tab === "flows"
-          ? h(FlowPane, { flow: selectedFlow, busy, message, onPublish: (flow) => void publish(flow), onRun: (flow, text) => void startRun(flow, text) })
+          ? h(FlowPane, { flow: selectedFlow, busy, message, onChanged: () => void reload(), onRun: (flow, text) => void startRun(flow, text) })
           : tab === "runs"
-            ? h(RunPane, { run: selectedRun, definition: selectedFlow?.definition ?? null })
+            ? h(RunPane, { run: selectedRun, definition: selectedFlow?.definition ?? null, busy, onCancel: (run) => void controlRun("cancel", run), onResume: (run) => void controlRun("resume", run) })
             : h(InboxView, { items: inbox, busy, onGate: (item, decision) => void decide(item, decision), onDeliver: (item, text) => void deliver(item, text) });
 
       return h(

@@ -9,18 +9,26 @@
 
 /**
  * Create a runner over the host's subagent service.
- * @param {{subagents: Record<string, any> | undefined}} options - host seam.
+ *
+ * The seam is resolved lazily: the core row is composed before the subagent
+ * plugin mounts, so a value captured at construction would stay `undefined` for
+ * the life of the process.
+ * @param {{subagents: Record<string, any> | undefined | (() => Record<string, any> | undefined)}} options - host seam.
  * @returns {{available: () => boolean, spawn: (input: Record<string, any>) => Promise<Record<string, any>>}} runner.
  */
 export function createSubagentRunner(options) {
-  const subagents = options?.subagents
+  /**
+   * The current subagent service.
+   * @returns {Record<string, any> | undefined} service.
+   */
+  const service = () => (typeof options?.subagents === 'function' ? options.subagents() : options?.subagents)
   return {
     /**
      * Whether delegation is mounted.
      * @returns {boolean} true when the seam exists.
      */
     available() {
-      return typeof subagents?.startActivation === 'function'
+      return typeof service()?.startActivation === 'function'
     },
 
     /**
@@ -38,33 +46,45 @@ export function createSubagentRunner(options) {
      * @returns {Promise<{childId: string, result: Promise<{childId: string, stopReason: string, output: unknown[], structured: unknown}>, dispose: () => Promise<void>}>} activation handle.
      */
     async spawn(input) {
-      if (!this.available()) {
+      const subagents = service()
+      if (typeof subagents?.startActivation !== 'function') {
         throw Object.assign(new Error('the host has no subagent service; a node cannot run'), { code: 'subagent-unavailable' })
+      }
+      if (process.env.HNFLOW_TRACE === '1') {
+        process.stderr.write(`[hnflow] spawn ${input.label} preset=${input.preset} route=${JSON.stringify(input.agentOptions ?? null)}\n`)
       }
       const activation = await subagents.startActivation({
         provider: 'spawn',
         label: input.label,
         delivery: 'caller',
-        ...(input.signal === undefined ? {} : { signal: input.signal }),
+        // The host requires a signal even when the caller has none; a private
+        // controller keeps the activation cancellable via `dispose` only.
+        signal: input.signal ?? new AbortController().signal,
         request: {
           parent: input.parent,
           cwd: input.cwd,
           agentPreset: input.preset,
           outputSchema: input.outputSchema,
-          // A node never delegates further: the run's budget stays the run's.
-          maxDepth: 0,
+          // A node is depth 1 and may not delegate further: the run's budget
+          // stays the run's. (`maxDepth: 0` would reject the node itself.)
+          maxDepth: 1,
           ...(input.agentOptions === undefined ? {} : { agentOptions: input.agentOptions }),
           prompt: [{ type: 'text', text: input.prompt }],
         },
       })
       return {
         childId: String(activation.childId ?? ''),
-        result: Promise.resolve(activation.result).then((result) => ({
-          childId: String(activation.childId ?? ''),
-          stopReason: String(result?.stopReason ?? 'error'),
-          output: Array.isArray(result?.output) ? result.output : [],
-          structured: result?.structured,
-        })),
+        result: Promise.resolve(activation.result).then((result) => {
+          if (process.env.HNFLOW_TRACE === '1') {
+            process.stderr.write(`[hnflow] activation ${String(activation.childId)} finished: ${JSON.stringify({ stopReason: result?.stopReason, structured: result?.structured, outputLength: Array.isArray(result?.output) ? result.output.length : null })}\n`)
+          }
+          return {
+            childId: String(activation.childId ?? ''),
+            stopReason: String(result?.stopReason ?? 'error'),
+            output: Array.isArray(result?.output) ? result.output : [],
+            structured: result?.structured,
+          }
+        }),
         dispose: async () => {
           await activation.dispose?.()
         },
@@ -88,7 +108,6 @@ export async function withTimeout(promise, timeoutMs) {
   let timer
   const timeout = new Promise((resolve) => {
     timer = setTimeout(() => resolve({ timedOut: true, value: undefined }), timeoutMs)
-    if (typeof timer.unref === 'function') timer.unref()
   })
   try {
     return await Promise.race([promise.then((value) => ({ timedOut: false, value })), timeout])

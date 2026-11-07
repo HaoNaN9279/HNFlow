@@ -7,7 +7,13 @@
  */
 
 /** Plugin version recorded in every lockfile. */
-export const PLUGIN_VERSION = '0.3.0'
+export const PLUGIN_VERSION = '0.4.0'
+
+/**
+ * The host's per-activation-tree concurrency cap (`maxActiveSubagents`, 8).
+ * A flow may not ask for more parallel nodes than the seam can start.
+ */
+export const MAX_PARALLEL_CAP = 8
 
 export const DEFAULT_CONFIG = Object.freeze({
   /** `false` turns this row into the client-only UI row. */
@@ -72,5 +78,7 @@ export function resolveConfig(raw) {
   }
   if (!ROLES.has(config.role)) config.role = DEFAULT_CONFIG.role
   if (config.maxParallel < 1) config.maxParallel = DEFAULT_CONFIG.maxParallel
+  // Never ask the subagent seam for more activations than it can start at once.
+  if (config.maxParallel > MAX_PARALLEL_CAP) config.maxParallel = MAX_PARALLEL_CAP
   return config
 }

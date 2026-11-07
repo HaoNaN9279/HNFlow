@@ -40,12 +40,17 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 
 ## 页面与命令
 
-- 左侧 HNFlow 图标：**流程**（树 + 只读画布 + 发布/启动）/ **运行**（节点时间线）/ **收件箱**（门禁与交付）。
+- 左侧 HNFlow 图标：**流程**（树 + 只读画布 + **版本历史 / 发布预览 diff / 钉住 / 回滚** + 启动）/
+  **运行**（节点时间线、**取消/继续、产物、token 用量、降级标记**）/ **收件箱**（门禁与交付，显示审计字段与过期状态）。
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
-- `/hnflow list|runs|status|inbox|assets|add|publish|pin|import|open`；发布需要 `publish <流程> confirm` 二次确认。
+- `/hnflow list|runs|status|inbox|assets|add|publish|history|rollback|pin|import|open`；
+  发布与回滚都需要 `confirm` 二次确认，发布预览先给出结构 diff（新增/删除/字段变化）。
   **命令在任何会话都可用**（core 行注册，作用于当前会话的工作区）；工具只属于 HNFlow 模式。
-- 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox）与
+- 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox / artifact）与
   `hnflow_author`（schema / validate / draft，**没有 publish**）。
+- `/hnflow import` 兼容旧 `WorkflowDefinition`：先转换并给出逐条报告（`flow:start/end` 丢弃、
+  `data:assign` → 常量 `merge`、`ai:llm_agent` → `agent`、`human:review/task` → `gate/request`、
+  `verify:gate` 降级为人工门禁），转换结果过静态校验后才写入资产库；原文件不改。
 
 ### 命令结果为什么在空白会话里看不到
 
@@ -122,5 +127,23 @@ domain 没有跨表事务，一次推进必须原子）。
 node test/run.mjs
 ```
 
-纯函数层（schema/envelope/调度/CAS/发布）与编排层（fake runner/store）分别覆盖；
-端到端仍需在桌面版里手测一次（M0 探针结论见方案 §13）。
+覆盖：schema 子集与 `type`+`oneOf` 禁止、信封、契约可赋值、调度/fallback 降级、CAS 与退回预算、
+发布/lockfile（含 preset 组合摘要）、storage 降级、门禁/交付/`needs_human`/重试/取消/重启、
+审计字段、交付路径越界、过期推进、verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、
+旧流程导入、页面路由与客户端契约。
+
+### 真机自测（隔离 web 实例）
+
+已用 `DSH_HOME=temp/dshhome` + `dsh --profile ztest --no-open --port 3999` + Playwright/Chrome
+完成一轮端到端自测（不碰桌面端真实会话）：
+
+- 页面可打开、切换三页签、选流程、看到版本历史与发布预览；
+- 从页面启动 `smoke-general`：**conductor 自动创建**、agent 子会话用 `hnflow` preset 跑通、
+  `structured_output` 信封被正确解析、gate 同时走原生问题卡（`askedVia: card`）与页面收件箱；
+- 页面批准后 run `succeeded`，审计字段（revision/contentHash/upstreamHash/consumerNodeIds/decidedBy）齐备；
+- `node.model: flash` 的流程发布时把 VibeStack 层解析进 `lockfile.models`，spawn 的
+  `agentOptions` 实际为 `deepseek-account/deepseek-flash`；
+- 进程重启后 storage domain 里的 run 仍可读回（`storage: domain`）；
+- token 用量被归因到节点（子会话销毁前采样，示例：input 5105 / output 293）。
+
+M0 结论与已知限制见方案 §13 与附录 E。

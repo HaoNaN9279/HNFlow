@@ -16,6 +16,13 @@ export const ROUTES = Object.freeze({
   deliverable: '/api/hnflow/deliverable',
   start: '/api/hnflow/start',
   publish: '/api/hnflow/publish',
+  preview: '/api/hnflow/preview',
+  history: '/api/hnflow/history',
+  pin: '/api/hnflow/pin',
+  rollback: '/api/hnflow/rollback',
+  artifact: '/api/hnflow/artifact',
+  cancel: '/api/hnflow/cancel',
+  resume: '/api/hnflow/resume',
 })
 
 /**
@@ -110,15 +117,86 @@ export function createRoutes(options) {
     },
   }
 
+  /**
+   * Read a flow's revision history.
+   * @param {Request} request - incoming request.
+   * @returns {Promise<Response>} response.
+   */
+  const historyRoute = {
+    path: ROUTES.history,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const url = new URL(request.url)
+        const workspace = url.searchParams.get('workspace') ?? ''
+        const flow = url.searchParams.get('flow') ?? ''
+        if (workspace.length === 0 || flow.length === 0) return json({ ok: false, code: 'field-required', message: 'workspace and flow are required' }, 400)
+        return json({ ok: true, history: await service.history(workspace, flow) })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  }
+
+  /**
+   * Preview a publish (validation + diff), without creating a revision.
+   * @param {Request} request - incoming request.
+   * @returns {Promise<Response>} response.
+   */
+  const previewRoute = {
+    path: ROUTES.preview,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const url = new URL(request.url)
+        const workspace = url.searchParams.get('workspace') ?? ''
+        const flow = url.searchParams.get('flow') ?? ''
+        if (workspace.length === 0 || flow.length === 0) return json({ ok: false, code: 'field-required', message: 'workspace and flow are required' }, 400)
+        return json({ ok: true, preview: await service.previewPublish(workspace, flow) })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  }
+
+  /**
+   * Read one artifact by id.
+   * @param {Request} request - incoming request.
+   * @returns {Promise<Response>} response.
+   */
+  const artifactRoute = {
+    path: ROUTES.artifact,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async (request) => {
+      try {
+        const artifactId = new URL(request.url).searchParams.get('artifactId') ?? ''
+        if (artifactId.length === 0) return json({ ok: false, code: 'artifact-id-required', message: 'artifactId is required' }, 400)
+        return json({ ok: true, artifact: await service.getArtifact(artifactId) })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  }
+
   return [
     stateRoute,
     runRoute,
     flowRoute,
     inboxRoute,
-    post(ROUTES.gate, async (body) => service.decide({ runId: required(body, 'runId'), gateId: required(body, 'gateId'), decision: required(body, 'decision'), reason: optional(body, 'reason'), revision: Number.isInteger(body?.revision) ? body.revision : undefined })),
+    artifactRoute,
+    historyRoute,
+    previewRoute,
+    post(ROUTES.gate, async (body) => service.decide({ runId: required(body, 'runId'), gateId: required(body, 'gateId'), decision: required(body, 'decision'), reason: optional(body, 'reason'), revision: Number.isInteger(body?.revision) ? body.revision : undefined, artifact: body?.artifact })),
     post(ROUTES.deliverable, async (body) => service.deliver({ runId: required(body, 'runId'), requestId: required(body, 'requestId'), payload: body?.payload, revision: Number.isInteger(body?.revision) ? body.revision : undefined })),
     post(ROUTES.start, async (body) => service.run({ cwd: required(body, 'workspace'), key: required(body, 'flow'), input: body?.input ?? {} })),
     post(ROUTES.publish, async (body) => service.publish({ cwd: required(body, 'workspace'), key: required(body, 'flow'), note: optional(body, 'note') ?? 'published from the HNFlow page' })),
+    post(ROUTES.pin, async (body) => service.pinRef(required(body, 'workspace'), required(body, 'flow'), body?.revision === undefined ? 'latest' : body.revision)),
+    post(ROUTES.rollback, async (body) => service.rollback({ cwd: required(body, 'workspace'), key: required(body, 'flow'), revision: Number(body?.revision), note: optional(body, 'note') })),
+    post(ROUTES.cancel, async (body) => service.cancel(required(body, 'runId'))),
+    post(ROUTES.resume, async (body) => service.resume(required(body, 'runId'))),
   ]
 }
 

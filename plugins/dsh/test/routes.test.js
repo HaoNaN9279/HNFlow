@@ -103,7 +103,7 @@ test('POST gate forwards the decision and does not await the run', async () => {
   const result = await post(route(createRoutes({ service }), ROUTES.gate), { runId: 'run-1', gateId: 'gate-1', decision: 'approved', revision: 3 })
   assert.equal(result.status, 200)
   assert.equal(result.body.ok, true)
-  assert.deepEqual(service.calls[0], { kind: 'decide', runId: 'run-1', gateId: 'gate-1', decision: 'approved', reason: undefined, revision: 3 })
+  assert.deepEqual(service.calls[0], { kind: 'decide', runId: 'run-1', gateId: 'gate-1', decision: 'approved', reason: undefined, revision: 3, artifact: undefined })
 })
 
 test('POST deliverable forwards the payload', async () => {

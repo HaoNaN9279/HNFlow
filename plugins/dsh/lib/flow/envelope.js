@@ -15,56 +15,38 @@ import { VERDICT_SCHEMA } from './definition.js'
  * @returns {Record<string, any>} envelope schema for `outputSchema`.
  */
 export function envelopeSchema(outputSchema) {
+  // The host's structured-output validator is object-rooted and rejects a
+  // top-level `oneOf`, so the three intents share one flat object. `status`
+  // selects the intent; `parseEnvelope` enforces the per-intent fields.
   return {
     type: 'object',
-    oneOf: [
-      {
+    required: ['status'],
+    properties: {
+      status: { type: 'string', enum: ['done', 'needs_human', 'failed'] },
+      output: outputSchema,
+      evidence: { type: 'array', items: { type: 'string' } },
+      notes: { type: 'string' },
+      needsHuman: {
         type: 'object',
-        required: ['status', 'output'],
+        required: ['reason', 'deliverable', 'whyHuman'],
         properties: {
-          status: { const: 'done' },
-          output: outputSchema,
-          evidence: { type: 'array', items: { type: 'string' } },
-          notes: { type: 'string' },
-        },
-        additionalProperties: false,
-      },
-      {
-        type: 'object',
-        required: ['status', 'needsHuman'],
-        properties: {
-          status: { const: 'needs_human' },
-          needsHuman: {
-            type: 'object',
-            required: ['reason', 'deliverable', 'whyHuman'],
-            properties: {
-              reason: {
-                type: 'string',
-                enum: ['capability_gap', 'real_world_judgement', 'authority', 'ambiguous_intent', 'asset_unavailable'],
-              },
-              deliverable: { type: 'object' },
-              whyHuman: { type: 'string' },
-              blocking: { type: 'boolean' },
-            },
-            additionalProperties: false,
+          reason: {
+            type: 'string',
+            enum: ['capability_gap', 'real_world_judgement', 'authority', 'ambiguous_intent', 'asset_unavailable'],
           },
+          deliverable: { type: 'object' },
+          whyHuman: { type: 'string' },
+          blocking: { type: 'boolean' },
         },
         additionalProperties: false,
       },
-      {
+      error: {
         type: 'object',
-        required: ['status', 'error'],
-        properties: {
-          status: { const: 'failed' },
-          error: {
-            type: 'object',
-            properties: { code: { type: 'string' }, message: { type: 'string' } },
-            additionalProperties: false,
-          },
-        },
+        properties: { code: { type: 'string' }, message: { type: 'string' } },
         additionalProperties: false,
       },
-    ],
+    },
+    additionalProperties: false,
   }
 }
 

@@ -71,6 +71,11 @@ export function assertSchema(schema, path) {
   if (source.type !== undefined && !JSON_TYPES.includes(source.type)) {
     throw new SchemaError('schema-invalid', `${path}.type: unknown type ${JSON.stringify(source.type)}`, `${path}.type`)
   }
+  // The host's structured-output validator rejects a schema that declares both
+  // `type` and `oneOf`; catching it at publish time beats a runtime surprise.
+  if (source.type !== undefined && source.oneOf !== undefined) {
+    throw new SchemaError('schema-unsupported', `${path}: a schema cannot declare both type and oneOf`, `${path}.oneOf`)
+  }
   if (source.type === 'object') {
     if (source.properties !== undefined) {
       if (source.properties === null || typeof source.properties !== 'object' || Array.isArray(source.properties)) {

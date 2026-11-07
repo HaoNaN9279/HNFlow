@@ -38,6 +38,25 @@ const service = {
   describeFlow: async () => ({ alias: 'demo', flowId: 'fl', source: 'latest', currentRevision: 1, definition: gateFlow() }),
   validate: async () => ({ ok: true, errors: [], warnings: [] }),
   publish: async () => ({ revision: 2, contentHash: 'sha256:abc' }),
+  previewPublish: async () => ({
+    alias: 'demo',
+    flowId: 'fl',
+    source: 'latest',
+    currentRevision: 1,
+    nextRevision: 2,
+    validation: { ok: true, errors: [], warnings: [] },
+    diff: { changed: true, summary: ['+节点 extra'] },
+  }),
+  history: async () => ({
+    alias: 'demo',
+    flowId: 'fl',
+    currentRevision: 1,
+    pinnedRevision: null,
+    source: 'latest',
+    revisions: [{ revision: 1, contentHash: 'sha256:abc', snapshotAt: '2026-01-01T00:00:00.000Z' }],
+  }),
+  rollback: async () => ({ revision: 2, contentHash: 'sha256:def', restoredFrom: 1 }),
+  pinRef: async (_cwd, key, target) => ({ alias: key, flowId: 'fl-test', revision: target === 'latest' ? null : Number(target) }),
 }
 
 test('usage and unknown subcommands never throw', async () => {
@@ -62,6 +81,19 @@ test('publish previews first and only confirms on the second word', async () => 
   assert.match(confirmed.text, /已发布 demo 为 r2/u)
   const noKey = await command(service).handler({ rawInput: 'publish' })
   assert.equal(noKey.kind, 'error')
+})
+
+test('publish previews the diff, and history/rollback are two-step', async () => {
+  const preview = await command(service).handler({ rawInput: 'publish demo' })
+  assert.match(preview.text, /变更：/u)
+  assert.match(preview.text, /\+节点 extra/u)
+  const history = await command(service).handler({ rawInput: 'history demo' })
+  assert.match(history.text, /r1/u)
+  assert.match(history.text, /sha256:abc/u)
+  const rollbackPreview = await command(service).handler({ rawInput: 'rollback demo r1' })
+  assert.match(rollbackPreview.text, /确认回滚/u)
+  const rolled = await command(service).handler({ rawInput: 'rollback demo r1 confirm' })
+  assert.match(rolled.text, /已把 r1 发布为 r2/u)
 })
 
 test('a workspace command refuses to run without a workspace', async () => {
@@ -107,6 +139,29 @@ test('pin re-points a reference, and import creates a new asset', async () => {
     await writeFile(file, JSON.stringify(definition), 'utf8')
     const imported = await cmd.handler({ rawInput: 'import 新流程 new.flow.json' })
     assert.match(imported.text, /已导入/u)
+
+    const legacyFile = path.join(seeded.workspace, 'old.workflow.json')
+    await writeFile(
+      legacyFile,
+      JSON.stringify({
+        id: 'old-hello',
+        name: '旧流程',
+        nodes: [
+          { id: 'start', type: 'flow:start' },
+          { id: 'greet', type: 'data:assign', outputs: [{ name: 'out' }], params: { value: 'hi' } },
+          { id: 'end', type: 'flow:end' },
+        ],
+        edges: [
+          { source: 'start', target: 'greet' },
+          { source: 'greet', target: 'end' },
+        ],
+      }),
+      'utf8',
+    )
+    const legacy = await cmd.handler({ rawInput: 'import 旧流程 old.workflow.json' })
+    assert.match(legacy.text, /旧格式导入报告/u)
+    assert.match(legacy.text, /data:assign → merge/u)
+
     const outside = await cmd.handler({ rawInput: 'import x ../escape.json' })
     assert.equal(outside.kind, 'error')
   } finally {

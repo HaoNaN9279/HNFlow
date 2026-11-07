@@ -43,14 +43,14 @@ test('the lockfile freezes presets, schema hashes and model routes', async () =>
     pluginVersion: '0.3.0',
     vibestack,
     layerStatus: async (id) => (id === 'strong' ? { ok: true, layer: vibestack.resolveLayer(id) } : { ok: false, message: 'missing' }),
-    presetStatus: async () => ({ ok: true }),
+    presetStatus: async () => ({ ok: true, composition: [{ moduleName: 'dsh-vibestack', enabled: true }] }),
   })
   assert.equal(lockfile.revision, 3)
   assert.equal(lockfile.pluginVersion, '0.3.0')
   assert.equal(lockfile.vibestack.apiVersion, 2)
   assert.equal(lockfile.nodes.draft.model, 'strong')
   assert.match(lockfile.nodes.draft.outputHash, /^sha256:/u)
-  assert.deepEqual(lockfile.presets, { hnflow: { ok: true } })
+  assert.deepEqual(lockfile.presets, { hnflow: { ok: true, composition: [{ moduleName: 'dsh-vibestack', enabled: true }] } })
   assert.equal(lockfile.models.strong.provider, 'deepseek-account')
   assert.equal(lockfile.models.strong.reasoningEffort, 'high')
 })

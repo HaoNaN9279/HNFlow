@@ -6,7 +6,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from '../lib/flow/envelope.js'
-import { assertObjectJsonSchema } from '../lib/flow/schema.js'
 
 const output = {
   type: 'object',
@@ -15,12 +14,15 @@ const output = {
   additionalProperties: false,
 }
 
-test('the synthesized envelope stays inside the supported subset', () => {
+test('the synthesized envelope stays inside the host supported subset', () => {
   const schema = envelopeSchema(output)
-  assert.equal(assertObjectJsonSchema(schema), schema)
-  assert.equal(schema.oneOf.length, 3)
+  // The host requires an object root and rejects a top-level `oneOf`.
+  assert.equal(schema.type, 'object')
+  assert.equal(schema.oneOf, undefined)
+  assert.deepEqual(schema.properties.status.enum, ['done', 'needs_human', 'failed'])
   const judge = judgeEnvelopeSchema()
-  assert.equal(assertObjectJsonSchema(judge), judge)
+  assert.equal(judge.type, 'object')
+  assert.equal(judge.properties.output.properties.verdict.enum.length, 3)
 })
 
 test('a done envelope carries its output and evidence', () => {

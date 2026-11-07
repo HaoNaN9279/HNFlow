@@ -13,7 +13,7 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 | --- | --- | --- | --- |
 | `agent` | 子 Agent（preset） | 执行被定义清楚的任务 | `preset`、`instruction`、`output`、可选 `model` |
 | `judge` | 另一个 preset 的子 Agent | 独立裁决产物 | `preset`（必须与生产者不同）、`criteria` |
-| `merge` | 插件（确定性） | 汇合多上游产物 | `from`、`output`、可选 `map` |
+| `merge` | 插件（确定性） | 汇合多上游产物 / 常量 | `from`、`output`、可选 `map`、可选 `set` |
 | `gate` | 人 | 批准 / 拒绝 / 修改后批准 | `title`、`detail`、`options` |
 | `request` | 人 + 验收 | 要 AI 生成不了的东西 | `deliverable`、`whyHuman`、`deadline` |
 | `verify` | 插件（+ 可选 judge） | 验收人的交付物 | `against`、`checks`、`onReject` |
@@ -47,7 +47,7 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 
 ## 人工交付
 
-`request` 的 `deliverable` 是人交付物的 JSON Schema，`whyHuman` 必须说明为什么模型不可替代。提交后先过 schema，再按 `verify.checks` 决定是否请独立 judge；`onReject` 的 `return` 有次数上限，超限按 `fail` / `fallback` / `arbitrate` 处理——降级必须标记，不能静默通过。
+`request` 的 `deliverable` 是人交付物的 JSON Schema，`whyHuman` 必须说明为什么模型不可替代。提交后先过 schema，再按 `verify.checks` 决定是否请独立 judge；`onReject` 的 `return` 有次数上限，超限按 `fail` / `fallback` / `arbitrate` 处理——降级必须标记，不能静默通过。judge 返回 `needs_more` 时，`verify` 默认转成人工门禁（`onInconclusive: "fail"` 可直接失败）；门禁的 `deadline.hours` + `onExpire` 决定过期后是否失败。
 
 ## 起草步骤
 
@@ -59,8 +59,8 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 ## 运行与观察
 
 - `hnflow` 工具的 `run` 只启动并立即返回 `runId`，不要轮询或等它。
-- `status` 用于回答后续问题；`inbox` 列出待人工处理的门禁/交付。
-- 页面：左侧 HNFlow 图标（流程 / 运行 / 收件箱）。运行的画布是只读的；编辑草稿不会影响在跑的 run。
+- `status` 用于回答后续问题；`inbox` 列出待人工处理的门禁/交付；`artifact` 按 id 读取一个节点产物。
+- 页面：左侧 HNFlow 图标（流程 / 运行 / 收件箱）。运行页可看节点状态、产物、token 用量与降级标记；版本历史可钉住或回滚（回滚由人确认）。
 
 ## 不要做
 

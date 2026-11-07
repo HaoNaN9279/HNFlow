@@ -670,7 +670,7 @@ plugins/dsh/
 | 风险 | 影响 | 缓解 |
 | --- | --- | --- |
 | DSH 处于 rc，subagent/storage/slot 契约可能变 | 插件失效 | `engines.dsh` 绑定次版本；M0 探针做成可复跑的回归脚本；每面留降级路径 |
-| `agents.create` 在插件上下文创建 conductor 未验证 | 页面直跑不可用 | M0 验证；失败则页面直跑降级为"请在会话中启动"，其余功能不受影响 |
+| `agents.create` 在插件上下文创建 conductor 未验证 | 页面直跑不可用 | M0 已验证通过（2026-11-07，见 §E.4）；失败路径仍保留 `host-unavailable` 降级 |
 | storage domain 单实例/后端缺失 | 状态不可写 | core service 独占打开；缺失时降级到文件存储并显式告警 |
 | 子 Agent 里需要审批的操作会被自动拒绝 | 某些节点"半路失败" | 把审批提前到门禁；节点简报明示"不得请求越权"；preset 选择以 workspace-write 为基线 |
 | 每个节点都是新上下文 | token 成本、简报膨胀 | 简报自包含但克制；大产物给 artifact 引用；`maxAttempts` 有界；并发上限 3 |
@@ -791,7 +791,7 @@ plugins/dsh/
 | 状态 | `runs.json`/`tasks.json`/checkpoint sqlite | storage domain 表 + 子会话证据 |
 | 版本 | 资产 revision + run 快照 | 同上 + lockfile（preset/契约 hash） |
 | 引擎依赖 | 必须 | 无 |
-| 页面直跑 | 待做 | conductor 宿主（M0 验证） |
+| 页面直跑 | 待做 | conductor 宿主（M0 已验证，见 §E.4） |
 | 工具名 | `hnflow` / `hnflow_author` | 保留 |
 
 ---
@@ -815,12 +815,16 @@ plugins/dsh/
 │  ├─ layers.js              # ctx.vibestack → agentOptions / 可路由检查
 │  ├─ prompt.js              # 节点简报 / judge 简报 / {{...}} 渲染
 │  ├─ gates.js  requests.js  # 门禁与交付的 CAS、验收、退回预算
+│  ├─ artifacts.js           # 产物地址表（值仍取节点输出）
+│  ├─ deliverable.js         # 交付路径的 fs.contains 越界检查
+│  ├─ usage.js               # 子会话 token 归因
+│  ├─ diff.js  import.js     # 发布 diff / 旧 WorkflowDefinition 导入
 │  ├─ service.js             # 编排器（唯一状态持有者）
 │  ├─ tools.js  author.js  commands.js  routes.js
 │  └─ skill.js
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（92 项，`node test/run.mjs`）
+└─ test/                     # node:test（123 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -846,6 +850,15 @@ plugins/dsh/
 | E-14 | 工具定义用本地 `lib/tool-schema.js`，不 import `@deepseek-ai/dsh-tools` | linked 插件解析不到 harness 包（Loader 内部 import 不对外），import 失败会连工具一起丢掉；该包在本项目只用于「DSL → 原始 JSON Schema + 参数校验」，本地实现等价 |
 | E-15 | `/hnflow` 由 core 行注册（全局），不下沉到 preset | 命令是人的数据面（list/assets/publish/pin），在任何会话都该能用；工具仍只属于 HNFlow 模式 |
 | E-16 | 命令结果只走 DSH 原生渲染，不额外弹提示 | DSH 约定：handler 结果由 host 记为 `command/run`/`command/done`，`dsh-client-ui-chat` 渲染成持久卡片；`command/executed` 只是客户端本地确认事件（无内置消费者），composer notice 只留给“准入失败”（未知命令）。HNFlow 不特殊化。副作用是空白会话尚无转录时命令卡片不可见，这是所有命令一致的平台行为 |
+| E-17 | 信封改为 **object-rooted 扁平对象**（`status` + 可选字段），不再用顶层 `oneOf` | 真机 `structured_output` 校验器：`schema cannot declare both type and oneOf`，且根必须是 object；顶层去 `type` 又报 `schema.type must be "object"`。扁平对象 + `parseEnvelope` 的逐状态校验是唯一同时满足两边的形状；`flow/schema.js` 同步禁止用户 schema 出现 `type`+`oneOf` |
+| E-18 | `runner` 惰性取 `ctx.get('subagents')`，并始终传 `signal`；节点 `maxDepth: 1` | core 行先于 subagent 行装配，构造时捕获服务会永久得到 `undefined`（真机首测 `subagent-unavailable`）。`startActivation` 无条件调用 `spec.signal.throwIfAborted()`；`maxDepth: 0` 会拒绝节点自身（depth 1），`1` 才表示“节点可跑、不可再委派” |
+| E-19 | conductor 显式带 `agentOptions`：优先 `agentDefaultModel.currentSelection()`，否则 VibeStack 默认层 | conductor 由插件创建，没有 UI 会话的模型选择可继承；不指定时子会话创建成功但不产生任何事件，run 卡在 `running`（真机首测无事件、无错误） |
+| E-20 | token 用量在子会话销毁前**采样**：轮询 `sessions.get(childId)`，并保留 Session 引用读最终 `assistant/message.usage` | `activation.result` 在子会话 dispose 之后才 resolve；只在结果后读 `sessions.get` 永远拿不到。采样值归因到节点并汇总到 run；会话不可读时记为 `null`（不估算） |
+| E-21 | 产物是 run 文档里的**地址表**（id/来源/schemaHash/accepted/degraded），值仍取节点输出 | 避免同一份大输出存两遍；`hnflow` 工具新增 `artifact` 动作，页面按需展开。fallback 产物带 `degraded: true` 与 `degradedReason` |
+| E-22 | 门禁/交付记录补齐 `askedAt/askedVia/flowRevision/contentHash/upstreamHash/consumerNodeIds/decidedBy/deliveryId`；交付路径过 `fs.contains`；过期 `fail` 关闭待决并推进 run；`onReject.kind:'arbitrate'` 由独立 judge 裁决 | §6.5 的审计四问必须可答；路径越界是真实威胁；过期若只打标记，`step` 会再次停在同一条待决上 |
+| E-23 | 新增 `history` / `previewPublish` / `rollback` / `pinRef`；`merge` 增加 `set` 常量；旧定义导入器 | 发布前给 diff、历史可回滚、引用可钉；`data:assign` 需要确定性落点，`merge.set` 是六原语内的最小扩展；M6 导入器 best-effort + 逐条报告 |
+| E-24 | 真机 M0 五探针**全部通过**（隔离 web profile，2026-11-07） | 见 §E.4；此前 E.4 的“未执行”结论作废 |
+| E-25 | `judge` 的 `reject` 是**合法裁决**（节点 done + `verdict`），只有“没有裁决 / 裁决格式错”才是 `inconclusive`（默认转人工门禁） | 原实现把 reject 当节点失败，`when.verdict` 边永远走不到；验收与“裁决冲突”是两件事，失败语义不应吞掉裁决 |
 
 ### E.3 状态机（实现）
 
@@ -861,19 +874,33 @@ running ─(宿主进程结束)─▶ interrupted ─resume(显式)─▶ runnin
 - 每个推进递增 `revisionCounter`，并把打开的待决记录刷新到该版本；页面提交携带它，过期即 `stale-revision`。
 - `open()` 把上次进程留下的 `running` 标为 `interrupted`；`waiting_human` 原样保留，提交后继续。
 
-### E.4 未执行的 M0 探针
+### E.4 M0 五探针（真机已通过）
 
-单元/集成测试覆盖了状态机与契约，但以下三条需要真机验证（不改设计，只影响降级路径）：
+环境：隔离 `DSH_HOME=temp/dshhome`、profile `ztest`（复制 desktop 的 bundle 行与 node_modules junction），
+`dsh --profile ztest --no-open --port 3999`，Playwright + 本机 Chrome 驱动；**不触碰桌面端真实会话**。
+日期 2026-11-07，DSH 0.2.1-rc.5，VibeStack 0.3。
 
-1. `agents.create` 在插件上下文创建 conductor，且 `spawn` 以它为父可启动；
-2. storage domain 的 `runs` 表跨进程重启可读回（本次实现按契约编写，未跑真机重启）；
-3. `userQuestions.ask` 在 conductor（无对话历史）上是否渲染；不能渲染时收件箱仍完整可用。
+| 探针 | 结果 | 证据 |
+| --- | --- | --- |
+| ① spawn 端到端（preset/outputSchema/delivery:caller） | 通过 | `smoke-general` 的 `draft` done，信封 `{status:"done",...}` 被解析并写产物 |
+| ② `agents.create` conductor 作为 parent | 通过 | 页面直跑无会话宿主，conductor 惰性创建，run 从 `running` 到 `waiting_human` 到 `succeeded` |
+| ③ storage domain 跨重启 | 通过 | 重启测试宿主后 `/api/hnflow/state` 仍列出上一进程的 run，`storage: "domain"` |
+| ④ `userQuestions.ask` + POST fetch | 通过 | 门禁待决项 `askedVia: "card"`；同一宿主上页面 POST `/api/hnflow/gate` 批准成功 |
+| ⑤ `ctx.get('vibestack')` + `agentOptions` | 通过 | `node.model: "flash"` 发布后 `lockfile.models.flash = deepseek-account/deepseek-flash`；spawn trace 路由相同 |
 
-三条都有明确的失败降级：页面直跑报 `host-unavailable`、文件存储显式 `storage-degraded`、卡片失败只记日志。
+真机首测暴露并已修复的契约差异：信封 schema 形状（E-17）、subagent 惰性服务/signal/maxDepth（E-18）、
+conductor 模型路由（E-19）、usage 读回时机（E-20）。已知保留限制：子会话销毁后无法再读 usage
+（已采样，失败时为 `null`）；`ask` 卡片在 conductor 上可发问但客户端是否展示由 DSH 决定，收件箱始终权威。
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：92 项，覆盖 schema 子集、契约可赋值、信封三态、调度
-（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile、storage 降级、
-编排（门禁/交付/needs_human/重试/取消/重启）、工具/命令/路由/装配/客户端契约。
+`plugins/dsh/test/`，`node test/run.mjs`：**123 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
+信封三态、调度（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile（含 preset 组合摘要）、
+storage 降级、编排（门禁/交付/needs_human/重试/取消/重启）、审计字段、交付路径越界、过期推进、
+verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、工具/命令/路由/装配/客户端契约。
+
+真机页面自测（隔离 web，Playwright）：三页签、流程树、版本历史、发布预览、钉住/回滚、启动、
+收件箱批准、产物展开、token 显示；浏览器 console 无 error。
+
+升级回归按 [`docs/dsh-upgrade-checklist.md`](dsh-upgrade-checklist.md) 执行。
 
