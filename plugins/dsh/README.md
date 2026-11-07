@@ -40,7 +40,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 
 ## 页面与命令
 
-- 左侧 HNFlow 图标：**流程**（树 + 只读画布 + **版本历史 / 发布预览 diff / 钉住 / 回滚** + 启动）/
+- 左侧 HNFlow 图标：**流程**（工作区引用树 + **通用资产库/一键引用** + 只读画布 + **版本历史 / 发布预览 diff / 钉住 / 回滚** + 启动）/
   **运行**（节点时间线、**取消/继续、产物、token 用量、降级标记**）/ **收件箱**（门禁与交付，显示审计字段与过期状态）。
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
 - `/hnflow list|runs|status|inbox|assets|add|publish|history|rollback|pin|import|open`；

@@ -306,13 +306,15 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * Left tree: workspaces and their referenced flows.
-     * @param {{groups: Record<string, any>[], selected: string, onPick: Function}} props - selection.
+     * Left tree: workspaces, their referenced flows and the reusable library.
+     * @param {{groups: Record<string, any>[], assets: Record<string, any>[], selected: string, onPick: Function, onAdd: Function}} props - selection.
      * @returns {unknown} element.
      */
     function FlowTree(props) {
       const groups = Array.isArray(props?.groups) ? props.groups : [];
+      const assets = Array.isArray(props?.assets) ? props.assets : [];
       const onPick = typeof props?.onPick === "function" ? props.onPick : () => {};
+      const onAdd = typeof props?.onAdd === "function" ? props.onAdd : () => {};
       return h(
         "div",
         { style: styles.tree },
@@ -334,6 +336,30 @@ window.__ModuleLoader__.load({
                       { type: "button", key, style: props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => onPick(group.path, entry) },
                       h("span", null, `${entry.alias || entry.flowId}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
                       h("span", { style: styles.meta }, `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                    );
+                  }),
+                ),
+            assets.length === 0
+              ? null
+              : h(
+                  "div",
+                  { style: { marginTop: "4px" } },
+                  h("div", { style: { ...styles.groupTitle, opacity: 0.8 } }, "通用资产库"),
+                  ...assets.slice(0, 20).map((asset) => {
+                    const referenced = (group.flows ?? []).some((entry) => entry.flowId === asset.id);
+                    return h(
+                      "button",
+                      {
+                        type: "button",
+                        key: `${group.path}:asset:${asset.id}`,
+                        disabled: referenced,
+                        style: { ...styles.item, opacity: referenced ? 0.55 : 1, cursor: referenced ? "default" : "pointer" },
+                        onClick: () => {
+                          if (!referenced) onAdd(group.path, asset);
+                        },
+                      },
+                      h("span", null, `${referenced ? "·" : "+"} ${asset.name}`),
+                      h("span", { style: styles.meta }, `${asset.id} · r${asset.revision}${referenced ? " · 已引用" : ""}`),
                     );
                   }),
                 ),
@@ -837,8 +863,28 @@ window.__ModuleLoader__.load({
       };
 
       const groups = Array.isArray(state?.workspaces) ? state.workspaces : [];
+      const assets = Array.isArray(state?.library) ? state.library : [];
       const runs = Array.isArray(state?.runs) ? state.runs : [];
       const inbox = Array.isArray(state?.inbox) ? state.inbox : [];
+
+      /**
+       * Reference one library asset in a workspace.
+       * @param {string} workspace - workspace root.
+       * @param {Record<string, any>} asset - library asset.
+       * @returns {Promise<void>} resolves once refreshed.
+       */
+      const addAsset = async (workspace, asset) => {
+        setBusy(true);
+        try {
+          const added = await postJson("/api/hnflow/add", { workspace, flowId: asset.id });
+          setMessage(`已引用 ${asset.name}${added.alias ? `（别名 ${added.alias}）` : ""}`);
+          await reload();
+        } catch (failure) {
+          setError(`${failure.code ?? "add-failed"}: ${failure.message}`);
+        } finally {
+          setBusy(false);
+        }
+      };
 
       const pickFlow = async (workspace, entry) => {
         setSelectedFlow({ ...entry, workspace, definition: null });
@@ -862,7 +908,7 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const left = tab === "flows" ? h(FlowTree, { groups, selected: selectedFlow === null ? "" : `${selectedFlow.workspace}:${selectedFlow.alias || selectedFlow.flowId}`, onPick: (workspace, entry) => void pickFlow(workspace, entry) }) : tab === "runs" ? h(RunsBoard, { runs, selected: selectedRun?.runId ?? "", onPick: (run) => void pickRun(run) }) : null;
+      const left = tab === "flows" ? h(FlowTree, { groups, assets, selected: selectedFlow === null ? "" : `${selectedFlow.workspace}:${selectedFlow.alias || selectedFlow.flowId}`, onPick: (workspace, entry) => void pickFlow(workspace, entry), onAdd: (workspace, asset) => void addAsset(workspace, asset) }) : tab === "runs" ? h(RunsBoard, { runs, selected: selectedRun?.runId ?? "", onPick: (run) => void pickRun(run) }) : null;
 
       const right =
         tab === "flows"

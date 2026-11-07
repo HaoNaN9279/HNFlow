@@ -14,6 +14,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { createStore } from './store.js'
+import { AssetStore } from './assets.js'
 import { contentHash, buildLockfile, lockfileProblems, publishFlow } from './flow/publish.js'
 import { nodeIndex, outgoingEdges } from './flow/definition.js'
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from './flow/envelope.js'
@@ -1638,6 +1639,30 @@ function buildService(options) {
   }
 
   /**
+   * The reusable library assets, regardless of workspace refs.
+   * @returns {Promise<Record<string, any>[]>} assets.
+   */
+  async function libraryAssets() {
+    return new AssetStore(libraryRoot(config), { logger }).list()
+  }
+
+  /**
+   * Reference one library asset from a workspace (human action).
+   * @param {string} cwd - workspace root.
+   * @param {string} flowId - library asset id.
+   * @param {string} [alias] - preferred alias.
+   * @returns {Promise<Record<string, any>>} the created ref.
+   */
+  async function addRef(cwd, flowId, alias) {
+    const assets = new AssetStore(libraryRoot(config), { logger })
+    const asset = await assets.read(flowId)
+    const { workspace } = storesFor(cwd)
+    const ref = await workspace.addRef({ flowId: String(asset.asset.id), alias: alias ?? '', revision: null })
+    indexCache.delete(String(cwd))
+    return { flowId: String(asset.asset.id), alias: ref.alias ?? '', revision: ref.revision ?? null }
+  }
+
+  /**
    * The page snapshot for a set of workspaces.
    * @param {{id?: string, name?: string, path: string}[]} workspaces - workspaces to include.
    * @returns {Promise<Record<string, any>>} snapshot.
@@ -1656,6 +1681,7 @@ function buildService(options) {
       degraded: !vibestackAvailable(hosts.vibestack()),
       storage: store.mode(),
       warnings: store.warnings(),
+      library: await libraryAssets(),
       workspaces: groups,
       runs: (await listRuns()).map(summariseRun),
       inbox: await inbox(),
@@ -1828,6 +1854,7 @@ function buildService(options) {
     history,
     rollback,
     pinRef,
+    addRef,
     listFlows,
     describeFlow,
     getRun,

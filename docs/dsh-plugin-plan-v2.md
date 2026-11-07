@@ -824,7 +824,7 @@ plugins/dsh/
 │  └─ skill.js
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（123 项，`node test/run.mjs`）
+└─ test/                     # node:test（124 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -894,7 +894,7 @@ conductor 模型路由（E-19）、usage 读回时机（E-20）。已知保留�
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：**123 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
+`plugins/dsh/test/`，`node test/run.mjs`：**124 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
 信封三态、调度（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile（含 preset 组合摘要）、
 storage 降级、编排（门禁/交付/needs_human/重试/取消/重启）、审计字段、交付路径越界、过期推进、
 verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、工具/命令/路由/装配/客户端契约。

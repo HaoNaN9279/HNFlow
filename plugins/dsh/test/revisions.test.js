@@ -15,6 +15,16 @@ test('history, diff preview, rollback and pin are consistent', async () => {
     const first = await service.history(seeded.workspace, 'demo')
     assert.equal(first.currentRevision, 1)
     assert.deepEqual(first.revisions.map((entry) => entry.revision), [1])
+    const snap = await service.snapshot([{ path: seeded.workspace }])
+    assert.equal(snap.library.some((asset) => asset.id === 'fl-test'), true)
+
+    const extra = gateFlow()
+    extra.flow = { id: 'fl-extra-asset', name: '资产库测试' }
+    const { AssetStore: LibraryStore } = await import('../lib/assets.js')
+    const created = await new LibraryStore(seeded.library).create({ name: '资产库测试', definition: extra })
+    const added = await service.addRef(seeded.workspace, String(created.asset.id))
+    assert.equal(added.flowId, String(created.asset.id))
+    assert.equal((await service.listFlows(seeded.workspace)).some((entry) => entry.flowId === String(created.asset.id)), true)
 
     // A draft override is a candidate, not a revision: the preview must show
     // the structural change and publish must remain an explicit call.
