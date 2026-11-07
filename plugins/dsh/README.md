@@ -44,9 +44,18 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
 - `/hnflow list|runs|status|inbox|assets|add|publish|pin|import|open`；发布需要 `publish <流程> confirm` 二次确认。
   **命令在任何会话都可用**（core 行注册，作用于当前会话的工作区）；工具只属于 HNFlow 模式。
-  命令结果同时镜像到右下角提示：DSH 把命令输出渲染成对话里的卡片，而**空白会话还没有转录**，不镜像的话新会话里看起来像“没反应”。
 - 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox）与
   `hnflow_author`（schema / validate / draft，**没有 publish**）。
+
+### 命令结果为什么在空白会话里看不到
+
+这是 DSH 的统一行为，不是 HNFlow 的特殊问题：命令 handler 的返回文本由 host 写成
+`command/run` + `command/done` 会话事件，`dsh-client-ui-chat` 再把它渲染成对话里的持久卡片；
+空白会话还没有对话转录，卡片要等第一轮消息后才出现。`command/executed` 只是客户端本地确认事件，
+`conversation.input.notify` 只用于“未知命令”这类准入失败——插件不应自行再弹一份结果。
+
+所以在**全新会话**里执行 `/hnflow list` 看不到输出时：先发一句话，或直接使用左侧 HNFlow 页面
+（流程/运行/收件箱本来就在那里，且不依赖会话转录）。
 
 ## 配置
 

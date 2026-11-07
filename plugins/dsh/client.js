@@ -712,35 +712,12 @@ window.__ModuleLoader__.load({
     /** Inbox item ids already announced; module-level so a remount cannot repeat. */
     const announced = new Set();
 
-    /** Subscribers for `/hnflow` command results (a toast, not a session turn). */
-    const commandNotices = new Set();
-
     /**
-     * Publish one command result to the mounted notice host.
-     * @param {{kind: string, text: string}} payload - result.
-     * @returns {void}
-     */
-    function notifyCommand(payload) {
-      for (const listener of commandNotices) {
-        try {
-          listener(payload);
-        } catch {
-          // One broken subscriber must not swallow the rest.
-        }
-      }
-    }
-
-    /**
-     * Bottom-right notice: inbox first sightings and command results.
-     *
-     * Command output normally renders as a transcript card, but a blank session
-     * has no transcript yet — recently sent commands are invisible until the
-     * first turn. The toast makes the command acknowledged immediately.
+     * Bottom-right notice for the first sighting of an inbox item.
      * @returns {unknown} element.
      */
     function Notifier() {
       const [notice, setNotice] = react.useState(null);
-      const [command, setCommand] = react.useState(null);
       react.useEffect(() => {
         let live = true;
         let timer = null;
@@ -769,32 +746,6 @@ window.__ModuleLoader__.load({
           if (timer !== null) clearTimeout(timer);
         };
       }, []);
-
-      react.useEffect(() => {
-        /** @type {NodeJS.Timeout | null} */
-        let hide = null;
-        const listener = (payload) => {
-          setCommand(payload);
-          if (hide !== null) clearTimeout(hide);
-          hide = setTimeout(() => setCommand(null), 12000);
-        };
-        commandNotices.add(listener);
-        return () => {
-          commandNotices.delete(listener);
-          if (hide !== null) clearTimeout(hide);
-        };
-      }, []);
-
-      if (command !== null) {
-        const text = command.text.length > 0 ? command.text : "命令已执行；输出会在会话首轮后显示在对话里，也可以打开左侧 HNFlow 页面查看。";
-        return h(
-          "div",
-          { style: { ...styles.toast, maxWidth: "420px" }, role: "status" },
-          h("div", { style: { fontWeight: 600, marginBottom: "4px" } }, command.kind === "error" ? "HNFlow 命令失败" : "HNFlow 命令结果"),
-          h("div", { style: { ...styles.meta, whiteSpace: "pre-wrap", maxHeight: "240px", overflow: "auto", color: "var(--dsw-alias-label-primary, inherit)" } }, text.slice(0, 1200)),
-          h("div", { style: { display: "flex", gap: "6px", marginTop: "8px" } }, h("button", { type: "button", style: styles.linkButton, onClick: () => setCommand(null) }, "关闭")),
-        );
-      }
       if (notice === null) return null;
       return h(
         "div",
@@ -855,22 +806,6 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       if (wired.has(ctx)) return;
       wired.add(ctx);
-
-      // Command results also render as transcript cards, but a blank session
-      // has no transcript; mirror them into the notice host so `/hnflow …`
-      // visibly reacts the moment it runs.
-      try {
-        ctx.on?.("command/executed", (sessionId, name, result) => {
-          void sessionId;
-          if (name !== "hnflow") return;
-          notifyCommand({
-            kind: result?.kind === "error" ? "error" : "success",
-            text: typeof result?.text === "string" ? result.text : "",
-          });
-        });
-      } catch {
-        // The notice is optional; command execution itself still works.
-      }
 
       registerSlot(ctx, "sidebar.panellist", (slots) => slots.register({ name: "sidebar.panellist", id: PANEL_ID, order: 15, label: () => "HNFlow" }, HnflowIcon));
       registerSlot(ctx, "main", (slots) => slots.register({ name: "main", key: PANEL_ID, inject: () => ({ ctx }) }, HnflowPage));
