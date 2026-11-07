@@ -43,6 +43,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 - 左侧 HNFlow 图标：**流程**（树 + 只读画布 + 发布/启动）/ **运行**（节点时间线）/ **收件箱**（门禁与交付）。
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
 - `/hnflow list|runs|status|inbox|assets|add|publish|pin|import|open`；发布需要 `publish <流程> confirm` 二次确认。
+  **命令在任何会话都可用**（core 行注册，作用于当前会话的工作区）；工具只属于 HNFlow 模式。
 - 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox）与
   `hnflow_author`（schema / validate / draft，**没有 publish**）。
 

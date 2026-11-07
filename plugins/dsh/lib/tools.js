@@ -7,6 +7,8 @@
  * belongs to the HNFlow page, not to a polling loop in the conversation.
  */
 
+import { defineTool } from './tool-schema.js'
+
 /** Actions the tool accepts. */
 export const ACTIONS = Object.freeze(['list_flows', 'describe_flow', 'run', 'status', 'cancel', 'resume', 'inbox'])
 
@@ -47,11 +49,11 @@ export function formatFlows(entries) {
 
 /**
  * Build the `hnflow` tool definition.
- * @param {{defineTool: Function, service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
+ * @param {{service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
  * @returns {Record<string, any>} tool definition.
  */
 export function createFlowTool(options) {
-  const { defineTool, service, cwdOf } = options
+  const { service, cwdOf } = options
 
   /**
    * Dispatch one action.

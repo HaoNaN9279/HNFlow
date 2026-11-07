@@ -7,7 +7,6 @@ import test from 'node:test'
 
 import { FLOW_SCHEMA_REFERENCE, createAuthorTool } from '../lib/author.js'
 
-const defineTool = (definition) => definition
 const cwdOf = () => '/w'
 
 const validFlow = {
@@ -36,16 +35,16 @@ function stubService() {
 }
 
 test('the schema action documents the six primitives and no publish', async () => {
-  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  const tool = createAuthorTool({ service: stubService(), cwdOf })
   const text = await tool.execute({ action: 'schema' }, {})
   const reference = JSON.parse(text)
   assert.deepEqual(reference.notes.nodeTypes, ['agent', 'judge', 'merge', 'gate', 'request', 'verify'])
-  assert.match(reference.notes.publish, /不可由工具调用/u)
+  assert.equal(reference.notes.publish.includes('\u4e0d\u53ef\u7531\u5de5\u5177\u8c03\u7528'), true)
   assert.equal(FLOW_SCHEMA_REFERENCE.schemaVersion, 2)
 })
 
 test('validate reports definition problems before touching the service', async () => {
-  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  const tool = createAuthorTool({ service: stubService(), cwdOf })
   const text = await tool.execute({ action: 'validate', definition: { nodes: [] } }, {})
   const result = JSON.parse(text)
   assert.equal(result.ok, false)
@@ -53,14 +52,14 @@ test('validate reports definition problems before touching the service', async (
 })
 
 test('validate accepts a definition object and delegates host checks', async () => {
-  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
+  const tool = createAuthorTool({ service: stubService(), cwdOf })
   const result = JSON.parse(await tool.execute({ action: 'validate', definition: validFlow }, {}))
   assert.equal(result.ok, true)
 })
 
 test('draft writes an agent override with the note', async () => {
   const service = stubService()
-  const tool = createAuthorTool({ defineTool, service, cwdOf })
+  const tool = createAuthorTool({ service, cwdOf })
   const result = JSON.parse(await tool.execute({ action: 'draft', flow: 'a', definition: validFlow, note: 'first pass' }, {}))
   assert.equal(result.ok, true)
   assert.equal(service.calls.length, 1)
@@ -69,7 +68,8 @@ test('draft writes an agent override with the note', async () => {
 })
 
 test('there is no publish action', async () => {
-  const tool = createAuthorTool({ defineTool, service: stubService(), cwdOf })
-  assert.match(await tool.execute({ action: 'publish' }, {}), /invalid-action/u)
-  assert.equal(tool.parameters.action.enum.includes('publish'), false)
+  const tool = createAuthorTool({ service: stubService(), cwdOf })
+  await assert.rejects(() => tool.execute({ action: 'publish' }, {}), /invalid arguments/u)
+  assert.equal(tool.parameters.properties.action.enum.includes('publish'), false)
 })
+

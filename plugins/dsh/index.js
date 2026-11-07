@@ -147,6 +147,31 @@ export function applyCore(ctx, config) {
     }
     void writeBreadcrumb('core', { ...facts, routes: registered.length, registered, routeErrors })
   })
+  // `/hnflow` is global: listing, assets and publish use the workspace of the
+  // session that typed it, and the command must exist outside HNFlow sessions
+  // too (it is the human surface for the page's data).
+  ctx.inject(['commands', 'workingDirectory'], (scope) => {
+    try {
+      /**
+       * Workspace directory of the invoking session.
+       * @param {unknown} agent - command's agent.
+       * @returns {string | null} absolute path.
+       */
+      const cwdOf = (agent) => {
+        try {
+          const cwd = scope.workingDirectory?.get?.(/** @type {any} */ (agent)?.session)
+          return typeof cwd === 'string' && cwd.length > 0 ? cwd : null
+        } catch {
+          return null
+        }
+      }
+      scope.commands.register(createFlowCommand({ service, cwdOf, config, logger }))
+      void writeBreadcrumb('commands', { role: 'core', version: PLUGIN_VERSION, phase: 'registered', name: 'hnflow' })
+    } catch (error) {
+      logger?.warn?.('hnflow: cannot register /hnflow: %o', error)
+      void writeBreadcrumb('commands', { role: 'core', version: PLUGIN_VERSION, phase: 'error', error: String(error?.message ?? error) })
+    }
+  })
   ctx.effect(
     () => () => {
       void service.close()
@@ -198,30 +223,13 @@ function applyPreset(ctx, config) {
   }
 
   ctx.inject(['hnflow', 'tools'], (scope) => {
-    const service = scope.hnflow
-    void (async () => {
-      try {
-        const module = await loadHarnessModule(ctx, '@deepseek-ai/dsh-tools')
-        const defineTool = module?.defineTool
-        if (typeof defineTool !== 'function') {
-          logger?.warn?.('hnflow: @deepseek-ai/dsh-tools does not export defineTool; the flow tools stay unregistered')
-          return
-        }
-        scope.tools.register(createFlowTool({ defineTool, service, cwdOf }))
-        scope.tools.register(createAuthorTool({ defineTool, service, cwdOf }))
-        void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'ready', tools: 2 })
-      } catch (error) {
-        logger?.warn?.('hnflow: cannot register the flow tools: %o', error)
-        void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'tool-error', error: String(error?.message ?? error) })
-      }
-    })()
-  })
-
-  ctx.inject(['hnflow', 'commands'], (scope) => {
     try {
-      scope.commands.register(createFlowCommand({ service: scope.hnflow, cwdOf, config, logger }))
+      scope.tools.register(createFlowTool({ service: scope.hnflow, cwdOf }))
+      scope.tools.register(createAuthorTool({ service: scope.hnflow, cwdOf }))
+      void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'ready', tools: 2 })
     } catch (error) {
-      logger?.warn?.('hnflow: cannot register /hnflow: %o', error)
+      logger?.warn?.('hnflow: cannot register the flow tools: %o', error)
+      void writeBreadcrumb('preset', { role: 'preset', version: PLUGIN_VERSION, phase: 'tool-error', error: String(error?.message ?? error) })
     }
   })
 
@@ -268,25 +276,6 @@ function applyPreset(ctx, config) {
       return decision
     })
   })
-}
-
-/**
- * Import a harness package the way the Loader does, falling back to plain ESM.
- * @param {Record<string, unknown>} ctx - plugin context.
- * @param {string} specifier - package specifier.
- * @returns {Promise<Record<string, unknown>>} module namespace.
- */
-async function loadHarnessModule(ctx, specifier) {
-  const loader = ctx.get('loader')
-  const internal = loader?.internal
-  if (typeof internal?.import === 'function') {
-    try {
-      return await internal.import(specifier, new URL('./', import.meta.url).href, {})
-    } catch {
-      // Fall through to the plain resolver.
-    }
-  }
-  return await import(specifier)
 }
 
 /** Exported for tests and for the usage hint in plugin documentation. */

@@ -15,6 +15,7 @@ import { Config, apply } from '../index.js'
 function fakeContext() {
   /** @type {Record<string, any>} */
   const services = {}
+  services.workingDirectory = { get: () => '/w' }
   /** @type {Record<string, any[]>} */
   const registered = { tools: [], commands: [], skills: [], sections: [] }
   /** @type {Record<string, any>[]} */
@@ -86,22 +87,24 @@ async function waitFor(check, timeoutMs = 2000) {
   }
 }
 
-test('the core row provides ctx.hnflow and registers the page routes', async () => {
+test('the core row provides ctx.hnflow, the page routes and the global command', async () => {
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
   assert.equal(ctx.routes.length, 8)
   assert.equal(typeof ctx.services.hnflow.status, 'function')
   assert.equal(ctx.effects.length, 1)
+  assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
   await ctx.services.hnflow.close()
 })
 
-test('the preset row registers the tools, command, skill and prompt section', async () => {
+test('the preset row registers the tools, skill and prompt section', async () => {
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   apply(ctx, { role: 'preset' })
   await waitFor(() => ctx.registered.tools.length === 2 && ctx.registered.skills.length === 1)
   assert.deepEqual(ctx.registered.tools.map((tool) => tool.name), ['hnflow', 'hnflow_author'])
+  // The command is global (core row), so the preset must not double-register it.
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
   assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-flows'])
   assert.deepEqual(ctx.registered.sections.map((section) => section.name), ['hnflow:flows'])

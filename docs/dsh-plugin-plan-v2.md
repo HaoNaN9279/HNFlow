@@ -843,6 +843,8 @@ plugins/dsh/
 | E-11 | `model` 路由按**层 id** 去重存于 `lockfile.models` | 同一层被多个节点引用时只解析一次；节点级 `model` 仍逐节点记录 |
 | E-12 | 新增 `POST /api/hnflow/publish` | 发布仍是人的动作（页面按钮），不是 Agent 工具 |
 | E-13 | run 记录内嵌 `definition` 快照（含来源 `source`） | 草稿覆盖没有发布 revision，却必须可执行；快照同时保证库文件／revision 之后的改动不影响已启动的 run |
+| E-14 | 工具定义用本地 `lib/tool-schema.js`，不 import `@deepseek-ai/dsh-tools` | linked 插件解析不到 harness 包（Loader 内部 import 不对外），import 失败会连工具一起丢掉；该包在本项目只用于「DSL → 原始 JSON Schema + 参数校验」，本地实现等价 |
+| E-15 | `/hnflow` 由 core 行注册（全局），不下沉到 preset | 命令是人的数据面（list/assets/publish/pin），在任何会话都该能用；工具仍只属于 HNFlow 模式 |
 
 ### E.3 状态机（实现）
 

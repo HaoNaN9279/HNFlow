@@ -9,6 +9,7 @@
 
 import { definitionProblems } from './assets.js'
 import { EDGE_WHEN_KINDS, GATE_DECISIONS, NODE_TYPES } from './flow/definition.js'
+import { defineTool } from './tool-schema.js'
 
 /** Shape reference returned by the `schema` action. */
 export const FLOW_SCHEMA_REFERENCE = Object.freeze({
@@ -68,11 +69,11 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
 
 /**
  * Build the `hnflow_author` tool definition.
- * @param {{defineTool: Function, service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
+ * @param {{service: Record<string, any>, cwdOf: (agent: unknown) => string | null}} options - wiring.
  * @returns {Record<string, any>} tool definition.
  */
 export function createAuthorTool(options) {
-  const { defineTool, service, cwdOf } = options
+  const { service, cwdOf } = options
 
   /**
    * Dispatch one action.
