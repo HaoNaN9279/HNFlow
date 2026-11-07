@@ -845,6 +845,7 @@ plugins/dsh/
 | E-13 | run 记录内嵌 `definition` 快照（含来源 `source`） | 草稿覆盖没有发布 revision，却必须可执行；快照同时保证库文件／revision 之后的改动不影响已启动的 run |
 | E-14 | 工具定义用本地 `lib/tool-schema.js`，不 import `@deepseek-ai/dsh-tools` | linked 插件解析不到 harness 包（Loader 内部 import 不对外），import 失败会连工具一起丢掉；该包在本项目只用于「DSL → 原始 JSON Schema + 参数校验」，本地实现等价 |
 | E-15 | `/hnflow` 由 core 行注册（全局），不下沉到 preset | 命令是人的数据面（list/assets/publish/pin），在任何会话都该能用；工具仍只属于 HNFlow 模式 |
+| E-16 | 客户端监听 `command/executed`，把 `/hnflow` 结果镜像到右下角提示 | DSH 的命令输出是会话转录里的卡片；空白会话没有转录，命令执行了也“看不见”（实测：首轮之后所有命令卡片才一起出现）。提示让命令在空白会话里即时可见 |
 
 ### E.3 状态机（实现）
 
