@@ -53,14 +53,23 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 
 1. 用 `hnflow_author` 的 `schema` 看完整格式。
 2. 写出定义后先 `validate`，把错误全部修掉；常见的几个：`input-unbound`、`gate-branches-incomplete`、`judge-same-as-producer`、`model-layer-unknown`。
-3. `draft` 写入工作区覆盖（草稿），此时**还没发布**。
-4. 明确告诉用户：发布是人的动作（`/hnflow publish <流程>` 或页面按钮），Agent 没有 publish 入口。
+3. 新建项目内流程用 `create`（默认 `scope: "project"`；`flow.id` 可省略，插件会生成；名称可用 `name` 参数）；确定要放进通用资产库时用 `create` + `scope: "library"`（新资产 r1，并默认引用到本工作区）。`folder` 支持 `a/b` 这样的多级路径。
+4. 修改流程用 `draft`。项目草稿可以改；库流程的草稿仍是工作区覆盖，**还没发布**。
+5. 项目草稿可以 `rename` / `delete` / `promote`；`promote` 把它提升为库资产 r1 并改为引用。
+6. 明确告诉用户：**已有资产的发布是人的动作**（`/hnflow publish <流程>` 或页面按钮），Agent 没有 publish 入口。
+
+## 对话管理
+
+- `hnflow` 的 `list_library` 查通用资产库；`add_ref` / `remove_ref` / `rename_ref` 管本工作区引用；`pin` / `history` 看版本与钉住状态。
+- `list_flows` 会同时列出本工作区引用和项目草稿；项目草稿标 `[project-draft]`，没有 revision，`source: "local"`。
+- 运行与观察：`run` 只启动并立即返回 `runId`；`status` / `list_runs` 用于后续问题；`inbox` 列出待人工处理项；`artifact` 按 id 取节点产物。
+- 不要对项目草稿调用 publish/pin/rollback：它们没有 revision，插件会返回 `local-flow`。
 
 ## 运行与观察
 
 - `hnflow` 工具的 `run` 只启动并立即返回 `runId`，不要轮询或等它。
 - `status` 用于回答后续问题；`inbox` 列出待人工处理的门禁/交付；`artifact` 按 id 读取一个节点产物。
-- 页面：左侧 HNFlow 图标（流程 / 运行 / 收件箱）。运行页可看节点状态、产物、token 用量与降级标记；版本历史可钉住或回滚（回滚由人确认）。
+- 页面：左侧 HNFlow 图标（流程 / 运行 / 收件箱）。运行页可看节点状态、产物、token 用量与降级标记；版本历史可钉住或回滚（回滚由人确认）。项目草稿在页面里只提供画布、运行和“提升到通用资产库”。
 
 ## 不要做
 

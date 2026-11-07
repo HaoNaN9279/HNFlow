@@ -14,7 +14,7 @@
 import { randomUUID } from 'node:crypto'
 
 import { createStore } from './store.js'
-import { AssetStore } from './assets.js'
+import { AssetStore, definitionProblems, normalizeFolder, withFlowIdentity } from './assets.js'
 import { contentHash, buildLockfile, lockfileProblems, publishFlow } from './flow/publish.js'
 import { nodeIndex, outgoingEdges } from './flow/definition.js'
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from './flow/envelope.js'
@@ -302,6 +302,34 @@ function buildService(options) {
    */
   async function resolveKey(cwd, key) {
     return storesFor(cwd).resolver.resolve(key)
+  }
+
+  /**
+   * Refuse library-only actions for a project-local draft.
+   * @param {Record<string, any>} resolved - resolution.
+   * @param {string} action - action name used in the message.
+   * @returns {void}
+   * @throws {HnflowError} `local-flow` when the flow is local.
+   */
+  function rejectLocal(resolved, action) {
+    if (resolved.local !== true) return
+    throw new HnflowError('local-flow', `cannot ${action} ${resolved.flowName}: it is a project-local draft with no published revision; promote it to the library first`)
+  }
+
+  /**
+   * Find a workspace ref by alias, flow id, or the asset's display name.
+   * @param {string} cwd - workspace root.
+   * @param {string} key - alias, id, or name.
+   * @returns {Promise<Record<string, any> | null>} ref, or null.
+   */
+  async function refForKey(cwd, key) {
+    const { workspace, assets } = storesFor(cwd)
+    const direct = await workspace.findRef(key)
+    if (direct !== null) return direct
+    const entries = await assets.list()
+    const matches = entries.filter((entry) => entry.name === String(key).trim())
+    if (matches.length !== 1) return null
+    return workspace.findRef(String(matches[0].id))
   }
 
   /**
@@ -1434,8 +1462,32 @@ function buildService(options) {
       flow: {
         ...(input.definition.flow ?? {}),
         id: resolved.flowId,
-        name: typeof input.definition.flow?.name === 'string' && input.definition.flow.name.trim().length > 0 ? input.definition.flow.name : resolved.flowName,
+        // Renaming goes through `rename` (local) or a reference alias; a
+        // definition edit must not silently create a duplicate display name.
+        name: resolved.flowName,
       },
+    }
+    if (resolved.local === true) {
+      const document = await workspace.writeOverride({
+        flowId: resolved.flowId,
+        definition,
+        baseRevision: 0,
+        note: input.note ?? '',
+        origin: input.origin === 'user' ? 'user' : 'agent',
+        local: true,
+        folder: resolved.folder ?? '',
+      })
+      const validation = await validate(definition)
+      indexCache.delete(String(input.cwd))
+      return {
+        draft: true,
+        local: true,
+        flowId: resolved.flowId,
+        baseRevision: 0,
+        updatedAt: document.updatedAt,
+        validation,
+        next: 'this is a project-local draft; run it here, or promote it to the library when it is ready',
+      }
     }
     const document = await workspace.writeOverride({
       flowId: resolved.flowId,
@@ -1457,6 +1509,216 @@ function buildService(options) {
   }
 
   /**
+   * Create a new flow: a project-local draft, or a library asset plus a ref.
+   *
+   * Creating a library asset writes revision 1. It does not advance an existing
+   * revision; changing an existing asset still requires a human publish.
+   * @param {{cwd: string, definition: Record<string, any>, scope?: 'project'|'library', name?: string, folder?: string, note?: string, alias?: string, reference?: boolean}} input - creation input.
+   * @returns {Promise<Record<string, any>>} created flow facts.
+   */
+  async function createFlow(input) {
+    const cwd = String(input.cwd ?? '')
+    const definition = input.definition
+    const flow = definition !== null && typeof definition === 'object' && definition.flow !== null && typeof definition.flow === 'object' && !Array.isArray(definition.flow) ? definition.flow : {}
+    const inputName = String(input.name ?? '').trim()
+    // `create` generates the identity, so callers (especially a model in a
+    // conversation) do not have to invent a flow id before the first draft.
+    const candidate = {
+      ...definition,
+      flow: {
+        ...flow,
+        id: typeof flow.id === 'string' && flow.id.trim().length > 0 ? flow.id : 'fl-pending',
+        name: typeof flow.name === 'string' && flow.name.trim().length > 0 ? flow.name : inputName,
+      },
+    }
+    const problems = definitionProblems(candidate)
+    if (problems.length > 0) throw new HnflowError('definition-invalid', problems.join('; '), { problems })
+    const name = String(input.name ?? candidate.flow?.name ?? '').trim()
+    if (name.length === 0) throw new HnflowError('name-required', 'a new flow needs a name (or definition.flow.name)')
+    const folder = normalizeFolder(input.folder)
+    const validation = await validate(candidate)
+    if (!validation.ok) {
+      throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
+    }
+    if (input.scope === 'library') {
+      const assets = new AssetStore(libraryRoot(config), { logger })
+      const created = await assets.create({
+        name,
+        definition: candidate,
+        folder,
+        description: typeof definition.flow?.description === 'string' ? definition.flow.description : '',
+      })
+      const { workspace } = storesFor(cwd)
+      const ref = input.reference === false ? null : await workspace.addRef({ flowId: String(created.asset.id), alias: input.alias ?? '', revision: null })
+      indexCache.delete(String(cwd))
+      return {
+        scope: 'library',
+        flowId: String(created.asset.id),
+        name,
+        folder,
+        revision: 1,
+        referenced: ref !== null,
+        alias: ref?.alias ?? '',
+        validation,
+      }
+    }
+    const flowId = `fl-local-${randomUUID().replace(/-/gu, '').slice(0, 12)}`
+    const localDefinition = withFlowIdentity(candidate, flowId, name)
+    const { workspace } = storesFor(cwd)
+    const existing = await workspace.listOverrides()
+    if ([...existing.values()].some((document) => document.local === true && String(document.definition?.flow?.name ?? '') === name)) {
+      throw new HnflowError('name-duplicate', `a project-local flow is already named ${name}`)
+    }
+    const document = await workspace.writeOverride({
+      flowId,
+      definition: localDefinition,
+      baseRevision: 0,
+      note: input.note ?? 'created in conversation',
+      origin: 'agent',
+      local: true,
+      folder,
+    })
+    indexCache.delete(String(cwd))
+    return {
+      scope: 'project',
+      flowId,
+      name,
+      folder,
+      local: true,
+      updatedAt: document.updatedAt,
+      validation,
+    }
+  }
+
+  /**
+   * Promote a project-local draft into a library asset (revision 1) and
+   * reference it from the same workspace.
+   * @param {{cwd: string, key: string, name?: string, folder?: string, alias?: string}} input - promotion input.
+   * @returns {Promise<Record<string, any>>} promoted asset facts.
+   */
+  async function promote(input) {
+    const resolved = await resolveKey(input.cwd, input.key)
+    if (resolved.local !== true) throw new HnflowError('not-local', `${input.key} is already a library flow`)
+    const name = String(input.name ?? resolved.flowName).trim()
+    if (name.length === 0) throw new HnflowError('name-required', 'the promoted flow needs a name')
+    const folder = normalizeFolder(input.folder !== undefined ? input.folder : resolved.folder)
+    const validation = await validate(resolved.definition)
+    if (!validation.ok) {
+      throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
+    }
+    const assets = new AssetStore(libraryRoot(config), { logger })
+    const created = await assets.create({
+      name,
+      definition: resolved.definition,
+      folder,
+      description: typeof resolved.definition.flow?.description === 'string' ? resolved.definition.flow.description : '',
+    })
+    const { workspace } = storesFor(input.cwd)
+    await workspace.addRef({ flowId: String(created.asset.id), alias: input.alias ?? '', revision: null })
+    await workspace.removeOverride(resolved.flowId)
+    indexCache.delete(String(input.cwd))
+    return {
+      scope: 'library',
+      flowId: String(created.asset.id),
+      previousFlowId: resolved.flowId,
+      name,
+      folder,
+      revision: 1,
+      validation,
+    }
+  }
+
+  /**
+   * Delete a project-local draft. Library assets and references are not removed.
+   * @param {{cwd: string, key: string}} input - deletion input.
+   * @returns {Promise<{flowId: string, name: string, local: true}>} removed facts.
+   */
+  async function deleteLocal(input) {
+    const resolved = await resolveKey(input.cwd, input.key)
+    if (resolved.local !== true) {
+      throw new HnflowError('not-local', `${input.key} is a library reference; remove the reference instead of deleting the asset`)
+    }
+    const { workspace } = storesFor(input.cwd)
+    await workspace.removeOverride(resolved.flowId)
+    indexCache.delete(String(input.cwd))
+    return { flowId: resolved.flowId, name: resolved.flowName, local: true }
+  }
+
+  /**
+   * Rename a project-local draft.
+   * @param {{cwd: string, key: string, name: string}} input - rename input.
+   * @returns {Promise<Record<string, any>>} renamed facts.
+   */
+  async function renameLocal(input) {
+    const name = String(input.name ?? '').trim()
+    if (name.length === 0) throw new HnflowError('name-required', 'a local flow needs a non-empty name')
+    const resolved = await resolveKey(input.cwd, input.key)
+    if (resolved.local !== true) throw new HnflowError('not-local', `${input.key} is a library flow; change its reference alias instead`)
+    const definition = {
+      ...resolved.definition,
+      flow: { ...(resolved.definition.flow ?? {}), id: resolved.flowId, name },
+    }
+    const { workspace } = storesFor(input.cwd)
+    const existing = await workspace.listOverrides()
+    if ([...existing.values()].some((document) => document.local === true && document.flowId !== resolved.flowId && String(document.definition?.flow?.name ?? '') === name)) {
+      throw new HnflowError('name-duplicate', `another project-local flow is already named ${name}`)
+    }
+    const document = await workspace.writeOverride({
+      flowId: resolved.flowId,
+      definition,
+      baseRevision: 0,
+      note: `renamed to ${name}`,
+      origin: 'agent',
+      local: true,
+      folder: resolved.folder ?? '',
+    })
+    indexCache.delete(String(input.cwd))
+    return { flowId: resolved.flowId, name, local: true, updatedAt: document.updatedAt }
+  }
+
+  /**
+   * Remove a workspace reference without touching the library asset.
+   * @param {{cwd: string, key: string}} input - reference removal input.
+   * @returns {Promise<Record<string, any>>} removed reference facts.
+   */
+  async function removeRef(input) {
+    const { workspace } = storesFor(input.cwd)
+    const ref = await refForKey(input.cwd, input.key)
+    if (ref === null) throw new HnflowError('ref-missing', `no flow named ${input.key} in this workspace`)
+    const override = await workspace.readOverride(ref.flowId)
+    await workspace.removeRef(ref.flowId)
+    indexCache.delete(String(input.cwd))
+    return { flowId: ref.flowId, alias: ref.alias ?? '', hadOverride: override !== null }
+  }
+
+  /**
+   * Change a reference's alias.
+   * @param {{cwd: string, key: string, alias: string}} input - rename input.
+   * @returns {Promise<Record<string, any>>} updated reference facts.
+   */
+  async function renameRef(input) {
+    const alias = String(input.alias ?? '').trim()
+    if (alias.length === 0) throw new HnflowError('alias-required', 'an alias must not be empty')
+    const { workspace } = storesFor(input.cwd)
+    const ref = await refForKey(input.cwd, input.key)
+    if (ref === null) throw new HnflowError('ref-missing', `no flow named ${input.key} in this workspace`)
+    const document = await workspace.readRefs()
+    const clash = document.refs.find((entry) => entry.alias === alias && entry.flowId !== ref.flowId)
+    if (clash !== undefined) throw new HnflowError('ref-duplicate', `another reference already uses the alias ${alias}`)
+    const updated = await workspace.updateRef(ref.flowId, { revision: ref.revision ?? null, alias })
+    indexCache.delete(String(input.cwd))
+    return { flowId: updated.flowId, alias: updated.alias ?? '', revision: updated.revision ?? null }
+  }
+
+  /**
+   * Every reusable library asset.
+   * @returns {Promise<Record<string, any>[]>} assets.
+   */
+  async function listLibrary() {
+    return new AssetStore(libraryRoot(config), { logger }).list()
+  }
+
+  /**
    * Publish a workspace flow as a new revision.
    * @param {{cwd: string, key: string, note?: string}} input - publish input.
    * @returns {Promise<Record<string, any>>} publish result.
@@ -1464,6 +1726,7 @@ function buildService(options) {
   async function publish(input) {
     requireVibestack()
     const resolved = await resolveKey(input.cwd, input.key)
+    rejectLocal(resolved, 'publish')
     const validation = await validate(resolved.definition)
     if (!validation.ok) throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
     const { assets } = storesFor(input.cwd)
@@ -1482,8 +1745,9 @@ function buildService(options) {
    */
   async function history(cwd, key) {
     const resolved = await resolveKey(cwd, key)
-    const { assets, workspace } = storesFor(cwd)
-    const ref = await workspace.findRef(key)
+    rejectLocal(resolved, 'show revision history for')
+    const { assets } = storesFor(cwd)
+    const ref = await refForKey(cwd, key)
     const revisions = await assets.listRevisions(resolved.flowId)
     return {
       flowId: resolved.flowId,
@@ -1508,6 +1772,7 @@ function buildService(options) {
   async function previewPublish(cwd, key) {
     requireVibestack()
     const resolved = await resolveKey(cwd, key)
+    rejectLocal(resolved, 'publish')
     const validation = await validate(resolved.definition)
     const { assets } = storesFor(cwd)
     const current = await assets.read(resolved.flowId)
@@ -1534,14 +1799,17 @@ function buildService(options) {
    */
   async function pinRef(cwd, key, target) {
     const resolved = await resolveKey(cwd, key)
+    rejectLocal(resolved, 'pin')
     const { workspace, assets } = storesFor(cwd)
+    const ref = await refForKey(cwd, key)
+    if (ref === null) throw new HnflowError('ref-missing', `no flow named ${key} in this workspace`)
     const revision = target === 'latest' || target === null || target === undefined ? null : Number(target)
     if (revision !== null) {
       if (!Number.isInteger(revision) || revision < 1) throw new HnflowError('revision-invalid', `revision must be a positive integer or "latest"`)
       const exists = await assets.readRevisionRecord(resolved.flowId, revision)
       if (exists === null) throw new HnflowError('revision-missing', `revision ${revision} of ${resolved.flowId} has no snapshot`)
     }
-    const updated = await workspace.updateRef(key, { revision })
+    const updated = await workspace.updateRef(ref.flowId, { revision })
     indexCache.delete(String(cwd))
     return { flowId: resolved.flowId, alias: resolved.alias, revision: updated.revision ?? null }
   }
@@ -1554,6 +1822,7 @@ function buildService(options) {
   async function rollback(input) {
     requireVibestack()
     const resolved = await resolveKey(input.cwd, input.key)
+    rejectLocal(resolved, 'roll back')
     const { assets } = storesFor(input.cwd)
     const record = await assets.readRevisionRecord(resolved.flowId, Number(input.revision))
     if (record === null) throw new HnflowError('revision-missing', `revision ${input.revision} of ${resolved.flowId} has no snapshot`)
@@ -1658,23 +1927,28 @@ function buildService(options) {
    * @returns {Promise<Record<string, any>[]>} assets.
    */
   async function libraryAssets() {
-    return new AssetStore(libraryRoot(config), { logger }).list()
+    return listLibrary()
   }
 
   /**
-   * Reference one library asset from a workspace (human action).
+   * Reference one library asset from a workspace.
    * @param {string} cwd - workspace root.
-   * @param {string} flowId - library asset id.
+   * @param {string} flowId - library asset id or name.
    * @param {string} [alias] - preferred alias.
    * @returns {Promise<Record<string, any>>} the created ref.
    */
   async function addRef(cwd, flowId, alias) {
     const assets = new AssetStore(libraryRoot(config), { logger })
-    const asset = await assets.read(flowId)
+    const wanted = String(flowId ?? '').trim()
+    if (wanted.length === 0) throw new HnflowError('flow-required', 'flowId is required')
+    const entries = await assets.list()
+    const match = entries.find((entry) => entry.id === wanted || entry.name === wanted)
+    if (match === undefined) throw new HnflowError('asset-missing', `no library asset named ${wanted}`)
+    const asset = await assets.read(match.id)
     const { workspace } = storesFor(cwd)
     const ref = await workspace.addRef({ flowId: String(asset.asset.id), alias: alias ?? '', revision: null })
     indexCache.delete(String(cwd))
-    return { flowId: String(asset.asset.id), alias: ref.alias ?? '', revision: ref.revision ?? null }
+    return { flowId: String(asset.asset.id), name: String(asset.asset.name ?? ''), alias: ref.alias ?? '', revision: ref.revision ?? null }
   }
 
   /**
@@ -1720,9 +1994,16 @@ function buildService(options) {
     if (rows.length === 0) return ''
     const lines = rows.slice(0, config.maxIndexEntries).map((row) => {
       const name = row.alias.length > 0 ? row.alias : row.flowId
-      return `- ${name}：${row.description?.length > 0 ? row.description : '（未写说明）'}${row.missing ? ' [资产缺失]' : ''}`
+      const marker = row.local === true ? ' [项目草稿，仅本工作区]' : row.missing ? ' [资产缺失]' : ''
+      return `- ${name}：${row.description?.length > 0 ? row.description : '（未写说明）'}${marker}`
     })
-    const section = ['## 本工作区的 HNFlow 流程', '', ...lines, '', '用 `hnflow` 工具（list_flows / describe_flow / run）操作；不要凭名字猜流程内容。'].join('\n')
+    const section = [
+      '## 本工作区的 HNFlow 流程',
+      '',
+      ...lines,
+      '',
+      '用 `hnflow` 工具（list_flows / list_library / describe_flow / run / status / add_ref / pin / history）操作；用 `hnflow_author`（schema / validate / create / draft / promote / delete / rename）创建和管理。新建默认是项目草稿，`scope:"library"` 才写通用资产；发布已有资产仍是人的动作。',
+    ].join('\n')
     indexCache.set(cwd, section)
     return section
   }
@@ -1871,6 +2152,13 @@ function buildService(options) {
     decide,
     deliver,
     draft,
+    createFlow,
+    promote,
+    deleteLocal,
+    renameLocal,
+    removeRef,
+    renameRef,
+    listLibrary,
     publish,
     previewPublish,
     history,

@@ -243,7 +243,7 @@ function applyPreset(ctx, config) {
             logger?.warn?.('hnflow: the bundled skill has no name/description frontmatter; skipping')
             return
           }
-          skillsScope.skills.register({ name: skill.name, description: skill.description, content: skill.content })
+          skillsScope.skills.register({ name: skill.name, description: skill.description, content: skill.content, source: 'bundled' })
         } catch (error) {
           logger?.warn?.('hnflow: cannot load the bundled skill: %o', error)
         }

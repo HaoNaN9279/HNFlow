@@ -51,8 +51,11 @@ export class Resolver {
    * @throws {ResolveError} when the ref, asset, or pinned revision is missing.
    */
   async resolve(key) {
-    const ref = await this.workspace.findRef(key)
+    let ref = await this.workspace.findRef(key)
+    if (ref === null) ref = await this.#refByName(key)
     if (ref === null) {
+      const local = await this.#findLocal(key)
+      if (local !== null) return local
       throw new ResolveError('ref-missing', `no flow named ${key} in this workspace`, { key })
     }
     const assetEntry = await this.#readAsset(ref.flowId)
@@ -133,13 +136,17 @@ export class Resolver {
     const overrides = await this.workspace.listOverrides()
     /** @type {Record<string, any>[]} */
     const entries = []
+    /** @type {Set<string>} */
+    const referenced = new Set()
     for (const ref of document.refs) {
+      referenced.add(ref.flowId)
       const override = overrides.get(ref.flowId) ?? null
       /** @type {Record<string, any>} */
       const entry = {
         alias: String(ref.alias ?? ''),
         flowId: ref.flowId,
         assetId: ref.flowId,
+        local: false,
         enabled: ref.enabled !== false,
         pinnedRevision: Number.isInteger(ref.revision) ? ref.revision : null,
         hasOverride: override !== null,
@@ -163,7 +170,88 @@ export class Resolver {
       }
       entries.push(entry)
     }
+    // A local flow is an override without a reference: it is created, edited
+    // and run inside this workspace, and only `promote` turns it into a
+    // library asset. Listing it here keeps the project tree honest.
+    const locals = [...overrides.values()]
+      .filter((document) => document.local === true && !referenced.has(String(document.flowId)))
+      .sort((left, right) => String(left.definition?.flow?.name ?? left.flowId).localeCompare(String(right.definition?.flow?.name ?? right.flowId)))
+    for (const document of locals) {
+      const name = String(document.definition?.flow?.name ?? document.flowId)
+      entries.push({
+        alias: '',
+        flowId: String(document.flowId),
+        assetId: null,
+        local: true,
+        enabled: true,
+        name,
+        description: String(document.definition?.flow?.description ?? ''),
+        folder: String(document.folder ?? ''),
+        pinnedRevision: null,
+        currentRevision: 0,
+        hasOverride: false,
+        overrideBaseRevision: null,
+        overrideChangedAt: String(document.updatedAt ?? ''),
+        missing: false,
+        drift: false,
+        source: 'local',
+      })
+    }
     return entries
+  }
+
+  /**
+   * Find a referenced asset by its display name (when no alias matches).
+   * @param {string} key - asset display name.
+   * @returns {Promise<Record<string, any> | null>} ref, or null.
+   */
+  async #refByName(key) {
+    const wanted = String(key ?? '').trim()
+    if (wanted.length === 0) return null
+    let entries
+    try {
+      entries = await this.assets.list()
+    } catch {
+      return null
+    }
+    const matches = entries.filter((entry) => entry.name === wanted)
+    if (matches.length !== 1) return null
+    return this.workspace.findRef(String(matches[0].id))
+  }
+
+  /**
+   * Resolve a project-local draft (an override with no library reference).
+   * @param {string} key - local flow id or name.
+   * @returns {Promise<Record<string, any> | null>} resolution, or null.
+   * @throws {ResolveError} `ref-ambiguous` when two locals share a name.
+   */
+  async #findLocal(key) {
+    const wanted = String(key ?? '').trim()
+    if (wanted.length === 0) return null
+    const overrides = await this.workspace.listOverrides()
+    const matches = [...overrides.values()].filter(
+      (document) => document.local === true && (String(document.flowId) === wanted || String(document.definition?.flow?.name ?? '') === wanted),
+    )
+    if (matches.length === 0) return null
+    if (matches.length > 1) throw new ResolveError('ref-ambiguous', `more than one local flow is named ${wanted}; use its flow id`, { key: wanted })
+    const document = matches[0]
+    return {
+      key: wanted,
+      alias: '',
+      flowId: String(document.flowId),
+      flowName: String(document.definition?.flow?.name ?? document.flowId),
+      definition: document.definition,
+      lockfile: null,
+      source: 'local',
+      local: true,
+      folder: String(document.folder ?? ''),
+      revision: null,
+      currentRevision: 0,
+      baseRevision: null,
+      overrideChangedAt: typeof document.updatedAt === 'string' ? document.updatedAt : null,
+      drift: false,
+      hash: hashOf(document.definition),
+    }
   }
 
   /**

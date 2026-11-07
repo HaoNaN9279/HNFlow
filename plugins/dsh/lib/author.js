@@ -65,6 +65,9 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
     humanGap: 'agent 节点声明 allowHuman:true 时，子 Agent 可用 needs_human 上抛缺口，插件创建交付请求并继续同一节点',
     policies: 'gate/request 可用 deadline.hours + onExpire(remind|fail)；verify 的 onInconclusive(gate|fail) 决定 judge 不确定时是否转人工门禁；request 的 onReject 支持 return|fallback|arbitrate|fail',
     mergeSet: 'merge 可用 set 声明常量（from 可为空）；data:assign 旧节点导入后就是这种 merge',
+    scope: 'create 的 scope: project（默认，项目内草稿，只在本工作区可见/可运行）或 library（新资产 r1，并默认引用到本工作区）',
+    createIdentity: 'create 会生成 flow.id；definition.flow.id 可省略，名称可由 create 的 name 参数提供',
+    promote: 'promote 把项目草稿提升为库资产 r1 并替换为引用；之后修改它仍需人工发布',
     publish: '不可由工具调用；由人经 /hnflow publish 或页面按钮完成',
   },
 })
@@ -109,8 +112,54 @@ export function createAuthorTool(options) {
           const result = await service.draft({ cwd, key, definition: args.definition, note: typeof args.note === 'string' ? args.note : 'agent draft' })
           return JSON.stringify({ ok: true, ...result }, null, 2)
         }
+        case 'create': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          if (args.definition === null || typeof args.definition !== 'object') return 'error definition-required: pass the complete flow definition'
+          const problems = definitionProblems(args.definition)
+          if (problems.length > 0) return `error definition-invalid: ${problems.join('; ')}`
+          const result = await service.createFlow({
+            cwd,
+            definition: args.definition,
+            scope: args.scope === 'library' ? 'library' : 'project',
+            name: typeof args.name === 'string' ? args.name : undefined,
+            folder: typeof args.folder === 'string' ? args.folder : '',
+            note: typeof args.note === 'string' ? args.note : undefined,
+            alias: typeof args.alias === 'string' ? args.alias : '',
+            reference: args.reference !== false,
+          })
+          return JSON.stringify({ ok: true, created: true, ...result }, null, 2)
+        }
+        case 'promote': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = typeof args.flow === 'string' ? args.flow.trim() : ''
+          if (key.length === 0) return 'error flow-required: promote needs the project-local flow id or name'
+          const result = await service.promote({
+            cwd,
+            key,
+            name: typeof args.name === 'string' ? args.name : undefined,
+            folder: typeof args.folder === 'string' ? args.folder : undefined,
+            alias: typeof args.alias === 'string' ? args.alias : '',
+          })
+          return JSON.stringify({ ok: true, promoted: true, ...result }, null, 2)
+        }
+        case 'delete': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = typeof args.flow === 'string' ? args.flow.trim() : ''
+          if (key.length === 0) return 'error flow-required: delete needs the project-local flow id or name'
+          const result = await service.deleteLocal({ cwd, key })
+          return JSON.stringify({ ok: true, deleted: true, ...result }, null, 2)
+        }
+        case 'rename': {
+          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
+          const key = typeof args.flow === 'string' ? args.flow.trim() : ''
+          const name = typeof args.name === 'string' ? args.name.trim() : ''
+          if (key.length === 0) return 'error flow-required: rename needs the project-local flow id or name'
+          if (name.length === 0) return 'error name-required: pass the new name'
+          const result = await service.renameLocal({ cwd, key, name })
+          return JSON.stringify({ ok: true, renamed: true, ...result }, null, 2)
+        }
         default:
-          return 'error invalid-action: expected schema, validate or draft'
+          return 'error invalid-action: expected schema, validate, create, draft, promote, delete or rename'
       }
     } catch (error) {
       return `error ${error?.code ?? 'internal'}: ${error?.message ?? String(error)}`
@@ -120,12 +169,17 @@ export function createAuthorTool(options) {
   return defineTool({
     name: 'hnflow_author',
     description:
-      'Author HNFlow flows without publishing them. `schema` returns the definition format, `validate` runs the publish-time static checks on a definition (or on a referenced flow), `draft` writes the definition as a workspace override. There is no publish action: only a human can publish, through /hnflow publish or the page.',
+      'Author and manage HNFlow flows without publishing. `schema` returns the definition format, `validate` runs publish-time static checks, `create` creates a project-local draft (default) or a library asset r1, `draft` writes an agent draft, `promote` turns a project draft into a library asset, and `delete`/`rename` manage project-local drafts only. There is no publish action: changing an existing library asset still requires a human to publish it through /hnflow publish or the page.',
     parameters: {
-      action: { type: 'string', required: true, enum: ['schema', 'validate', 'draft'], description: 'Operation to perform.' },
-      flow: { type: 'string', description: 'Referenced flow alias or id (validate without a definition, draft).' },
-      definition: { type: 'object', additionalProperties: true, description: 'Complete flow definition for validate/draft.' },
-      note: { type: 'string', description: 'Optional draft note.' },
+      action: { type: 'string', required: true, enum: ['schema', 'validate', 'create', 'draft', 'promote', 'delete', 'rename'], description: 'Operation to perform.' },
+      flow: { type: 'string', description: 'Referenced/local flow alias, name or id (validate without a definition, draft, promote, delete, rename).' },
+      definition: { type: 'object', additionalProperties: true, description: 'Complete flow definition for validate/create/draft.' },
+      scope: { type: 'string', enum: ['project', 'library'], description: 'create only: project-local draft (default) or reusable library asset r1.' },
+      name: { type: 'string', description: 'create/promote/rename: display name.' },
+      folder: { type: 'string', description: 'create/promote: library- or project-relative folder (multi-level with /).' },
+      alias: { type: 'string', description: 'create/promote with scope library: reference alias in this workspace.' },
+      reference: { type: 'boolean', description: 'create scope=library: also reference it here (default true).' },
+      note: { type: 'string', description: 'Optional draft/creation note.' },
     },
     output: {
       schema: { type: 'string' },

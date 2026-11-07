@@ -10,7 +10,7 @@
 import { readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
 
-import { readJsonOrNull, writeJson } from './assets.js'
+import { normalizeFolder, readJsonOrNull, writeJson } from './assets.js'
 import { ASSET_SUFFIX, overridePath, overridesDir, refsPath } from './paths.js'
 
 /** Ref manifest version written by this plugin. */
@@ -160,7 +160,7 @@ export class WorkspaceStore {
    * Write (or replace) an override.
    *
    * Every write appends to a bounded change log; the asset itself is untouched.
-   * @param {{flowId: string, definition: Record<string, any>, baseRevision: number, note?: string, origin?: 'agent'|'user', updatedBy?: string}} input - override content.
+   * @param {{flowId: string, definition: Record<string, any>, baseRevision: number, note?: string, origin?: 'agent'|'user', updatedBy?: string, local?: boolean, folder?: string}} input - override content.
    * @returns {Promise<Record<string, any>>} the stored override.
    */
   async writeOverride(input) {
@@ -171,6 +171,8 @@ export class WorkspaceStore {
     const changeLog = Array.isArray(previous?.changeLog) ? [...previous.changeLog] : []
     const note = String(input.note ?? '').trim()
     if (note.length > 0) changeLog.push({ at: now, by: input.updatedBy ?? input.origin ?? 'user', summary: note.slice(0, 500) })
+    const local = input.local === true || previous?.local === true
+    const folder = normalizeFolder(input.folder !== undefined ? input.folder : previous?.folder)
     /** @type {Record<string, any>} */
     const document = {
       flowId,
@@ -183,6 +185,10 @@ export class WorkspaceStore {
       changeLog: changeLog.slice(-MAX_CHANGE_LOG),
       definition: input.definition,
     }
+    // `local` marks a project-only draft that has no library reference. The
+    // same override file keeps an ordinary workspace customization otherwise.
+    if (local) document.local = true
+    if (folder.length > 0) document.folder = folder
     await writeJson(overridePath(this.cwd, flowId, this.config), document)
     return document
   }

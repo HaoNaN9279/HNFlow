@@ -72,6 +72,29 @@ export function definitionProblems(definition) {
 }
 
 /**
+ * Normalize a library-relative folder path.
+ *
+ * Folders are presentation metadata and a path fragment at the same time, so
+ * the two failure modes that matter are traversal (`..`) and absolute paths.
+ * Backslashes are accepted because Windows callers naturally produce them.
+ * @param {unknown} value - folder, possibly empty or undefined.
+ * @returns {string} normalized `/`-separated relative folder ('' for root).
+ * @throws {AssetError} `folder-invalid` on traversal or an absolute path.
+ */
+export function normalizeFolder(value) {
+  const raw = String(value ?? '').trim().replace(/\\/gu, '/')
+  if (raw.length === 0) return ''
+  if (raw.startsWith('/') || /^[a-zA-Z]:/u.test(raw)) {
+    throw new AssetError('folder-invalid', `folder must be relative to the library root: ${raw}`)
+  }
+  const parts = raw.split('/').filter((part) => part.length > 0)
+  if (parts.some((part) => part === '.' || part === '..')) {
+    throw new AssetError('folder-invalid', `folder must not contain "." or "..": ${raw}`)
+  }
+  return parts.join('/')
+}
+
+/**
  * The library of flow assets.
  */
 export class AssetStore {
@@ -94,7 +117,8 @@ export class AssetStore {
    * @returns {string} absolute file path.
    */
   pathFor(folder, name, id) {
-    const dir = folder.length > 0 ? path.join(this.root, ...folder.split('/').filter((part) => part.length > 0)) : this.root
+    const relative = normalizeFolder(folder)
+    const dir = relative.length > 0 ? path.join(this.root, ...relative.split('/')) : this.root
     return path.join(dir, `${assetFileName(name, id)}${ASSET_SUFFIX}`)
   }
 
@@ -246,10 +270,11 @@ export class AssetStore {
       updatedAt: now,
     }
     const definition = withFlowIdentity(input.definition, id, name)
-    const filePath = this.pathFor(String(input.folder ?? '').trim(), name, id)
+    const folder = normalizeFolder(input.folder)
+    const filePath = this.pathFor(folder, name, id)
     await writeJson(filePath, { asset, definition })
     await this.writeSnapshot(id, 1, definition)
-    return { asset, path: filePath }
+    return { asset, path: filePath, folder }
   }
 
   /**
@@ -358,7 +383,7 @@ export function withFlowIdentity(definition, id, name) {
     flow: {
       ...flow,
       id,
-      name: typeof flow.name === 'string' && flow.name.trim().length > 0 ? flow.name : name,
+      name: typeof name === 'string' && name.trim().length > 0 ? name : typeof flow.name === 'string' ? flow.name : '',
     },
   }
 }

@@ -128,7 +128,7 @@ session 记录证据、storage 保存流程状态；人通过门禁与交付请�
 
 - 插件注册一个真正的 Cordis service（`class HnflowService extends Service { constructor(ctx){ super(ctx,'hnflow') } }`，与 `ctx.tools`/`ctx.subagents` 同构），
   全局单例，持有：run 表、调度器、门禁/交付队列、storage 句柄、路由。
-- 模型面只有**薄工具**：`hnflow`（读 + 启停）与 `hnflow_author`（schema/校验/起草，无发布）。
+- 模型面是**薄工具**：`hnflow`（读 + 启停 + 引用管理）与 `hnflow_author`（schema/校验/创建/起草/提升/删除/改名，无发布）。
 - 页面与命令读同一个 service，不读文件、不轮询引擎。
 
 ### 3.2 为什么不用 `ctx.jobs`
@@ -299,6 +299,7 @@ session 记录证据、storage 保存流程状态；人通过门禁与交付请�
 ### 4.5 版本与发布（不可变）
 
 - 草稿可改；**发布**产生 `revision + contentHash`，并写只读快照 `<library>/.hnflow-revisions/<flowId>/r<rev>.json`（复用现有资产库的 revision 设计）。
+- **新建**资产（`hnflow_author create` + `scope:"library"`）直接写 r1，不提升任何已有 revision；它不算“发布已有资产”，但也不提供对既有内容的免审修改。项目内默认先建草稿（`.hnflow/overrides` 中 `local: true` 且无引用），需要共享时再 `promote` 为库资产 r1。
 - 发布时冻结 **lockfile**：每个节点的 `preset` id + 该 preset 当时的组装摘要（`agentPresets.inspectCompositions()` / `compositionInventory()` 可取）、每个 output schema 的 hash、**每个 `model` 层解析出的 `{layer, provider, model, reasoningEffort}`**、插件版本、VibeStack 版本与 `apiVersion`、DSH 版本。
 - run 钉住 `revision + contentHash + lockfile`；恢复只读该快照，缺失或不匹配即 `revision-missing` / `lockfile-mismatch`，**不回退最新版**。
 - 层定义属于用户、可被编辑；run 只认 lockfile 里解析过的路由，因此改层不会改变在跑 run（与 HNFlow 的"不可变版本"一致）。
@@ -533,7 +534,8 @@ const result = await activation.result        // { output, structured, stopReaso
 
 - 资产库 `$DSH_HOME/hnflow/library/<分类>/<name>.flow.json` + 只读 revision 快照；
 - 工作区引用 `<workspace>/.hnflow/flows.json`（默认固定 revision）；
-- 工作区覆盖 `<workspace>/.hnflow/overrides/<flowId>.flow.json`（完整副本 + `baseRevision`）；
+- 工作区覆盖 `<workspace>/.hnflow/overrides/<flowId>.flow.json`（完整副本 + `baseRevision`；`local: true` 且无引用即项目草稿）；
+- 项目草稿由 `create` 默认产生，可 `draft` / `rename` / `delete` / `promote`；`promote` 建库资产 r1 并改为引用；
 - 解析顺序：override → ref 固定 revision → ref 跟随最新；
 - 不变量：只有用户显式发布能提升资产 revision；Agent 的修改一律先落草稿/覆盖；run 用快照。
 
@@ -576,8 +578,8 @@ const result = await activation.result        // { output, structured, stopReaso
 
 | 面 | 名称 | 动作 / 参数 | 约束 |
 | --- | --- | --- | --- |
-| 工具 | `hnflow` | `list_flows`、`describe_flow{flow}`、`run{flow,input}`、`status{runId}`、`cancel{runId}`、`artifact{artifactId}`、`inbox` | `run` 只启动并立即返回 `runId`，不等结果；错误返回 `error <code>: <message>`，不抛异常、不结束回合 |
-| 工具 | `hnflow_author` | `schema`、`validate{definition}`、`draft{flow,definition,note}` | **没有 publish**：发布只能由人经 `/hnflow publish` 或页面按钮完成（I1 物理上无入口） |
+| 工具 | `hnflow` | `list_flows`、`list_library`、`describe_flow{flow}`、`run{flow,input}`、`status{runId}`、`list_runs`、`cancel{runId}`、`resume{runId}`、`inbox`、`artifact{artifactId}`、`add_ref{flow,alias?}`、`remove_ref{flow}`、`rename_ref{flow,alias}`、`pin{flow,revision}`、`history{flow}` | `run` 只启动并立即返回 `runId`，不等结果；错误返回 `error <code>: <message>`，不抛异常、不结束回合 |
+| 工具 | `hnflow_author` | `schema`、`validate{definition}`、`create{definition,scope?,name?,folder?,reference?}`、`draft{flow,definition,note}`、`promote{flow,folder?}`、`delete{flow}`、`rename{flow,name}` | **没有 publish**：发布已有资产只能由人经 `/hnflow publish` 或页面完成（I1 物理上无入口）；项目草稿可创建/编辑/删除/提升 |
 | 命令 | `/hnflow` | `list`、`inbox`、`runs`、`publish <flow>`、`open` | 除 `publish` 外都不进模型上下文；`publish` 先给 diff 再二次确认 |
 | 提示词 | section `hnflow:flows` | 流程索引（≤20 条：名称 + 一句话 + 何时用） | 不注入流程正文；索引由资产库生成并缓存 |
 | 技能 | `hnflow-flows` | 节点目录、信封三态、契约/边规则、起草步骤 | 大块参考资料按需加载，常驻上下文只留一行摘要 |
@@ -609,7 +611,7 @@ plugins/dsh/
 │  ├─ merge.js             # 声明式汇合 + 端口校验
 │  ├─ assets.js  workspace.js  resolve.js  paths.js  json.js   # 复用
 │  ├─ tools.js             # hnflow（薄）
-│  ├─ author.js            # hnflow_author（schema/validate/draft，无 publish）
+│  ├─ author.js            # hnflow_author（schema/validate/create/draft/promote/delete/rename，无 publish）
 │  ├─ commands.js          # /hnflow
 │  ├─ routes.js            # GET inbox / POST gate / POST deliverable
 │  └─ state.js             # 页面只读快照
@@ -706,7 +708,7 @@ plugins/dsh/
 | D9 | 是否用 workflow seam | 否（VM 逃逸 + 编排权外移） |
 | D10 | 是否用 jobs | 否（kind 仅 bash、语义不匹配） |
 | D11 | VibeStack 关系 | 单向**强依赖**；不 fork、不改其 preset；`apiVersion` 不足即 `degraded` |
-| D12 | 发布权 | 只有人能发布；Agent 只能起草与校验 |
+| D12 | 发布权 | 只有人能发布已有资产；Agent 只能起草、创建新资产 r1、校验与管理草稿 |
 | D13 | 节点模型如何指定 | 引用 VibeStack 层 id（`model`），启动时解析为 `agentOptions`，lockfile 钉住 |
 | D14 | 缺层时是否回落 | 否，fail-loud（`model-layer-unknown`）；回落会让"可复现"失效 |
 
@@ -824,7 +826,7 @@ plugins/dsh/
 │  └─ skill.js
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（124 项，`node test/run.mjs`）
+└─ test/                     # node:test（134 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -860,6 +862,8 @@ plugins/dsh/
 | E-24 | 真机 M0 五探针**全部通过**（隔离 web profile，2026-11-07） | 见 §E.4；此前 E.4 的“未执行”结论作废 |
 | E-25 | `judge` 的 `reject` 是**合法裁决**（节点 done + `verdict`），只有“没有裁决 / 裁决格式错”才是 `inconclusive`（默认转人工门禁） | 原实现把 reject 当节点失败，`when.verdict` 边永远走不到；验收与“裁决冲突”是两件事，失败语义不应吞掉裁决 |
 | E-26 | 左侧树改为“**通用资产库（全列表只出现一次）+ 工作区（各自可折叠）**”两段；两者都按资产的 library 相对 `folder` 渲染多级文件夹并支持逐级折叠；库中的流程不再按工作区标注“已引用”或禁用 | 旧实现把通用库重复挂在每个工作区下，既重复又暗示“归属”；库是全局的，引用动作以当前选中（或第一个）工作区为目标，并在操作结果里反馈，而不是在列表里做跨工作区标记 |
+| E-27 | 对话能力补齐为“创建/管理/运行”闭环：`hnflow_author` 增加 `create`（默认项目草稿，`scope:library` 建库资产 r1）、`promote`、`delete`、`rename`；`hnflow` 增加 `list_library`、`list_runs`、`add_ref`、`remove_ref`、`rename_ref`、`pin`、`history`；项目草稿复用 `.hnflow/overrides/<id>.flow.json`，以 `local: true` 且无引用识别，不新建第二套存储 | 原有模型面只能 `draft` 已引用流程，无法创建新流程、管理引用或发现库资产；项目草稿不需要独立存储，沿用工作区覆盖即可保持 resolver/run/页面一条路径。`create` 只写新资产 r1，不提升任何已有 revision；已有资产的 publish 仍是人类动作，I1 不破 |
+| E-28 | 执行层**不做**子流程嵌套；文件夹嵌套只是展示层级 | 六原语 + `merge`/gate/verify 已覆盖当前约束表达；子流程会引入版本钉住、父子 run、错误/取消传播、inbox 归属和递归限制，成本高于当前收益；出现稳定复用片段时再单独立项 |
 
 ### E.3 状态机（实现）
 
@@ -895,10 +899,11 @@ conductor 模型路由（E-19）、usage 读回时机（E-20）。已知保留�
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：**124 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
+`plugins/dsh/test/`，`node test/run.mjs`：**134 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
 信封三态、调度（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile（含 preset 组合摘要）、
 storage 降级、编排（门禁/交付/needs_human/重试/取消/重启）、审计字段、交付路径越界、过期推进、
-verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、工具/命令/路由/装配/客户端契约。
+verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、项目草稿创建/运行/提升/删除、
+引用管理、工具/命令/路由/装配/客户端契约。
 
 真机页面自测（隔离 web，Playwright）：三页签、流程树、版本历史、发布预览、钉住/回滚、启动、
 收件箱批准、产物展开、token 显示；浏览器 console 无 error。

@@ -31,6 +31,22 @@ function stubService() {
       calls.push(input)
       return { draft: true, flowId: 'fl-a', baseRevision: 1, updatedAt: 'now', validation: { ok: true, errors: [] }, next: 'a human must publish it (/hnflow publish <flow>) before it becomes a revision' }
     },
+    createFlow: async (input) => {
+      calls.push(input)
+      return { scope: input.scope ?? 'project', flowId: 'fl-new', name: input.name ?? 'new', folder: input.folder ?? '', local: input.scope !== 'library', validation: { ok: true, errors: [] } }
+    },
+    promote: async (input) => {
+      calls.push(input)
+      return { scope: 'library', flowId: 'fl-promoted', previousFlowId: 'fl-local', name: 'new', folder: input.folder ?? '' }
+    },
+    deleteLocal: async (input) => {
+      calls.push(input)
+      return { flowId: 'fl-local', name: 'new', local: true }
+    },
+    renameLocal: async (input) => {
+      calls.push(input)
+      return { flowId: 'fl-local', name: input.name, local: true }
+    },
   }
 }
 
@@ -70,6 +86,32 @@ test('draft writes an agent override with the note', async () => {
 test('there is no publish action', async () => {
   const tool = createAuthorTool({ service: stubService(), cwdOf })
   await assert.rejects(() => tool.execute({ action: 'publish' }, {}), /invalid arguments/u)
+  assert.equal(tool.parameters.properties.action.enum.includes('publish'), false)
+})
+
+test('create defaults to a project draft and can target the library', async () => {
+  const service = stubService()
+  const tool = createAuthorTool({ service, cwdOf })
+  const project = JSON.parse(await tool.execute({ action: 'create', definition: validFlow, name: '新流程' }, {}))
+  assert.equal(project.created, true)
+  assert.equal(project.scope, 'project')
+  assert.equal(service.calls[0].scope, 'project')
+  const library = JSON.parse(await tool.execute({ action: 'create', definition: validFlow, name: '通用流程', scope: 'library', folder: 'a/b' }, {}))
+  assert.equal(library.scope, 'library')
+  assert.equal(service.calls[1].folder, 'a/b')
+  assert.equal(service.calls[1].reference, true)
+})
+
+test('promote, delete and rename are explicit draft management actions', async () => {
+  const service = stubService()
+  const tool = createAuthorTool({ service, cwdOf })
+  const promoted = JSON.parse(await tool.execute({ action: 'promote', flow: 'local', folder: 'team' }, {}))
+  assert.equal(promoted.promoted, true)
+  assert.equal(service.calls[0].folder, 'team')
+  const deleted = JSON.parse(await tool.execute({ action: 'delete', flow: 'local' }, {}))
+  assert.equal(deleted.deleted, true)
+  const renamed = JSON.parse(await tool.execute({ action: 'rename', flow: 'local', name: '改名' }, {}))
+  assert.equal(renamed.name, '改名')
   assert.equal(tool.parameters.properties.action.enum.includes('publish'), false)
 })
 

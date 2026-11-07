@@ -43,6 +43,10 @@ function stubService() {
       calls.push({ kind: 'addRef', workspace, flowId, alias })
       return { flowId, alias: alias ?? 'demo', revision: null }
     },
+    promote: async (input) => {
+      calls.push({ kind: 'promote', ...input })
+      return { flowId: 'fl-new', previousFlowId: 'fl-local', revision: 1 }
+    },
   }
 }
 
@@ -123,6 +127,16 @@ test('POST add references a library asset', async () => {
   assert.equal(result.body.ok, true)
   assert.equal(result.body.alias, 'lib')
   assert.deepEqual(service.calls[0], { kind: 'addRef', workspace: '/w', flowId: 'fl-lib', alias: 'lib' })
+})
+
+test('POST promote forwards the project draft and its folder', async () => {
+  const service = stubService()
+  const entry = route(createRoutes({ service }), ROUTES.promote)
+  const { status, body } = await post(entry, { workspace: '/w', flow: 'fl-local', folder: 'team/a' })
+  assert.equal(status, 200)
+  assert.equal(body.flowId, 'fl-new')
+  assert.equal(service.calls[0].kind, 'promote')
+  assert.equal(service.calls[0].folder, 'team/a')
 })
 
 test('POST start and publish validate their required fields', async () => {  const service = stubService()

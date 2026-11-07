@@ -278,7 +278,8 @@ window.__ModuleLoader__.load({
      * @returns {string} label.
      */
     function flowLabel(entry) {
-      return String(entry?.alias || entry?.name || entry?.flowId || "");
+      if (entry?.local === true) return String(entry?.name || entry?.flowName || entry?.flowId || "");
+      return String(entry?.alias || entry?.flowId || entry?.name || "");
     }
 
     /**
@@ -410,12 +411,13 @@ window.__ModuleLoader__.load({
             );
           } else {
             const key = `${groupPath}:${flowLabel(entry)}`;
+            const local = entry.local === true;
             rows.push(
               h(
                 "button",
                 { type: "button", key, style: { ...(props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item), paddingLeft: `${10 + depth * 12}px` }, onClick: () => onPick(groupPath, entry) },
-                h("span", null, `${flowLabel(entry)}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
-                h("span", { style: styles.meta }, `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
+                h("span", null, `${flowLabel(entry)}${local ? " ·项目草稿" : ""}${entry.hasOverride ? " ·草稿" : ""}${entry.drift ? " ·漂移" : ""}${entry.missing ? " ·缺失" : ""}`),
+                h("span", { style: styles.meta }, local ? "仅本工作区 · 可运行" : `${entry.flowId} · r${entry.pinnedRevision ?? "latest"}/${entry.currentRevision ?? "?"}`),
               ),
             );
           }
@@ -472,18 +474,20 @@ window.__ModuleLoader__.load({
       const [history, setHistory] = react.useState(null);
       const [preview, setPreview] = react.useState(null);
       const [confirmRollback, setConfirmRollback] = react.useState(null);
+      const [confirmPromote, setConfirmPromote] = react.useState(false);
       const [error, setError] = react.useState("");
       const [note, setNote] = react.useState("");
       const [working, setWorking] = react.useState(false);
       const flowKey = flow === null || flow === undefined ? "" : flow.alias || flow.flowId;
       const workspace = flow === null || flow === undefined ? "" : flow.workspace;
+      const isLocal = flow !== null && flow !== undefined && (flow.local === true || flow.source === "local");
 
       /**
        * Refresh the revision list for the selected flow.
        * @returns {Promise<void>} resolves once loaded.
        */
       const loadHistory = async () => {
-        if (workspace.length === 0 || flowKey.length === 0) return;
+        if (isLocal || workspace.length === 0 || flowKey.length === 0) return;
         try {
           const payload = await fetchHistory(workspace, flowKey);
           setHistory(payload.history);
@@ -496,10 +500,11 @@ window.__ModuleLoader__.load({
         setHistory(null);
         setPreview(null);
         setConfirmRollback(null);
+        setConfirmPromote(false);
         setError("");
         setNote("");
         void loadHistory();
-      }, [workspace, flowKey]);
+      }, [workspace, flowKey, isLocal]);
 
       /**
        * Run one human action with shared busy/error handling.
@@ -511,7 +516,7 @@ window.__ModuleLoader__.load({
         setError("");
         try {
           setNote(await action());
-          await loadHistory();
+          if (!isLocal) await loadHistory();
           if (typeof props.onChanged === "function") props.onChanged();
         } catch (failure) {
           setError(`${failure.code ?? "action-failed"}: ${failure.message}`);
@@ -526,67 +531,87 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: styles.pane },
-        h("div", { style: styles.meta }, `${flow.alias || flow.flowId} · ${flow.source} · r${flow.revision ?? "?"}/${flow.currentRevision ?? "?"}${flow.drift ? " · 漂移" : ""}`),
+        h("div", { style: styles.meta }, isLocal ? `${flow.flowName || flow.name || flow.flowId} · 项目草稿 · 仅本工作区，可运行` : `${flow.alias || flow.flowId} · ${flow.source} · r${flow.revision ?? "?"}/${flow.currentRevision ?? "?"}${flow.drift ? " · 漂移" : ""}`),
         h(FlowCanvas, { definition: flow.definition, run: null }),
-        h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, [
-          h("button", { key: "publish", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy, onClick: () => act(async () => {
-            const payload = await fetchPreview(flow.workspace, flow.alias || flow.flowId);
-            setPreview(payload.preview);
-            return "已生成发布预览：确认后才会新增 revision。";
-          }) }, "发布新版本"),
-          h("span", { key: "hint", style: styles.meta }, "发布是人工动作：Agent 只能起草；先看 diff 再确认"),
-        ]),
+        isLocal
+          ? h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, [
+              h("button", { key: "promote", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy, onClick: () => act(async () => {
+                if (!confirmPromote) {
+                  setConfirmPromote(true);
+                  return `再点一次确认：把「${flow.flowName || flow.flowId}」提升为通用资产 r1，并改为本工作区引用。`;
+                }
+                setConfirmPromote(false);
+                const promoted = await postJson("/api/hnflow/promote", { workspace: flow.workspace, flow: flow.flowId });
+                if (typeof props.onPromoted === "function") props.onPromoted(promoted);
+                return `已提升为 ${promoted.flowId}（r1）。后续修改仍需人工发布。`;
+              }) }, confirmPromote ? "确认提升" : "提升到通用资产库"),
+              h("span", { key: "hint", style: styles.meta }, "项目草稿没有版本历史；提升后才进入资产库"),
+            ])
+          : h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } }, [
+              h("button", { key: "publish", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy, onClick: () => act(async () => {
+                const payload = await fetchPreview(flow.workspace, flow.alias || flow.flowId);
+                setPreview(payload.preview);
+                return "已生成发布预览：确认后才会新增 revision。";
+              }) }, "发布新版本"),
+              h("span", { key: "hint", style: styles.meta }, "发布是人工动作：Agent 只能起草；先看 diff 再确认"),
+            ]),
         note.length > 0 ? h("div", { style: styles.okBox }, note) : null,
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
-        preview === null
+        isLocal
           ? null
           : h(
               "div",
-              { style: styles.card },
-              h("div", { style: styles.cardTitle }, `发布预览：r${preview.currentRevision} → r${preview.nextRevision}`),
-              h("div", { style: styles.meta }, preview.validation.ok ? "校验通过" : `校验失败（${preview.validation.errors.length} 项）`),
-              ...preview.validation.errors.map((entry) => h("div", { key: `${entry.code}:${entry.nodeId ?? ""}`, style: styles.meta }, `× ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ""}: ${entry.message}`)),
-              h("div", { style: styles.cardTitle }, "变更"),
-              preview.diff?.changed === false
-                ? h("div", { style: styles.meta }, "没有内容变化（仍会生成新 revision）")
-                : h("div", { style: { ...styles.meta, whiteSpace: "pre-wrap" } }, (preview.diff?.summary ?? []).join("\n")),
-              h("div", { style: { display: "flex", gap: "8px" } }, [
-                h("button", { key: "ok", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy || !preview.validation.ok, onClick: () => act(async () => {
-                  const result = await postJson("/api/hnflow/publish", { workspace: flow.workspace, flow: flow.alias || flow.flowId, note: "published from the HNFlow page" });
-                  setPreview(null);
-                  return `已发布 r${result.revision}（${result.contentHash}）`;
-                }) }, "确认发布"),
-                h("button", { key: "cancel", type: "button", style: styles.button, disabled: busy, onClick: () => setPreview(null) }, "取消"),
-              ]),
+              { style: { display: "contents" } },
+              preview === null
+                ? null
+                : h(
+                    "div",
+                    { style: styles.card },
+                    h("div", { style: styles.cardTitle }, `发布预览：r${preview.currentRevision} → r${preview.nextRevision}`),
+                    h("div", { style: styles.meta }, preview.validation.ok ? "校验通过" : `校验失败（${preview.validation.errors.length} 项）`),
+                    ...preview.validation.errors.map((entry) => h("div", { key: `${entry.code}:${entry.nodeId ?? ""}`, style: styles.meta }, `× ${entry.code}${entry.nodeId ? ` [${entry.nodeId}]` : ""}: ${entry.message}`)),
+                    h("div", { style: styles.cardTitle }, "变更"),
+                    preview.diff?.changed === false
+                      ? h("div", { style: styles.meta }, "没有内容变化（仍会生成新 revision）")
+                      : h("div", { style: { ...styles.meta, whiteSpace: "pre-wrap" } }, (preview.diff?.summary ?? []).join("\n")),
+                    h("div", { style: { display: "flex", gap: "8px" } }, [
+                      h("button", { key: "ok", type: "button", style: { ...styles.button, ...styles.buttonPrimary }, disabled: busy || !preview.validation.ok, onClick: () => act(async () => {
+                        const result = await postJson("/api/hnflow/publish", { workspace: flow.workspace, flow: flow.alias || flow.flowId, note: "published from the HNFlow page" });
+                        setPreview(null);
+                        return `已发布 r${result.revision}（${result.contentHash}）`;
+                      }) }, "确认发布"),
+                      h("button", { key: "cancel", type: "button", style: styles.button, disabled: busy, onClick: () => setPreview(null) }, "取消"),
+                    ]),
+                  ),
+              h("div", { style: styles.cardTitle }, `版本历史（${revisions.length}）`),
+              h(
+                "div",
+                { style: styles.card },
+                ...revisions.map((entry) =>
+                  h("div", { key: entry.revision, style: { ...styles.row, cursor: "default", alignItems: "center" } }, [
+                    h("span", { key: "r", style: { ...styles.cell, flex: "0 0 54px" } }, `r${entry.revision}`),
+                    h("span", { key: "h", style: { ...styles.cell, flex: "1 1 auto" } }, `${entry.contentHash}${entry.revision === history.pinnedRevision ? " · 引用钉住" : ""}${entry.revision === history.currentRevision ? " · 当前" : ""}`),
+                    h("button", { key: "pin", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+                      await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
+                      return `已钉住 r${entry.revision}`;
+                    }) }, "钉住"),
+                    h("button", { key: "rollback", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+                      if (confirmRollback !== entry.revision) {
+                        setConfirmRollback(entry.revision);
+                        return `再点一次确认：把 r${entry.revision} 发布为新的 r${(history?.currentRevision ?? 0) + 1}`;
+                      }
+                      setConfirmRollback(null);
+                      const result = await postJson("/api/hnflow/rollback", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
+                      return `已把 r${entry.revision} 发布为 r${result.revision}`;
+                    }) }, confirmRollback === entry.revision ? "确认回滚" : "回滚"),
+                  ]),
+                ),
+                h("div", { style: { display: "flex", gap: "8px" } }, [h("button", { key: "latest", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
+                  await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: null });
+                  return "引用改为跟随最新版本";
+                }) }, "跟随最新")]),
+              ),
             ),
-        h("div", { style: styles.cardTitle }, `版本历史（${revisions.length}）`),
-        h(
-          "div",
-          { style: styles.card },
-          ...revisions.map((entry) =>
-            h("div", { key: entry.revision, style: { ...styles.row, cursor: "default", alignItems: "center" } }, [
-              h("span", { key: "r", style: { ...styles.cell, flex: "0 0 54px" } }, `r${entry.revision}`),
-              h("span", { key: "h", style: { ...styles.cell, flex: "1 1 auto" } }, `${entry.contentHash}${entry.revision === history.pinnedRevision ? " · 引用钉住" : ""}${entry.revision === history.currentRevision ? " · 当前" : ""}`),
-              h("button", { key: "pin", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
-                await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
-                return `已钉住 r${entry.revision}`;
-              }) }, "钉住"),
-              h("button", { key: "rollback", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
-                if (confirmRollback !== entry.revision) {
-                  setConfirmRollback(entry.revision);
-                  return `再点一次确认：把 r${entry.revision} 发布为新的 r${(history?.currentRevision ?? 0) + 1}`;
-                }
-                setConfirmRollback(null);
-                const result = await postJson("/api/hnflow/rollback", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: entry.revision });
-                return `已把 r${entry.revision} 发布为 r${result.revision}`;
-              }) }, confirmRollback === entry.revision ? "确认回滚" : "回滚"),
-            ]),
-          ),
-          h("div", { style: { display: "flex", gap: "8px" } }, [h("button", { key: "latest", type: "button", style: styles.linkButton, disabled: busy, onClick: () => act(async () => {
-            await postJson("/api/hnflow/pin", { workspace: flow.workspace, flow: flow.alias || flow.flowId, revision: null });
-            return "引用改为跟随最新版本";
-          }) }, "跟随最新")]),
-        ),
         h("div", { style: styles.cardTitle }, "启动输入（JSON）"),
         h("textarea", { style: styles.input, value: input, onChange: (event) => setInput(event.target.value), spellCheck: false }),
         h("div", null, h("button", { type: "button", style: styles.button, disabled: busy, onClick: () => props.onRun(flow, input) }, "用这份输入运行")),
@@ -610,7 +635,7 @@ window.__ModuleLoader__.load({
             "button",
             { type: "button", key: run.runId, style: props.selected === run.runId ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => props.onPick(run) },
             h("span", null, `${runLabel(run)}${run.pending > 0 ? ` · 待人工 ${run.pending}` : ""}`),
-            h("span", { style: styles.meta }, `${run.runId} · ${shortPath(run.workspace)} · r${run.revision ?? "latest"}`),
+            h("span", { style: styles.meta }, `${run.runId} · ${shortPath(run.workspace)} · ${run.source === "local" ? "项目草稿" : `r${run.revision ?? "latest"}`}`),
           ),
         ),
       );
@@ -649,7 +674,7 @@ window.__ModuleLoader__.load({
       return h(
         "div",
         { style: styles.pane },
-        h("div", { style: styles.meta }, `${run.runId} · ${run.status} · ${run.source === "override" ? "草稿覆盖" : `r${run.revision ?? "latest"}`} · ${shortPath(run.workspace)}`),
+        h("div", { style: styles.meta }, `${run.runId} · ${run.status} · ${run.source === "override" ? "草稿覆盖" : run.source === "local" ? "项目草稿" : `r${run.revision ?? "latest"}`} · ${shortPath(run.workspace)}`),
         run.error !== null && run.error !== undefined ? h("div", { style: styles.errorBox }, `${run.error.code}: ${run.error.message}`) : null,
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
         cancellable && typeof props.onCancel === "function"
@@ -1005,7 +1030,7 @@ window.__ModuleLoader__.load({
 
       const right =
         tab === "flows"
-          ? h(FlowPane, { flow: selectedFlow, busy, message, onChanged: () => void reload(), onRun: (flow, text) => void startRun(flow, text) })
+          ? h(FlowPane, { flow: selectedFlow, busy, message, onChanged: () => void reload(), onPromoted: (promoted) => { setSelectedFlow(null); setSelectedRun(null); setMessage(`已提升为 ${promoted.flowId}（r1），后续修改仍需人工发布。`); void reload(); }, onRun: (flow, text) => void startRun(flow, text) })
           : tab === "runs"
             ? h(RunPane, { run: selectedRun, definition: selectedFlow?.definition ?? null, busy, onCancel: (run) => void controlRun("cancel", run), onResume: (run) => void controlRun("resume", run) })
             : h(InboxView, { items: inbox, busy, onGate: (item, decision) => void decide(item, decision), onDeliver: (item, text) => void deliver(item, text) });

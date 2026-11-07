@@ -20,6 +20,7 @@ export const ROUTES = Object.freeze({
   history: '/api/hnflow/history',
   pin: '/api/hnflow/pin',
   add: '/api/hnflow/add',
+  promote: '/api/hnflow/promote',
   rollback: '/api/hnflow/rollback',
   artifact: '/api/hnflow/artifact',
   cancel: '/api/hnflow/cancel',
@@ -196,6 +197,7 @@ export function createRoutes(options) {
     post(ROUTES.publish, async (body) => service.publish({ cwd: required(body, 'workspace'), key: required(body, 'flow'), note: optional(body, 'note') ?? 'published from the HNFlow page' })),
     post(ROUTES.pin, async (body) => service.pinRef(required(body, 'workspace'), required(body, 'flow'), body?.revision === undefined ? 'latest' : body.revision)),
     post(ROUTES.add, async (body) => service.addRef(required(body, 'workspace'), required(body, 'flowId'), optional(body, 'alias'))),
+    post(ROUTES.promote, async (body) => service.promote({ cwd: required(body, 'workspace'), key: required(body, 'flow'), folder: optional(body, 'folder'), name: optional(body, 'name'), alias: optional(body, 'alias') })),
     post(ROUTES.rollback, async (body) => service.rollback({ cwd: required(body, 'workspace'), key: required(body, 'flow'), revision: Number(body?.revision), note: optional(body, 'note') })),
     post(ROUTES.cancel, async (body) => service.cancel(required(body, 'runId'))),
     post(ROUTES.resume, async (body) => service.resume(required(body, 'runId'))),
@@ -283,7 +285,7 @@ function json(value, status = 200) {
  */
 function failure(error) {
   const code = /** @type {any} */ (error)?.code
-  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'vibestack-unavailable'].includes(code)
+  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'vibestack-unavailable', 'local-flow', 'not-local', 'name-required', 'name-duplicate', 'alias-required', 'folder-invalid', 'ref-ambiguous'].includes(code)
   const conflict = typeof code === 'string' && ['stale-revision', 'already-decided', 'run-terminal'].includes(code)
   const status = badRequest ? 400 : conflict ? 409 : typeof code === 'string' && code.endsWith('-missing') ? 404 : 500
   return json(

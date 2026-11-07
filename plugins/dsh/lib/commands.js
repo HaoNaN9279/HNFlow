@@ -33,6 +33,7 @@ export const USAGE = [
   '  /hnflow pin <流程> <latest|rN> 改引用钉住的版本',
   '  /hnflow assets                 列出通用资产库里的流程',
   '  /hnflow add <流程id> [别名]     把通用资产引用到本工作区',
+  '  /hnflow promote <流程> [目录]   把项目草稿提升为通用资产并改为引用',
   '  /hnflow import <名称> <文件>    导入流程（兼容旧 WorkflowDefinition，转换结果先报告再落库）',
   '  /hnflow open                   打开左侧 HNFlow 页面',
 ].join('\n')
@@ -72,9 +73,9 @@ export function createFlowCommand(options) {
             kind: 'success',
             text: entries
               .map((entry) => {
-                const name = entry.alias.length > 0 ? entry.alias : entry.flowId
-                const flags = [entry.missing ? '缺失' : '', entry.hasOverride ? '草稿覆盖' : '', entry.drift ? '漂移' : ''].filter((flag) => flag.length > 0)
-                const revision = entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'}（跟随最新）` : `钉住 r${entry.pinnedRevision}/${entry.currentRevision ?? '?'}`
+                const name = entry.alias.length > 0 ? entry.alias : entry.local ? entry.name?.length > 0 ? entry.name : entry.flowId : entry.flowId
+                const flags = [entry.local ? '项目草稿' : '', entry.missing ? '缺失' : '', entry.hasOverride ? '草稿覆盖' : '', entry.drift ? '漂移' : ''].filter((flag) => flag.length > 0)
+                const revision = entry.local ? '本地，无版本' : entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'}（跟随最新）` : `钉住 r${entry.pinnedRevision}/${entry.currentRevision ?? '?'}`
                 return `- ${name} (${entry.flowId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `：${entry.description}` : ''}`
               })
               .join('\n'),
@@ -90,7 +91,7 @@ export function createFlowCommand(options) {
               .map((run) => {
                 const summary = summariseRun(run)
                 const nodes = summary.nodes.map((node) => `${node.id}=${node.status}`).join(', ')
-                return `${summary.runId} ${summary.status} ${summary.flowName ?? summary.flowId} r${summary.revision ?? 'latest'}${nodes.length > 0 ? ` — ${nodes}` : ''}`
+                return `${summary.runId} ${summary.status} ${summary.flowName ?? summary.flowId} ${summary.source === 'local' ? '项目草稿' : `r${summary.revision ?? 'latest'}`}${nodes.length > 0 ? ` — ${nodes}` : ''}`
               })
               .join('\n'),
           }
@@ -99,7 +100,7 @@ export function createFlowCommand(options) {
           const runId = rest[0]
           if (runId === undefined) return { kind: 'error', text: '用法：/hnflow status <runId>' }
           const run = summariseRun(await service.getRun(runId))
-          const lines = [`${run.runId}: ${run.status} (${run.flowName ?? run.flowId} r${run.revision ?? 'latest'})`]
+          const lines = [`${run.runId}: ${run.status} (${run.flowName ?? run.flowId} ${run.source === 'local' ? '项目草稿' : `r${run.revision ?? 'latest'}`})`]
           for (const node of run.nodes) {
             lines.push(`- ${node.id}: ${node.status}${node.attempts > 1 ? ` ×${node.attempts}` : ''}${node.diagnostic ? ` — ${node.diagnostic.code}: ${node.diagnostic.message}` : ''}`)
           }
@@ -128,6 +129,8 @@ export function createFlowCommand(options) {
           return await listAssets()
         case 'add':
           return await addRef(rest, cwd)
+        case 'promote':
+          return await promote(rest, cwd)
         case 'import':
           return await importAsset(rest, cwd)
         case 'open':
@@ -270,6 +273,22 @@ export function createFlowCommand(options) {
     const { workspace } = createStores({ cwd, config, libraryRoot: libraryRoot(config), logger })
     const ref = await workspace.addRef({ flowId: asset.id, alias: alias ?? '', revision: null })
     return { kind: 'success', text: `已引用 ${asset.name} (${asset.id})${ref.alias ? `，别名 ${ref.alias}` : ''}，跟随最新版本。` }
+  }
+
+  /**
+   * Promote a project-local draft into the library and reference it (human action).
+   * @param {string[]} args - `<flow> [folder]`.
+   * @param {string | null} cwd - workspace root.
+   * @returns {Promise<{kind: string, text: string}>} result.
+   */
+  async function promote(args, cwd) {
+    const [key, folder] = args
+    if (key === undefined) return { kind: 'error', text: '用法：/hnflow promote <项目草稿> [目录]' }
+    const promoted = await service.promote({ cwd, key, folder })
+    return {
+      kind: 'success',
+      text: `已把 ${promoted.name} 提升为通用资产 ${promoted.flowId}（r1${promoted.folder ? `，目录 ${promoted.folder}` : ''}）并改为本工作区引用。\n后续修改仍需人工发布。`,
+    }
   }
 
   /**

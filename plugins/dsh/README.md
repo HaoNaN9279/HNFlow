@@ -8,7 +8,8 @@ HNFlow 约束式流程在 DeepSeek Harness 里的模式插件。设计与边界�
 
 - 编排权在插件自己的状态机里（`ctx.hnflow`），节点执行交给 DSH `subagents`；
 - 流程状态进 DSH storage domain（不可用时降级为文件，并显式告警）；
-- 发布是人的动作：`/hnflow publish` 或页面按钮；Agent 只有 `draft`；
+- 对话可以**创建、修改、提升、引用和运行**流程；发布已有资产仍是人的动作：
+  `/hnflow publish` 或页面按钮，Agent 没有 publish 工具；
 - 页面/会话/右栏读同一个 service，不读文件、不跑命令、不写会话事件。
 
 ## 依赖
@@ -38,18 +39,37 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 | `preset-hnflow` → `hnflow` | `role: preset` | `hnflow` / `hnflow_author` 工具、`/hnflow`、`hnflow-flows` 技能、流程索引 |
 | `hnflow-ui` | `host: false` | 浏览器 bundle：侧栏页面、会话页签、右栏收件箱、右下角通知 |
 
+## 对话创建与管理
+
+HNFlow 模式里的模型面现在是完整的“起草 + 管理 + 运行”闭环，但仍不包含发布：
+
+| 目标 | 工具动作 |
+| --- | --- |
+| 新建项目内流程 | `hnflow_author create`（`scope` 省略或 `project`；默认只在本工作区可见、可运行） |
+| 新建通用流程 | `hnflow_author create` + `scope: "library"`（新资产 r1，并默认引用到本工作区） |
+| 修改项目草稿 | `hnflow_author draft`；项目草稿可继续 `draft`，直到提升或删除 |
+| 项目草稿管理 | `hnflow_author rename` / `delete` / `promote`（提升为库资产 r1 并改为引用） |
+| 通用资产发现/引用 | `hnflow` 的 `list_library` / `add_ref` / `remove_ref` / `rename_ref` |
+| 版本与回滚信息 | `hnflow` 的 `history` / `pin`；真正 publish/rollback 仍由人经命令或页面操作 |
+| 运行与观察 | `hnflow` 的 `run` / `status` / `list_runs` / `cancel` / `resume` / `inbox` / `artifact` |
+
+约束仍然是：**发布已有资产是人的动作**。`create` 写的是新资产 r1，不提升任何已有 revision；之后修改它必须走
+`draft` + 人工 publish。项目草稿（`.hnflow/overrides/` 中 `local: true` 且无引用的文件）没有版本历史，
+可以运行、改名、删除或提升，但不能直接 publish/pin/rollback。
+
 ## 页面与命令
 
 - 左侧 HNFlow 图标：**流程**（**通用资产库（唯一一段，可折叠）+ 工作区列表（可折叠）**；两者都按资产的
-  多级文件夹层级显示并支持逐级折叠；通用库不按工作区标注“已引用”，引用按钮以当前选中/第一个工作区为目标）/
-  只读画布 + **版本历史 / 发布预览 diff / 钉住 / 回滚** + 启动；
+  多级文件夹层级显示并支持逐级折叠；项目草稿也在工作区树中，标“项目草稿”并显示“仅本工作区 · 可运行”）/
+  只读画布 + **版本历史 / 发布预览 diff / 钉住 / 回滚** + 启动；项目草稿只显示画布、启动与“提升到通用资产库”；
   **运行**（节点时间线、**取消/继续、产物、token 用量、降级标记**）/ **收件箱**（门禁与交付，显示审计字段与过期状态）。
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
-- `/hnflow list|runs|status|inbox|assets|add|publish|history|rollback|pin|import|open`；
+- `/hnflow list|runs|status|inbox|assets|add|promote|publish|history|rollback|pin|import|open`；
   发布与回滚都需要 `confirm` 二次确认，发布预览先给出结构 diff（新增/删除/字段变化）。
   **命令在任何会话都可用**（core 行注册，作用于当前会话的工作区）；工具只属于 HNFlow 模式。
-- 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox / artifact）与
-  `hnflow_author`（schema / validate / draft，**没有 publish**）。
+- 模型面：`hnflow`（list_flows / list_library / describe_flow / run / status / list_runs / cancel / resume /
+  inbox / artifact / add_ref / remove_ref / rename_ref / pin / history）与
+  `hnflow_author`（schema / validate / create / draft / promote / delete / rename，**没有 publish**）。
 - `/hnflow import` 兼容旧 `WorkflowDefinition`：先转换并给出逐条报告（`flow:start/end` 丢弃、
   `data:assign` → 常量 `merge`、`ai:llm_agent` → `agent`、`human:review/task` → `gate/request`、
   `verify:gate` 降级为人工门禁），转换结果过静态校验后才写入资产库；原文件不改。
@@ -82,10 +102,10 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 ## 数据布局
 
 ```text
-$DSH_HOME/hnflow/library/<name>.flow.json        资产（asset + definition）
+$DSH_HOME/hnflow/library/<目录>/<name>.flow.json   资产（asset + definition）
 $DSH_HOME/hnflow/library/.hnflow-revisions/<id>/rN.json   不可变快照 + lockfile
 <workspace>/.hnflow/flows.json                   引用（默认钉住 revision）
-<workspace>/.hnflow/overrides/<flowId>.flow.json 工作区草稿
+<workspace>/.hnflow/overrides/<flowId>.flow.json 工作区草稿；`local: true` 且无引用 = 项目草稿
 $DSH_HOME/hnflow/state/runs/<runId>.json         仅 storage domain 不可用时的降级
 ```
 
@@ -132,7 +152,7 @@ node test/run.mjs
 覆盖：schema 子集与 `type`+`oneOf` 禁止、信封、契约可赋值、调度/fallback 降级、CAS 与退回预算、
 发布/lockfile（含 preset 组合摘要）、storage 降级、门禁/交付/`needs_human`/重试/取消/重启、
 审计字段、交付路径越界、过期推进、verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、
-旧流程导入、页面路由与客户端契约。
+旧流程导入、项目草稿创建/运行/提升/删除、引用管理、页面路由与客户端契约。当前 **134 项**。
 
 ### 真机自测（隔离 web 实例）
 

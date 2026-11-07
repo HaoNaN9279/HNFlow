@@ -7,7 +7,7 @@
  */
 
 /** Plugin version recorded in every lockfile. */
-export const PLUGIN_VERSION = '0.4.0'
+export const PLUGIN_VERSION = '0.5.0'
 
 /**
  * The host's per-activation-tree concurrency cap (`maxActiveSubagents`, 8).

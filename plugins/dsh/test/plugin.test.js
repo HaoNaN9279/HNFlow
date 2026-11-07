@@ -91,7 +91,7 @@ test('the core row provides ctx.hnflow, the page routes and the global command',
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
-  assert.equal(ctx.routes.length, 16)
+  assert.equal(ctx.routes.length, 17)
   assert.equal(typeof ctx.services.hnflow.status, 'function')
   assert.equal(ctx.effects.length, 1)
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
@@ -107,6 +107,8 @@ test('the preset row registers the tools, skill and prompt section', async () =>
   // The command is global (core row), so the preset must not double-register it.
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
   assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-flows'])
+  assert.equal(ctx.registered.skills[0].source, 'bundled')
+  assert.equal(typeof ctx.registered.skills[0].content, 'string')
   assert.deepEqual(ctx.registered.sections.map((section) => section.name), ['hnflow:flows'])
   assert.equal(ctx.listeners['agent/pre-step'].length, 1)
   await ctx.services.hnflow.close()

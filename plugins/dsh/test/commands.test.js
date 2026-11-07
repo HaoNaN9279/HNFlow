@@ -57,6 +57,7 @@ const service = {
   }),
   rollback: async () => ({ revision: 2, contentHash: 'sha256:def', restoredFrom: 1 }),
   pinRef: async (_cwd, key, target) => ({ alias: key, flowId: 'fl-test', revision: target === 'latest' ? null : Number(target) }),
+  promote: async () => ({ flowId: 'fl-new', name: '本地流程', folder: 'team/a', previousFlowId: 'fl-local' }),
 }
 
 test('usage and unknown subcommands never throw', async () => {
@@ -94,6 +95,24 @@ test('publish previews the diff, and history/rollback are two-step', async () =>
   assert.match(rollbackPreview.text, /确认回滚/u)
   const rolled = await command(service).handler({ rawInput: 'rollback demo r1 confirm' })
   assert.match(rolled.text, /已把 r1 发布为 r2/u)
+})
+
+test('promote turns a project draft into a library asset', async () => {
+  const promoted = await command(service).handler({ rawInput: 'promote 本地流程 team/a' })
+  assert.equal(promoted.kind, 'success')
+  assert.match(promoted.text, /fl-new/u)
+  assert.match(promoted.text, /后续修改仍需人工发布/u)
+})
+
+test('list marks a project-local draft and shows no revision', async () => {
+  const localService = {
+    ...service,
+    listFlows: async () => [{ alias: '', flowId: 'fl-local-1', name: '本地流程', local: true, pinnedRevision: null, currentRevision: 0, hasOverride: false, drift: false, missing: false, description: '草稿' }],
+  }
+  const listed = await command(localService).handler({ rawInput: 'list' })
+  assert.match(listed.text, /本地流程/u)
+  assert.match(listed.text, /项目草稿/u)
+  assert.match(listed.text, /本地，无版本/u)
 })
 
 test('a workspace command refuses to run without a workspace', async () => {
