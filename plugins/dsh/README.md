@@ -42,7 +42,7 @@ dsh --profile desktop --dump-config | grep -A2 'dsh-hnflow'
 
 - 左侧 HNFlow 图标：**流程**（树 + 只读画布 + 发布/启动）/ **运行**（节点时间线）/ **收件箱**（门禁与交付）。
 - 会话页签只显示本会话启动的运行；右栏是同一份收件箱；右下角首次出现待决项时提示一次。
-- `/hnflow list|runs|status|inbox|publish|pin|import|open`；发布需要 `publish <流程> confirm` 二次确认。
+- `/hnflow list|runs|status|inbox|assets|add|publish|pin|import|open`；发布需要 `publish <流程> confirm` 二次确认。
 - 模型面：`hnflow`（list_flows / describe_flow / run / status / cancel / resume / inbox）与
   `hnflow_author`（schema / validate / draft，**没有 publish**）。
 
@@ -101,6 +101,8 @@ domain 没有跨表事务，一次推进必须原子）。
 - `project-delivery`：运行后在收件箱提交 `{"files":["a.txt"],"notes":"测试交付"}`；它带工作区覆盖，列表里显示「草稿」，运行记录标「草稿覆盖」，child 简报里能看到“（本项目覆盖）”。
 
 两条流程都不写 `model`，直接用会话当前模型，不需要先在 VibeStack 里定义模型层。
+
+`smoke-general` 是**通用**资产：别的项目里用 `/hnflow assets` 找到它，再 `/hnflow add fl-demo-general-smoke smoke` 就能引用；`project-delivery` 只在本工作区被引用，并带了一份工作区覆盖。
 
 
 ## 测试

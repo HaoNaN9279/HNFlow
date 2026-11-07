@@ -84,6 +84,22 @@ test('pin re-points a reference, and import creates a new asset', async () => {
     const pinned = await cmd.handler({ rawInput: 'pin demo latest' })
     assert.match(pinned.text, /跟随最新/u)
 
+    const library = await cmd.handler({ rawInput: 'assets' })
+    assert.match(library.text, /fl-test/u)
+
+    const extra = gateFlow()
+    extra.flow = { id: 'fl-extra', name: '通用流程' }
+    await writeFile(
+      path.join(seeded.library, 'extra.flow.json'),
+      JSON.stringify({ asset: { id: 'fl-extra', name: '通用流程', revision: 1, tags: [] }, definition: extra }),
+      'utf8',
+    )
+    const added = await cmd.handler({ rawInput: 'add fl-extra shared' })
+    assert.match(added.text, /已引用/u)
+    assert.match(added.text, /别名 shared/u)
+    const missing = await cmd.handler({ rawInput: 'add fl-nope' })
+    assert.equal(missing.kind, 'error')
+
     const file = path.join(seeded.workspace, 'new.flow.json')
     await mkdir(path.dirname(file), { recursive: true })
     const definition = gateFlow()

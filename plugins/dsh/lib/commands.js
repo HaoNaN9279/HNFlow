@@ -27,6 +27,8 @@ export const USAGE = [
   '  /hnflow publish <流程>         预览发布（校验 + 版本信息）',
   '  /hnflow publish <流程> confirm 确认发布为新的不可变 revision',
   '  /hnflow pin <流程> <latest|rN> 改引用钉住的版本',
+  '  /hnflow assets                 列出通用资产库里的流程',
+  '  /hnflow add <流程id> [别名]     把通用资产引用到本工作区',
   '  /hnflow import <名称> <文件>    从工作区内的 JSON 文件新建流程资产（人工操作）',
   '  /hnflow open                   打开左侧 HNFlow 页面',
 ].join('\n')
@@ -114,6 +116,10 @@ export function createFlowCommand(options) {
           return await publish(rest, cwd)
         case 'pin':
           return await pin(rest, cwd)
+        case 'assets':
+          return await listAssets()
+        case 'add':
+          return await addRef(rest, cwd)
         case 'import':
           return await importAsset(rest, cwd)
         case 'open':
@@ -173,6 +179,38 @@ export function createFlowCommand(options) {
     }
     const updated = await workspace.updateRef(key, { revision })
     return { kind: 'success', text: `${key} 现在${updated.revision === null ? '跟随最新版本' : `钉住 r${updated.revision}`}。` }
+  }
+
+  /**
+   * List the reusable library assets (not just this workspace's refs).
+   * @returns {Promise<{kind: string, text: string}>} result.
+   */
+  async function listAssets() {
+    const assets = await new AssetStore(libraryRoot(config), { logger }).list()
+    if (assets.length === 0) return { kind: 'success', text: '通用资产库是空的。' }
+    return {
+      kind: 'success',
+      text: assets
+        .map((asset) => `- ${asset.name} (${asset.id}, r${asset.revision})${asset.description ? `：${asset.description}` : ''}`)
+        .join('\n'),
+    }
+  }
+
+  /**
+   * Reference an existing library asset from this workspace (human action).
+   * @param {string[]} args - `<flowId> [alias]`.
+   * @param {string | null} cwd - workspace root.
+   * @returns {Promise<{kind: string, text: string}>} result.
+   */
+  async function addRef(args, cwd) {
+    const [flowId, alias] = args
+    if (flowId === undefined) return { kind: 'error', text: '用法：/hnflow add <流程id> [别名]' }
+    const assets = await new AssetStore(libraryRoot(config), { logger }).list()
+    const asset = assets.find((entry) => entry.id === flowId || entry.name === flowId)
+    if (asset === undefined) return { kind: 'error', text: `资产库里没有 ${flowId}；先用 /hnflow assets 查看。` }
+    const { workspace } = createStores({ cwd, config, libraryRoot: libraryRoot(config), logger })
+    const ref = await workspace.addRef({ flowId: asset.id, alias: alias ?? '', revision: null })
+    return { kind: 'success', text: `已引用 ${asset.name} (${asset.id})${ref.alias ? `，别名 ${ref.alias}` : ''}，跟随最新版本。` }
   }
 
   /**
