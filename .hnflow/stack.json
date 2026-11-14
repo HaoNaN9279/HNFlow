@@ -4,11 +4,6 @@
     "name": "core",
     "version": "0.1.0"
   },
-  "groups": [
-    {
-      "name": "hnflow-forge",
-      "version": "0.1.0"
-    }
-  ],
+  "groups": [],
   "agents_md": "off"
 }

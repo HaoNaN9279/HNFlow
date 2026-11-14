@@ -2,10 +2,11 @@
   "guid": "eb8a3a66c69f566799a0606b89b916cc",
   "name": "core",
   "version": "0.1.0",
-  "description": "HNFlow 常驻能力组：全局规则、Agent、命令、技能与基础工具。",
+  "description": "HNFlow 常驻能力组：全局规则、Agent、命令、技能与基础工具，并含能力组与流程的制作内容。",
   "permissions": [
     "fs",
-    "net"
+    "net",
+    "exec"
   ],
   "extends": [],
   "tools": [
@@ -13,7 +14,8 @@
     "tool:a8a2ce51a3255a6ebb7c1705821b52f9@v1.0.0",
     "tool:b906f036f7fb5ef0a858ffea70a735f3@v1.0.0",
     "tool:fee311c2959c5f739e8ee01baa644dc7@v1.0.0",
-    "tool:927d3ae4489f5edc92a74fcfd3acf7ee@v0.1.6"
+    "tool:927d3ae4489f5edc92a74fcfd3acf7ee@v0.1.6",
+    "tool:79a8092f06b841a594899f346eae285b@v0.1.0"
   ],
   "tool_permissions": {
     "tool:c1d2411db9e55d04aec18e9933599e36@v1.0.0": [
@@ -31,6 +33,9 @@
     "tool:927d3ae4489f5edc92a74fcfd3acf7ee@v0.1.6": [
       "fs",
       "net"
+    ],
+    "tool:79a8092f06b841a594899f346eae285b@v0.1.0": [
+      "fs"
     ]
   }
 }

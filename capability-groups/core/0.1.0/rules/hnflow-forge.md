@@ -1,8 +1,8 @@
 ---
 name: hnflow-forge
 description: HNFlow 工作流制作规则：需求拆分、边界判定、节点约束与人类专属动作。
+on_demand: true
 ---
-
 # HNFlow 工作流制作
 
 适用：用户要求“做一套 HNFlow 工作流”“把某个需求变成可运行流程”“给流程配能力组”。
@@ -61,7 +61,7 @@ description: HNFlow 工作流制作规则：需求拆分、边界判定、节点
 
 `hnflow` / `hnflow_author` 只在 HNFlow 预设的会话里存在。没有工具时不要假装调用，也不要用文件读写绕过插件。
 
-本组的命令与技能在 DSH 里带命名空间：`/capability-hnflow-forge-flow-*`、`capability-hnflow-forge-flow-*`；组内文字用短名即可。
+命令与技能在 DSH 里带命名空间：`/capability-core-flow-*`、`capability-core-flow-*`；组内文字用短名即可。
 
 ## 配套能力组
 

@@ -16,10 +16,12 @@ HNFlow 用一个仓库同时管理：
 ```text
 Layer (core / domain / project)
   └── Group (版本边界, group.json)
-        └── 内容目录 rules/ agents/ commands/ skills/ flows/
+        └── 内容目录 rules/ agents/ commands/ skills/ flows/ references/
 ```
 
-- **Core**：常驻规则、基础 Agent/命令/技能，仓库内 `capability-groups/core/<version>/`。
+- **Core**：常驻规则、基础 Agent/命令/技能，以及能力组与流程的制作内容（`custom-*`、
+  `flow-*` 技能，`group-authoring` / `hnflow-forge` 规则，`group-*` / `flow-*` 命令）；
+  仓库内 `capability-groups/core/<version>/`。HNFlow 模式固定加载，不需要写进 `stack.json`。
 - **领域组**：`capability-groups/domain/<name>/<version>/`，显式激活。
 - **项目组**：`<project>/.hnflow/groups/<name>/`，无版本目录；同名覆盖仓库组，天然承载
   未发布的项目内工作流。
@@ -31,7 +33,7 @@ Layer (core / domain / project)
 `group.json` 的 `extends` 是能力组依赖：
 
 ```json
-{ "name": "hnflow-forge", "version": "0.1.0", "extends": ["group-forge"] }
+{ "name": "unity-framework", "version": "1.0.0", "extends": ["shared-tools"] }
 ```
 
 - 依赖先于依赖者加载，按组名去重；同一依赖可写 `name@version`。
@@ -45,7 +47,7 @@ Layer (core / domain / project)
 ## 4. 工作流作为能力组内容
 
 ```text
-capability-groups/domain/hnflow-forge/0.1.0/flows/art-review.flow.json
+capability-groups/core/0.1.0/flows/art-review.flow.json
 <project>/.hnflow/groups/local/flows/my-flow.flow.json
 ```
 

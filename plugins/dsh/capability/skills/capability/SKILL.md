@@ -73,7 +73,7 @@ hnflow-stack tool serve <tool>      # MCP stdio
 
 - `/capability-core-activate`
 - `/capability-core-auto-git-commit`
-- `/capability-group-forge-group-new`
+- `/capability-core-group-new`
 
 命令模板支持 `$ARGUMENTS`、`$1`..`$9`；`` !`cmd` `` 与 `@file` 在 DeepSeek Harness 中
 不展开。Core 命令在任何会话可执行；领域组命令只有在当前工作区激活了该组时才执行。
@@ -95,10 +95,9 @@ hnflow-stack tool serve <tool>      # MCP stdio
 
 ## 开发能力组
 
-需要创建或修改能力组时，加载 `group-forge` 能力组的 `custom-group` 技能（以及
-`custom-agent` / `custom-command` / `custom-rule` / `custom-skill` / `custom-tool` /
-`custom-mcp`）。该组是领域组，默认不激活；在仓库根目录的 `.hnflow/stack.json` 中加入
-`group-forge` 即可。
+需要创建或修改能力组时，加载 `custom-group` 技能（以及 `custom-agent` /
+`custom-command` / `custom-rule` / `custom-skill` / `custom-tool` / `custom-mcp`）。
+这些技能住在 Core，随 HNFlow 会话固定加载，不需要额外激活能力组。
 
 ## 工具
 

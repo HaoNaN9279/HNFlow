@@ -59,7 +59,7 @@ capability-groups/domain/<name>/<version>/
 好：
 
 ```text
-按 hnflow-forge 的 flow-author 技能写作规范完成本节；本次要求：<参数>。
+按 Core 的 flow-author 技能写作规范完成本节；本次要求：<参数>。
 输出契约见 output，不要输出额外字段。
 ```
 
@@ -106,7 +106,7 @@ hnflow-stack status                      # 核对当前激活项
 ## 优先复用
 
 - 已存在的能力组能覆盖 → 直接引用，别新建同职责的组。
-- 需要能力组制作细则（规则/技能/Agent/命令/工具的字段与校验）→ 加载 `capability-group-forge-custom-*` 技能（本组 `extends: group-forge`，已随激活加载）。
+- 需要能力组制作细则（规则/技能/Agent/命令/工具的字段与校验）→ 加载 `capability-core-custom-*` 技能（同在 Core，随常驻加载）。
 - 组内容跨组同名会互相覆盖（后加载者赢），命名加领域前缀。
 
 ## 自检

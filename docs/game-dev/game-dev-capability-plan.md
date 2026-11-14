@@ -2,7 +2,7 @@
 
 > 状态：计划草案，尚未创建组目录、技能或 `group.json`。
 > 配套文档：[`game-dev-workflow-plan.md`](game-dev-workflow-plan.md)（HNFlow 流程）。
-> 方法来源：`hnflow-forge` 的 `flow-capability` / `flow-review`，`group-forge` 的 `custom-group` / `custom-skill`。
+> 方法来源：Core 的 `flow-capability` / `flow-review` 与 `custom-group` / `custom-skill` 技能。
 
 ## 0. 结论摘要
 
@@ -65,7 +65,7 @@ capability-groups/domain/game-dev/0.1.0/
 ```
 
 - `permissions`：`fs` 读写文档；`exec` 只跑 `git status` / `git diff` 这类只读命令，不含网络。
-- 不写 `extends`：`group-forge` 与 `hnflow-forge` 是「制作流程/能力组」的组，`game-dev` 是「写游戏文档」的组，二者不构成依赖。
+- 不写 `extends`：`game-dev` 是「写游戏文档」的组，Core 自带的制作技能不构成组间依赖。
 - `tools` 暂空；将来 `doc-lint` CLI 由这里引用。
 
 ## 4. 规则

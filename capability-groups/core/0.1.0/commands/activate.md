@@ -11,7 +11,7 @@ model: standard
 
 ```text
 /capability-core-activate
-/capability-core-activate unity-framework hnflow-forge
+/capability-core-activate unity-framework
 ```
 
 ## 前置检查

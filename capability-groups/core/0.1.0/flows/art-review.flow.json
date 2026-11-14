@@ -5,7 +5,7 @@
     "name": "美术评审",
     "description": "概念 → 人交付精修稿 → 独立验收 → 接入；演示流程随能力组发布。",
     "tags": ["demo", "human"],
-    "requires": ["hnflow-forge"]
+    "requires": ["core"]
   },
   "input": {
     "type": "object",
