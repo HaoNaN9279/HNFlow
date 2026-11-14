@@ -62,6 +62,7 @@ test('the tool definition exposes only non-publishing actions', () => {
     'rename_ref',
     'pin',
     'history',
+    'triggers',
   ])
 })
 

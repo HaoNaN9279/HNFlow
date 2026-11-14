@@ -11,6 +11,46 @@
 /** Bytes of one artifact inlined into a brief before it is referenced instead. */
 export const MAX_ARTIFACT_CHARS = 8000
 
+/** Bytes of one diagnostic message kept in a retry section. */
+export const MAX_RETRY_MESSAGE_CHARS = 2000
+
+/**
+ * Render the "what went wrong last time" section of a retried brief.
+ *
+ * A retry that resends the same brief invites the same mistake; the child needs
+ * the concrete failure (code, message, contract violations) to change course.
+ * Empty for a first attempt.
+ * @param {{attempt?: number, code?: string, message?: string, violations?: any[]}[]} history - earlier failures.
+ * @returns {string} markdown section, or an empty string.
+ */
+export function renderRetrySection(history) {
+  if (!Array.isArray(history) || history.length === 0) return ''
+  const lines = [
+    '## 上一轮失败记录',
+    '',
+    '这不是第一次尝试。下面是之前尝试的失败原因；请改变做法，不要原样重试。',
+    '',
+  ]
+  history.forEach((entry, index) => {
+    const attempt = Number.isInteger(entry?.attempt) ? entry.attempt : index + 1
+    lines.push(`### 第 ${attempt} 次尝试`)
+    lines.push(`- 失败代码: \`${String(entry?.code ?? 'unknown')}\``)
+    if (typeof entry?.message === 'string' && entry.message.trim().length > 0) {
+      const text = entry.message.trim()
+      lines.push(`- 说明: ${text.length > MAX_RETRY_MESSAGE_CHARS ? `${text.slice(0, MAX_RETRY_MESSAGE_CHARS)}…` : text}`)
+    }
+    if (Array.isArray(entry?.violations) && entry.violations.length > 0) {
+      lines.push('- 契约违规:')
+      for (const violation of entry.violations.slice(0, 12)) {
+        if (typeof violation === 'string') lines.push(`  - ${violation}`)
+        else lines.push(`  - ${JSON.stringify(violation)}`)
+      }
+    }
+    lines.push('')
+  })
+  return lines.join('\n')
+}
+
 /**
  * Render `{{input.x}}` / `{{nodes.<id>.output.y}}` references.
  * @param {string} text - instruction template.
@@ -118,6 +158,11 @@ export function buildNodeBrief(input) {
     `- 节点: \`${node.id}\``,
     `- 工作区: \`${run.workspace}\``,
   )
+  if (run.recovery !== undefined && run.recovery !== null) {
+    lines.push('', '## 恢复说明', '', `这次运行在宿主重启后恢复（${String(run.recovery.reason ?? 'host-restarted')}）。已完成的节点不会重跑，不要重复它们的工作。`)
+  }
+  const retry = renderRetrySection(input.retry)
+  if (retry.length > 0) lines.push('', retry)
   return lines.join('\n')
 }
 
@@ -166,5 +211,6 @@ export function buildJudgeBrief(input) {
     '',
     '不要向用户提问，不要委派，不要执行需要审批的操作。',
     `运行: run \`${run.runId}\`，工作区 \`${run.workspace}\`。`,
+    renderRetrySection(input.retry),
   ].join('\n')
 }

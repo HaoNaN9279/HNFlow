@@ -32,7 +32,7 @@ dsh --profile ztest --no-open --port 3999
 | ② `agents.create` conductor + 作为 parent | 页面启动的 run 用 conductor 跑通 | run 标 `host-unavailable`，需回会话启动 |
 | ③ storageDomain 跨进程读回 | 重启后 `/api/hnflow/state` 仍列出旧 run，`storage: domain` | 降级文件存储并告警 `storage-degraded` |
 | ④ 同一宿主 `userQuestions.ask()` + POST fetch 路由 | 收件箱待决项 `askedVia: card`，页面 POST 可裁决 | 卡片失败只记日志，收件箱仍可用 |
-| ⑤ `ctx.get('vibestack')` + `agentOptions` | `lockfile.models.<layer>` 有 provider/model，spawn trace 的路由一致 | 缺层直接 `model-layer-unknown`，不回落 |
+| ⑤ `ctx.get('vibestack')` + `agentOptions` | VibeStack `apiVersion >= 3`；`lockfile.models.<layer>` 有 provider/model，spawn trace 的路由一致 | 旧插件直接 `vibestack-unavailable`；未绑定层 `model-layer-unbound`、自定义层 `model-layer-custom`、写错层名 `model-layer-unknown`，都不回落 |
 
 ## 3. 页面/浏览器（Playwright，隔离实例）
 
@@ -42,8 +42,11 @@ dsh --profile ztest --no-open --port 3999
 2. 选流程：画布、版本历史、`发布新版本` 预览（校验 + diff）、`取消`；
 3. `钉住` / `跟随最新` 生效；`回滚` 需要第二次点击确认；
 4. 输入 `{"brief":"..."}` → 运行 → 收件箱出现门禁 → 批准 → 运行页签显示 `succeeded`；
-5. 运行页签：节点 token 用量、产物按钮可展开 JSON、取消/继续按钮按状态出现；
-6. 浏览器 console 无 error、无 pageerror。
+5. 运行页签：节点 token 用量、产物按钮可展开 JSON、取消/继续按钮按状态出现，顶部有健康说明；
+6. 收件箱：按阶段排序并显示一句话摘要；底部“自动化”面板显示触发器、副作用计数与上次扫描；
+7. 在 `<workspace>/.hnflow/triggers.json` 写一条 cron 触发器，等一个 `passIntervalMs`：
+   出现一条 `由触发器启动` 的运行，且同一分钟不重复；删掉文件后面板不再列出；
+8. 浏览器 console 无 error、无 pageerror。
 
 自测脚本在 `temp/ui-flow-verify.mjs`（仓库临时目录，不随插件发布）。
 
@@ -59,6 +62,8 @@ dsh --profile ztest --no-open --port 3999
 | storage domain | `runs` 域单实例、原子写 | 打不开/丢 run | 保持 core 独占；失败走文件降级 |
 | `userQuestions.ask` | 只接受活跃 root（conductor 可） | 卡片不出现 | 收件箱是权威，卡片只是便利 |
 | client 槽位 | `sidebar.panellist`/`main`/`conversation.view`/`sidebarRightTabs`/`shell.overlay` | 页面/页签空白 | 对照 `cordis_inspect_list` 的 Slots 清单 |
+| `hnflow-pass` 行 | `role: pass` 与 `ctx.inject(['hnflow'])` | 触发器不触发、过期不推进、副作用不重放 | 检查该行是否被禁用/报错；`status().pass` 与页面“自动化”面板给出上次扫描 |
+| 时钟源 | `setInterval` + `timer.unref()` | 测试进程挂住或 tick 不跑 | 保持 `unref`，首次 tick 用 `setTimeout(≤1s)` |
 | command/executed | 客户端本地确认事件，无内置消费者 | 空白会话看不到命令结果 | 不改插件；用页面或先发一条消息 |
 
 ## 5. 升级后记录

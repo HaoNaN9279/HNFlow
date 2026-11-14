@@ -636,6 +636,7 @@ window.__ModuleLoader__.load({
             { type: "button", key: run.runId, style: props.selected === run.runId ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => props.onPick(run) },
             h("span", null, `${runLabel(run)}${run.pending > 0 ? ` · 待人工 ${run.pending}` : ""}`),
             h("span", { style: styles.meta }, `${run.runId} · ${shortPath(run.workspace)} · ${run.source === "local" ? "项目草稿" : `r${run.revision ?? "latest"}`}`),
+            run.health && run.health.message ? h("span", { style: { ...styles.meta, flex: "1 1 100%", whiteSpace: "normal" } }, run.health.message) : null,
           ),
         ),
       );
@@ -675,6 +676,11 @@ window.__ModuleLoader__.load({
         "div",
         { style: styles.pane },
         h("div", { style: styles.meta }, `${run.runId} · ${run.status} · ${run.source === "override" ? "草稿覆盖" : run.source === "local" ? "项目草稿" : `r${run.revision ?? "latest"}`} · ${shortPath(run.workspace)}`),
+        run.health && run.health.message
+          ? h("div", { style: { ...styles.meta, color: run.health.code === "ok" ? undefined : "var(--dsw-alias-label-warning, #d29922)" } }, `状态说明：${run.health.message}`)
+          : null,
+        run.trigger ? h("div", { style: styles.meta }, `由触发器启动：${run.trigger.source} · ${run.trigger.triggerId ?? ""}`) : null,
+        run.recovery ? h("div", { style: styles.meta }, `恢复说明：${run.recovery.reason === "host-restarted" ? "宿主重启后自动续跑" : String(run.recovery.reason ?? "")}`) : null,
         run.error !== null && run.error !== undefined ? h("div", { style: styles.errorBox }, `${run.error.code}: ${run.error.message}`) : null,
         error.length > 0 ? h("div", { style: styles.errorBox }, error) : null,
         cancellable && typeof props.onCancel === "function"
@@ -746,7 +752,8 @@ window.__ModuleLoader__.load({
           return h(
             "div",
             { key: item.id, style: styles.card },
-            h("div", { style: styles.cardTitle }, `${item.kind === "gate" ? "门禁" : "人工交付"} · ${item.flowName ?? ""} · ${item.nodeId}`),
+            h("div", { style: styles.cardTitle }, `${item.stageLabel ?? (item.kind === "gate" ? "门禁" : "人工交付")} · ${item.flowName ?? ""} · ${item.nodeId}`),
+            item.summary ? h("div", { style: { ...styles.meta, whiteSpace: "normal" } }, item.summary) : null,
             h("div", { style: styles.meta }, `run ${item.runId} · ${item.id}${item.attempts > 0 ? ` · 已退回 ${item.attempts} 次` : ""}${item.expired === true ? " · 已过期（仍可处理）" : ""}`),
             h("div", { style: styles.meta }, `流程 r${item.flowRevision ?? "?"}（${item.flowSource ?? "latest"}）· 提问通道 ${item.askedVia ?? "inbox"} · 下游节点 ${(item.consumerNodeIds ?? []).join(", ") || "无"}`),
             item.lastDiagnostic
@@ -770,6 +777,75 @@ window.__ModuleLoader__.load({
             item.deliverable ? h("div", { style: styles.meta }, `契约：${JSON.stringify(item.deliverable).slice(0, 320)}`) : null,
           );
         }),
+      );
+    }
+
+    /**
+     * Read-only automation panel: triggers, durable effects, last pass.
+     *
+     * The owner writes triggers as a file (`<workspace>/.hnflow/triggers.json`);
+     * this panel only explains what the plugin saw, including parse errors, so
+     * a typo is visible without reading logs.
+     * @param {{triggers?: Record<string, any>[], automation?: Record<string, any> | null, facts?: Record<string, any> | null}} props - snapshot slices.
+     * @returns {unknown} element.
+     */
+    function AutomationPanel(props) {
+      const triggers = Array.isArray(props?.triggers) ? props.triggers : [];
+      const automation = props?.automation ?? null;
+      const facts = props?.facts ?? null;
+      const effects = automation?.effects ?? null;
+      const pass = automation?.pass ?? null;
+      const errors = Array.isArray(automation?.errors) ? automation.errors : [];
+      const channels = Array.isArray(facts?.channels) ? facts.channels : [];
+      /**
+       * Human-readable trigger condition.
+       * @param {Record<string, any>} trigger - trigger row.
+       * @returns {string} condition.
+       */
+      const condition = (trigger) => {
+        if (trigger.source === "cron") return `cron ${trigger.cron}`;
+        if (trigger.source === "file") return `文件 ${(trigger.watch ?? []).join(", ")}`;
+        return `流程完成后 · ${trigger.after}`;
+      };
+      return h(
+        "div",
+        { style: styles.card },
+        h("div", { style: styles.cardTitle }, "自动化"),
+        h(
+          "div",
+          { style: styles.meta },
+          `触发器 ${facts?.triggersEnabled === false ? "已关闭" : "已启用"} · 扫描间隔 ${facts?.passIntervalMs ?? "?"} ms · 运行预算 ${Math.round(Number(facts?.runBudgetMs ?? 0) / 60000)} 分钟`,
+        ),
+        triggers.length === 0
+          ? h("div", { style: styles.meta }, "没有触发器。在 <工作区>/.hnflow/triggers.json 里声明 cron、file 或 run-completed。")
+          : h(
+              "div",
+              null,
+              ...triggers.map((trigger) =>
+                h("div", { key: `${trigger.workspace}:${trigger.id}`, style: styles.row }, [
+                  h("span", { key: "id", style: { ...styles.cell, flex: "0 0 150px" } }, trigger.id),
+                  h("span", { key: "src", style: { ...styles.cell, flex: "0 0 90px" } }, trigger.source),
+                  h("span", { key: "when", style: { ...styles.cell, flex: "1 1 auto" } }, `${condition(trigger)} → ${trigger.flow}`),
+                  h("span", { key: "last", style: styles.meta }, trigger.lastFiredAt ? `上次 ${trigger.lastFiredAt}` : "尚未触发"),
+                ]),
+              ),
+            ),
+        errors.length > 0 ? h("div", { style: styles.warnBox }, `触发器问题：${errors.join("；")}`) : null,
+        effects === null
+          ? null
+          : h(
+              "div",
+              { style: styles.meta },
+              `副作用队列：待处理 ${effects.pending} · 已完成 ${effects.done} · 放弃 ${effects.dead}${Array.isArray(effects.recent) && effects.recent.length > 0 ? ` · 最近 ${effects.recent.slice(0, 3).map((entry) => `${entry.kind}/${entry.status}`).join("，")}` : ""}`,
+            ),
+        pass === null || pass === undefined
+          ? null
+          : h(
+              "div",
+              { style: styles.meta },
+              `上次扫描：${pass.at ?? "尚未"}${pass.error ? `（失败：${pass.error}）` : ` · 过期 ${pass.expired} · 副作用 ${pass.effects} · 触发 ${pass.triggers} · 续推 ${pass.advanced}`}`,
+            ),
+        channels.length > 0 ? h("div", { style: styles.meta }, `通知通道：${channels.map((channel) => `${channel.title ?? channel.id}${channel.enabled === false ? "（关）" : ""}`).join("，")}`) : null,
       );
     }
 
@@ -984,6 +1060,9 @@ window.__ModuleLoader__.load({
       const assets = Array.isArray(state?.library) ? state.library : [];
       const runs = Array.isArray(state?.runs) ? state.runs : [];
       const inbox = Array.isArray(state?.inbox) ? state.inbox : [];
+      const triggers = Array.isArray(state?.triggers) ? state.triggers : [];
+      const automation = state?.automation ?? null;
+      const facts = state?.facts ?? null;
 
       /**
        * Reference one library asset in a workspace.
@@ -1033,7 +1112,7 @@ window.__ModuleLoader__.load({
           ? h(FlowPane, { flow: selectedFlow, busy, message, onChanged: () => void reload(), onPromoted: (promoted) => { setSelectedFlow(null); setSelectedRun(null); setMessage(`已提升为 ${promoted.flowId}（r1），后续修改仍需人工发布。`); void reload(); }, onRun: (flow, text) => void startRun(flow, text) })
           : tab === "runs"
             ? h(RunPane, { run: selectedRun, definition: selectedFlow?.definition ?? null, busy, onCancel: (run) => void controlRun("cancel", run), onResume: (run) => void controlRun("resume", run) })
-            : h(InboxView, { items: inbox, busy, onGate: (item, decision) => void decide(item, decision), onDeliver: (item, text) => void deliver(item, text) });
+            : h("div", { style: styles.pane }, h(InboxView, { items: inbox, busy, onGate: (item, decision) => void decide(item, decision), onDeliver: (item, text) => void deliver(item, text) }), h(AutomationPanel, { triggers, automation, facts }));
 
       return h(
         "div",

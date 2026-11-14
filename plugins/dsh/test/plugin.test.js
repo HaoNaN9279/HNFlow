@@ -91,10 +91,22 @@ test('the core row provides ctx.hnflow, the page routes and the global command',
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
-  assert.equal(ctx.routes.length, 17)
+  assert.equal(ctx.routes.length, 18)
   assert.equal(typeof ctx.services.hnflow.status, 'function')
   assert.equal(ctx.effects.length, 1)
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
+  await ctx.services.hnflow.close()
+})
+
+test('the pass row only starts a ticker and never registers routes or tools', async () => {
+  const ctx = fakeContext()
+  apply(ctx, { role: 'core' })
+  apply(ctx, { role: 'pass' })
+  await waitFor(() => ctx.effects.length === 2)
+  assert.equal(ctx.effects.length, 2)
+  assert.equal(ctx.registered.tools.length, 0)
+  assert.equal(ctx.registered.commands.length, 1)
+  for (const dispose of ctx.effects) dispose()
   await ctx.services.hnflow.close()
 })
 

@@ -7,7 +7,7 @@
  */
 
 /** Plugin version recorded in every lockfile. */
-export const PLUGIN_VERSION = '0.6.0'
+export const PLUGIN_VERSION = '0.8.0'
 
 /**
  * The host's per-activation-tree concurrency cap (`maxActiveSubagents`, 8).
@@ -38,11 +38,21 @@ export const DEFAULT_CONFIG = Object.freeze({
   maxIndexEntries: 20,
   /** Use the DSH storage domain when it is mounted; `false` forces the file store. */
   storage: true,
+  /** Interval of the `hnflow-pass` row: expiry, effects, triggers, stalled runs. */
+  passIntervalMs: 2000,
+  /** Wall-clock budget of one run; exceeded runs fail with `run-budget-exceeded`. */
+  runBudgetMs: 21_600_000,
+  /** Resume runs that a host restart interrupted when the service opens. */
+  resumeOnStart: true,
+  /** Attempts before an effect is parked as dead. */
+  outboxMaxAttempts: 8,
+  /** Evaluate `<workspace>/.hnflow/triggers.json`. */
+  triggersEnabled: true,
 })
 
 /** Keys whose value is a list of strings rather than a scalar. */
 const STRING_LISTS = new Set(['presetAllowlist'])
-const ROLES = new Set(['core', 'preset', 'ui'])
+const ROLES = new Set(['core', 'preset', 'pass', 'ui'])
 
 /**
  * Coerce a raw row config into the plugin's shape.
@@ -80,5 +90,8 @@ export function resolveConfig(raw) {
   if (config.maxParallel < 1) config.maxParallel = DEFAULT_CONFIG.maxParallel
   // Never ask the subagent seam for more activations than it can start at once.
   if (config.maxParallel > MAX_PARALLEL_CAP) config.maxParallel = MAX_PARALLEL_CAP
+  // The pass is cheap, but it must not spin: 500 ms is the floor.
+  if (config.passIntervalMs < 500) config.passIntervalMs = 500
+  if (config.runBudgetMs < 60_000) config.runBudgetMs = 60_000
   return config
 }

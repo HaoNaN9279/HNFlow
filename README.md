@@ -11,6 +11,7 @@ HNFlow 是运行在 DeepSeek Harness 上的**约束式工作流插件**。
 | --- | --- |
 | 安装、页面、命令、工具、测试 | [`plugins/dsh/README.md`](plugins/dsh/README.md) |
 | 设计、边界、实现差异 | [`docs/dsh-plugin-plan-v2.md`](docs/dsh-plugin-plan-v2.md) |
+| v0.8 单人化与自动化 | [`docs/hnflow-v0.8-plan.md`](docs/hnflow-v0.8-plan.md) |
 | 为什么做约束式流程 | [`docs/新开发理念.md`](docs/新开发理念.md) |
 | DSH 升级回归 | [`docs/dsh-upgrade-checklist.md`](docs/dsh-upgrade-checklist.md) |
 
@@ -20,7 +21,7 @@ HNFlow 是运行在 DeepSeek Harness 上的**约束式工作流插件**。
 dsh plugin --profile desktop add "D:/workspace/HNFlow/plugins/dsh"
 ```
 
-安装后在会话模式中选择 **HNFlow**。详细依赖（VibeStack ≥ 0.3.0）与配置见
+安装后在会话模式中选择 **HNFlow**。详细依赖（VibeStack ≥ 0.8.0 / `apiVersion >= 3`）与配置见
 [`plugins/dsh/README.md`](plugins/dsh/README.md)。
 
 ## 测试

@@ -93,8 +93,20 @@ export function createAuthorTool(options) {
     const cwd = cwdOf(exec?.agent)
     try {
       switch (args.action) {
-        case 'schema':
-          return JSON.stringify(FLOW_SCHEMA_REFERENCE, null, 2)
+        case 'schema': {
+          // Extra kinds are host extensions, not part of the language: list
+          // them from the live registry so `schema` never claims they exist
+          // when the registering row is absent.
+          const nodeTypes = typeof service.nodeKinds === 'function' ? service.nodeKinds() : [...NODE_TYPES]
+          return JSON.stringify(
+            {
+              ...FLOW_SCHEMA_REFERENCE,
+              notes: { ...FLOW_SCHEMA_REFERENCE.notes, nodeTypes },
+            },
+            null,
+            2,
+          )
+        }
         case 'validate': {
           const definition = await resolveDefinition(service, args, cwd)
           if (definition.error !== undefined) return `error ${definition.error}`

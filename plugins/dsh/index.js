@@ -22,6 +22,7 @@ import { createFlowCommand } from './lib/commands.js'
 import { createAuthorTool } from './lib/author.js'
 import { PLUGIN_VERSION, resolveConfig } from './lib/config.js'
 import { writeBreadcrumb } from './lib/diagnostics.js'
+import { vibestackAvailable, vibestackOf, vibestackWarnings } from './lib/layers.js'
 import { createRoutes } from './lib/routes.js'
 import { createService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
@@ -64,6 +65,11 @@ try {
       nodeTimeoutMs: z.number().default(900000),
       maxIndexEntries: z.number().default(20),
       storage: z.boolean().default(true),
+      passIntervalMs: z.number().default(2000),
+      runBudgetMs: z.number().default(21600000),
+      resumeOnStart: z.boolean().default(true),
+      outboxMaxAttempts: z.number().default(8),
+      triggersEnabled: z.boolean().default(true),
     })
   }
 } catch {
@@ -85,8 +91,58 @@ export function apply(ctx, rawConfig) {
     applyCore(ctx, config)
     return
   }
+  if (config.role === 'pass') {
+    applyPass(ctx, config)
+    return
+  }
   if (config.role !== 'preset') return
   applyPreset(ctx, config)
+}
+
+/**
+ * Pass row: the clock.
+ *
+ * Deliberately its own row: the tick is the one thing that must keep running
+ * when nobody is watching, and a crash in automation must not take the page or
+ * the model surface with it. It never decides anything — it advances expiry,
+ * replays durable effects, evaluates triggers and nudges stalled runs.
+ * @param {Record<string, any>} ctx - Cordis plugin context.
+ * @param {ReturnType<typeof resolveConfig>} config - resolved config.
+ * @returns {void}
+ */
+export function applyPass(ctx, config) {
+  const logger = ctx.logger
+  void writeBreadcrumb('pass', { role: 'pass', version: PLUGIN_VERSION, intervalMs: config.passIntervalMs })
+  ctx.inject(['hnflow'], (scope) => {
+    const service = scope.hnflow
+    if (service === undefined || service === null || typeof service.pass !== 'function') {
+      logger?.warn?.('hnflow: the pass row found no orchestrator; automation stays off')
+      void writeBreadcrumb('pass', { role: 'pass', version: PLUGIN_VERSION, phase: 'no-service' })
+      return
+    }
+    /**
+     * Run one pass.
+     * @returns {void}
+     */
+    const tick = () => {
+      void Promise.resolve(service.pass()).catch((error) => logger?.warn?.('hnflow: the pass failed: %o', error))
+    }
+    const timer = setInterval(tick, config.passIntervalMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    // First tick soon after start: a restart may have left expiry and effects
+    // waiting, and waiting a full interval for nothing is a needless delay.
+    const first = setTimeout(tick, Math.min(config.passIntervalMs, 1000))
+    if (typeof first.unref === 'function') first.unref()
+    ctx.effect(
+      () => () => {
+        clearInterval(timer)
+        clearTimeout(first)
+        return undefined
+      },
+      'hnflow: stop the pass ticker',
+    )
+    void writeBreadcrumb('pass', { role: 'pass', version: PLUGIN_VERSION, phase: 'registered', intervalMs: config.passIntervalMs })
+  })
 }
 
 /**
@@ -116,6 +172,7 @@ export function applyCore(ctx, config) {
     subagents: safeHas(ctx, 'subagents'),
     presets: safeHas(ctx, 'agentPresets'),
     connection: safeHas(ctx, 'connection'),
+    vibestack: vibestackFactsOf(ctx),
   }
   void writeBreadcrumb('core', facts)
   try {
@@ -196,6 +253,20 @@ function safeHas(ctx, name) {
     return ctx.get?.(name) !== undefined
   } catch {
     return false
+  }
+}
+
+/**
+ * The VibeStack contract as seen at load time, for the breadcrumb.
+ * @param {Record<string, any>} ctx - Cordis context.
+ * @returns {{available: boolean, apiVersion: number | null, warnings: string[]}} facts.
+ */
+function vibestackFactsOf(ctx) {
+  const service = vibestackOf(ctx)
+  return {
+    available: vibestackAvailable(service),
+    apiVersion: service === undefined || service === null ? null : Number(service.apiVersion) || null,
+    warnings: vibestackWarnings(service),
   }
 }
 

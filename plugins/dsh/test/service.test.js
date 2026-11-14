@@ -341,12 +341,36 @@ test('open() marks runs left by a previous process as interrupted', async () => 
     pending: [],
     startedAt: new Date().toISOString(),
   })
-  const service = await makeService({ store, config: {} })
+  const service = await makeService({ store, config: { resumeOnStart: false } })
   try {
     const run = await service.getRun('run-stale')
     assert.equal(run.status, 'interrupted')
     assert.equal(run.nodes.draft.status, 'interrupted')
     assert.equal(run.error.code, 'interrupted')
+  } finally {
+    await service.close()
+  }
+})
+
+test('open() resumes interrupted runs when resumeOnStart is on', async () => {
+  const store = memoryStore()
+  await store.putRun({
+    runId: 'run-resume',
+    flowId: 'fl-test',
+    flowName: 'x',
+    workspace: '/w',
+    status: 'interrupted',
+    revision: 1,
+    nodes: { draft: { status: 'interrupted', attempts: 1 } },
+    pending: [],
+    startedAt: new Date().toISOString(),
+  })
+  const service = await makeService({ store })
+  try {
+    const run = await service.getRun('run-resume')
+    assert.equal(run.recovery.reason, 'host-restarted')
+    assert.notEqual(run.status, 'interrupted')
+    assert.notEqual(run.nodes.draft.status, 'interrupted')
   } finally {
     await service.close()
   }

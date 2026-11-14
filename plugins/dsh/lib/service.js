@@ -12,28 +12,36 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 
 import { createStore } from './store.js'
-import { AssetStore, definitionProblems, normalizeFolder, withFlowIdentity } from './assets.js'
+import { AssetStore, definitionProblems, normalizeFolder, readJsonOrNull, withFlowIdentity, writeJson } from './assets.js'
 import { contentHash, buildLockfile, lockfileProblems, publishFlow } from './flow/publish.js'
 import { nodeIndex, outgoingEdges } from './flow/definition.js'
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from './flow/envelope.js'
 import { validateValue } from './flow/schema.js'
 import { validateFlow } from './flow/validate.js'
-import { agentOptionsOf, layerStatus, vibestackAvailable, vibestackOf } from './layers.js'
-import { buildJudgeBrief, buildNodeBrief } from './prompt.js'
+import { REQUIRED_API_VERSION, agentOptionsOf, layerStatus, vibestackAvailable, vibestackOf, vibestackWarnings } from './layers.js'
+import { buildJudgeBrief, buildNodeBrief, renderRetrySection } from './prompt.js'
 import { createSubagentRunner, withTimeout } from './runner.js'
 import { activateFallbacks, impliedStatus, nodeState, runnableNodes, settle, upstreamArtifacts } from './scheduler.js'
 import { createGatePending, decideGate, gateQuestion } from './gates.js'
 import { checkDelivery, createRequestPending, rejectionStep } from './requests.js'
 import { PLUGIN_VERSION } from './config.js'
 import { createStores } from './resolve.js'
-import { libraryRoot } from './paths.js'
+import { libraryRoot, stateDirectory } from './paths.js'
 import { hashOf } from './json.js'
 import { diffDefinitions } from './diff.js'
 import { artifactList, artifactView, registerArtifact } from './artifacts.js'
 import { checkDeliverablePaths } from './deliverable.js'
 import { addUsage, usageFromSession } from './usage.js'
+import { createChannels } from './channels.js'
+import { createKindRegistry, normalizeKindResult } from './kinds.js'
+import { createOutbox } from './outbox.js'
+import { evaluateTriggers, readTriggers, runCompletedTriggers } from './triggers.js'
+import { runHealth } from './health.js'
+import { pendingSummary, sortPending, stageOf } from './inbox.js'
+import { NODE_TYPES } from './flow/definition.js'
 
 /** Run statuses that never advance again. */
 const TERMINAL_RUN = new Set(['succeeded', 'failed', 'cancelled'])
@@ -102,8 +110,27 @@ function buildService(options) {
   let disposed = false
   /** @type {Promise<void> | null} */
   let opened = null
-  /** @type {NodeJS.Timeout | null} */
-  let sweep = null
+  /** Extra node kinds (deterministic executors) registered by other plugins. */
+  const kinds = createKindRegistry()
+  /** Human-work delivery channels; the inbox stays authoritative. */
+  const channels = createChannels({ logger })
+  // The native question card is a channel, not the source of truth: disabling
+  // it or failing to render it changes nothing about what the inbox holds.
+  channels.register({
+    id: 'card',
+    title: '会话问题卡',
+    send: async (payload) => askCard(payload.run, payload.node, payload.pending, payload.host),
+  })
+  /** Durable side effects: notices and run-completed triggers. */
+  const outbox = createOutbox({ dir: stateDirectory(config), now, logger, maxAttempts: config.outboxMaxAttempts })
+  /** Trigger bookkeeping, keyed by `<workspace>#<trigger id>`. */
+  let triggerState = {}
+  /** Workspaces the pass should evaluate triggers for. */
+  const knownWorkspaces = new Set()
+  /** Last pass report, surfaced to the page. */
+  let lastPass = { at: null, error: null, expired: 0, effects: 0, triggers: 0, advanced: 0 }
+  /** Re-entrancy guard: a slow pass must not stack up. */
+  let passRunning = false
 
   /** Host services are read lazily: rows load in order. */
   const hosts = {
@@ -241,13 +268,14 @@ function buildService(options) {
 
   /**
    * The current host facts used by static validation.
-   * @returns {{allowlist: string[], vibestackAvailable: boolean, checkPreset: Function, checkLayer: Function}} facts.
+   * @returns {{allowlist: string[], vibestackAvailable: boolean, extraNodeKinds: Set<string>, checkPreset: Function, checkLayer: Function}} facts.
    */
   function hostFacts() {
     const vibestack = hosts.vibestack()
     return {
       allowlist: config.presetAllowlist,
       vibestackAvailable: vibestackAvailable(vibestack),
+      extraNodeKinds: new Set(kinds.list().map((kind) => kind.id)),
       checkPreset: async (id) => {
         const presets = hosts.presets()
         if (presets === undefined || typeof presets.resolve !== 'function') return { ok: true }
@@ -270,7 +298,20 @@ function buildService(options) {
    */
   function requireVibestack() {
     if (!vibestackAvailable(hosts.vibestack())) {
-      throw new HnflowError('vibestack-unavailable', 'HNFlow needs the VibeStack plugin (apiVersion >= 2) for capability groups and model layers')
+      throw new HnflowError('vibestack-unavailable', `HNFlow needs the VibeStack plugin (apiVersion >= ${REQUIRED_API_VERSION}) for capability groups and model layers`)
+    }
+  }
+
+  /**
+   * The VibeStack contract as reported to the page and the breadcrumb.
+   * @returns {{available: boolean, apiVersion: number | null, warnings: string[]}} facts.
+   */
+  function vibestackFacts() {
+    const service = hosts.vibestack()
+    return {
+      available: vibestackAvailable(service),
+      apiVersion: service === undefined || service === null ? null : Number(service.apiVersion) || null,
+      warnings: vibestackWarnings(service),
     }
   }
 
@@ -495,6 +536,7 @@ function buildService(options) {
    *   host: Record<string, any>,
    *   prompt: string,
    *   schema: Record<string, any>,
+   *   prior?: Record<string, any>[],
    * }} input - spawn input.
    * @returns {Promise<{kind: string, output?: any, gap?: any, diagnostic?: any, childId?: string}>} interpreted result.
    */
@@ -507,8 +549,12 @@ function buildService(options) {
     let last = null
     /** @type {Record<string, number> | null} */
     let lastUsage = null
+    // Failures accumulate across attempts *and* across steps of the same node:
+    // resending an unchanged brief is how a retry repeats the same mistake.
+    const history = Array.isArray(input.prior) ? [...input.prior] : []
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       if (run.cancelRequested === true) return { kind: 'cancelled' }
+      const attemptPrompt = history.length === 0 ? prompt : `${prompt}\n\n${renderRetrySection(history)}`
       /** @type {Record<string, any>} */
       let activation
       try {
@@ -518,11 +564,12 @@ function buildService(options) {
           preset: node.preset,
           agentOptions: route,
           label: `${run.runId}/${node.id}#${attempt}`,
-          prompt,
+          prompt: attemptPrompt,
           outputSchema: schema,
         })
       } catch (error) {
         last = { code: String(error?.code ?? 'node-spawn-failed'), message: String(error?.message ?? error) }
+        history.push({ attempt, ...last })
         continue
       }
       active.get(run.runId)?.add(activation)
@@ -544,6 +591,7 @@ function buildService(options) {
       if (outcome.timedOut === true) {
         await activation.dispose().catch(() => {})
         last = { code: 'node-timeout', message: `node ${node.id} exceeded ${timeoutMs} ms` }
+        history.push({ attempt, ...last })
         continue
       }
       const result = outcome.value
@@ -559,15 +607,41 @@ function buildService(options) {
       if (envelope.kind === 'failed') {
         last = envelope.error
         lastUsage = usage
+        history.push({ attempt, code: String(envelope.error?.code ?? 'node-failed'), message: String(envelope.error?.message ?? ''), violations: envelope.error?.violations })
         continue
       }
       last = {
         code: result?.stopReason === 'completed' ? 'node-envelope-invalid' : 'node-failed',
         message: envelope.message ?? `stopReason=${String(result?.stopReason ?? 'unknown')}`,
       }
+      history.push({ attempt, ...last })
       lastUsage = usage
     }
     return { kind: 'failed', diagnostic: last ?? { code: 'node-failed', message: `node ${node.id} failed` }, usage: lastUsage }
+  }
+
+  /**
+   * Diagnostics from an earlier step of the same node.
+   *
+   * A node can be re-entered (gate rework, fallback, resume); without this the
+   * child receives the same brief it already failed with.
+   * @param {Record<string, any>} run - run record.
+   * @param {Record<string, any>} node - node.
+   * @returns {Record<string, any>[]} prior failures, oldest first.
+   */
+  function priorDiagnostics(run, node) {
+    const state = nodeState(run, node.id)
+    const attempts = Number(state.attempts ?? 0)
+    const diagnostic = state.diagnostic
+    if (diagnostic === undefined || diagnostic === null || attempts <= 1) return []
+    return [
+      {
+        attempt: attempts - 1,
+        code: String(diagnostic.code ?? 'node-failed'),
+        message: String(diagnostic.message ?? ''),
+        violations: diagnostic.violations,
+      },
+    ]
   }
 
   /**
@@ -584,7 +658,7 @@ function buildService(options) {
     if (node.humanDelivery !== undefined) {
       prompt += `\n\n## 人的交付物（本次继续使用）\n\n\`\`\`json\n${JSON.stringify(node.humanDelivery, null, 2).slice(0, 8000)}\n\`\`\``
     }
-    const result = await spawnNode({ run, node, host, prompt, schema: envelopeSchema(node.output) })
+    const result = await spawnNode({ run, node, host, prompt, schema: envelopeSchema(node.output), prior: priorDiagnostics(run, node) })
     if (result.kind === 'needs_human') {
       if (node.allowHuman !== true) {
         return { status: 'failed', diagnostic: { code: 'human-not-allowed', message: `node ${node.id} reported a human gap but does not declare allowHuman` }, usage: result.usage }
@@ -781,28 +855,69 @@ function buildService(options) {
         const pending = openPending(flow, run, node, createRequestPending(node, { now: now() }))
         return { status: 'waiting', pending }
       }
-      default:
-        return { status: 'failed', diagnostic: { code: 'node-type-invalid', message: `unsupported node type ${String(node.type)}` } }
+      default: {
+        // Not one of the six built-ins: only a registered deterministic kind
+        // may run it. An unknown type stays a validation-grade failure.
+        const kind = kinds.get(node.type)
+        if (kind === undefined) {
+          return { status: 'failed', diagnostic: { code: 'node-type-invalid', message: `unsupported node type ${String(node.type)}` } }
+        }
+        const upstream = upstreamArtifacts(flow, run, node.id)
+        try {
+          const normalized = normalizeKindResult(await kind.run({ flow, run, node, upstream, input: run.input ?? {} }), kind.id)
+          if (normalized.status === 'failed') return { status: 'failed', diagnostic: normalized.diagnostic }
+          const checked = validateValue(normalized.output, node.output)
+          if (!checked.ok) {
+            return {
+              status: 'failed',
+              diagnostic: { code: 'contract-unsatisfied', message: `node kind ${kind.id} returned an output that does not satisfy the node contract`, violations: checked.violations },
+            }
+          }
+          return { status: 'done', output: normalized.output }
+        } catch (error) {
+          return { status: 'failed', diagnostic: { code: String(error?.code ?? 'node-failed'), message: String(error?.message ?? error) } }
+        }
+      }
     }
   }
 
   /**
-   * Offer a gate as a native question card, in addition to the inbox.
+   * Offer a gate on every delivery channel, in addition to the inbox.
    *
-   * The card is a convenience, never the source of truth: the pending record is
-   * already durable, so a missing answerer, an unrendered card or a timeout only
-   * means the decision happens on the page instead. The decision is submitted
-   * after the current step settles its own chain (no re-entrant deadlock).
+   * Channels are convenience, never the source of truth: the pending record is
+   * already durable, so a missing answerer, an unrendered card or a failed
+   * third-party push only means the decision happens on the page instead.
    * @param {Record<string, any>} run - run record.
    * @param {Record<string, any>} node - gate node.
    * @param {Record<string, any>} pending - pending record.
    * @param {Record<string, any>} host - live root agent.
-   * @returns {void}
+   * @returns {Promise<void>} resolves once the card was attempted.
    */
-  function askGate(run, node, pending, host) {
-    const questions = hosts.questions()
-    if (typeof questions?.ask !== 'function' || pending.asked === 'card') return
+  async function askGate(run, node, pending, host) {
+    if (typeof hosts.questions()?.ask !== 'function' || pending.asked === 'card') return
     pending.asked = 'card'
+    const outcome = await channels.send('card', { run, node, pending, host })
+    if (!outcome.ok) {
+      // The inbox is the effective channel from here on.
+      pending.askedVia = 'inbox'
+      pending.askError = outcome.error ?? outcome.code
+    }
+  }
+
+  /**
+   * Render the gate as a native question card and submit its answer.
+   *
+   * The decision is submitted after the current step settles its own chain (no
+   * re-entrant deadlock).
+   * @param {Record<string, any>} run - run record.
+   * @param {Record<string, any>} node - gate node.
+   * @param {Record<string, any>} pending - pending record.
+   * @param {Record<string, any>} host - live root agent.
+   * @returns {Promise<void>} resolves when the card settles.
+   */
+  async function askCard(run, node, pending, host) {
+    const questions = hosts.questions()
+    if (typeof questions?.ask !== 'function') return
     pending.askedVia = 'card'
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 10 * 60_000)
@@ -1064,6 +1179,36 @@ function buildService(options) {
   }
 
   /**
+   * Record the effects a finished run owes.
+   *
+   * Written before they are delivered: the pass picks them up later, so a crash
+   * between "the run is terminal" and "the owner knows" cannot lose the notice.
+   * @param {Record<string, any>} run - terminal run.
+   * @returns {Promise<void>} resolves once recorded.
+   */
+  async function recordRunEffects(run) {
+    const status = String(run.status)
+    try {
+      await outbox.enqueue({
+        kind: 'notice',
+        key: `notice:${run.runId}:${status}`,
+        runId: run.runId,
+        payload: { runId: run.runId, flowId: run.flowId, flowName: run.flowName, status, message: runHealth(run, { now: now() }).message },
+      })
+      if (status === 'succeeded') {
+        await outbox.enqueue({
+          kind: 'trigger',
+          key: `run-completed:${run.runId}`,
+          runId: run.runId,
+          payload: { runId: run.runId, flowId: run.flowId, flowName: run.flowName, chain: Array.isArray(run.chain) ? run.chain : [] },
+        })
+      }
+    } catch (error) {
+      logger.warn?.('hnflow: cannot record the run effects: %o', error)
+    }
+  }
+
+  /**
    * Advance one run as far as it can go.
    * @param {string} runId - run identity.
    * @returns {Promise<Record<string, any> | null>} the run after the step.
@@ -1079,11 +1224,29 @@ function buildService(options) {
       if (run.cancelRequested === true) {
         run.status = 'cancelled'
         run.endedAt = now().toISOString()
+        run.updatedAt = run.endedAt
         run.error = { code: 'cancelled', message: 'the run was cancelled' }
         await store.putRun(run)
+        await recordRunEffects(run)
+        return run
+      }
+      const budget = Number(config.runBudgetMs ?? 0)
+      const startedMs = Date.parse(String(run.startedAt ?? run.createdAt ?? ''))
+      if (budget > 0 && Number.isFinite(startedMs) && now().getTime() - startedMs > budget) {
+        const live = active.get(run.runId)
+        if (live !== undefined) {
+          for (const activation of live) await activation.dispose().catch(() => {})
+        }
+        run.status = 'failed'
+        run.endedAt = now().toISOString()
+        run.updatedAt = run.endedAt
+        run.error = { code: 'run-budget-exceeded', message: `the run exceeded its ${Math.round(budget / 1000)}s budget` }
+        await store.putRun(run)
+        await recordRunEffects(run)
         return run
       }
       run.revisionCounter = Number(run.revisionCounter ?? 0) + 1
+      run.updatedAt = now().toISOString()
       // Any advance invalidates a decision read before it: open human work
       // carries the current revision so a stale page submission is refused.
       for (const pending of run.pending) {
@@ -1112,6 +1275,7 @@ function buildService(options) {
           }
         }
         await store.putRun(run)
+        if (TERMINAL_RUN.has(status)) await recordRunEffects(run)
         return run
       }
       if (host === null) {
@@ -1153,7 +1317,7 @@ function buildService(options) {
 
   /**
    * Start a fresh run.
-   * @param {{cwd: string, key: string, input?: Record<string, any>, hostSessionId?: string}} input - start input.
+   * @param {{cwd: string, key: string, input?: Record<string, any>, hostSessionId?: string, trigger?: Record<string, any>}} input - start input.
    * @returns {Promise<{runId: string, status: string, settled: Promise<Record<string, any> | null>}>} started run.
    */
   async function run(input) {
@@ -1177,6 +1341,7 @@ function buildService(options) {
     }
     const routes = await routesOf(resolved.definition, lockfile)
     const runId = `run-${randomUUID().replace(/-/gu, '').slice(0, 16)}`
+    const startedAt = now().toISOString()
     /** @type {Record<string, any>} */
     const record = {
       runId,
@@ -1195,10 +1360,16 @@ function buildService(options) {
       hostSessionId: typeof input.hostSessionId === 'string' ? input.hostSessionId : null,
       status: 'running',
       input: input.input ?? {},
-      createdAt: now().toISOString(),
-      startedAt: now().toISOString(),
+      createdAt: startedAt,
+      startedAt,
+      updatedAt: startedAt,
       endedAt: null,
       error: null,
+      // A trigger-started run records what woke it, and the chain that led here
+      // so a run-completed trigger cannot loop forever.
+      trigger: input.trigger === undefined ? null : input.trigger,
+      chain: Array.isArray(input.trigger?.chain) ? input.trigger.chain : [],
+      recovery: null,
       nodes: Object.fromEntries([...nodeIndex(resolved.definition).keys()].map((id) => [id, { status: 'pending', attempts: 0 }])),
       pending: [],
       fallbacks: [],
@@ -1212,6 +1383,7 @@ function buildService(options) {
       revisionCounter: 0,
     }
     await store.putRun(record)
+    knownWorkspaces.add(String(input.cwd))
     active.set(runId, new Set())
     const settled = enqueue(runId, () => step(runId))
     return { runId, status: 'running', settled }
@@ -1889,12 +2061,20 @@ function buildService(options) {
     for (const run of runs) {
       for (const pending of Array.isArray(run.pending) ? run.pending : []) {
         if (pending.decision !== undefined || pending.delivery !== undefined) continue
+        const stage = stageOf(pending)
         items.push({
           id: pending.id,
           kind: pending.kind,
           runId: run.runId,
           flowName: run.flowName,
           nodeId: pending.nodeId,
+          nodeTitle: pending.nodeTitle ?? pending.nodeId,
+          // Derived, not stored: the page shows one sentence and one stage so a
+          // flat list of ten pending items never looks like ten equal chores.
+          stage: stage.stage,
+          stageLabel: stage.label,
+          priority: stage.priority,
+          summary: pendingSummary(pending, { run }),
           createdAt: pending.createdAt,
           askedAt: pending.askedAt ?? pending.createdAt,
           askedVia: pending.askedVia ?? 'inbox',
@@ -1919,7 +2099,7 @@ function buildService(options) {
         })
       }
     }
-    return items.sort((left, right) => String(left.createdAt).localeCompare(String(right.createdAt)))
+    return sortPending(items)
   }
 
   /**
@@ -1972,15 +2152,60 @@ function buildService(options) {
     } catch (error) {
       logger.warn?.('hnflow: the library could not be listed: %o', error)
     }
+    /** @type {Record<string, any>[]} */
+    const triggers = []
+    /** @type {{workspace: string, id: string, error: string}[]} */
+    const triggerErrors = []
+    for (const group of groups) {
+      const root = String(group.path ?? '')
+      if (root.length === 0 || config.triggersEnabled === false) continue
+      knownWorkspaces.add(root)
+      try {
+        const file = await readTriggers(root, config)
+        for (const entry of file.errors) triggerErrors.push({ workspace: root, id: entry.id, error: entry.error })
+        for (const trigger of file.triggers) {
+          const state = triggerState[`${root}#${trigger.id}`] ?? {}
+          triggers.push({
+            id: trigger.id,
+            source: trigger.source,
+            flow: trigger.flow,
+            enabled: trigger.enabled,
+            workspace: root,
+            cron: trigger.cron ?? null,
+            watch: trigger.watch ?? null,
+            after: trigger.after ?? null,
+            lastFiredAt: state.lastFiredAt ?? null,
+          })
+        }
+      } catch (error) {
+        triggerErrors.push({ workspace: root, id: '*', error: String(error?.message ?? error) })
+      }
+    }
+    const degraded = !vibestackAvailable(hosts.vibestack())
     return {
       ok: true,
-      degraded: !vibestackAvailable(hosts.vibestack()),
+      degraded,
+      vibestack: vibestackFacts(),
       storage: store.mode(),
       warnings: store.warnings(),
       library,
       workspaces: groups,
-      runs: (await listRuns()).map(summariseRun),
+      runs: (await listRuns()).map((run) => summariseRun(run)),
       inbox: await inbox(),
+      // Declarative facts: the page renders these instead of hard-coding where
+      // to look for automation state.
+      triggers,
+      automation: { errors: triggerErrors, effects: outbox.summary(), pass: lastPass },
+      facts: {
+        degraded,
+        storage: store.mode(),
+        vibestack: vibestackFacts(),
+        triggersEnabled: config.triggersEnabled !== false,
+        passIntervalMs: config.passIntervalMs,
+        runBudgetMs: config.runBudgetMs,
+        channels: channels.list(),
+        nodeKinds: kinds.list().map((kind) => ({ id: kind.id, title: kind.title, description: kind.description })),
+      },
     }
   }
 
@@ -2015,6 +2240,182 @@ function buildService(options) {
    */
   function cachedIndex(cwd) {
     return indexCache.get(cwd) ?? ''
+  }
+
+  /**
+   * Path of the trigger bookkeeping file.
+   * @returns {string} absolute path.
+   */
+  function triggerStatePath() {
+    return path.join(stateDirectory(config), 'triggers-state.json')
+  }
+
+  /**
+   * Read the trigger bookkeeping file.
+   * @returns {Promise<Record<string, any>>} state (empty when unreadable).
+   */
+  async function loadTriggerState() {
+    try {
+      const parsed = await readJsonOrNull(triggerStatePath())
+      return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+    } catch (error) {
+      logger.warn?.('hnflow: cannot read the trigger state: %o', error)
+      return {}
+    }
+  }
+
+  /**
+   * Persist the trigger bookkeeping file.
+   * @returns {Promise<void>} resolves once durable.
+   */
+  async function saveTriggerState() {
+    try {
+      await writeJson(triggerStatePath(), triggerState)
+    } catch (error) {
+      logger.warn?.('hnflow: cannot write the trigger state: %o', error)
+    }
+  }
+
+  /**
+   * Start a run on behalf of a trigger.
+   *
+   * The run is started through the same `run()` path as a person's request, so
+   * validation, lockfile pinning and workspace resolution are identical. The
+   * trigger only decides *when*; it never bypasses a gate.
+   * @param {{workspace: string, trigger: Record<string, any>, key: string, chain?: string[]}} input - firing.
+   * @returns {Promise<void>} resolves once started.
+   */
+  async function startTriggeredRun(input) {
+    const started = await run({
+      cwd: input.workspace,
+      key: input.trigger.flow,
+      input: input.trigger.input ?? {},
+      trigger: { source: input.trigger.source, triggerId: input.trigger.id, key: input.key, chain: input.chain ?? [] },
+    })
+    void started.settled.catch((error) => logger.warn?.('hnflow: a triggered run failed: %o', error))
+  }
+
+  /**
+   * Turn a `run-completed` effect into runs.
+   * @param {Record<string, any>} effect - outbox effect.
+   * @param {Record<string, any>} report - pass report.
+   * @returns {Promise<void>} resolves once handled.
+   */
+  async function deliverTriggerEffect(effect, report) {
+    const payload = effect.payload ?? {}
+    const runId = String(payload.runId ?? '')
+    const source = runId.length > 0 ? await store.getRun(runId) : null
+    if (source === null) {
+      await outbox.markDone(effect.id, 'source run missing')
+      return
+    }
+    const workspace = String(source.workspace ?? '')
+    const chain = Array.isArray(payload.chain) ? [...payload.chain, runId] : [runId]
+    if (workspace.length === 0 || chain.length > 5) {
+      await outbox.markDone(effect.id, 'chain too deep')
+      return
+    }
+    const file = await readTriggers(workspace, config)
+    const matching = runCompletedTriggers(file.triggers, String(payload.flowId ?? ''))
+    for (const trigger of matching) {
+      const stateKey = `${workspace}#${trigger.id}`
+      const dedupe = `${trigger.id}:${runId}`
+      if (triggerState[stateKey]?.lastKey === dedupe) continue
+      await startTriggeredRun({ workspace, trigger, key: dedupe, chain })
+      triggerState[stateKey] = { lastKey: dedupe, lastFiredAt: now().toISOString() }
+      report.triggers += 1
+    }
+    await saveTriggerState()
+    await outbox.markDone(effect.id, `${matching.length} trigger(s)`)
+  }
+
+  /**
+   * Evaluate the polling trigger sources for every known workspace.
+   * @param {Record<string, any>} report - pass report.
+   * @returns {Promise<void>} resolves once evaluated.
+   */
+  async function evaluateWorkspaceTriggers(report) {
+    if (config.triggersEnabled === false) return
+    for (const workspace of [...knownWorkspaces]) {
+      const file = await readTriggers(workspace, config)
+      if (file.missing) continue
+      const evaluated = await evaluateTriggers({ workspace, triggers: file.triggers, state: triggerState, now: now() })
+      triggerState = evaluated.state
+      for (const error of evaluated.errors) report.errors.push(`trigger ${error.id}: ${error.error}`)
+      for (const firing of evaluated.fired) {
+        try {
+          await startTriggeredRun({ workspace, trigger: firing.trigger, key: firing.key, chain: [] })
+          report.triggers += 1
+        } catch (error) {
+          report.errors.push(`trigger ${firing.trigger.id}: ${String(error?.message ?? error)}`)
+          logger.warn?.('hnflow: trigger %s could not start %s: %o', firing.trigger.id, firing.trigger.flow, error)
+        }
+      }
+      await saveTriggerState()
+    }
+  }
+
+  /**
+   * Advance runs that are marked running but have no live chain.
+   * @param {Record<string, any>} report - pass report.
+   * @returns {Promise<void>} resolves once advanced.
+   */
+  async function advanceStalledRuns(report) {
+    const runs = await store.listRuns()
+    const stamp = now().getTime()
+    for (const run of runs) {
+      if (run.status !== 'running' || chains.has(run.runId)) continue
+      const live = active.get(run.runId)
+      if (live !== undefined && live.size > 0) continue
+      const last = Date.parse(String(run.updatedAt ?? run.startedAt ?? ''))
+      if (!Number.isFinite(last) || stamp - last < 60_000) continue
+      report.advanced += 1
+      void enqueue(run.runId, () => step(run.runId)).catch((error) => logger.warn?.('hnflow: advancing a stalled run failed: %o', error))
+    }
+  }
+
+  /**
+   * One pass: expiry, durable effects, triggers, stalled runs.
+   *
+   * Called by the `hnflow-pass` row every `passIntervalMs`. Re-entrant calls are
+   * skipped, so a slow pass delays the next tick instead of stacking.
+   * @returns {Promise<Record<string, any>>} pass report.
+   */
+  async function pass() {
+    if (disposed || passRunning) return lastPass
+    passRunning = true
+    /** @type {Record<string, any>} */
+    const report = { at: now().toISOString(), error: null, expired: 0, effects: 0, triggers: 0, advanced: 0, errors: [] }
+    try {
+      await ready()
+      await sweepExpired()
+      for (const effect of outbox.due(now())) {
+        try {
+          if (effect.kind === 'notice') {
+            await outbox.markDone(effect.id, 'noticed')
+            report.effects += 1
+          } else if (effect.kind === 'trigger') {
+            await deliverTriggerEffect(effect, report)
+            report.effects += 1
+          } else {
+            await outbox.markDone(effect.id, 'ignored')
+          }
+        } catch (error) {
+          await outbox.markFailed(effect.id, String(error?.message ?? error))
+          report.errors.push(`effect ${effect.kind}: ${String(error?.message ?? error)}`)
+        }
+      }
+      await evaluateWorkspaceTriggers(report)
+      await advanceStalledRuns(report)
+    } catch (error) {
+      report.error = String(error?.message ?? error)
+      report.errors.push(report.error)
+      logger.warn?.('hnflow: the pass failed: %o', error)
+    } finally {
+      passRunning = false
+      lastPass = report
+    }
+    return report
   }
 
   /**
@@ -2104,23 +2505,91 @@ function buildService(options) {
   async function open() {
     opened = (async () => {
       await store.open()
+      try {
+        await outbox.open()
+      } catch (error) {
+        logger.warn?.('hnflow: cannot open the effect queue: %o', error)
+      }
+      triggerState = await loadTriggerState()
       const runs = await store.listRuns()
+      const interrupted = []
       for (const run of runs) {
-        if (run.status === 'running' || run.status === 'queued') {
+        if (String(run.workspace ?? '').length > 0) knownWorkspaces.add(String(run.workspace))
+        if (run.status === 'running' || run.status === 'queued' || run.status === 'interrupted') {
           for (const [id, state] of Object.entries(run.nodes)) {
             if (state.status === 'running') run.nodes[id] = { ...state, status: 'interrupted', endedAt: now().toISOString() }
           }
           run.status = 'interrupted'
           run.error = { code: 'interrupted', message: 'the host process ended while the run was working; resume explicitly' }
+          run.updatedAt = now().toISOString()
           await store.putRun(run)
+          interrupted.push(run)
+        }
+      }
+      // Recovery is opt-out, not opt-in: an interrupted run is the common case
+      // after an upgrade or a laptop sleep, and leaving it parked is exactly the
+      // "forgot about it" failure this version exists to remove.
+      if (config.resumeOnStart !== false) {
+        for (const run of interrupted) {
+          try {
+            run.status = 'running'
+            run.error = null
+            run.recovery = { reason: 'host-restarted', at: now().toISOString() }
+            for (const [id, state] of Object.entries(run.nodes)) {
+              if (state.status === 'running' || state.status === 'interrupted') run.nodes[id] = { ...state, status: 'pending' }
+            }
+            run.updatedAt = now().toISOString()
+            await store.putRun(run)
+            active.set(run.runId, new Set())
+            void enqueue(run.runId, () => step(run.runId)).catch((error) => logger.warn?.('hnflow: resuming an interrupted run failed: %o', error))
+          } catch (error) {
+            logger.warn?.('hnflow: cannot resume run %s: %o', run.runId, error)
+          }
         }
       }
     })()
     await opened
-    sweep = setInterval(() => {
-      void sweepExpired()
-    }, 60_000)
-    if (typeof sweep.unref === 'function') sweep.unref()
+  }
+
+  /**
+   * Register an extra deterministic node kind.
+   * @param {Record<string, any>} kind - `{id, title?, description?, run}`.
+   * @returns {Record<string, any>} the registered kind.
+   */
+  function registerNodeKind(kind) {
+    const record = kinds.register(kind)
+    indexCache.clear()
+    return record
+  }
+
+  /**
+   * Register an extra delivery channel for human work.
+   * @param {Record<string, any>} channel - `{id, title, send, enabled?}`.
+   * @returns {Record<string, any>} the registered channel.
+   */
+  function registerChannel(channel) {
+    return channels.register(channel)
+  }
+
+  /**
+   * Trigger rows across known workspaces (read-only).
+   * @returns {Promise<{triggers: Record<string, any>[], errors: Record<string, any>[], enabled: boolean}>} triggers.
+   */
+  async function triggers() {
+    await ready()
+    /** @type {Record<string, any>[]} */
+    const rows = []
+    /** @type {Record<string, any>[]} */
+    const errors = []
+    for (const workspace of [...knownWorkspaces]) {
+      const file = await readTriggers(workspace, config)
+      for (const entry of file.errors) errors.push({ workspace, id: entry.id, error: entry.error })
+      for (const trigger of file.triggers) {
+        const state = triggerState[`${workspace}#${trigger.id}`] ?? {}
+        rows.push({ ...trigger, workspace, lastFiredAt: state.lastFiredAt ?? null })
+      }
+    }
+    return { triggers: rows, errors, enabled: config.triggersEnabled !== false }
   }
 
   /**
@@ -2129,8 +2598,6 @@ function buildService(options) {
    */
   async function close() {
     disposed = true
-    if (sweep !== null) clearInterval(sweep)
-    sweep = null
     for (const activations of active.values()) {
       for (const activation of activations) await activation.dispose().catch(() => {})
     }
@@ -2177,7 +2644,12 @@ function buildService(options) {
     validate,
     resolveKey,
     sweepExpired,
-    status: () => ({ degraded: !vibestackAvailable(hosts.vibestack()), storage: store.mode(), warnings: store.warnings(), runner: runner.available() }),
+    pass,
+    triggers,
+    registerNodeKind,
+    registerChannel,
+    nodeKinds: () => [...NODE_TYPES, ...kinds.list().map((kind) => kind.id)],
+    status: () => ({ degraded: !vibestackAvailable(hosts.vibestack()), vibestack: vibestackFacts(), storage: store.mode(), warnings: store.warnings(), runner: runner.available(), pass: lastPass }),
   }
 }
 
@@ -2193,11 +2665,14 @@ export function summariseRun(run) {
     flowName: run.flowName,
     key: run.key,
     status: run.status,
+    health: runHealth(run),
     workspace: run.workspace,
     hostSessionId: run.hostSessionId,
     revision: run.revision,
     source: run.source ?? 'latest',
+    trigger: run.trigger ?? null,
     startedAt: run.startedAt,
+    updatedAt: run.updatedAt ?? null,
     endedAt: run.endedAt,
     error: run.error,
     nodes: Object.entries(run.nodes ?? {}).map(([id, state]) => ({

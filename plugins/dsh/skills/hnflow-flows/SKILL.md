@@ -18,7 +18,9 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 | `request` | 人 + 验收 | 要 AI 生成不了的东西 | `deliverable`、`whyHuman`、`deadline` |
 | `verify` | 插件（+ 可选 judge） | 验收人的交付物 | `against`、`checks`、`onReject` |
 
-`model` 只写 **VibeStack 模型层 id**（如 `strong`、`fast`、`audit`），不是 provider/model。层缺失时节点不会启动，发布也会失败。
+`model` 只写 **VibeStack 平台层 id**（`fast` / `standard` / `strong` / `vision`，默认 `standard`），不是 provider/model。
+层在目录里但本机没绑路由时发布失败（`model-layer-unbound`），写错的层名失败（`model-layer-unknown`），
+DSH 本机自定义层不能写进流程（`model-layer-custom`）；都不回落。
 
 ## 节点信封
 

@@ -31,8 +31,9 @@ description: HNFlow 对话控制面：创建、修改、提升、删除项目内
 | `status` | `run_id` | 节点状态、错误、待人工数、usage、降级、产物 | 只读 |
 | `list_runs` | 无 | 最近 20 条运行摘要 | 只读 |
 | `cancel` | `run_id` | 协作式取消 | 终态运行返回原状态 |
-| `resume` | `run_id` | 显式恢复 `interrupted` 等未终态运行 | 不会自动恢复；终态报 `run-terminal` |
-| `inbox` | 无 | 待处理的门禁/交付（含审计字段） | **只读**；不能代替人决策或交付 |
+| `resume` | `run_id` | 显式恢复未终态运行 | 重启后插件会按 `resumeOnStart` 自动续跑；本动作用于手动重试 |
+| `inbox` | 无 | 待处理的门禁/交付，按"先做什么"排序，每项带阶段（交付/裁决/返工/仲裁）与一句话摘要 | **只读**；不能代替人决策或交付 |
+| `triggers` | 无 | `.hnflow/triggers.json` 的触发器（来源、条件、目标流程、上次触发时间）与解析错误 | 只读；新增/修改触发器是改文件，不是工具动作 |
 | `artifact` | `artifact_id` | 一个节点产物及当前值 | id 从 `status` 取 |
 | `add_ref` | `flow`、`alias?` | 把库资产引用到当前工作区 | `flow` 用资产 id 或名称；重复引用报错 |
 | `remove_ref` | `flow` | 删除引用，**不删资产** | 若该引用有工作区覆盖，覆盖文件保留但不再列出 |
@@ -90,8 +91,16 @@ description: HNFlow 对话控制面：创建、修改、提升、删除项目内
 
 - `run` 只启动；不要轮询，也不要在对话里模拟节点。
 - 后续用 `status` / `list_runs` / `inbox` / `artifact` 回答。
-- 等待人工的门禁和交付由用户在页面或 `/hnflow inbox` 处理；`inbox` 只读。
-- `cancel` / `resume` 是显式动作；`interrupted` 不会自动续跑。
+- 等待人工的门禁和交付由用户在页面或 `/hnflow inbox` 处理；`inbox` 只读，一次只推进一条。
+- 宿主重启后，未终态运行会按 `resumeOnStart` 自动带"恢复说明"续跑；`interrupted` 不再是默认停点。
+- `cancel` 是显式动作；`resume` 用于手动重试被放弃的运行。
+
+### 自动化（`triggers`）
+
+- 触发器写在 `<工作区>/.hnflow/triggers.json`，只决定**何时**新开一次运行；它不绕门禁、不接管授权、不续跑旧 run。
+- 三种来源：`cron`（五字段）、`file`（watch glob 签名变化，带 debounce）、`run-completed`（`after: <flowId>|"*"`）。
+- 每次触发用幂等键去重；链式触发最多 5 层；创建触发器是改文件，不是工具动作。
+- `triggers` 动作只读：看条件、目标流程、上次触发时间与解析错误。
 
 ## 只能由人完成（工具没有入口）
 
@@ -121,7 +130,11 @@ description: HNFlow 对话控制面：创建、修改、提升、删除项目内
 | `revision-missing` / `lockfile-mismatch` | 版本快照或 lockfile 不可用：不要回退猜测，报告给用户 |
 | `run-missing` | run id 不存在：`list_runs` 确认 |
 | `run-terminal` | 运行已结束，不能 resume：如需新结果重新 `run` |
-| `vibestack-unavailable` | 缺 VibeStack 或 apiVersion 不足：发布/运行会被拒绝，不要重试绕过 |
+| `vibestack-unavailable` | 缺 VibeStack 或 apiVersion < 3：发布/运行都被拒绝，不要重试绕过 |
+| `model-layer-unknown` | 层 id 写错：只用 `fast` / `standard` / `strong` / `vision` |
+| `model-layer-unbound` | 层存在但本机没绑路由：让用户在该项目 `.vibestack/models.json` 的 `bindings.dsh.<layer>` 里绑定，别换默认层顶替 |
+| `model-layer-custom` | 写了 DSH 本机自定义层：流程只能钉平台层 |
+| `model-layer-unroutable` | 层绑定的 provider/model 不可用：让用户修 VibeStack 配置 |
 
 ## 不要做
 

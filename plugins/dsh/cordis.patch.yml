@@ -35,6 +35,15 @@
         role: ui
         host: false
 
+    # The clock: expiry, durable effects, `.hnflow/triggers.json`, stalled runs.
+    # Its own row so a failing automation tick cannot take the page or the model
+    # surface down with it. Disable this row to turn automation off entirely
+    # (the plugin then only advances runs while a session is driving them).
+    - id: hnflow-pass
+      name: dsh-hnflow
+      config:
+        role: pass
+
     - id: preset-hnflow
       name: '@deepseek-ai/dsh-agent-preset'
       config:

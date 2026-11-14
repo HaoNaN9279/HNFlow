@@ -26,6 +26,7 @@ export const ACTIONS = Object.freeze([
   'rename_ref',
   'pin',
   'history',
+  'triggers',
 ])
 
 /**
@@ -187,9 +188,14 @@ export function createFlowTool(options) {
         case 'inbox': {
           const items = await service.inbox()
           if (items.length === 0) return 'The HNFlow inbox is empty.'
+          // Stage first: the owner needs to know what kind of act each item is,
+          // and the list order is already "what to do first".
           return items
-            .map((item) => `- ${item.id} (${item.kind}, run ${item.runId}, node ${item.nodeId})${item.whyHuman ? `: ${item.whyHuman}` : ''}`)
+            .map((item, index) => `${index + 1}. [${item.stageLabel ?? item.kind}] ${item.summary ?? item.id} (id ${item.id}, run ${item.runId}${typeof item.expiresAt === 'string' ? `, expires ${item.expiresAt}` : ''})`)
             .join('\n')
+        }
+        case 'triggers': {
+          return formatTriggers(await service.triggers())
         }
         case 'artifact': {
           const artifactId = requireArtifactId(args)
@@ -272,6 +278,22 @@ function runSummary(run) {
     degradations: Array.isArray(run.degradations) ? run.degradations : [],
     artifacts: Object.values(run.artifacts ?? {}).map((entry) => ({ artifactId: entry.artifactId, nodeId: entry.nodeId, kind: entry.kind, degraded: entry.degraded === true })),
   }
+}
+
+/**
+ * Render the trigger listing for the tool.
+ * @param {{triggers: Record<string, any>[], errors?: Record<string, any>[], enabled: boolean}} listing - trigger listing.
+ * @returns {string} text.
+ */
+function formatTriggers(listing) {
+  const lines = [`automation: ${listing.enabled === false ? 'disabled' : 'enabled'}`]
+  if ((listing.triggers ?? []).length === 0) lines.push('no triggers in .hnflow/triggers.json')
+  for (const trigger of listing.triggers ?? []) {
+    const when = trigger.source === 'cron' ? trigger.cron : trigger.source === 'file' ? (trigger.watch ?? []).join(', ') : `after ${trigger.after}`
+    lines.push(`- ${trigger.id} [${trigger.source}] ${when} → ${trigger.flow}${trigger.enabled === false ? ' (disabled)' : ''}${typeof trigger.lastFiredAt === 'string' ? `; last fired ${trigger.lastFiredAt}` : ''}`)
+  }
+  for (const error of listing.errors ?? []) lines.push(`- invalid ${error.id}: ${error.error}`)
+  return lines.join('\n')
 }
 
 /**

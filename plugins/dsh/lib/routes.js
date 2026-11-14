@@ -25,6 +25,7 @@ export const ROUTES = Object.freeze({
   artifact: '/api/hnflow/artifact',
   cancel: '/api/hnflow/cancel',
   resume: '/api/hnflow/resume',
+  triggers: '/api/hnflow/triggers',
 })
 
 /**
@@ -183,6 +184,23 @@ export function createRoutes(options) {
     },
   }
 
+  /**
+   * Read the trigger listing (read-only; editing is a file action).
+   * @returns {Promise<Response>} response.
+   */
+  const triggersRoute = {
+    path: ROUTES.triggers,
+    methods: ['GET'],
+    requestBody: 'buffered',
+    fetch: async () => {
+      try {
+        return json({ ok: true, ...(await service.triggers()) })
+      } catch (error) {
+        return failure(error)
+      }
+    },
+  }
+
   return [
     stateRoute,
     runRoute,
@@ -191,6 +209,7 @@ export function createRoutes(options) {
     artifactRoute,
     historyRoute,
     previewRoute,
+    triggersRoute,
     post(ROUTES.gate, async (body) => service.decide({ runId: required(body, 'runId'), gateId: required(body, 'gateId'), decision: required(body, 'decision'), reason: optional(body, 'reason'), revision: Number.isInteger(body?.revision) ? body.revision : undefined, artifact: body?.artifact })),
     post(ROUTES.deliverable, async (body) => service.deliver({ runId: required(body, 'runId'), requestId: required(body, 'requestId'), payload: body?.payload, revision: Number.isInteger(body?.revision) ? body.revision : undefined })),
     post(ROUTES.start, async (body) => service.run({ cwd: required(body, 'workspace'), key: required(body, 'flow'), input: body?.input ?? {} })),
@@ -285,7 +304,7 @@ function json(value, status = 200) {
  */
 function failure(error) {
   const code = /** @type {any} */ (error)?.code
-  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'vibestack-unavailable', 'local-flow', 'not-local', 'name-required', 'name-duplicate', 'alias-required', 'folder-invalid', 'ref-ambiguous'].includes(code)
+  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'vibestack-unavailable', 'model-layer-unknown', 'model-layer-unbound', 'model-layer-custom', 'model-layer-unroutable', 'local-flow', 'not-local', 'name-required', 'name-duplicate', 'alias-required', 'folder-invalid', 'ref-ambiguous'].includes(code)
   const conflict = typeof code === 'string' && ['stale-revision', 'already-decided', 'run-terminal'].includes(code)
   const status = badRequest ? 400 : conflict ? 409 : typeof code === 'string' && code.endsWith('-missing') ? 404 : 500
   return json(

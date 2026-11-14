@@ -38,21 +38,45 @@ export function memoryStore() {
 }
 
 /**
- * A VibeStack service fake with one layer (`strong`).
- * @param {{apiVersion?: number, layers?: Record<string, any>}} [options] - overrides.
+ * A VibeStack service fake shaped like apiVersion 3: four bound platform
+ * layers, an optional catalog-only layer (`unbound`) and an optional DSH-only
+ * layer (`custom`).
+ * @param {{apiVersion?: number, layers?: Record<string, any>, unbound?: string[], custom?: Record<string, any>[], warnings?: string[]}} [options] - overrides.
  * @returns {Record<string, any>} service.
  */
 export function fakeVibestack(options = {}) {
   const layers = options.layers ?? {
-    strong: { id: 'strong', provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' },
+    fast: { id: 'fast', provider: 'deepseek-account', model: 'deepseek-flash', kind: 'speed', rank: 1 },
+    standard: { id: 'standard', provider: 'deepseek-account', model: 'deepseek-flash', kind: 'balanced', rank: 2 },
+    strong: { id: 'strong', provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high', kind: 'reasoning', rank: 3 },
+    vision: { id: 'vision', provider: 'deepseek-account', model: 'deepseek-flash', kind: 'multimodal', rank: 4 },
+  }
+  const unbound = options.unbound ?? []
+  const custom = options.custom ?? []
+  const warnings = options.warnings ?? []
+  /** @returns {Record<string, any>[]} every catalog row, bound or not. */
+  const rows = () => [
+    ...Object.values(layers)
+      .filter((layer) => !unbound.includes(layer.id))
+      .map((layer) => ({ label: layer.id, description: '', kind: '', ...layer, bound: true, custom: false })),
+    ...unbound.map((id, index) => ({ id, label: id, description: '', kind: '', rank: 100 + index, bound: false, custom: false })),
+    ...custom.map((layer, index) => ({ label: layer.id, description: '', kind: 'custom', rank: 1000 + index, ...layer, bound: true, custom: true })),
+  ]
+  /** @param {string} id - layer id. @returns {Record<string, any> | undefined} bound copy. */
+  const resolve = (id) => {
+    const row = rows().find((entry) => entry.bound === true && entry.id === id)
+    return row === undefined ? undefined : { ...row }
   }
   return {
-    apiVersion: options.apiVersion ?? 2,
-    listLayers: () => Object.values(layers),
-    resolveLayer: (id) => layers[id],
-    defaultLayer: () => 'strong',
-    hasModel: (id) => layers[id] !== undefined,
-    catalog: async () => ({ available: Object.values(layers), unroutable: [], error: undefined }),
+    apiVersion: options.apiVersion ?? 3,
+    listCatalog: () => rows(),
+    listLayers: () => rows().filter((entry) => entry.bound === true),
+    resolveLayer: resolve,
+    hasLayer: (id) => rows().some((entry) => entry.id === id),
+    defaultLayer: () => (layers.standard === undefined ? Object.keys(layers)[0] ?? null : 'standard'),
+    hasModel: (id) => resolve(id) !== undefined,
+    listWarnings: () => [...warnings],
+    catalog: async () => ({ available: [], unroutable: [], error: undefined }),
   }
 }
 
@@ -217,7 +241,10 @@ export async function seedWorkspace(definition, options = {}) {
  * @returns {Promise<Record<string, any>>} service.
  */
 export async function makeService(options = {}) {
-  const config = resolveConfig({ role: 'core', ...(options.config ?? {}) })
+  // Effects and trigger bookkeeping live under the state directory: give every
+  // test its own temp one so runs in the suite cannot see each other's queue.
+  const stateDir = options.config?.stateDir ?? (await mkdtemp(path.join(os.tmpdir(), 'hnflow-state-')))
+  const config = resolveConfig({ role: 'core', ...(options.config ?? {}), stateDir })
   const store = options.store ?? memoryStore()
   const agents = options.agents ?? fakeAgents()
   const ctx = {

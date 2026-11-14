@@ -90,7 +90,9 @@ export async function validateFlow(definition, options = {}) {
       continue
     }
     seen.add(id)
-    if (!NODE_TYPES.includes(node.type)) {
+    const extraKinds = options.extraNodeKinds
+    const isExtra = NODE_TYPES.includes(node.type) === false && (extraKinds instanceof Set ? extraKinds.has(node.type) : Array.isArray(extraKinds) && extraKinds.includes(node.type))
+    if (!NODE_TYPES.includes(node.type) && !isExtra) {
       fail('node-type-invalid', `node ${id} has unknown type ${JSON.stringify(node.type)}`, { nodeId: id })
       continue
     }
@@ -180,6 +182,11 @@ export async function validateFlow(definition, options = {}) {
       }
       default:
         break
+    }
+    if (isExtra) {
+      // An extra kind is a deterministic producer: it must declare the shape of
+      // what it produces, and it cannot ask for a model budget it never spends.
+      assertSchemaField(node.output, `${id}.output`, fail, at, { required: true })
     }
     if (node.type !== 'judge' && node.type !== 'agent' && node.preset !== undefined) {
       // preset is meaningful on agent/judge only; a merge/gate/request that

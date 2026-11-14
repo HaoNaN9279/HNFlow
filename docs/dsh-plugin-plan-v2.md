@@ -7,9 +7,9 @@
 | 分支 | `feat/dsh-v2` |
 | 目标运行环境 | DSH `0.2.1-rc.5`（桌面版 / web profile） |
 | 插件 | `dsh-hnflow`（private，本地 `dsh plugin add`，不上架） |
-| 依赖 | `D:\workspace\VibeStack\plugins\dsh`（`dsh-vibestack` ≥ 0.3.0，独立插件；HNFlow 单向强依赖，缺它进入 `degraded`） |
+| 依赖 | `D:\workspace\VibeStack\plugins\dsh`（`dsh-vibestack` ≥ 0.8.0，独立插件；HNFlow 单向强依赖，缺它进入 `degraded`） |
 | 取代范围 | 取代已移除的旧 `docs/dsh-plugin-plan.md` 与 `HNFlow 开发方案.md` 的**执行模型**（LangGraph 图 + Python 引擎 + AI 节点）；保留其资产/引用/覆盖/人工治理的产品结论 |
-| 文档状态 | 方案稿 v2.1；v0.6.0 已按本文落地（实现差异见附录 E） |
+| 文档状态 | 方案稿 v2.1；v0.8.0 已按本文与 [hnflow-v0.8-plan.md](hnflow-v0.8-plan.md) 落地（实现差异见附录 E） |
 
 > 本文只讨论**一个目标**：把 HNFlow 改造成 DSH 插件，且遵循 `docs/新开发理念.md` 的三条结论——
 > 用户编排的是**约束**而非步骤；**人**是有交付契约的生产能力；**验证与问责不能外包给生成者**。
@@ -316,7 +316,7 @@ session 记录证据、storage 保存流程状态；人通过门禁与交付请�
 | `judge.preset ≠ 生产者 preset` | `judge-same-as-producer` |
 | 节点 `preset` 存在于 `agentPresets` 且在使用者白名单内 | `preset-unknown` / `preset-not-allowed` |
 | 节点的 `model` 层在 `ctx.vibestack` 中存在且可路由 | `model-layer-unknown` / `model-layer-unroutable` |
-| VibeStack 服务可用（`apiVersion >= 2`）；否则引用 `model` 的节点不得发布 | `vibestack-unavailable` |
+| VibeStack 服务可用（`apiVersion >= 3`）；否则引用 `model` 的节点不得发布 | `vibestack-unavailable` |
 | `request` 节点声明了 `deliverable` 与 `whyHuman` | `request-contract-missing` |
 | 无环（v1）；单起点单终点 | `cycle-unsupported` / `graph-shape-invalid` |
 | 节点 id 唯一且不含路径字符 | `node-id-invalid` |
@@ -543,13 +543,13 @@ const result = await activation.result        // { output, structured, stopReaso
 
 | 项 | 约定 |
 | --- | --- |
-| 依赖强度 | **强依赖**：HNFlow 的能力组、模型层、Agent 人设都来自 VibeStack；缺 VibeStack 或 `apiVersion < 2` 时，HNFlow 进入 `degraded`：可列流程与资产，但**发布/运行一律拒绝**（`vibestack-unavailable`） |
+| 依赖强度 | **强依赖**：HNFlow 的能力组、模型层、Agent 人设都来自 VibeStack；缺 VibeStack 或 `apiVersion < 3` 时，HNFlow 进入 `degraded`：可列流程与资产，但**发布/运行一律拒绝**（`vibestack-unavailable`） |
 | 方向 | HNFlow → VibeStack（单向）。VibeStack 不知道 HNFlow 存在，也不为 HNFlow 改代码 |
 | 独立可用 | `dsh-vibestack` 仍可单独安装、单独 `preset-vibestack` 使用；HNFlow 只引用其模块名、服务与 preset 行 |
 | 接入方式 | `preset-hnflow` 的子插件清单里放一行 `dsh-vibestack`；HNFlow core 行 `ctx.get('vibestack')` 取模型层服务 |
 | 节点侧生效 | 节点以 `agentPreset: 'hnflow'` 启动 → 子会话按 cwd 解析 `.vibestack/stack.json` → 规则/技能/命令/MCP/人设对该节点生效；节点 `model` 走 `agentOptions` |
 | 命名空间 | VibeStack 的能力组命令/技能在 DSH 里统一是 `vibestack-<group>-<name>`；HNFlow 自己的工具（`hnflow`、`hnflow_author`）、命令（`/hnflow`）、技能（`hnflow-controls`、`hnflow-flows`）**不使用** `vibestack-` 前缀 |
-| 版本门槛 | 需要 VibeStack ≥ `0.3.0`（含 `resolve` schema v2 与 `ctx.vibestack` 服务）；插件启动时校验 `apiVersion`，不满足即 `degraded` |
+| 版本门槛 | 需要 VibeStack ≥ `0.8.0`（`apiVersion >= 3`，四层模型目录与 `ctx.vibestack` 服务）；插件启动时校验 `apiVersion`，不满足即 `degraded` |
 | 禁止 | HNFlow 不读 `.vibestack/` 内部结构、不解析能力组、不代管规则/技能/MCP、不自己维护模型目录 |
 | OpenCode 退场 | VibeStack 删除 OpenCode 适配器不影响 HNFlow；HNFlow 从未依赖它，文档只需更新版本门槛 |
 
@@ -591,7 +591,7 @@ const result = await activation.result        // { output, structured, stopReaso
 
 ```text
 plugins/dsh/
-├─ package.json            # dsh-hnflow 0.3.0；engines.dsh 绑定 0.2.x；不再有 Python
+├─ package.json            # dsh-hnflow 0.8.0；engines.dsh 绑定 0.2.x；不再有 Python
 ├─ cordis.patch.yml        # 根级 hnflow-core（全局 service + 路由）+ preset-hnflow（薄 mode 行）
 ├─ index.js                # 角色装配：core / mode / client
 ├─ lib/
@@ -799,7 +799,7 @@ plugins/dsh/
 
 ---
 
-## 附录 E：v0.3.0 实现落地（分支 `feat/dsh-v2`）
+## 附录 E：v0.3.0–v0.8.0 实现落地（分支 `feat/dsh-v2`）
 
 > 本节记录**实际实现**与上文设计的差异。凡与上文冲突之处，以本节为准。
 
@@ -807,8 +807,8 @@ plugins/dsh/
 
 ```text
 plugins/dsh/
-├─ index.js                  # core / preset / ui 三行装配；Config（schemastery）
-├─ cordis.patch.yml          # hnflow-core + hnflow-ui + preset-hnflow
+├─ index.js                  # core / pass / preset / ui 四行装配；Config（schemastery）
+├─ cordis.patch.yml          # hnflow-core + hnflow-pass + hnflow-ui + preset-hnflow
 ├─ lib/
 │  ├─ config.js  paths.js  json.js  assets.js  workspace.js  resolve.js
 │  ├─ store.js               # storage domain（runs 表）+ 文件降级
@@ -817,6 +817,7 @@ plugins/dsh/
 │  ├─ runner.js              # subagents.startActivation(delivery:'caller') 封装
 │  ├─ layers.js              # ctx.vibestack → agentOptions / 可路由检查
 │  ├─ prompt.js              # 节点简报 / judge 简报 / {{...}} 渲染
+│  ├─ cron.js  health.js  inbox.js  kinds.js  channels.js  outbox.js  triggers.js   # v0.8 自动化与扩展点
 │  ├─ gates.js  requests.js  # 门禁与交付的 CAS、验收、退回预算
 │  ├─ artifacts.js           # 产物地址表（值仍取节点输出）
 │  ├─ deliverable.js         # 交付路径的 fs.contains 越界检查
@@ -828,7 +829,7 @@ plugins/dsh/
 ├─ skills/hnflow-controls/SKILL.md
 ├─ skills/hnflow-flows/SKILL.md
 ├─ examples/{smoke,art-review}.flow.json
-└─ test/                     # node:test（137 项，`node test/run.mjs`）
+└─ test/                     # node:test（166 项，`node test/run.mjs`）
 ```
 
 相对 §10 的合并：`judge.js`/`merge.js` 并入 `service.js`（它们只有几十行且必须共享 run 记录）；
@@ -904,7 +905,7 @@ conductor 模型路由（E-19）、usage 读回时机（E-20）。已知保留�
 
 ### E.5 测试
 
-`plugins/dsh/test/`，`node test/run.mjs`：**137 项**，覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
+`plugins/dsh/test/`，`node test/run.mjs`：**137 项**（v0.7.0 起 144 项，v0.8.0 起 166 项，新增项见 E.6 / E.7），覆盖 schema 子集与 `type`+`oneOf` 禁止、契约可赋值、
 信封三态、调度（就绪/边条件/skip·block/fallback）、CAS 与退回预算、发布与 lockfile（含 preset 组合摘要）、
 storage 降级、编排（门禁/交付/needs_human/重试/取消/重启）、审计字段、交付路径越界、过期推进、
 verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程导入、项目草稿创建/运行/提升/删除、
@@ -914,4 +915,34 @@ verify `inconclusive` 门禁、`arbitrate`、产物与 token 归因、旧流程�
 收件箱批准、产物展开、token 显示；浏览器 console 无 error。
 
 升级回归按 [`docs/dsh-upgrade-checklist.md`](dsh-upgrade-checklist.md) 执行。
+
+### E.6 v0.7.0：跟进 VibeStack 0.8（`apiVersion 3`）
+
+| 变化 | HNFlow 的落地 |
+| --- | --- |
+| `apiVersion` 2 → 3；服务新增 `hasLayer` / `listCatalog`（带 `bound`）、自定义层 | `lib/layers.js` 的 `REQUIRED_API_VERSION = 3`；可用性还要求 `hasLayer`，旧插件直接 `degraded` |
+| 平台层目录改为 `fast` / `standard` / `strong` / `vision`，默认 `standard`（`flash` → `fast`） | 文档、技能、README 全部改四层；`standard` 为不写 `model` 时的路由 |
+| 层可存在于目录但本机未绑定路由（`bound: false`） | 新错误码 `model-layer-unbound`，指引用用户在 `.vibestack/models.json` 的 `bindings.dsh.<layer>` 绑定；不回落默认层 |
+| DSH 本机自定义层（`custom: true`）不属于平台契约 | 新错误码 `model-layer-custom`；流程只能钉平台层 |
+| `.vibestack/models.json`（项目级默认）与 `.vibestack/groups/`（项目能力组） | HNFlow 不读这些文件，只消费 `ctx.vibestack`；文档说明绑定位置 |
+| VibeStack 加载告警（如 legacy `models.layers`） | `status` / `snapshot` 的 `vibestack.warnings` 透出，供诊断 |
+| 新错误码需要 400 而不是 500 | `lib/routes.js` 的 `badRequest` 白名单加入 `model-layer-unbound` / `model-layer-custom` 等 |
+
+### E.7 v0.8.0：单人化与自动化（详见 [hnflow-v0.8-plan.md](hnflow-v0.8-plan.md)）
+
+v0.7 的约束层不变（六原语、契约图、门禁/交付/验收、版本钉住），v0.8 只在这些前提下补"活得久、被谁叫醒、人会不会错过"：
+
+| 能力 | 落点 |
+| --- | --- |
+| 重试带上一轮病史 | `lib/prompt.js` 的 `renderRetrySection` + `spawnNode` 的 attempt 历史；`run.recovery` 另加恢复说明 |
+| 持久副作用队列 | `lib/outbox.js`（`kind+key` 幂等、指数退避、dead），`step` 终态写 notice；run-completed 触发也走它 |
+| 收件箱阶段化 | `lib/inbox.js`（返工 → 仲裁 → 裁决 → 交付），`inbox()` 返回 `stage/stageLabel/priority/summary` |
+| 运行健康 | `lib/health.js` 的 `runHealth`，进入 `summariseRun`/`status`/页面 |
+| 独立时钟行 | `hnflow-pass`（`role: pass`）每 `passIntervalMs` 跑一次 `service.pass()`；预算 `runBudgetMs`、重启 `resumeOnStart` |
+| 最小 Source 层 | `lib/triggers.js` + `.hnflow/triggers.json`（cron / file / run-completed），只新建 run |
+| 扩展节点类型 | `lib/kinds.js` + `registerNodeKind`，`validate` 用 `extraNodeKinds` 放行；执行器仍只允许"插件确定性"或"子 Agent" |
+| 通知通道 | `lib/channels.js` + `registerChannel`；内置 `inbox`，`card` 由 core 行注册，失败回落收件箱 |
+| 声明式 facts | `snapshot()` 的 `automation` / `triggers` / `facts`，页面"自动化"面板只读消费 |
+
+测试 166 项。单人前提：没有多用户、身份映射、RBAC 或白名单同步；所有"谁能发起"的问题都由本机文件与门禁表达。
 
