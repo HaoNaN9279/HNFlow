@@ -68,15 +68,15 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
   },
   "flows": [
     {
-      "id": "core/art-review",
-      "flow_id": "art-review",
-      "name": "美术评审",
-      "group": "core",
-      "path": ".../flows/art-review.flow.json",
+      "id": "local/my-flow",
+      "flow_id": "my-flow",
+      "name": "示例流程",
+      "group": "local",
+      "path": ".../.hnflow/groups/local/flows/my-flow.flow.json",
       "description": "...",
-      "tags": ["art"],
+      "tags": ["demo"],
       "version": "",
-      "requires": ["core"]
+      "requires": []
     }
   ],
   "warnings": [],

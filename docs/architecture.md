@@ -47,7 +47,7 @@ Layer (core / domain / project)
 ## 4. 工作流作为能力组内容
 
 ```text
-capability-groups/core/0.1.0/flows/art-review.flow.json
+capability-groups/domain/<name>/<version>/flows/my-flow.flow.json
 <project>/.hnflow/groups/local/flows/my-flow.flow.json
 ```
 

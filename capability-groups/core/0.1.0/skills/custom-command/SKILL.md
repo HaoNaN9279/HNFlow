@@ -182,30 +182,30 @@ Check for performance issues and suggest improvements.
 
 ## 6. 命令制作示例
 
-### 6.1 核心命令示例（`capability-groups/core/0.1.0/commands/auto-git-commit.md`）
+### 6.1 核心命令示例（`capability-groups/core/0.1.0/commands/group-new.md`）
 
 ```markdown
 ---
-name: auto-git-commit
-description: commit 当前项目变更（含 submodules 支持）
+name: group-new
+description: 新建一个 HNFlow 能力组骨架（group.json + 内容目录）并给出激活步骤
 model: standard
 ---
 
-# `/auto-git-commit` — 自动 Git 提交
+# `/group-new` — 新建能力组
 
-根据当前项目的 Git 变更，写出规范的 commit message 并提交，不推送到远程。
+按用户给出的组名、版本与定位创建能力组骨架。
 
-## Step 1: 检查变更
+## Step 1: 确认位置与命名
 
-运行 `git status` 和 `git diff`，确认待提交内容。
+Core 或领域组、版本号、group.json 的 guid。
 
-## Step 2: 提交
+## Step 2: 建目录
 
-按项目约定生成 commit message，执行提交。
+创建 `group.json` 与 `rules/`、`agents/`、`commands/`、`skills/` 等需要的目录。
 
-## Step 3: 报告
+## Step 3: 校验并报告
 
-输出提交哈希与变更摘要。
+运行 `hnflow-stack validate` 与 `hnflow-stack list`，报告路径、组清单与激活命令。
 ```
 
 ### 6.2 领域命令示例（`capability-groups/domain/data-forge/1.0.0/commands/data-forge-process.md`）

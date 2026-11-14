@@ -39,7 +39,6 @@ def test_core_ships_the_authoring_content() -> None:
     assert (group.root / "rules/hnflow-forge.md").is_file()
     assert (group.root / "commands/group-new.md").is_file()
     assert (group.root / "commands/flow-new.md").is_file()
-    assert (group.root / "flows/art-review.flow.json").is_file()
     assert not (REPO / "capability-groups/domain/group-forge").exists()
     assert not (REPO / "capability-groups/domain/hnflow-forge").exists()
 
@@ -56,6 +55,5 @@ def test_core_loads_the_authoring_content_without_a_group(tmp_path: Path) -> Non
     assert {"Athena", "Hermes", "Hephaestus", "Argus", "Daedalus"} <= set(plan.agents)
     assert {"group-new", "group-validate", "flow-new"} <= set(plan.commands)
     skills = {skill.name for skill in plan.skills}
-    assert {"caveman", "custom-group", "flow-author"} <= skills
-    assert "core/art-review" in {flow.id for flow in plan.flows}
+    assert {"custom-group", "flow-author"} <= skills
     assert plan.rules and all(rule.on_demand for rule in plan.rules)

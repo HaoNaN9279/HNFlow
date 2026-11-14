@@ -71,9 +71,8 @@ hnflow-stack tool serve <tool>      # MCP stdio
 
 能力组命令与技能统一发布为 `capability-<group>-<name>`：
 
-- `/capability-core-activate`
-- `/capability-core-auto-git-commit`
 - `/capability-core-group-new`
+- `/capability-core-flow-new`
 
 命令模板支持 `$ARGUMENTS`、`$1`..`$9`；`` !`cmd` `` 与 `@file` 在 DeepSeek Harness 中
 不展开。Core 命令在任何会话可执行；领域组命令只有在当前工作区激活了该组时才执行。

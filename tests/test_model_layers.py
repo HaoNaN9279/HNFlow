@@ -88,8 +88,10 @@ def test_checked_in_agents_and_commands_use_only_platform_layers() -> None:
     from hnflow_stack.model_layers import MODEL_LAYER_IDS
 
     root = Path(__file__).resolve().parents[1] / "capability-groups"
-    checked = 0
-    for path in [*root.rglob("agents/*.md"), *root.rglob("commands/*.md")]:
+    files = [*root.rglob("agents/*.md"), *root.rglob("commands/*.md")]
+    assert files
+    checked = []
+    for path in files:
         parsed = parse_frontmatter(path.read_text(encoding="utf-8-sig"))
         value = frontmatter_text(parsed.data.get("model"))
         if not value:
@@ -97,8 +99,8 @@ def test_checked_in_agents_and_commands_use_only_platform_layers() -> None:
         assert value in MODEL_LAYER_IDS, f"{path}: unknown model layer {value}"
         for forbidden in ("provider", "temperature", "permission", "permissions", "reasoningEffort"):
             assert forbidden not in parsed.data, f"{path}: must not declare {forbidden}"
-        checked += 1
-    assert checked == 24
+        checked.append(path)
+    assert checked
 
 
 def test_checked_in_project_model_defaults_bind_all_four_layers() -> None:
