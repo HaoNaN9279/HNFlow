@@ -19,7 +19,9 @@ import {
   defaultExecute,
   errorText,
   isMissingCommand,
+  repoFor,
   resolveTimeout,
+  spawnCwd,
 } from './resolve.js'
 
 /** Directory that marks an activated project. */
@@ -57,12 +59,18 @@ export function stackExists(projectDir) {
 /**
  * Build the argv that initialises one project.
  *
- * `--project` is a global option, so it has to precede the subcommand.
+ * `--repo` and `--project` are global options, so they have to precede the
+ * subcommand. Pinning the repository matters even for `init`: without it the
+ * CLI falls back to its own cwd (the host application's), fails with
+ * "HNFlow repository not found", and never records the repository in the global
+ * config for later resolves.
  * @param {string} projectDir - absolute project directory.
+ * @param {string | null} [repo] - repository root to pin.
  * @returns {string[]} argv after the executable.
  */
-export function initArgs(projectDir) {
-  return ['--project', projectDir, 'init']
+export function initArgs(projectDir, repo = null) {
+  const pinned = typeof repo === 'string' && repo.length > 0 ? ['--repo', repo] : []
+  return [...pinned, '--project', projectDir, 'init']
 }
 
 /**
@@ -99,12 +107,13 @@ export async function ensureStack(projectDir, config, execute = defaultExecute) 
  * @returns {Promise<{created: boolean, error?: string}>} outcome.
  */
 async function runInit(projectDir, config, execute) {
-  const options = { timeout: resolveTimeout(config?.timeoutMs), maxBuffer: MAX_BUFFER }
+  const options = { timeout: resolveTimeout(config?.timeoutMs), maxBuffer: MAX_BUFFER, cwd: spawnCwd(projectDir) }
+  const repo = repoFor(projectDir)
   let lastError = ''
   for (const command of cliCandidates(config?.command)) {
     try {
-      await execute(command, initArgs(projectDir), options)
-      return { created: stackExists(projectDir) }
+      await execute(command, initArgs(projectDir, repo), options)
+      return { created: stackExists(projectDir), repo: repo ?? undefined }
     } catch (error) {
       if (isMissingCommand(error)) continue
       lastError = errorText(error)

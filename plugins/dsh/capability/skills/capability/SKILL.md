@@ -91,6 +91,8 @@ hnflow-stack tool serve <tool>      # MCP stdio
 设置页「模型层」写本机覆盖，也可新增仅在 DSH 可用的自定义层；自定义层不能写进共享能力组。
 输入框右下角的模型位切换当前会话的层，左下角始终是 Agent 选择。`/capability-layer` 可列出层，
 `/capability-layer strong` 直接切换。未绑定层只告警，不阻断提示词；层只影响会话路由。
+切到 HNFlow 模式时插件会自动为当前工作区补写 `.hnflow/stack.json` 并解析一次计划，
+不需要手工跑 `hnflow-stack init`；只有 `autoActivate: false` 或 `resolveMode: project` 时才跳过。
 
 ## 开发能力组
 
@@ -127,6 +129,10 @@ hnflow-stack sync
 hnflow-stack resolve --json --mode capabilities
 cat .hnflow/lock.json
 ```
+
+插件自己调用 CLI 时都会显式带上 `--repo <仓库> --project <工作区>`（仓库从工作区或插件包
+路径向上找 `capability-groups`），所以宿主进程的当前目录不影响解析；手工排查时若不在仓库
+根，也请同样带上 `--repo`。
 
 插件告警写在宿主日志（`capability:` 前缀），常见原因：`hnflow-stack` 未安装或不在
 `PATH`、解析超时（`CAPABILITY_RESOLVE_TIMEOUT_MS`）、schema 版本不兼容、仓库路径未配置、

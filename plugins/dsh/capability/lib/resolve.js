@@ -7,6 +7,10 @@
  */
 
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 /** Resolve API versions this adapter understands. */
 export const RESOLVE_SCHEMA_VERSIONS = Object.freeze([2])
@@ -14,6 +18,39 @@ export const RESOLVE_SCHEMA_VERSIONS = Object.freeze([2])
 export const RESOLVE_SCHEMA_VERSION = 2
 
 const MAX_BUFFER = 16 * 1024 * 1024
+/** This plugin's own package directory, used as a repository starting point. */
+const PLUGIN_ROOT = fileURLToPath(new URL('../..', import.meta.url))
+
+/**
+ * Find the HNFlow repository that owns a workspace.
+ *
+ * `hnflow-stack resolve` needs a repository to read `capability-groups` from and
+ * otherwise falls back to *its own process cwd* — which belongs to the host
+ * application, not to the project, so the mode failed with "repository not
+ * found" even in an activated workspace. The repository is discovered from the
+ * workspace upwards (a project may live inside the repository) and then from
+ * this plugin's own package upwards (an installed plugin still knows which
+ * repository it came from).
+ * @param {string} projectDir - absolute workspace directory.
+ * @returns {string | null} repository root, or null when none is known.
+ */
+export function repoFor(projectDir) {
+  for (const start of [projectDir, PLUGIN_ROOT]) {
+    if (typeof start !== 'string' || start.length === 0) continue
+    let current = path.resolve(start)
+    for (;;) {
+      try {
+        if (existsSync(path.join(current, 'capability-groups'))) return current
+      } catch {
+        /* ignore an unreadable ancestor and keep walking */
+      }
+      const parent = path.dirname(current)
+      if (parent === current) break
+      current = parent
+    }
+  }
+  return null
+}
 
 /**
  * Candidate executables, in priority order.
@@ -24,7 +61,27 @@ export function cliCandidates(configured) {
   const candidates = [configured, process.env.CAPABILITY_CLI]
   if (process.platform === 'win32') candidates.push('hnflow-stack.exe')
   candidates.push('hnflow-stack')
+  // `pipx`/`pip --user` install the launcher under the user's home, which is on
+  // PATH for a terminal but not necessarily for a desktop app launched from the
+  // shell's login environment. Try the known home bin directory explicitly.
+  candidates.push(...homeCandidates())
   return [...new Set(candidates.filter((value) => typeof value === 'string' && value.length > 0))]
+}
+
+/**
+ * Launchers installed under the user's home directory.
+ * @returns {string[]} absolute candidate paths.
+ */
+function homeCandidates() {
+  let home = ''
+  try {
+    home = os.homedir()
+  } catch {
+    return []
+  }
+  if (home.length === 0) return []
+  const names = process.platform === 'win32' ? ['hnflow-stack.exe', 'hnflow-stack'] : ['hnflow-stack']
+  return names.map((name) => path.join(home, '.local', 'bin', name))
 }
 
 /**
@@ -87,13 +144,37 @@ export function normalizePlan(plan) {
 
 /**
  * Build the argv for one resolve call.
+ *
+ * `--repo` is a global option, so it has to precede the subcommand; it pins the
+ * repository the CLI reads instead of letting it depend on the host's cwd.
  * @param {string} projectDir - absolute session working directory.
  * @param {{resolveMode?: string}} config - resolved plugin config.
  * @returns {string[]} argv after the executable.
  */
 export function resolveArgs(projectDir, config) {
   const mode = config.resolveMode === 'project' ? 'project' : 'capabilities'
-  return ['resolve', '--json', '--mode', mode, '--project', projectDir]
+  const repo = repoFor(projectDir)
+  const pinned = repo === null ? [] : ['--repo', repo]
+  return [...pinned, '--project', projectDir, 'resolve', '--json', '--mode', mode]
+}
+
+/**
+ * Directory to spawn the CLI in.
+ *
+ * Running inside the project makes relative output and any CLI fallback paths
+ * agree with the workspace, but a spawn `cwd` that no longer exists fails with a
+ * misleading `ENOENT`, so an unusable directory falls back to the inherited one.
+ * @param {string} projectDir - absolute project directory.
+ * @returns {string | undefined} existing directory, or undefined to inherit.
+ */
+export function spawnCwd(projectDir) {
+  if (typeof projectDir !== 'string' || projectDir.length === 0) return undefined
+  try {
+    if (!existsSync(projectDir)) return undefined
+  } catch {
+    return undefined
+  }
+  return projectDir
 }
 
 /**
@@ -105,7 +186,7 @@ export function resolveArgs(projectDir, config) {
  */
 export async function resolvePlan(projectDir, config, execute = defaultExecute) {
   const args = resolveArgs(projectDir, config)
-  const options = { timeout: resolveTimeout(config.timeoutMs), maxBuffer: MAX_BUFFER }
+  const options = { timeout: resolveTimeout(config.timeoutMs), maxBuffer: MAX_BUFFER, cwd: spawnCwd(projectDir) }
   const warnings = []
   let lastError = ''
   for (const command of cliCandidates(config.command)) {
@@ -132,7 +213,7 @@ export async function resolvePlan(projectDir, config, execute = defaultExecute) 
  * Default spawn implementation.
  * @param {string} command - executable.
  * @param {string[]} args - argv.
- * @param {{timeout: number, maxBuffer: number}} options - spawn limits.
+ * @param {{timeout: number, maxBuffer: number, cwd?: string}} options - spawn limits and working directory.
  * @returns {Promise<{stdout: string, stderr: string}>} captured output.
  */
 export function defaultExecute(command, args, options) {
@@ -145,6 +226,7 @@ export function defaultExecute(command, args, options) {
         timeout: options.timeout,
         maxBuffer: options.maxBuffer,
         windowsHide: true,
+        ...(typeof options.cwd === 'string' && options.cwd.length > 0 ? { cwd: options.cwd } : {}),
       },
       (error, stdout, stderr) => {
         if (error) {

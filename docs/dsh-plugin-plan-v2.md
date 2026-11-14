@@ -64,8 +64,9 @@ docs/
 | 能力组解析与注入 | `plugins/dsh/capability/` |
 | 规则注入 | `agent/pre-step` + systemPrompt |
 | 技能/命令/Agent/MCP | capability preset 注册 |
-| 模型层选择 | `settings.section` + `conversation.input.model` |
-| 上下文预览 | 输入框左下角 `▤` 按钮 |
+| 模型层选择 | `settings.section` + 右下角 `conversation.input.model`（替换原生模型位） |
+| 上下文预览 | 输入框左下角 `▤` 按钮（左下角只放 Agent 选择） |
+| 工作区初始化 | 切模式即调 `GET /api/capability/prepare`，补 `.hnflow/stack.json` 并解析一次；CLI 调用总是带 `--repo`，不依赖宿主 cwd |
 | 流程/运行/收件箱 | 原 HNFlow 页面 |
 | 模型管理命令 | `/capability-layer`、`/capability-agent` |
 

@@ -1,7 +1,7 @@
 /**
  * Read-only Fetch route for the pre-turn Agent roster.
  *
- * GET /api/capability/roster?sessionId=<id>
+ * GET /api/capability/roster?sessionId=<id>&cwd=<workspace>
  *   -> {ok: true, roster: {...} | null}
  *
  * A blank session cannot carry a surface event before the harness appends its
@@ -15,7 +15,7 @@ export const ROSTER_PATH = '/api/capability/roster'
 
 /**
  * Build the exact Fetch route.
- * @param {{rosterForSession: (sessionId: string) => Promise<object | null>}} options - wiring.
+ * @param {{rosterForSession: (sessionId: string, hint?: string) => Promise<object | null>}} options - wiring.
  * @returns {{path: string, methods: string[], requestBody: 'buffered', fetch: (request: Request) => Promise<Response>}} route.
  */
 export function createRosterRoute(options) {
@@ -31,7 +31,8 @@ export function createRosterRoute(options) {
         if (sessionId.length === 0) {
           return json({ ok: false, code: 'missing-session', message: 'sessionId is required' }, 400)
         }
-        const roster = await rosterForSession(sessionId)
+        const hint = url.searchParams.get('cwd') ?? ''
+        const roster = await rosterForSession(sessionId, hint.length > 0 ? hint : undefined)
         return json({ ok: true, roster: roster ?? null })
       } catch (error) {
         return json(

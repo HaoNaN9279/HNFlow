@@ -66,8 +66,13 @@ capability-groups/domain/hnflow-forge/0.1.0/flows/art-review.flow.json
 ## 5. 解析与注入
 
 ```sh
-hnflow-stack resolve --json --mode capabilities --project <project>
+hnflow-stack --repo <repo> --project <project> resolve --json --mode capabilities
 ```
+
+`--repo` / `--project` 是全局参数，必须放在子命令前。插件每次都显式钉住仓库
+（从工作区向上找 `capability-groups`，找不到再用插件自身包路径；成功找到后 `--repo` 一定会带），
+因为 CLI 在缺省时回退到自己的进程 cwd，而宿主进程的 cwd 不是 HNFlow 仓库，
+会直接报 `HNFlow repository not found`。
 
 固定顺序：
 
@@ -106,6 +111,16 @@ DSH 宿主名：`capability-<group>[-<alias>]-<name>`。
 `preset-hnflow` 同时承担能力组注入职责：解析 → 规则消息 → skills
 provider → commands → agents 投影 → MCP → 模型层应用。客户端同一 bundle 注册页面、
 上下文预览、Agent 选择器与模型层选择。
+
+客户端 bundle 只调用一次 `window.__ModuleLoader__.load`，且 `id` 必须等于包名
+（`dsh-hnflow`）：Cordis Loader 按包名导入模块，其它 id 只被登记、永远不会被实例化。
+`dsh.client` 需要 `immediately: true`，否则页面启动时没人导入这个模块。两条 Loader 行
+（`hnflow-ui` 与 preset 内的 `hnflow`）共用这一个工厂，各自带挂载守卫。
+
+输入框的两个位置各有归属，不按服务端 selector 分支：左下角只放 Agent 选择器与 `▤` 预览，
+模型层永远接管右下角的模型位（`conversation.input.model`，`priority -1`）。
+切换模式时客户端立刻请求 `GET /api/capability/prepare?sessionId=&cwd=`：宿主按会话
+工作区补写 `.hnflow/stack.json` 并解析一次计划，预览与模型层读同一份热计划，不必等首轮对话。
 
 ## 7. 边界
 

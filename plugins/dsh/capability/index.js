@@ -43,6 +43,7 @@ import { planUsable, unusablePlanReason } from './lib/plan.js'
 import { PlanCache } from './lib/plans.js'
 import { resolvePlan as resolveProjectPlan } from './lib/resolve.js'
 import { createInventoryRoutes } from './lib/inventory-route.js'
+import { createPrepareRoute } from './lib/prepare-route.js'
 import { createRosterRoute } from './lib/roster-route.js'
 import { renderRules } from './lib/rules.js'
 import { CapabilityService } from './lib/service.js'
@@ -249,19 +250,73 @@ export function applyCore(ctx, config, deps = {}) {
       throw missing
     }
     const tried = []
+    let reason = null
+    /** @type {string[]} */
+    const warnings = []
     for (const directory of candidates) {
       const result = await cache.get(directory)
-      for (const warning of result.warnings) logger?.warn?.('capability: %s', warning)
+      for (const warning of result.warnings) {
+        if (!warnings.includes(warning)) warnings.push(warning)
+        logger?.warn?.('capability: %s', warning)
+      }
       if (planUsable(result.plan)) {
         return { plan: result.plan, cwd: relativeTo(result.plan.project, directory) }
       }
+      reason = unusablePlanReason(result.plan)
       tried.push(directory)
     }
-    const unusable = new Error(`no usable Capability plan for ${tried.join(' or ')}`)
+    const unusable = new Error(
+      `no usable Capability plan for ${tried.join(' or ')}${reason === null ? '' : ` (${reason})`}`,
+    )
     unusable.code = 'missing-plan'
     unusable.status = 404
-    unusable.details = { cwd: tried }
+    unusable.details = { cwd: tried, reason, warnings }
     throw unusable
+  }
+
+  /**
+   * Make one window's workspace ready for the mode.
+   *
+   * Selecting the HNFlow preset should not leave the composer and the preview
+   * waiting for a plan: this resolves (and, when allowed, initialises with
+   * `hnflow-stack init`) the workspace the session belongs to, exactly once,
+   * and reports why it could not so the client can show the real reason.
+   * @param {string} sessionId - session id from the client.
+   * @param {string} [hint] - workspace directory the client reports for the window.
+   * @returns {Promise<{ready: boolean, cwd: string | null, project?: string, created?: boolean, reason?: string, warnings: string[]}>} report.
+   */
+  const prepareForSession = async (sessionId, hint) => {
+    const cwd = await resolveSessionCwd(ctx, sessionId, hint)
+    const candidates = []
+    for (const candidate of [cwd, existingDirectory(hint)]) {
+      if (candidate !== null && !candidates.includes(candidate)) candidates.push(candidate)
+    }
+    /** @type {string[]} */
+    const warnings = []
+    let reason = null
+    for (const directory of candidates) {
+      const result = await cache.get(directory)
+      for (const warning of result.warnings) {
+        if (!warnings.includes(warning)) warnings.push(warning)
+        logger?.warn?.('capability: %s', warning)
+      }
+      if (planUsable(result.plan)) {
+        return {
+          ready: true,
+          created: result.activation?.created === true,
+          cwd: relativeTo(result.plan.project, directory),
+          project: typeof result.plan.project === 'string' ? result.plan.project : directory,
+          warnings,
+        }
+      }
+      reason = unusablePlanReason(result.plan)
+    }
+    return {
+      ready: false,
+      cwd: candidates[0] ?? null,
+      reason: reason ?? 'this window has no workspace on the host yet',
+      warnings,
+    }
   }
 
   ctx.inject(['connection'], (scope) => {
@@ -273,6 +328,9 @@ export function applyCore(ctx, config, deps = {}) {
       }
       registry.register(createModelsRoute({ service }))
       registry.register(createRosterRoute({ rosterForSession }))
+      // The client calls this the moment a window switches to the mode, so the
+      // workspace is initialised before the composer and the preview ask for it.
+      registry.register(createPrepareRoute({ prepareForSession }))
       if (config.inventory !== false) {
         for (const route of createInventoryRoutes({
           sessionFor: sessionForInventory,
@@ -797,13 +855,25 @@ export function apply(ctx, rawConfig, deps = {}) {
    * @param {object} session - session handle.
    * @returns {Promise<void>} resolves after the attempt.
    */
-  const prime = (session) => {
+  const prime = (session, sessionId) => {
     if (!config.agents || session === undefined || session === null) return Promise.resolve()
     if (priming.has(session)) return Promise.resolve()
     priming.add(session)
     return (async () => {
       try {
-        const cwd = cwdOf(session)
+        // A session that has not written its first message yet has no handle
+        // directory, but the host still knows which workspace it belongs to.
+        // Falling back to that is what lets the mode initialise the workspace
+        // the moment the preset is selected.
+        const id = typeof sessionId === 'string'
+          ? sessionId
+          : typeof session?.id === 'string'
+            ? session.id
+            : typeof session?.sessionId === 'string'
+              ? session.sessionId
+              : undefined
+        let cwd = cwdOf(session)
+        if (cwd === null && id !== undefined) cwd = await resolveSessionCwd(ctx, id, undefined)
         if (cwd === null) return
         const result = await cache.get(cwd)
         logWarnings(result.warnings)
@@ -847,14 +917,14 @@ export function apply(ctx, rawConfig, deps = {}) {
     if (preset !== PRESET_ID) return undefined
     const session = sessionFrom(sessionId)
     if (session === null) return undefined
-    return prime(session)
+    return prime(session, sessionId)
   }
 
   ctx.on('agent-preset/selected', onPresetSelected)
   ctx.on('session/event', (session, event) => {
     if (!config.agents || event?.type !== 'agent-preset/selected') return undefined
     if (event.data?.agentPreset !== PRESET_ID) return undefined
-    return prime(session)
+    return prime(session, session?.id)
   })
   ctx.on('agent/created', (payload) => {
     if (!config.agents) return undefined

@@ -57,7 +57,11 @@ JSON 条目带 `id`、`name`、`kind`、`status`、`summary`、`path`、`host_na
 
 ## 4. 插件路由
 
-- `GET /api/capability/inventory?workspace=<dir>&agent=<name>`：清单。
-- `GET /api/capability/inventory/text?workspace=<dir>&path=<path>`：单条正文，按 `text-bytes` 截断。
+- `GET /api/capability/prepare?sessionId=<id>&cwd=<dir>`：切到 HNFlow 时由客户端调用，
+  给当前工作区补 `.hnflow/stack.json` 并解析一次计划。
+- `GET /api/capability/inventory?sessionId=<id>&agent=<name>&cwd=<dir>`：清单。
+- `GET /api/capability/inventory/text?sessionId=<id>&kind=<kind>&id=<id>&cwd=<dir>`：单条正文，按 `text-bytes` 截断。
+- `GET /api/capability/models` 与 `GET /api/capability/roster?sessionId=<id>&cwd=<dir>`：模型层目录与 Agent 候选。
 
+`cwd` 是客户端报告的工作区提示，只在宿主还不知道会话目录（新窗口尚未落盘）时使用。
 页面只读；预览不改变注入，也不写会话。

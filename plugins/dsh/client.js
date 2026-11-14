@@ -1,9 +1,14 @@
 // HNFlow browser half, bundled with the capability surface.
 //
-// Two factories ship in this one file: `dsh-capability` (agent picker,
-// context inventory, model-layer settings and model seat) and `dsh-hnflow`
+// One module, two halves: the capability surface (agent picker, context
+// inventory, model-layer settings and model seat) and the HNFlow surface
 // (flow/run/inbox panels, session view, right tab and notice). They render
 // into different slots and share the same routes.
+//
+// Both halves ride the ONE factory whose id equals the package name
+// (`dsh-hnflow`): the Cordis Loader imports the module named after the package,
+// so a factory registered under any other id is stored but never materialized.
+// Splitting them under two ids silently drops whichever half does not match.
 
 // Capability browser half for DeepSeek Harness.
 //
@@ -20,9 +25,7 @@
 // Selecting an agent runs the mode's `/capability-agent <name>` command; the
 // command log event is what the `capability` projection folds, so the choice
 // survives a restart without any plugin-owned session event type.
-window.__ModuleLoader__.load({
-  id: "dsh-capability",
-  factory: (require) => {
+function createCapabilityModule(require) {
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
@@ -189,15 +192,54 @@ window.__ModuleLoader__.load({
     const LAYERS_PATH = "/api/capability/models";
     /** Read-only roster route used before the first pre-step publishes one. */
     const ROSTER_PATH = "/api/capability/roster";
+    /** Idempotent workspace initialisation route owned by the host core row. */
+    const PREPARE_PATH = "/api/capability/prepare";
+
+    /**
+     * Make a window's workspace ready for the HNFlow mode.
+     *
+     * Switching the preset must not leave the composer waiting: the host
+     * creates `.hnflow/stack.json` when needed and resolves the plan once, so
+     * the roster, the model layers and the preview all read a warm plan.
+     * @param {string} sessionId - session id from the slot.
+     * @param {string} [hint] - workspace directory the window belongs to.
+     * @returns {Promise<object>} readiness report; never rejects on a failed resolve.
+     */
+    async function prepareWorkspace(sessionId, hint) {
+      const query = new URLSearchParams({ sessionId });
+      if (typeof hint === "string" && hint.length > 0) query.set("cwd", hint);
+      const response = await fetch(PREPARE_PATH + "?" + query.toString(), {
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (payload.ready === undefined) {
+        // The route is missing (older host) or answered an error envelope: stay
+        // silent instead of claiming the workspace is unusable. The preview
+        // still shows its own missing-plan error when that one is real.
+        return { ready: null, cwd: hint || null, reason: "", warnings: [] };
+      }
+      return {
+        ready: payload.ready === true,
+        cwd: typeof payload.cwd === "string" ? payload.cwd : hint || null,
+        project: typeof payload.project === "string" ? payload.project : "",
+        created: payload.created === true,
+        reason: typeof payload.reason === "string" ? payload.reason : "",
+        warnings: Array.isArray(payload.warnings) ? payload.warnings : []
+      };
+    }
 
     /**
      * Read the roster for a session that has not published one yet.
      * @param {string} sessionId - session id from the slot.
+     * @param {string} [hint] - workspace directory the window belongs to.
      * @returns {Promise<object | null>} roster payload or null.
      */
-    async function readRoster(sessionId) {
+    async function readRoster(sessionId, hint) {
+      const query = new URLSearchParams({ sessionId });
+      if (typeof hint === "string" && hint.length > 0) query.set("cwd", hint);
       const response = await fetch(
-        ROSTER_PATH + "?sessionId=" + encodeURIComponent(sessionId),
+        ROSTER_PATH + "?" + query.toString(),
         { credentials: "same-origin", cache: "no-store" }
       );
       const payload = await response.json().catch(() => ({}));
@@ -265,241 +307,6 @@ window.__ModuleLoader__.load({
       return matches.find((layer) => layer.id === preferredId) ?? matches[0];
     }
 
-    /**
-     * Additive model-layer menu in the composer control strip.
-     * @param {{useProjection: Function, onApply: (id: string) => Promise<void>}} props - slot props.
-     * @returns {object | null} react element or null outside the mode.
-     */
-    function LayerPicker(props) {
-      const preset = props.useProjection("agentPreset");
-      const projection = props.useProjection("modelSelection");
-      const selection = projection && (projection.next ?? projection.current ?? projection);
-      const [layers, setLayers] = react.useState([]);
-      const [open, setOpen] = react.useState(false);
-      const [busy, setBusy] = react.useState(false);
-      const [error, setError] = react.useState(null);
-      const [active, setActive] = react.useState(0);
-      const [pos, setPos] = react.useState(null);
-      const rootRef = react.useRef(null);
-      const triggerRef = react.useRef(null);
-      const menuRef = react.useRef(null);
-      const idRef = react.useRef(null);
-      const restoreFocus = react.useRef(false);
-
-      if (idRef.current === null) {
-        pickerSeq += 1;
-        idRef.current = "capability-layer-menu-" + pickerSeq;
-      }
-
-      const visible = preset === "hnflow";
-      const current = activeLayer(layers, selection);
-      const label = current ? current.label : selection ? "未映射" : "模型层";
-
-      const load = react.useCallback(async () => {
-        try {
-          const payload = await readLayerConfig();
-          setLayers(Array.isArray(payload.layers) ? payload.layers : []);
-          setError(null);
-        } catch (failure) {
-          setLayers([]);
-          setError(failure instanceof Error ? failure.message : String(failure));
-        }
-      }, []);
-
-      react.useEffect(() => {
-        if (visible) void load();
-      }, [visible, load]);
-
-      const measure = react.useCallback(() => {
-        const trigger = triggerRef.current;
-        if (!trigger) return;
-        setPos(placeMenu(trigger));
-      }, []);
-
-      react.useEffect(() => {
-        if (!open) return;
-        const index = current === undefined ? 0 : layers.findIndex((layer) => layer.id === current.id);
-        setActive(index < 0 ? 0 : index);
-      }, [open, current, layers.length]);
-
-      react.useLayoutEffect(() => {
-        if (!open) {
-          setPos(null);
-          return undefined;
-        }
-        measure();
-        const onViewportChange = () => measure();
-        window.addEventListener("resize", onViewportChange);
-        window.addEventListener("scroll", onViewportChange, true);
-        return () => {
-          window.removeEventListener("resize", onViewportChange);
-          window.removeEventListener("scroll", onViewportChange, true);
-        };
-      }, [open, measure]);
-
-      react.useEffect(() => {
-        if (!open) return undefined;
-        const onPointerDown = (event) => {
-          const target = event.target;
-          if (!(target instanceof Node)) return;
-          const root = rootRef.current;
-          const menu = menuRef.current;
-          if (root && root.contains(target)) return;
-          if (menu && menu.contains(target)) return;
-          setOpen(false);
-        };
-        const onKey = (event) => {
-          if (event.key !== "Escape") return;
-          setOpen(false);
-          triggerRef.current?.focus?.();
-        };
-        document.addEventListener("mousedown", onPointerDown);
-        document.addEventListener("keydown", onKey);
-        return () => {
-          document.removeEventListener("mousedown", onPointerDown);
-          document.removeEventListener("keydown", onKey);
-        };
-      }, [open]);
-
-      react.useEffect(() => {
-        if (busy) {
-          setOpen(false);
-          return;
-        }
-        if (!restoreFocus.current) return;
-        restoreFocus.current = false;
-        triggerRef.current?.focus?.();
-      }, [busy]);
-
-      if (!visible) return null;
-
-      const choose = async (layer) => {
-        if (busy || layer.bound === false || (current && current.id === layer.id)) {
-          setOpen(false);
-          return;
-        }
-        restoreFocus.current = true;
-        setBusy(true);
-        try {
-          await props.onApply(layer.id);
-        } catch (failure) {
-          console.warn("[capability] layer selection failed", failure);
-        } finally {
-          setBusy(false);
-        }
-      };
-
-      const onKeyDown = (event) => {
-        if (!open || layers.length === 0) return;
-        if (event.key === "ArrowDown") {
-          event.preventDefault();
-          setActive((index) => (index + 1) % layers.length);
-        } else if (event.key === "ArrowUp") {
-          event.preventDefault();
-          setActive((index) => (index - 1 + layers.length) % layers.length);
-        } else if (event.key === "Enter" || event.key === " ") {
-          const layer = layers[active];
-          if (layer === undefined) return;
-          event.preventDefault();
-          void choose(layer);
-        }
-      };
-
-      const trigger = h(
-        "button",
-        {
-          type: "button",
-          ref: triggerRef,
-          style: open
-            ? Object.assign({}, styles.trigger, styles.triggerOpen)
-            : busy
-              ? Object.assign({}, styles.trigger, styles.triggerDisabled)
-              : styles.trigger,
-          title: current ? `模型层：${current.id}` : "模型层：未映射",
-          "aria-haspopup": "menu",
-          "aria-expanded": open,
-          "aria-controls": open ? idRef.current : undefined,
-          "aria-label": `模型层：${label}`,
-          "aria-busy": busy,
-          disabled: busy,
-          onClick: () => {
-            if (open) {
-              setOpen(false);
-              return;
-            }
-            measure();
-            setOpen(true);
-            void load();
-          }
-        },
-        h("span", { style: styles.glyph, "aria-hidden": true }, "◈"),
-        h("span", { style: selection ? styles.label : Object.assign({}, styles.label, styles.placeholder) }, busy ? "切换中…" : label),
-        h("span", { style: styles.caret, "aria-hidden": true }, "▾")
-      );
-
-      const menu =
-        open && pos !== null
-          ? reactDom.createPortal(
-              h(
-                "div",
-                {
-                  ref: menuRef,
-                  id: idRef.current,
-                  role: "menu",
-                  "aria-label": "模型层",
-                  style: Object.assign({}, styles.menu, pos)
-                },
-                h(
-                  "div",
-                  { style: styles.menuHeader },
-                  h("span", { style: styles.menuTitle }, "模型层"),
-                  h("span", { style: styles.menuHint }, "用户级路由；只影响会话模型，不改变权限或工具")
-                ),
-                error ? h("span", { style: styles.empty }, error) : null,
-                !error && layers.length === 0
-                  ? h("span", { style: styles.empty }, "模型层目录不可用（检查 hnflow-stack 安装与版本）")
-                  : layers.map((layer, index) =>
-                      h(
-                        "button",
-                        {
-                          key: layer.id,
-                          type: "button",
-                          role: "menuitemradio",
-                          "aria-checked": current !== undefined && current.id === layer.id,
-                          disabled: layer.bound === false,
-                          tabIndex: -1,
-                          style: layer.bound === false
-                            ? Object.assign({}, styles.item, styles.itemDisabled)
-                            : index === active
-                              ? Object.assign({}, styles.item, styles.itemActive)
-                              : styles.item,
-                          onMouseEnter: () => setActive(index),
-                          onClick: () => void choose(layer)
-                        },
-                        h("span", { style: styles.check, "aria-hidden": true }, current && current.id === layer.id ? "✓" : ""),
-                        h(
-                          "span",
-                          { style: styles.itemBody },
-                          h("span", { style: styles.itemName }, layer.label, h("span", { style: styles.itemGroup }, layer.id)),
-                          h("span", { style: styles.itemDesc },
-                            layer.bound === false
-                              ? "未绑定本机模型（在设置页配置）"
-                              : `${layer.provider}/${layer.model}${layer.reasoningEffort ? " · " + layer.reasoningEffort : ""}`)
-                        )
-                      )
-                    )
-              ),
-              document.body
-            )
-          : null;
-
-      return h(
-        react.Fragment,
-        null,
-        h("div", { ref: rootRef, style: styles.root, onKeyDown }, trigger),
-        menu
-      );
-    }
 
     /**
      * Settings page for model layers.
@@ -1081,6 +888,7 @@ window.__ModuleLoader__.load({
       const [busy, setBusy] = react.useState(false);
       const [active, setActive] = react.useState(0);
       const [pos, setPos] = react.useState(null);
+      const [attempt, setAttempt] = react.useState(0);
       const rootRef = react.useRef(null);
       const triggerRef = react.useRef(null);
       const menuRef = react.useRef(null);
@@ -1094,17 +902,27 @@ window.__ModuleLoader__.load({
       }
 
       const projectionRoster = state && Array.isArray(state.agents) ? state.agents : [];
+      const sessionsSnapshot = useOptionalSnapshot(props.useSessions);
+      const workspacesSnapshot = useOptionalSnapshot(props.useWorkspaces);
+      const projectedCwd = inventoryCwdHint(sessionsSnapshot, workspacesSnapshot, sessionId);
+      const cwdHint = projectedCwd.length > 0
+        ? projectedCwd
+        : sessionCwdHint(props.sessionsService, sessionId);
 
       // A blank session has no stored roster yet: the on-disk format forbids
       // any surface event before the first system/message, so the host serves
-      // the pre-turn roster through a read-only route instead.
+      // the pre-turn roster through a read-only route instead. A session that
+      // was just switched to the mode has no resolved plan either, so the
+      // window's workspace is initialised first and the roster read second.
       react.useEffect(() => {
         if (preset !== "hnflow" || sessionId.length === 0 || projectionRoster.length > 0) {
           setFallback(null);
           return undefined;
         }
         let cancelled = false;
-        readRoster(sessionId)
+        prepareWorkspace(sessionId, cwdHint)
+          .catch(() => null)
+          .then((report) => (cancelled ? null : readRoster(sessionId, cwdHint)))
           .then((next) => {
             if (!cancelled) setFallback(next);
           })
@@ -1114,7 +932,7 @@ window.__ModuleLoader__.load({
         return () => {
           cancelled = true;
         };
-      }, [preset, sessionId, projectionRoster.length]);
+      }, [preset, sessionId, projectionRoster.length, cwdHint, attempt]);
 
       const roster = projectionRoster.length > 0
         ? projectionRoster
@@ -1131,7 +949,11 @@ window.__ModuleLoader__.load({
       const selected =
         canonical(state && state.selected) ??
         canonical(fallback && fallback.defaultSelected);
-      const visible = preset === "hnflow" && agents.length > 0;
+      // The picker is part of the mode, not of the roster: a workspace whose
+      // plan is still missing must show the control (with a retry) instead of
+      // silently deleting it from the composer.
+      const visible = preset === "hnflow";
+      const empty = agents.length === 0;
 
       const measure = react.useCallback(() => {
         const trigger = triggerRef.current;
@@ -1254,9 +1076,11 @@ window.__ModuleLoader__.load({
               ? Object.assign({}, styles.trigger, styles.triggerDisabled)
               : styles.trigger,
           title:
-            selected === null
-              ? "HNFlow Agent：未选择人设，点击选择"
-              : `HNFlow Agent：${selected}（本会话人设）`,
+            empty
+              ? "HNFlow Agent：工作区计划尚未就绪，点击重试"
+              : selected === null
+                ? "HNFlow Agent：未选择人设，点击选择"
+                : `HNFlow Agent：${selected}（本会话人设）`,
           "aria-haspopup": "menu",
           "aria-expanded": open,
           "aria-controls": open ? idRef.current : undefined,
@@ -1266,6 +1090,12 @@ window.__ModuleLoader__.load({
           onClick: () => {
             if (open) {
               setOpen(false);
+              return;
+            }
+            if (empty) {
+              // No roster yet: re-run the prepare/roster pair instead of
+              // opening an empty menu.
+              setAttempt((count) => count + 1);
               return;
             }
             measure();
@@ -1282,7 +1112,7 @@ window.__ModuleLoader__.load({
       );
 
       const menu =
-        open && pos !== null
+        open && pos !== null && agents.length > 0
           ? reactDom.createPortal(
               h(
                 "div",
@@ -1451,6 +1281,28 @@ function inventoryCwdHint(sessions, workspaces, sessionId) {
 }
 
 /**
+ * Workspace directory of one session, read from the live session service.
+ *
+ * The composer slot hands only `sessionId` to a left-strip control, so the
+ * snapshot hooks the panel accepts are not always available. The sessions
+ * service the plugin already injects carries the same summaries, which keeps
+ * the workspace hint alive for a brand-new window.
+ * @param {any} sessions - injectable client sessions service.
+ * @param {string} sessionId - window session id.
+ * @returns {string} absolute directory, or an empty string.
+ */
+function sessionCwdHint(sessions, sessionId) {
+  if (typeof sessionId !== "string" || sessionId.length === 0) return "";
+  try {
+    const list = sessions && sessions.list;
+    const snapshot = list && typeof list.getSnapshot === "function" ? list.getSnapshot() : null;
+    return inventoryCwdHint(snapshot, null, sessionId);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Read the session inventory.
  * @param {string} sessionId - live session id.
  * @param {string} agent - selected persona name, or an empty string.
@@ -1609,6 +1461,16 @@ const inventoryStyles = {
   },
   muted: { padding: "14px 6px", fontSize: "12px", color: "var(--dsw-alias-label-tertiary, inherit)" },
   error: { padding: "14px 6px", fontSize: "12px", color: "var(--dsw-alias-state-error-primary, #c0392b)" },
+  warning: {
+    padding: "10px 12px",
+    margin: "0 0 10px",
+    borderRadius: "var(--dsw-radius-sm, 6px)",
+    border: "1px solid var(--dsw-alias-state-warning-border, rgba(214,158,46,0.42))",
+    background: "var(--dsw-alias-state-warning-bg, rgba(214,158,46,0.12))",
+    fontSize: "12px",
+    lineHeight: "1.5",
+    color: "var(--dsw-alias-label-primary, inherit)"
+  },
   card: {
     position: "fixed",
     zIndex: 71,
@@ -1705,7 +1567,10 @@ function InventoryPanel(props) {
   const sessionsSnapshot = useOptionalSnapshot(props.useSessions);
   const workspacesSnapshot = useOptionalSnapshot(props.useWorkspaces);
   const sessionId = typeof props.sessionId === "string" ? props.sessionId : "";
-  const cwdHint = inventoryCwdHint(sessionsSnapshot, workspacesSnapshot, sessionId);
+  const projectedCwd = inventoryCwdHint(sessionsSnapshot, workspacesSnapshot, sessionId);
+  const cwdHint = projectedCwd.length > 0
+    ? projectedCwd
+    : sessionCwdHint(props.sessionsService, sessionId);
   const [open, setOpen] = react.useState(false);
   const [data, setData] = react.useState(null);
   const [error, setError] = react.useState("");
@@ -1714,6 +1579,7 @@ function InventoryPanel(props) {
   const [hover, setHover] = react.useState(null);
   const [preview, setPreview] = react.useState(null);
   const [copied, setCopied] = react.useState("");
+  const [readiness, setReadiness] = react.useState(null);
   const cacheRef = react.useRef(new Map());
   const showTimer = react.useRef(null);
   const hideTimer = react.useRef(null);
@@ -1739,6 +1605,27 @@ function InventoryPanel(props) {
       setLoading(false);
     }
   }, [sessionId, selected, cwdHint]);
+
+  // Switching a window to the mode initialises its workspace at once: the
+  // preview, the Agent roster and the model layers all read the same plan, so
+  // none of them should have to wait for the first message to create it.
+  react.useEffect(() => {
+    if (preset !== "hnflow" || sessionId.length === 0) {
+      setReadiness(null);
+      return undefined;
+    }
+    let cancelled = false;
+    prepareWorkspace(sessionId, cwdHint)
+      .then((report) => {
+        if (!cancelled) setReadiness(report);
+      })
+      .catch((failure) => {
+        if (!cancelled) setReadiness({ ready: false, reason: String(failure?.message ?? failure), warnings: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [preset, sessionId, cwdHint]);
 
   react.useEffect(() => {
     if (!open) return undefined;
@@ -1885,6 +1772,13 @@ function InventoryPanel(props) {
         h(
           "div",
           { style: inventoryStyles.body },
+          readiness !== null && readiness.ready === false
+            ? h(
+                "div",
+                { style: inventoryStyles.warning },
+                `工作区未就绪：${readiness.reason}${Array.isArray(readiness.warnings) && readiness.warnings.length > 0 ? `（${readiness.warnings.join("；")}）` : ""}`
+              )
+            : null,
           error.length > 0
             ? h("div", { style: inventoryStyles.error }, error)
             : loading && data === null
@@ -2084,6 +1978,11 @@ function inlineCounts(sections) {
       ctx.effect(() => () => {
         if (owner === ctx) owner = null;
       }, "capability: release the agent picker");
+      // The left-strip controls receive only a session id from the composer, so
+      // the sessions service is threaded through as a prop: it carries the
+      // workspace each session belongs to, which the host needs to initialise the
+      // mode before the first turn.
+      const sessionsService = ctx.sessions ?? null;
       ctx.slots.inject("conversation.input.left", () =>
         ctx.slots.register(
           {
@@ -2092,6 +1991,7 @@ function inlineCounts(sections) {
             order: 5,
             inject: (sessionId) => ({
               sessionId,
+              sessionsService,
               onSelect: async (name) => {
                 const result = await ctx.remote.commands.execute(
                   sessionId,
@@ -2117,7 +2017,7 @@ function inlineCounts(sections) {
             name: "conversation.input.left",
             id: "capability-inventory",
             order: 8,
-            inject: (sessionId) => ({ sessionId })
+            inject: (sessionId) => ({ sessionId, sessionsService })
           },
           (props) => h(InventoryBoundary, null, h(InventoryPanel, props))
         )
@@ -2135,20 +2035,34 @@ function inlineCounts(sections) {
           LayerSettings
         )
       );
-      // Optional full replacement: only when the core row reports
-      // `modelSelector: replace`. The component falls back to the live native
-      // catalog outside Capability sessions, so the model seat never goes blank.
-      void readLayerConfig()
-        .then((payload) => {
-          if (payload.selector === "additive") {
-            ctx.slots.inject("conversation.input.left", () =>
-              ctx.slots.register(
-                {
-                  name: "conversation.input.left",
-                  id: "capability-layer",
-                  order: 6,
-                  inject: (sessionId) => ({
-                    onApply: async (id) => {
+      // Full replacement, always: in the HNFlow mode the layer control owns the
+      // right-hand model seat. The left strip belongs to the Agent picker alone,
+      // so the old `additive` layer control is gone rather than competing with
+      // it. The component falls back to the live native catalog outside HNFlow
+      // sessions, so the model seat never goes blank.
+      if (typeof ctx.inject !== "function") return;
+      ctx.inject(["slots", "modelDirectories", "sessions"], (scope) => {
+        try {
+          const models = scope.modelDirectories;
+          const sessions = scope.sessions;
+          scope.slots.inject("conversation.input.model", () =>
+            scope.slots.register(
+              {
+                name: "conversation.input.model",
+                priority: -1,
+                inject: (sessionId) => {
+                  const directory = models.directoryFor(sessionId);
+                  const available = sessions.subagentAddress(sessionId) === undefined;
+                  return {
+                    available,
+                    sessionId,
+                    directory: directory.store,
+                    load: () => {
+                      if (available) directory.load().catch(() => {});
+                    },
+                    select: (selection) =>
+                      available ? directory.select(selection) : Promise.resolve(undefined),
+                    selectLayer: async (id) => {
                       const result = await ctx.remote.commands.execute(
                         sessionId,
                         "/capability-layer " + id,
@@ -2159,69 +2073,24 @@ function inlineCounts(sections) {
                           `capability: ${result.error?.code ?? "command-failed"}: ${result.error?.message ?? ""}`
                         );
                       }
+                      return result;
                     }
-                  })
-                },
-                LayerPicker
-              )
-            );
-            return;
-          }
-          if (payload.selector !== "replace") return;
-          if (typeof ctx.inject !== "function") return;
-          ctx.inject(["slots", "modelDirectories", "sessions"], (scope) => {
-            try {
-              const models = scope.modelDirectories;
-              const sessions = scope.sessions;
-              scope.slots.inject("conversation.input.model", () =>
-                scope.slots.register(
-                  {
-                    name: "conversation.input.model",
-                    priority: -1,
-                    inject: (sessionId) => {
-                      const directory = models.directoryFor(sessionId);
-                      const available = sessions.subagentAddress(sessionId) === undefined;
-                      return {
-                        available,
-                        sessionId,
-                        directory: directory.store,
-                        load: () => {
-                          if (available) directory.load().catch(() => {});
-                        },
-                        select: (selection) =>
-                          available ? directory.select(selection) : Promise.resolve(undefined),
-                        selectLayer: async (id) => {
-                          const result = await ctx.remote.commands.execute(
-                            sessionId,
-                            "/capability-layer " + id,
-                            []
-                          );
-                          if (result && result.ok === false) {
-                            throw new Error(
-                              `capability: ${result.error?.code ?? "command-failed"}: ${result.error?.message ?? ""}`
-                            );
-                          }
-                          return result;
-                        }
-                      };
-                    }
-                  },
-                  ModelSeat
-                )
-              );
-            } catch (failure) {
-              console.warn("[capability] model seat replacement failed", failure);
-            }
-          });
-        })
-        .catch(() => {});
+                  };
+                }
+              },
+              ModelSeat
+            )
+          );
+        } catch (failure) {
+          console.warn("[capability] model seat replacement failed", failure);
+        }
+      });
     }
 
     exports.apply = apply;
     exports.inject = inject;
     return module.exports;
-  }
-});
+}
 
 // HNFlow browser half for DeepSeek Harness.
 //
@@ -2242,9 +2111,7 @@ function inlineCounts(sections) {
 // through a slash command: a command would append `command/run` + `command/done`
 // to whichever session it named, and the page belongs to no session. Every
 // write is an explicit POST with the pending item's revision.
-window.__ModuleLoader__.load({
-  id: "dsh-hnflow",
-  factory: (require) => {
+function createHnflowModule(require) {
     var module = { exports: {} };
     var exports = module.exports;
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
@@ -3230,5 +3097,25 @@ window.__ModuleLoader__.load({
     /** Pure helpers, exported for the contract tests. */
     exports.internals = { layoutFlow, edgePath, shortPath, nodeStatuses, rightTabDefinition, runLabel };
     return module.exports;
+}
+
+// One registration for the whole package: the Loader imports the module named
+// after the package, materializes this factory once, and mounts the exported
+// plugin for every Loader entry that references the package (the `hnflow-ui`
+// row and the `hnflow` row inside the preset). Each half keeps its own mount
+// guard, so the second entry is a no-op for the surfaces the first one owns.
+window.__ModuleLoader__.load({
+  id: "dsh-hnflow",
+  factory: (require) => {
+    const capability = createCapabilityModule(require);
+    const hnflow = createHnflowModule(require);
+    return {
+      inject: [...new Set([...capability.inject, ...hnflow.inject])],
+      apply(ctx) {
+        capability.apply(ctx);
+        hnflow.apply(ctx);
+      },
+      internals: hnflow.internals,
+    };
   },
 });

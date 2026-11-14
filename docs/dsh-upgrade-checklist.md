@@ -49,8 +49,10 @@ dsh --profile ztest --no-open --port 3999
 3. 输入 JSON → 运行 → 收件箱出现门禁 → 批准 → 运行页显示 `succeeded`。
 4. 运行页：节点 token 用量、产物按钮、取消/继续。
 5. 输入框左下角 `▤` 打开上下文预览，能看到 persona、rules、skills、commands、flows、mcp、agents。
-6. 模型层选择器与 `/capability-layer` 生效；Agent 选择器与 `/capability-agent` 生效。
-7. 浏览器 console 无 error、无 pageerror。
+6. 右下角模型位是「模型层」而不是原生模型选择；左下角只有 Agent 选择与 `▤`。
+7. 新窗口切到 HNFlow：不报 `no usable Capability plan`，工作区自动补 `.hnflow/stack.json`。
+8. 模型层选择器与 `/capability-layer` 生效；Agent 选择器与 `/capability-agent` 生效。
+9. 浏览器 console 无 error、无 pageerror。
 
 ## 4. 常见契约变更
 

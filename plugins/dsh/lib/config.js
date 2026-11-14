@@ -48,6 +48,44 @@ export const DEFAULT_CONFIG = Object.freeze({
   outboxMaxAttempts: 8,
   /** Evaluate `<workspace>/.hnflow/triggers.json`. */
   triggersEnabled: true,
+  // The capability surface travels in the same row config, and `resolveConfig`
+  // drops every key it does not know. These mirror `capability/lib/config.js`:
+  // without them `modelSelector` never reaches `CapabilityService`, which then
+  // degrades to `additive` and puts the layer picker back into the left strip.
+  /** `replace` shadows the model seat; `additive` keeps it and adds a layer control. */
+  modelSelector: 'replace',
+  /** Optional model-layer bindings file; empty uses the global catalog. */
+  modelsFile: '',
+  /** Explicit `hnflow-stack` executable; empty means auto-discovery. */
+  command: '',
+  /** Plan resolve timeout in milliseconds. */
+  timeoutMs: 5000,
+  /** Resolve mode: `capabilities` keeps Core loaded in every workspace. */
+  resolveMode: 'capabilities',
+  /** Create `.hnflow/stack.json` when the workspace has none. */
+  autoActivate: true,
+  /** Apply the layer the selected Agent persona declares. */
+  applyModelOnAgent: true,
+  /** Apply the layer a capability-group command declares. */
+  applyModelOnCommand: true,
+  /** Apply the layer a skill declares. */
+  applyModelOnSkill: true,
+  /** Apply `models.default` once to a fresh session. */
+  applyDefaultLayer: true,
+  /** Namespace prefix for capability-group commands and skills. */
+  namePrefix: 'capability',
+  /** Maximum published command/skill name length before hashing. */
+  maxCommandNameLength: 48,
+  /** Skill candidate rank. */
+  skillRank: 250,
+  /** Upper bound for the rendered rules message. */
+  maxRulesBytes: 65536,
+  /** Expose the session inventory route and the preview button. */
+  inventory: true,
+  /** Upper bound for one inventory preview payload. */
+  inventoryTextBytes: 65536,
+  /** Preferred default agent name; empty falls back to the plan default. */
+  defaultAgent: '',
 })
 
 /** Keys whose value is a list of strings rather than a scalar. */

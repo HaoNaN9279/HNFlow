@@ -92,7 +92,16 @@ test('the core row provides ctx.hnflow and ctx.capability, the page routes and t
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
   assert.notEqual(ctx.services.capability, undefined)
-  assert.equal(ctx.routes.length, 15)
+  // The row config must carry the capability keys through `resolveConfig`; a
+  // missing `modelSelector` makes CapabilityService fall back to `additive`,
+  // which puts the layer picker back into the left strip and leaves the native
+  // model seat unshadowed.
+  assert.equal(ctx.services.capability.modelSelector, 'replace')
+  assert.equal(ctx.routes.length, 16)
+  assert.ok(
+    ctx.routes.some((route) => route.path === '/api/capability/prepare'),
+    'the workspace prepare route is missing',
+  )
   assert.equal(typeof ctx.services.hnflow.status, 'function')
   assert.equal(ctx.effects.length, 2)
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
@@ -120,7 +129,9 @@ test('the preset row registers the tools, skill and prompt section', async () =>
   // The `hnflow` command is global (core row); the capability row adds its own
   // two management commands inside the preset.
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow', 'capability-agent', 'capability-layer'])
-  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-controls', 'capability', 'hnflow-flows'])
+  // The preset row and the capability row register their skills concurrently,
+  // so the arrival order is not part of the contract — only the set is.
+  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name).sort(), ['capability', 'hnflow-controls', 'hnflow-flows'])
   for (const skill of ctx.registered.skills) {
     assert.equal(skill.source, 'bundled')
     assert.equal(typeof skill.content, 'string')

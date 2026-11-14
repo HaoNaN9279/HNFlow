@@ -27,7 +27,7 @@ import { createRoutes } from './lib/routes.js'
 import { createService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createFlowTool } from './lib/tools.js'
-import { apply as applyCapability, applyCore as applyCapabilityCore } from './capability/index.js'
+import { apply as applyCapability } from './capability/index.js'
 
 /** Plugin name shown in Loader diagnostics. */
 export const name = 'hnflow'
@@ -112,7 +112,11 @@ export function apply(ctx, rawConfig) {
   if (config.host === false) return
   if (config.role === 'core') {
     try {
-      applyCapabilityCore(ctx, { ...config, role: 'core', host: true })
+      // Go through the capability row's own entry point rather than
+      // `applyCore` directly: it re-applies the capability defaults, so a key
+      // this row forgot to carry (notably `modelSelector`) still lands on the
+      // service instead of silently degrading to `additive`.
+      applyCapability(ctx, { ...config, role: 'core', host: true })
     } catch (error) {
       ctx.logger?.warn?.('hnflow: capability core failed; model layers and preview stay unavailable: %o', error)
     }
