@@ -20,6 +20,9 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
 - 非致命内容问题写入 `warnings`，退出码仍为 `0`。
 - 仓库缺失、stack JSON 损坏等致命错误写 `stderr`，退出码为 `1`。
 
+`hnflow-stack groups --json` 是同一条加载链上的只读清单（含未激活组），供工作区窗口使用；
+它不参与解析，`resolve` 仍是唯一的解析边界。
+
 ## 响应
 
 ```json

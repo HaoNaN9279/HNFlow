@@ -22,6 +22,7 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 | 面 | 行为 |
 | --- | --- |
 | 能力组 | 按项目 `.hnflow/stack.json` 解析，注入 rules、skills、commands、agents、MCP、模型层 |
+| 能力组开关 | 工作区标题右键或 `…` 菜单里的「HNFlow 能力组…」：新窗口列出全部能力组，勾选启停，展开看组内内容，悬停 `◉` 预览全文 |
 | 工作流 | 能力组的 `flows/*.flow.json`，与规则/技能同一条解析链 |
 | 模型层 | 平台层 `fast` / `standard` / `strong` / `vision`，项目与全局绑定由 Python Core 读取；HNFlow 模式下接管输入框右下角的模型位 |
 | 上下文预览 | 输入框左下角 `▤` 按钮，查看本次会话实际注入的人设、规则、技能、命令、Agent、MCP 与工作流（左下角只放 Agent 选择与预览） |
@@ -76,6 +77,7 @@ $DSH_HOME/hnflow/runs                          运行状态（storage 不可用�
 
 左栏 `HNFlow` 三页签：流程、运行、收件箱。流程页只读展示所属能力组、依赖与
 节点契约；收件箱处理门禁与人工交付；上下文清单从输入框左下角 `▤` 打开。
+工作区窗口从工作区三点菜单打开，启停直接写该工作区的 `.hnflow/stack.json`。
 
 ## 测试
 

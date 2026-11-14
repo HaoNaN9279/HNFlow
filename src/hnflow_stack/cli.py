@@ -18,6 +18,7 @@ from hnflow_stack.bindings import (
     unbind_layer,
 )
 from hnflow_stack.errors import HNFlowError
+from hnflow_stack.groups import groups_document
 from hnflow_stack.loader import discover_groups, discover_tools, load_group
 from hnflow_stack.model import (
     GroupMeta,
@@ -189,6 +190,18 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("group")
     info.add_argument("--group-version", default="")
 
+    groups_parser = sub.add_parser(
+        "groups", help="list every capability group with its activation state"
+    )
+    groups_parser.add_argument("--json", action="store_true", help="write JSON")
+    groups_parser.add_argument(
+        "--project",
+        dest="resolve_project",
+        type=Path,
+        default=None,
+        help="project root containing .hnflow (default: cwd)",
+    )
+
     activate_parser = sub.add_parser("activate", help="activate capability groups")
     activate_parser.add_argument("groups", nargs="+", metavar="group[@version]")
 
@@ -239,8 +252,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _force_utf8_stdio() -> None:
+    """Write UTF-8 even when stdout is a pipe.
+
+    The plugin reads `--json` output as UTF-8; on Windows a piped stream would
+    otherwise use the ANSI code page and turn CJK descriptions into invalid JSON.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point."""
+    _force_utf8_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -265,6 +295,8 @@ def _dispatch(args: argparse.Namespace, repo: Path) -> int:
         return _init(repo, project, args.core)
     if args.command == "info":
         return _info(repo, project, args.group, args.group_version)
+    if args.command == "groups":
+        return _groups(repo, project, bool(getattr(args, "json", False)))
     if args.command == "activate":
         return _activate(repo, project, args.groups)
     if args.command == "deactivate":
@@ -301,6 +333,25 @@ def _list(repo: Path, project: Path) -> int:
     print("\nTools:")
     for tool in tools:
         print(f"  {tool.short_id}  [{tool.provider}]  {tool.description}")
+    return 0
+
+
+def _groups(repo: Path, project: Path, as_json: bool) -> int:
+    document = groups_document(repo, project)
+    if as_json:
+        _write_json(document)
+        return 0
+    print(f"repo: {document['repo']}")
+    print(f"project: {document['project']}")
+    for group in document["groups"]:
+        mark = "*" if group["active"] else " "
+        label = f"{group['name']}@{group['version']}" if group["version"] else group["name"]
+        counts = ", ".join(
+            f"{kind} {len(items)}" for kind, items in group["contents"].items() if items
+        )
+        print(f" {mark} {label}  {group['description']}")
+        if counts:
+            print(f"     {counts}")
     return 0
 
 

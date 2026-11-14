@@ -42,6 +42,7 @@ import { createModelsRoute } from './lib/models-route.js'
 import { planUsable, unusablePlanReason } from './lib/plan.js'
 import { PlanCache } from './lib/plans.js'
 import { resolvePlan as resolveProjectPlan } from './lib/resolve.js'
+import { createGroupsRoutes } from './lib/groups-route.js'
 import { createInventoryRoutes } from './lib/inventory-route.js'
 import { createPrepareRoute } from './lib/prepare-route.js'
 import { createRosterRoute } from './lib/roster-route.js'
@@ -331,6 +332,14 @@ export function applyCore(ctx, config, deps = {}) {
       // The client calls this the moment a window switches to the mode, so the
       // workspace is initialised before the composer and the preview ask for it.
       registry.register(createPrepareRoute({ prepareForSession }))
+      // The workspace switcher is a workspace-level surface, not a session one:
+      // it must list groups before any session exists in that workspace.
+      for (const route of createGroupsRoutes({
+        config,
+        textBytes: config.inventoryTextBytes,
+      })) {
+        registry.register(route)
+      }
       if (config.inventory !== false) {
         for (const route of createInventoryRoutes({
           sessionFor: sessionForInventory,

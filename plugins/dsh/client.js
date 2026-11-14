@@ -1971,6 +1971,535 @@ function inlineCounts(sections) {
      * @param {Record<string, unknown>} ctx - client context.
      * @returns {void}
      */
+const GROUPS_PATH = "/api/capability/groups";
+const GROUPS_SELECT_PATH = "/api/capability/groups/select";
+const GROUPS_TEXT_PATH = "/api/capability/groups/text";
+
+/** Group rows in the window, in display order, with their Chinese labels. */
+const GROUP_KINDS = [
+  { kind: "rules", label: "规则" },
+  { kind: "agents", label: "Agent" },
+  { kind: "commands", label: "命令" },
+  { kind: "skills", label: "技能" },
+  { kind: "references", label: "参考" },
+  { kind: "flows", label: "流程" }
+];
+
+/**
+ * Read one workspace's capability group catalog.
+ * @param {string} workspace - absolute workspace directory.
+ * @returns {Promise<object>} catalog document.
+ */
+async function readWorkspaceGroups(workspace) {
+  const query = new URLSearchParams({ workspace });
+  const response = await fetch(`${GROUPS_PATH}?${query.toString()}`, {
+    credentials: "same-origin",
+    cache: "no-store"
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.message ?? payload.code ?? `HTTP ${response.status}`);
+  }
+  return payload.catalog ?? null;
+}
+
+/**
+ * Turn one capability group on or off for a workspace.
+ * @param {string} workspace - absolute workspace directory.
+ * @param {string} group - group name.
+ * @param {boolean} active - desired state.
+ * @returns {Promise<object>} refreshed catalog.
+ */
+async function selectWorkspaceGroup(workspace, group, active) {
+  const response = await fetch(GROUPS_SELECT_PATH, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspace, group, active })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.message ?? payload.code ?? `HTTP ${response.status}`);
+  }
+  return payload.catalog ?? null;
+}
+
+/**
+ * Read one capability content file for preview.
+ * @param {string} workspace - absolute workspace directory.
+ * @param {string} file - absolute content path from the catalog.
+ * @returns {Promise<{text: string, truncated: boolean, path: string}>} preview payload.
+ */
+async function readWorkspaceGroupText(workspace, file) {
+  const query = new URLSearchParams({ workspace, path: file });
+  const response = await fetch(`${GROUPS_TEXT_PATH}?${query.toString()}`, {
+    credentials: "same-origin",
+    cache: "no-store"
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok === false) {
+    throw new Error(payload.message ?? payload.code ?? `HTTP ${response.status}`);
+  }
+  return {
+    text: typeof payload.text === "string" ? payload.text : "",
+    truncated: payload.truncated === true,
+    path: typeof payload.path === "string" ? payload.path : file
+  };
+}
+
+/**
+ * Open/close state of the workspace window.
+ *
+ * The context menu contribution and the overlay component live in the same
+ * module, but React cannot read the menu callback, so the state sits here and
+ * both sides share it.
+ */
+const groupsWindow = {
+  state: { open: false, workspace: "", title: "" },
+  listeners: new Set(),
+  subscribe(listener) {
+    groupsWindow.listeners.add(listener);
+    return () => groupsWindow.listeners.delete(listener);
+  },
+  snapshot() {
+    return groupsWindow.state;
+  },
+  show(patch) {
+    groupsWindow.state = {
+      open: true,
+      workspace: typeof patch?.workspace === "string" ? patch.workspace : "",
+      title: typeof patch?.title === "string" ? patch.title : ""
+    };
+    for (const listener of groupsWindow.listeners) listener();
+  },
+  hide() {
+    groupsWindow.state = { ...groupsWindow.state, open: false };
+    for (const listener of groupsWindow.listeners) listener();
+  }
+};
+
+/** Styles for the capability-group window; the preview card reuses the inventory ones. */
+const groupsStyles = {
+  dialog: {
+    ...inventoryStyles.dialog,
+    width: "min(1040px, 94vw)",
+    maxHeight: "88vh"
+  },
+  group: {
+    border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.18))",
+    borderRadius: "var(--dsw-radius-sm, 8px)",
+    marginBottom: "8px",
+    background: "var(--dsw-alias-bg-l1, transparent)"
+  },
+  groupHead: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "8px",
+    padding: "8px 10px"
+  },
+  checkbox: {
+    flex: "none",
+    width: "15px",
+    height: "15px",
+    margin: "3px 0 0",
+    cursor: "pointer",
+    accentColor: "var(--dsw-alias-brand-primary, #4a8cff)"
+  },
+  expand: {
+    flex: "none",
+    width: "22px",
+    height: "22px",
+    padding: "0",
+    border: "0",
+    background: "transparent",
+    color: "var(--dsw-alias-label-secondary, inherit)",
+    fontFamily: "inherit",
+    fontSize: "12px",
+    cursor: "pointer"
+  },
+  groupBody: { flex: "1 1 auto", minWidth: "0" },
+  groupName: {
+    display: "flex",
+    alignItems: "center",
+    gap: "6px",
+    fontSize: "13px",
+    fontWeight: 600,
+    color: "var(--dsw-alias-label-primary, inherit)"
+  },
+  badge: {
+    fontSize: "10px",
+    fontWeight: 500,
+    padding: "1px 5px",
+    borderRadius: "999px",
+    border: "1px solid var(--dsw-alias-border-l1, rgba(127,127,127,0.28))",
+    color: "var(--dsw-alias-label-tertiary, inherit)"
+  },
+  groupDescription: {
+    marginTop: "2px",
+    fontSize: "12px",
+    lineHeight: "1.5",
+    color: "var(--dsw-alias-label-secondary, inherit)"
+  },
+  contents: { padding: "0 10px 10px 40px" },
+  kindHead: {
+    marginTop: "6px",
+    fontSize: "11px",
+    fontWeight: 600,
+    letterSpacing: "0.02em",
+    color: "var(--dsw-alias-label-tertiary, inherit)"
+  },
+  contentRow: {
+    display: "flex",
+    alignItems: "flex-start",
+    gap: "8px",
+    padding: "3px 0"
+  },
+  contentBody: { flex: "1 1 auto", minWidth: "0" },
+  contentName: {
+    fontSize: "12px",
+    color: "var(--dsw-alias-label-primary, inherit)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap"
+  }
+};
+
+/**
+ * Hover preview for one content entry.
+ * @param {{item: object, rect: DOMRect, text: string, loading: boolean, error: string, truncated: boolean, onEnter: Function, onLeave: Function}} props - card props.
+ * @returns {object} portal element.
+ */
+function GroupPreviewCard(props) {
+  const place = placeInventoryCard(props.rect);
+  return reactDom.createPortal(
+    h(
+      "div",
+      {
+        style: { ...inventoryStyles.card, ...place },
+        role: "tooltip",
+        onMouseEnter: props.onEnter,
+        onMouseLeave: props.onLeave
+      },
+      h(
+        "div",
+        { style: inventoryStyles.cardHead },
+        h("span", { style: inventoryStyles.cardTitle }, props.item.name || props.item.id),
+        h("span", { style: inventoryStyles.muted }, props.item.kind)
+      ),
+      h(
+        "div",
+        { style: inventoryStyles.cardBody },
+        props.loading
+          ? h("div", { style: inventoryStyles.muted }, "加载中…")
+          : props.error.length > 0
+            ? h("div", { style: inventoryStyles.error }, props.error)
+            : h("pre", { style: inventoryStyles.pre }, props.text)
+      ),
+      h(
+        "div",
+        { style: inventoryStyles.cardFoot },
+        h("span", { style: { flex: "1 1 auto" } }, props.item.path || ""),
+        props.truncated ? h("span", null, "已截断") : null
+      )
+    ),
+    document.body
+  );
+}
+
+/**
+ * The workspace capability-group window.
+ *
+ * Opened from the workspace row's context menu (`…`), it lists every HNFlow
+ * group with a checkbox, expands each group into its content, and previews any
+ * file on hover with the same card the session inventory uses.
+ * @returns {object | null} react element, or null while closed.
+ */
+function GroupsWindow() {
+  const [state, setState] = react.useState(groupsWindow.snapshot());
+  const [catalog, setCatalog] = react.useState(null);
+  const [error, setError] = react.useState("");
+  const [loading, setLoading] = react.useState(false);
+  const [pending, setPending] = react.useState({});
+  const [expanded, setExpanded] = react.useState({});
+  const [hover, setHover] = react.useState(null);
+  const [preview, setPreview] = react.useState(null);
+  const cacheRef = react.useRef(new Map());
+  const showTimer = react.useRef(null);
+  const hideTimer = react.useRef(null);
+  const dialogRef = react.useRef(null);
+
+  react.useEffect(() => groupsWindow.subscribe(() => setState(groupsWindow.snapshot())), []);
+
+  const load = react.useCallback(async () => {
+    if (state.workspace.length === 0) {
+      setCatalog(null);
+      setError("无法确定该工作区目录。");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      setCatalog(await readWorkspaceGroups(state.workspace));
+      setExpanded({});
+    } catch (failure) {
+      setCatalog(null);
+      setError(String(failure?.message ?? failure));
+    } finally {
+      setLoading(false);
+    }
+  }, [state.workspace]);
+
+  react.useEffect(() => {
+    if (!state.open) return undefined;
+    void load();
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") groupsWindow.hide();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [state.open, load]);
+
+  react.useEffect(
+    () => () => {
+      clearTimeout(showTimer.current);
+      clearTimeout(hideTimer.current);
+    },
+    []
+  );
+
+  react.useEffect(() => {
+    if (hover === null) {
+      setPreview(null);
+      return undefined;
+    }
+    const entry = hover.item;
+    const cached = cacheRef.current.get(entry.path);
+    if (cached !== undefined) {
+      setPreview({ loading: false, error: "", path: entry.path, truncated: false, text: cached });
+      return undefined;
+    }
+    let cancelled = false;
+    setPreview({ loading: true, error: "", path: entry.path, truncated: false, text: "" });
+    readWorkspaceGroupText(state.workspace, entry.path)
+      .then((result) => {
+        cacheRef.current.set(entry.path, result.text);
+        if (!cancelled) setPreview({ loading: false, error: "", ...result });
+      })
+      .catch((failure) => {
+        if (!cancelled) {
+          setPreview({ loading: false, error: String(failure?.message ?? failure), path: entry.path, truncated: false, text: "" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hover, state.workspace]);
+
+  const openPreview = (item, event) => {
+    clearTimeout(showTimer.current);
+    clearTimeout(hideTimer.current);
+    const rect = event.currentTarget.getBoundingClientRect();
+    showTimer.current = setTimeout(() => setHover({ item, rect }), 120);
+  };
+
+  const closePreview = () => {
+    clearTimeout(showTimer.current);
+    hideTimer.current = setTimeout(() => setHover(null), 180);
+  };
+
+  const toggleGroup = async (group) => {
+    if (group.fixed === true || pending[group.name] === true) return;
+    const next = group.active !== true;
+    setPending((current) => ({ ...current, [group.name]: true }));
+    setError("");
+    try {
+      setCatalog(await selectWorkspaceGroup(state.workspace, group.name, next));
+    } catch (failure) {
+      setError(String(failure?.message ?? failure));
+    } finally {
+      setPending((current) => {
+        const copy = { ...current };
+        delete copy[group.name];
+        return copy;
+      });
+    }
+  };
+
+  if (!state.open) return null;
+
+  const groups = catalog && Array.isArray(catalog.groups) ? catalog.groups : [];
+  const activeCount = groups.filter((group) => group.active === true).length;
+
+  const card = hover !== null && preview !== null
+    ? h(GroupPreviewCard, {
+        item: hover.item,
+        rect: hover.rect,
+        text: preview.text,
+        loading: preview.loading,
+        error: preview.error,
+        truncated: preview.truncated,
+        onEnter: () => clearTimeout(hideTimer.current),
+        onLeave: closePreview
+      })
+    : null;
+
+  const modal = reactDom.createPortal(
+    h(
+      "div",
+      {
+        style: inventoryStyles.overlay,
+        onMouseDown: (event) => {
+          if (event.target === event.currentTarget) groupsWindow.hide();
+        }
+      },
+      h(
+        "div",
+        {
+          ref: dialogRef,
+          role: "dialog",
+          "aria-modal": "true",
+          "aria-label": "HNFlow 能力组",
+          tabIndex: -1,
+          style: groupsStyles.dialog,
+          onMouseDown: (event) => event.stopPropagation()
+        },
+        h(
+          "div",
+          { style: inventoryStyles.header },
+          h("span", { style: inventoryStyles.title }, "HNFlow 能力组"),
+          h(
+            "span",
+            { style: inventoryStyles.subtitle },
+            `${state.title || state.workspace || "未选择工作区"} · 已激活 ${activeCount}/${groups.length}`
+          ),
+          h("span", { style: inventoryStyles.spacer }),
+          h(
+            "button",
+            { type: "button", style: smallButton, disabled: loading, onClick: () => void load() },
+            loading ? "刷新中…" : "刷新"
+          ),
+          h("button", { type: "button", style: smallButton, onClick: () => groupsWindow.hide() }, "关闭")
+        ),
+        h(
+          "div",
+          { style: inventoryStyles.body },
+          error.length > 0 ? h("div", { style: inventoryStyles.error }, error) : null,
+          loading && catalog === null
+            ? h("div", { style: inventoryStyles.muted }, "加载中…")
+            : catalog === null
+              ? h("div", { style: inventoryStyles.muted }, "没有可显示的能力组。")
+              : groups.map((group) => {
+                  const isOpen = expanded[group.name] === true;
+                  const contents = group.contents && typeof group.contents === "object" ? group.contents : {};
+                  const total = GROUP_KINDS.reduce(
+                    (sum, { kind }) => sum + (Array.isArray(contents[kind]) ? contents[kind].length : 0),
+                    0
+                  );
+                  return h(
+                    "div",
+                    { key: group.name, style: groupsStyles.group },
+                    h(
+                      "div",
+                      { style: groupsStyles.groupHead },
+                      h("input", {
+                        type: "checkbox",
+                        style: groupsStyles.checkbox,
+                        checked: group.active === true || group.fixed === true,
+                        disabled: group.fixed === true || pending[group.name] === true,
+                        title: group.fixed === true ? "Core 固定加载，不能关闭" : "激活/关闭该能力组",
+                        "aria-label": `${group.name} 激活`,
+                        onChange: () => void toggleGroup(group)
+                      }),
+                      h(
+                        "button",
+                        {
+                          type: "button",
+                          style: groupsStyles.expand,
+                          "aria-expanded": isOpen,
+                          title: isOpen ? "收起内容" : "展开内容",
+                          onClick: () => setExpanded((current) => ({ ...current, [group.name]: !isOpen }))
+                        },
+                        isOpen ? "▾" : "▸"
+                      ),
+                      h(
+                        "div",
+                        { style: groupsStyles.groupBody },
+                        h(
+                          "div",
+                          { style: groupsStyles.groupName },
+                          h("span", null, group.version ? `${group.name}@${group.version}` : group.name),
+                          group.fixed === true ? h("span", { style: groupsStyles.badge }, "常驻") : null,
+                          group.source === "project" ? h("span", { style: groupsStyles.badge }, "项目") : null,
+                          h("span", { style: inventoryStyles.count }, `${total} 项`)
+                        ),
+                        h("div", { style: groupsStyles.groupDescription }, group.description || "")
+                      )
+                    ),
+                    isOpen
+                      ? h(
+                          "div",
+                          { style: groupsStyles.contents },
+                          GROUP_KINDS.map(({ kind, label }) => {
+                            const items = Array.isArray(contents[kind]) ? contents[kind] : [];
+                            if (items.length === 0) return null;
+                            return h(
+                              "div",
+                              { key: kind },
+                              h("div", { style: groupsStyles.kindHead }, `${label} (${items.length})`),
+                              items.map((item) =>
+                                h(
+                                  "div",
+                                  { key: `${kind}:${item.id}`, style: groupsStyles.contentRow },
+                                  h(
+                                    "div",
+                                    { style: groupsStyles.contentBody },
+                                    h("div", { style: groupsStyles.contentName }, item.name || item.id),
+                                    h(
+                                      "div",
+                                      { style: inventoryStyles.rowMeta },
+                                      [
+                                        item.kind ? item.kind : kind,
+                                        item.scope ? `scope: ${item.scope}` : "",
+                                        item.on_demand === true ? "按需加载" : "",
+                                        item.mode ? `mode: ${item.mode}` : "",
+                                        item.description || ""
+                                      ]
+                                        .filter((part) => part.length > 0)
+                                        .join(" · ")
+                                    )
+                                  ),
+                                  h(
+                                    "button",
+                                    {
+                                      type: "button",
+                                      style: inventoryStyles.previewButton,
+                                      title: "预览全文",
+                                      "aria-label": `预览 ${item.name || item.id}`,
+                                      onMouseEnter: (event) => openPreview(item, event),
+                                      onFocus: (event) => openPreview(item, event),
+                                      onMouseLeave: closePreview,
+                                      onBlur: closePreview,
+                                      onClick: (event) => openPreview(item, event)
+                                    },
+                                    "◉"
+                                  )
+                                )
+                              )
+                            );
+                          })
+                        )
+                      : null
+                  );
+                })
+        )
+      )
+    ),
+    document.body
+  );
+
+  return h(react.Fragment, null, modal, card);
+}
+
     function apply(ctx) {
       if (owner !== null) return;
       owner = ctx;
@@ -2021,6 +2550,42 @@ function inlineCounts(sections) {
           (props) => h(InventoryBoundary, null, h(InventoryPanel, props))
         )
       );
+      // One overlay renders the workspace window; one context-menu entry opens
+      // it. Both stay inert when the host does not offer the service.
+      try {
+        ctx.slots.inject("shell.overlay", () =>
+          ctx.slots.register({ name: "shell.overlay", id: "capability-groups-window" }, GroupsWindow)
+        );
+      } catch (failure) {
+        console.warn("[capability] group window is unavailable", failure);
+      }
+      ctx.inject(["contextMenus"], (scope) => {
+        const menus = scope.contextMenus;
+        if (!menus || typeof menus.register !== "function") return;
+        const contribution = {
+          id: "capability-groups",
+          target: "workspace",
+          order: 900,
+          resolve: (target) => {
+            const value = target !== null && typeof target === "object" && "value" in target ? target.value : target;
+            const workspace = typeof value?.path === "string" ? value.path : "";
+            const title = typeof value?.displayTitle === "string" ? value.displayTitle : "";
+            return [
+              {
+                id: "capability-groups.open",
+                label: "HNFlow 能力组…",
+                run: () => groupsWindow.show({ workspace, title })
+              }
+            ];
+          }
+        };
+        if (typeof scope.effect === "function") {
+          scope.effect(() => menus.register(contribution), "capability: workspace capability-group menu");
+          return;
+        }
+        menus.register(contribution);
+      });
+
       // The model-layer selector lives in the right-hand model seat, not in the
       // left strip: that strip belongs to the Agent picker.
       ctx.slots.inject("settings.section", () =>
@@ -2088,6 +2653,7 @@ function inlineCounts(sections) {
 
     exports.apply = apply;
     exports.inject = inject;
+    exports.internals = { groupsWindow };
     return module.exports;
 }
 
@@ -3114,7 +3680,7 @@ window.__ModuleLoader__.load({
         capability.apply(ctx);
         hnflow.apply(ctx);
       },
-      internals: hnflow.internals,
+      internals: { ...hnflow.internals, ...capability.internals },
     };
   },
 });

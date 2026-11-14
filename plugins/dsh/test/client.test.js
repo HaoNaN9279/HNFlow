@@ -57,7 +57,7 @@ function loadBundle() {
 /**
  * Apply the bundle to a fake client context.
  * @param {{fetch?: Function}} [options] - fetch stand-in for the host routes.
- * @returns {{entries: Record<string, any>[], exports: Record<string, any>, injected: string[]}} registrations.
+ * @returns {{entries: Record<string, any>[], exports: Record<string, any>, injected: string[], menus: Record<string, any>[]}} registrations.
  */
 function applyBundle(options = {}) {
   if (options.fetch !== undefined) globalThis.fetch = options.fetch;
@@ -66,6 +66,8 @@ function applyBundle(options = {}) {
   const entries = [];
   /** @type {string[]} */
   const injected = [];
+  /** @type {Record<string, any>[]} */
+  const menus = [];
   const ctx = {
     slots: {
       inject: (name, callback) => {
@@ -77,21 +79,23 @@ function applyBundle(options = {}) {
       },
     },
     inject: (deps, callback) =>
-      callback(
-        Array.isArray(deps) && deps.includes("modelDirectories")
-          ? {
-              slots: ctx.slots,
-              modelDirectories: {
-                directoryFor: () => ({
-                  store: {},
-                  load: async () => {},
-                  select: async () => {},
-                }),
-              },
-              sessions: { subagentAddress: () => undefined },
-            }
-          : {},
-      ),
+      callback({
+        slots: ctx.slots,
+        contextMenus: {
+          register: (contribution) => {
+            menus.push(contribution);
+            return () => {};
+          },
+        },
+        modelDirectories: {
+          directoryFor: () => ({
+            store: {},
+            load: async () => {},
+            select: async () => {},
+          }),
+        },
+        sessions: { subagentAddress: () => undefined },
+      }),
     effect: () => {},
     // The capability surface reads the live session list to learn the workspace
     // a blank window belongs to; the real client exposes it as `ctx.sessions`.
@@ -108,7 +112,7 @@ function applyBundle(options = {}) {
     },
   };
   exports.apply(ctx);
-  return { entries, exports, injected };
+  return { entries, exports, injected, menus };
 }
 
 /** Registered `slot:id-or-key` names, for readable assertions. */
@@ -195,4 +199,31 @@ test("the left-strip controls receive the workspace-aware sessions service", () 
   assert.equal(props.sessionId, "session-1");
   assert.equal(typeof props.sessionsService?.list?.getSnapshot, "function");
   assert.equal(preview.entry.inject("session-1").sessionsService, props.sessionsService);
+});
+
+test("the bundle registers the capability-group window on the overlay", () => {
+  const { entries } = applyBundle();
+  assert.ok(
+    entryNames(entries).includes("shell.overlay:capability-groups-window"),
+    "the workspace capability-group window is missing",
+  );
+});
+
+test("the workspace menu opens the window for that directory", () => {
+  const { menus, exports } = applyBundle();
+  const contribution = menus.find((entry) => entry.target === "workspace");
+  assert.ok(contribution, "the workspace context menu contribution is missing");
+  assert.equal(contribution.id, "capability-groups");
+  const actions = contribution.resolve({
+    kind: "workspace",
+    value: { workspaceId: "w1", path: "D:/workspace/HNFlow", displayTitle: "HNFlow" },
+  });
+  assert.equal(actions.length, 1, "the workspace menu must add exactly one entry");
+  assert.equal(actions[0].id, "capability-groups.open");
+  assert.equal(actions[0].label, "HNFlow 能力组…");
+  actions[0].run();
+  const state = exports.internals.groupsWindow.snapshot();
+  assert.equal(state.open, true);
+  assert.equal(state.workspace, "D:/workspace/HNFlow");
+  assert.equal(state.title, "HNFlow");
 });

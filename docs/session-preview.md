@@ -65,3 +65,15 @@ JSON 条目带 `id`、`name`、`kind`、`status`、`summary`、`path`、`host_na
 
 `cwd` 是客户端报告的工作区提示，只在宿主还不知道会话目录（新窗口尚未落盘）时使用。
 页面只读；预览不改变注入，也不写会话。
+
+## 5. 工作区能力组窗口
+
+工作区标题的右键与 `…` 共用同一个菜单，插件在其中追加「HNFlow 能力组…」：
+
+- 窗口纵向列出仓库与项目里的全部能力组，包括未激活的；勾选框负责启停，`Core` 固定加载、不可关闭。
+- 展开一条组列出规则、Agent、命令、技能、参考与流程；每条右侧 `◉` 悬停预览全文，复用本页的预览浮层。
+- 启停只写 `.hnflow/stack.json`，由 `hnflow-stack activate|deactivate` 完成；解析缓存在下一步自行失效，不需要重启。
+
+- `GET /api/capability/groups?workspace=<dir>`：能力组目录与激活状态（`hnflow-stack groups --json`）。
+- `POST /api/capability/groups/select`：`{workspace, group, active}`，写入后返回新目录。
+- `GET /api/capability/groups/text?workspace=<dir>&path=<file>`：单条正文，路径必须来自目录，按 `text-bytes` 截断。

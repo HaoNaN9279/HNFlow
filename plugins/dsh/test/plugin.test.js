@@ -97,7 +97,7 @@ test('the core row provides ctx.hnflow and ctx.capability, the page routes and t
   // which puts the layer picker back into the left strip and leaves the native
   // model seat unshadowed.
   assert.equal(ctx.services.capability.modelSelector, 'replace')
-  assert.equal(ctx.routes.length, 16)
+  assert.equal(ctx.routes.length, 19)
   assert.ok(
     ctx.routes.some((route) => route.path === '/api/capability/prepare'),
     'the workspace prepare route is missing',
