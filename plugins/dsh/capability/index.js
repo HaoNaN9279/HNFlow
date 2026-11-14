@@ -166,7 +166,7 @@ export function applyCore(ctx, config, deps = {}) {
   })
   const cache = new PlanCache(resolverFor(config, logger))
   // HNFlow reads the same resolved plan the capability rows inject: one source
-  // of truth for groups, modules and their `flows/` content.
+  // of truth for groups and their `flows/` content.
   service.planFor = async (cwd) => {
     const result = await cache.get(cwd)
     return { plan: result.plan, warnings: result.warnings }

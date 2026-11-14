@@ -1,5 +1,6 @@
 ---
 name: maya
+description: Maya DCC 开发规则：脚本、插件与资产流程约定。
 ---
 
 # Autodesk Maya DCC 开发规则

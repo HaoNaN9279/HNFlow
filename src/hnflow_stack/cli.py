@@ -22,13 +22,11 @@ from hnflow_stack.loader import discover_groups, discover_tools, load_group
 from hnflow_stack.model import (
     GroupMeta,
     GroupRef,
-    ModuleMeta,
     ProjectStack,
     ResolvedGroup,
     ResolvedPlan,
     ResolvedRule,
 )
-from hnflow_stack.modules import active_modules, discover_modules
 from hnflow_stack.plugin import discover_plugins, status as plugin_status
 from hnflow_stack.project import (
     activate,
@@ -84,9 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     list_parser = sub.add_parser("list", help="list capability groups and tools")
-    list_parser.add_argument(
-        "--tree", action="store_true", help="show active modules per group"
-    )
     sub.add_parser("status", help="show project capability groups")
     sub.add_parser("sync", help="resolve the project stack and write lock.json")
     validate_parser = sub.add_parser(
@@ -187,24 +182,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="per-item text cap used by --with-text",
     )
 
-    module_parser = sub.add_parser("module", help="enable or disable group modules")
-    module_sub = module_parser.add_subparsers(dest="module_command", required=True)
-    module_list = module_sub.add_parser("list", help="list active modules")
-    module_list.add_argument("group", nargs="?")
-    module_enable = module_sub.add_parser("enable", help="enable a module")
-    module_enable.add_argument("module", help="group:module")
-    module_disable = module_sub.add_parser("disable", help="disable a module")
-    module_disable.add_argument("module", help="group:module")
-
     init = sub.add_parser("init", help="create .hnflow/stack.json")
     init.add_argument("--core", default="", help="core group as name@version")
 
     info = sub.add_parser("info", help="show capability group details")
     info.add_argument("group")
     info.add_argument("--group-version", default="")
-    info.add_argument(
-        "--modules", action="store_true", help="show modules and their content"
-    )
 
     activate_parser = sub.add_parser("activate", help="activate capability groups")
     activate_parser.add_argument("groups", nargs="+", metavar="group[@version]")
@@ -275,13 +258,13 @@ def main(argv: list[str] | None = None) -> int:
 def _dispatch(args: argparse.Namespace, repo: Path) -> int:
     project = args.project.resolve()
     if args.command == "list":
-        return _list(repo, project, bool(getattr(args, "tree", False)))
+        return _list(repo, project)
     if args.command == "status":
         return _status(project)
     if args.command == "init":
         return _init(repo, project, args.core)
     if args.command == "info":
-        return _info(repo, project, args.group, args.group_version, bool(args.modules))
+        return _info(repo, project, args.group, args.group_version)
     if args.command == "activate":
         return _activate(repo, project, args.groups)
     if args.command == "deactivate":
@@ -294,8 +277,6 @@ def _dispatch(args: argparse.Namespace, repo: Path) -> int:
         return _rules(repo, project, args)
     if args.command == "preview":
         return _preview(repo, project, args)
-    if args.command == "module":
-        return _module_cmd(repo, project, args)
     if args.command == "resolve":
         return _resolve(
             repo,
@@ -310,35 +291,17 @@ def _dispatch(args: argparse.Namespace, repo: Path) -> int:
     raise HNFlowError(f"unknown command: {args.command}")
 
 
-def _list(repo: Path, project: Path, tree: bool = False) -> int:
+def _list(repo: Path, project: Path) -> int:
     groups = discover_groups(repo, project=project)
-    stack = read_stack(project)
-    refs = {ref.name: ref for ref in stack.groups} if stack is not None else {}
     print("Capability groups:")
     for group in groups:
         label = f"{group.name}@{group.version}" if group.version else group.name
         print(f"  {label}  {group.description}")
-        if not tree:
-            continue
-        ref = refs.get(group.name)
-        if ref is not None:
-            group.selected_modules = ref.modules
-            group.excluded_modules = list(ref.exclude)
-        modules = _active_modules(group)
-        if not modules:
-            continue
-        for module in modules:
-            title = f"  {module.title}" if module.title else ""
-            print(f"      module {module.path} (alias: {module.alias}){title}")
     tools = discover_tools(repo)
     print("\nTools:")
     for tool in tools:
         print(f"  {tool.short_id}  [{tool.provider}]  {tool.description}")
     return 0
-
-
-def _active_modules(group: GroupMeta) -> list[ModuleMeta]:
-    return active_modules(group)
 
 
 def _status(project: Path) -> int:
@@ -358,10 +321,6 @@ def _status(project: Path) -> int:
         for ref in stack.groups:
             label = f"{ref.name}@{ref.version}" if ref.version else ref.name
             extra = ""
-            if ref.modules is not None:
-                extra += f" modules={','.join(ref.modules) or '(none)'}"
-            if ref.exclude:
-                extra += f" exclude={','.join(ref.exclude)}"
             if ref.disable:
                 extra += f" disable={len(ref.disable)}"
             print(f"  {label}{extra}")
@@ -402,47 +361,26 @@ def _remember_repository(repo: Path, core: GroupRef | None = None) -> None:
         )
 
 
-def _info(
-    repo: Path, project: Path, name: str, version: str, with_modules: bool = False
-) -> int:
+def _info(repo: Path, project: Path, name: str, version: str) -> int:
     group = load_group(repo, name, version or None, project=project)
     stack = read_stack(project)
     if stack is not None:
         for ref in stack.groups:
             if ref.name != group.name:
                 continue
-            group.selected_modules = ref.modules
-            group.excluded_modules = list(ref.exclude)
             group.disabled_rules = list(ref.disable)
             break
-    group.active_modules = active_modules(group)
     label = f"{group.name}@{group.version}" if group.version else group.name
     print(label)
     print(f"guid: {group.guid}")
     print(f"description: {group.description}")
     print(f"extends: {', '.join(group.extends) or '(none)'}")
-    print(f"tools: {', '.join(group.all_tools) or '(none)'}")
+    print(f"tools: {', '.join(group.tools) or '(none)'}")
     print(f"rules: {len(group.rules)}")
     print(f"agents: {len(group.agents)}")
     print(f"commands: {len(group.commands)}")
     print(f"skills: {_count_skills(group.root / 'skills')}")
-    print(f"modules: {len(group.active_modules)}")
     print(f"path: {group.root}")
-    if not with_modules:
-        return 0
-    print("")
-    for module in group.active_modules:
-        title = f"  {module.title}" if module.title else ""
-        print(f"module {module.path}{title}")
-        print(f"  alias: {module.alias}")
-        if module.paths:
-            print(f"  paths: {', '.join(module.paths)}")
-        if module.depends:
-            print(f"  depends: {', '.join(module.depends)}")
-        print(f"  rules: {len(module.rules)}")
-        print(f"  agents: {len(module.agents)}")
-        print(f"  commands: {len(module.commands)}")
-        print(f"  skills: {_count_skills(module.root / 'skills')}")
     return 0
 
 
@@ -490,7 +428,6 @@ def _sync(repo: Path, project: Path) -> int:
         warnings=plan.warnings,
     )
     print(f"resolved {len(groups)} groups")
-    print(f"modules: {sum(len(group.active_modules) for group in groups)}")
     print(f"lock: {path}")
     print(f"tools: {len(tools_for_groups(repo, groups))}")
     for warning in plan.warnings:
@@ -515,7 +452,6 @@ def _resolve(repo: Path, project: Path, as_json: bool, mode: str) -> int:
     if plan.core is not None:
         print(f"core: {plan.core.name}@{plan.core.version}")
     print(f"groups: {len(plan.groups)}")
-    print(f"modules: {sum(len(group.modules) for group in plan.groups)}")
     print(f"rules: {len(plan.rules)}")
     print(f"skills: {len(plan.skills)}")
     print(f"agents: {len(plan.agents)}")
@@ -548,7 +484,6 @@ def _validate(repo: Path, project: Path, as_json: bool) -> int:
             {
                 "ok": True,
                 "groups": len(plan.group_metas),
-                "modules": sum(len(group.active_modules) for group in plan.group_metas),
                 "rules": len(plan.rules),
                 "warnings": list(plan.warnings),
                 "fingerprint": plan.fingerprint,
@@ -560,9 +495,6 @@ def _validate(repo: Path, project: Path, as_json: bool) -> int:
         return 0
     print("ok")
     print(f"groups: {len(plan.group_metas)}")
-    print(
-        f"modules: {sum(len(group.active_modules) for group in plan.group_metas)}"
-    )
     print(f"rules: {len(plan.rules)}")
     for warning in plan.warnings:
         print(f"warning: {warning}", file=sys.stderr)
@@ -580,9 +512,8 @@ def _rules(repo: Path, project: Path, args: argparse.Namespace) -> int:
             _write_json(payload)
             return 0
         for rule in plan.rules:
-            scope = rule.scope
-            module = f" [{rule.module}]" if rule.module else ""
-            print(f"{rule.id}  ({scope}{module} · priority {rule.priority})")
+            mark = " (on demand)" if rule.on_demand else ""
+            print(f"{rule.id}  ({rule.scope}{mark} · priority {rule.priority})")
         return 0
     if args.rules_command == "show":
         relative = relative_to(project, Path(args.for_path))
@@ -655,7 +586,7 @@ def _print_session(view: SessionView) -> None:
         print(f"\n{section.title} ({len(section.items)})")
         for item in section.items:
             mark = STATUS_MARKS.get(item.status, "·")
-            detail = "/".join(part for part in (item.group, item.module) if part)
+            detail = item.group or ""
             extra = f"  [{detail}]" if detail else ""
             size = f"  {item.bytes}B" if item.bytes else ""
             print(f"  {mark} {item.id}{extra}{size}  {item.summary}")
@@ -669,69 +600,6 @@ def _write_json(payload: dict[str, object]) -> None:
     output = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     sys.stdout.buffer.write((output + "\n").encode("utf-8"))
     sys.stdout.buffer.flush()
-
-
-def _module_cmd(repo: Path, project: Path, args: argparse.Namespace) -> int:
-    if args.module_command == "list":
-        stack = read_stack(project)
-        if stack is None:
-            raise HNFlowError(f"no {stack_path(project)}")
-        refs = [ref for ref in stack.groups if args.group is None or ref.name == args.group]
-        if not refs:
-            print("no matching groups")
-            return 0
-        for ref in refs:
-            group = load_group(repo, ref.name, ref.version or None, project=project)
-            group.selected_modules = ref.modules
-            group.excluded_modules = list(ref.exclude)
-            modules = active_modules(group)
-            print(f"{ref.name}:")
-            if not modules:
-                print("  (no modules)")
-            for module in modules:
-                title = f"  {module.title}" if module.title else ""
-                print(f"  {module.path} (alias: {module.alias}){title}")
-        return 0
-    name, _, module_path = args.module.partition(":")
-    if not module_path:
-        raise HNFlowError("expected group:module, e.g. unity-framework:battle")
-    stack = read_stack(project)
-    if stack is None:
-        raise HNFlowError(f"no {stack_path(project)}")
-    ref = next((item for item in stack.groups if item.name == name), None)
-    if ref is None:
-        raise HNFlowError(f"group '{name}' is not active in this project")
-    group = load_group(repo, name, ref.version or None, project=project)
-    known = {module.path for module in discover_modules(group)}
-    if not any(item == module_path or item.startswith(module_path + "/") for item in known):
-        raise HNFlowError(f"group '{name}' has no module '{module_path}'")
-    if args.module_command == "enable":
-        ref.exclude = [
-            item
-            for item in ref.exclude
-            if not (item == module_path or item.startswith(module_path + "/"))
-        ]
-        if ref.modules is not None:
-            covered = any(
-                item == module_path or module_path.startswith(item + "/")
-                for item in ref.modules
-            )
-            if not covered:
-                ref.modules.append(module_path)
-        write_stack(project, stack)
-        print(f"enabled {name}:{module_path}")
-        return 0
-    if ref.modules is not None:
-        ref.modules = [
-            item
-            for item in ref.modules
-            if not (item == module_path or module_path.startswith(item + "/"))
-        ]
-    if module_path not in ref.exclude:
-        ref.exclude.append(module_path)
-    write_stack(project, stack)
-    print(f"disabled {name}:{module_path}")
-    return 0
 
 
 def _models(args: argparse.Namespace) -> int:

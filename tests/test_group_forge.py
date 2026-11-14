@@ -21,7 +21,6 @@ def test_group_forge_is_a_valid_group_with_the_custom_skills() -> None:
         "custom-command",
         "custom-group",
         "custom-mcp",
-        "custom-module",
         "custom-rule",
         "custom-skill",
         "custom-tool",

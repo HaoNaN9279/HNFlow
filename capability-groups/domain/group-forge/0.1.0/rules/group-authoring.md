@@ -1,5 +1,6 @@
 ---
 name: group-authoring
+description: 能力组制作规则：目录边界、路径写法、版本标识、校验与交付。
 ---
 
 # 能力组制作规则
@@ -9,24 +10,14 @@ name: group-authoring
 ## 目录与边界
 
 - Core：`capability-groups/core/<version>/`；领域：`capability-groups/domain/<name>/<version>/`。
-- 能力组只放 `group.json`、`AGENTS.md`、`rules/`、`agents/`、`commands/`、`skills/`、`references/`、`modules/`。
-- 不在能力组内创建 `mcp/`、`tools/`、`pyproject.toml` 或工具源码；工具放在仓库根部 `tools/<name>/<version>/`，由 `group.json` 或 `module.json` 的 `tools` 引用。
+- 能力组只放 `group.json`、`AGENTS.md`、`rules/`、`agents/`、`commands/`、`skills/`、`references/`。
+- 不在能力组内创建 `mcp/`、`tools/`、`pyproject.toml` 或工具源码；工具放在仓库根部 `tools/<name>/<version>/`，由 `group.json` 的 `tools` 引用。
 - 能力组 Agent / 命令 / 技能只写可选的 `model: <layer id>`（平台默认层）；provider、具体模型名、温度、权限等宿主参数不写入。
-
-## 模块
-
-- 组根是全局默认，模块是局部覆盖；只对某个子系统成立的内容放 `modules/<path>/`。
-- 模块随组版本发布，不建版本目录、不跨组引用；跨组复用走组的 `extends`。
-- 模块路径匹配 `^[a-z0-9]+(-[a-z0-9]+)*(/...)*$`，深度 ≤3，同组 `alias` 唯一。
-- `module.json` 只写 `name`（可选，需等于目录末段）、`title`、`description`、`alias`、`paths`、`default`、`depends`、`tools`。
-- 限定 id：组根 `<group>/<name>`，模块 `<group>/<alias>/<name>`；宿主名 `capability-<group>[-<alias>]-<name>`。
-- 新增/移动模块后运行 `hnflow-stack validate` 与 `hnflow-stack list --tree`，确认激活集与命名符合预期。
-
 
 ## 路径
 
 - 任何内容都不写本地绝对路径（含盘符路径、用户主目录路径、本机安装路径）。
-- 组内引用一律用相对路径：相对组根（`rules/xx.md`、`modules/battle/rules/xx.md`）或相对项目根（`Assets/Battle/**`）。
+- 组内引用一律用相对路径：相对组根（`rules/xx.md`、`skills/xx/SKILL.md`）或相对项目根（`Assets/Battle/**`）。
 - 必须提到外部位置时，用占位符或环境变量（`<project-root>`、`<repo>`、`$HOME`、`%ProgramFiles%`），并说明由用户按自己的安装位置替换。
 - 涉及用户自定义路径时，只描述「由用户在 `stack.json`、命令参数或环境变量中提供」，不假设固定目录。
 - 示例、日志、命令输出里也不要粘贴本机路径；需要举例时用假路径并以 `<...>` 标注可替换部分。
@@ -40,10 +31,10 @@ name: group-authoring
 
 ## 校验与交付
 
-- 内容必须带 frontmatter：规则 `name`（`description`/`scope`/`paths`/`always`/`priority`/`overrides` 可选）；Agent `name`/`description`/`mode`；命令 `name`/`description`；技能 `name`/`description`。
+- 内容必须带 frontmatter：规则 `name`/`description` 必填（`scope`/`paths`/`on_demand`/`priority`/`overrides` 可选）；Agent `name`/`description`/`mode`；命令 `name`/`description`；技能 `name`/`description`。
 - 完成后运行 `hnflow-stack validate` 与 `hnflow-stack resolve --json --project <project>`，确认新内容出现且无告警；必要时运行 `hnflow-stack sync` 写 `lock.json`。
 - 项目激活只改 `.hnflow/stack.json`；不把能力组内容复制到项目或 Agent 配置目录。
-- 规则按作用域与 `priority` 注入，`overrides` 压掉同名早期规则；Agent / 命令 / MCP 同名后加载者覆盖，设计命名时优先避免跨组同名。
+- 规则按作用域与 `priority` 注入；`on_demand: true` 的规则默认只注入摘要行，正文由 Agent 按需读取，`overrides` 压掉同名早期规则；Agent / 命令 / MCP 同名后加载者覆盖，设计命名时优先避免跨组同名。
 
 
 ## 本能力组的定位

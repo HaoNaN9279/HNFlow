@@ -485,7 +485,6 @@ function buildService(options) {
       local: false,
       lockfile: null,
       group: String(entry.group ?? ''),
-      module: entry.module === undefined || entry.module === null ? null : String(entry.module),
       path: entry.path,
       requires: Array.isArray(entry.requires) ? entry.requires : [],
     }
@@ -512,7 +511,6 @@ function buildService(options) {
       description: String(entry.description ?? ''),
       folder: String(entry.group ?? ''),
       group: String(entry.group ?? ''),
-      module: entry.module === undefined || entry.module === null ? null : String(entry.module),
       path: entry.path,
       tags: Array.isArray(entry.tags) ? entry.tags : [],
       requires: Array.isArray(entry.requires) ? entry.requires : [],
@@ -1526,7 +1524,6 @@ function buildService(options) {
       flowName: resolved.flowName || resolved.definition?.flow?.name || resolved.key,
       key: resolved.key,
       group: resolved.group ?? null,
-      module: resolved.module ?? null,
       revision: Number.isInteger(resolved.revision) ? resolved.revision : null,
       source: resolved.source,
       // Self-contained: a draft override is executable even though it has no
@@ -2313,7 +2310,7 @@ function buildService(options) {
     if (rows.length === 0) return ''
     const lines = rows.slice(0, config.maxIndexEntries).map((row) => {
       const name = row.name || row.flowId
-      const owner = row.module ? `${row.group}/${row.module}` : row.group
+      const owner = row.group
       return `- ${name}（${row.flowId}，能力组 ${owner}）：${row.description?.length > 0 ? row.description : '（未写说明）'}`
     })
     const section = [
@@ -2752,7 +2749,6 @@ export function summariseRun(run) {
     workspace: run.workspace,
     hostSessionId: run.hostSessionId,
     group: run.group ?? null,
-    module: run.module ?? null,
     revision: run.revision,
     source: run.source ?? 'capability',
     trigger: run.trigger ?? null,

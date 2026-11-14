@@ -1,5 +1,6 @@
 ---
 name: unity-bugs
+description: Unity 2022.3 已知无法修复的引擎 bug 清单，开发时需规避。
 ---
 
 本文件包含Unity 2022.3 中的无法修复的bug，开发过程当中需要尽量避免。

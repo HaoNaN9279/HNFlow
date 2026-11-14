@@ -22,8 +22,7 @@ HNFlow 用能力组组织 Agent 配置与工作流。插件调用
 
 ## 工作流
 
-- 组根：`<group>/flows/<id>.flow.json`
-- 模块：`<group>/modules/<module>/flows/<id>.flow.json`
+- 仓库组：`<group>/flows/<id>.flow.json`
 - 项目本地：`<project>/.hnflow/groups/<group>/flows/<id>.flow.json`
 - 流程可使用本组及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流。
 - 页面的流程页只读；新建/修改用 `hnflow_author`，运行用 `hnflow`。
@@ -48,7 +47,7 @@ HNFlow 用能力组组织 Agent 配置与工作流。插件调用
   "core": { "name": "core", "version": "0.1.0" },
   "agents_md": "auto",
   "groups": [
-    { "name": "data-forge", "version": "1.0.0", "modules": [] }
+    { "name": "data-forge", "version": "1.0.0" }
   ]
 }
 ```

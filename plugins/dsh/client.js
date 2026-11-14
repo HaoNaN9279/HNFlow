@@ -1835,7 +1835,6 @@ function InventoryPanel(props) {
                                   [
                                     item.id,
                                     item.group ? `group: ${item.group}` : "",
-                                    item.module ? `module: ${item.module}` : "",
                                     item.scope ? `scope: ${item.scope}` : "",
                                     item.bytes > 0 ? `${item.bytes} B` : "",
                                     item.status
@@ -2098,7 +2097,7 @@ function inlineCounts(sections) {
 // loader. Only React and react-dom (platform-seeded modules) are required, so no
 // build step is involved.
 //
-// Surfaces (docs/dsh-plugin-plan-v2.md §9):
+// Surfaces (docs/architecture.md):
 //
 // - a left-sidebar page (`sidebar.panellist` + the keyed `main` slot) with three
 //   tabs: 流程 / 运行 / 收件箱;
@@ -2373,7 +2372,7 @@ function createHnflowModule(require) {
                 "button",
                 { type: "button", key, style: props.selected === key ? { ...styles.item, ...styles.itemActive } : styles.item, onClick: () => onPick(group.path, entry) },
                 h("span", null, String(entry.name || entry.flowId)),
-                h("span", { style: styles.meta }, `${entry.group}${entry.module ? `/${entry.module}` : ""} · ${entry.flowId}`),
+                h("span", { style: styles.meta }, `${entry.group} · ${entry.flowId}`),
               );
             }),
           ),
@@ -2390,7 +2389,7 @@ function createHnflowModule(require) {
       const flow = props?.flow;
       const [input, setInput] = react.useState("{}");
       if (flow === null || flow === undefined) return h("div", { style: styles.empty }, "选择左侧的流程查看画布");
-      const owner = `${flow.group || "?"}${flow.module ? `/${flow.module}` : ""}`;
+      const owner = `${flow.group || "?"}`;
       return h(
         "div",
         { style: styles.pane },

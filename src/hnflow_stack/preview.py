@@ -76,7 +76,6 @@ class SessionItem:
     id: str
     name: str
     group: str
-    module: str = ""
     scope: str = ""
     status: str = "active"
     bytes: int = 0
@@ -94,7 +93,6 @@ class SessionItem:
             "id": self.id,
             "name": self.name,
             "group": self.group,
-            "module": self.module,
             "scope": self.scope,
             "status": self.status,
             "bytes": self.bytes,
@@ -367,7 +365,6 @@ def _agent_payload(agent: ResolvedAgent) -> dict[str, object]:
         "name": agent.name,
         "id": agent.id,
         "group": agent.group,
-        "module": agent.module,
         "description": agent.description,
         "model": agent.model,
         "system_path": agent.system_path,
@@ -385,7 +382,6 @@ def _persona_item(
         id=agent.id or agent.name,
         name=agent.name,
         group=agent.group,
-        module=agent.module,
         status="active",
         bytes=_size(system),
         path=agent.system_path or agent.source,
@@ -406,7 +402,6 @@ def _agent_items(plan: ResolvedPlan, current: ResolvedAgent) -> list[SessionItem
                 id=agent.id or agent.name,
                 name=agent.name,
                 group=agent.group,
-                module=agent.module,
                 status="active",
                 bytes=_size(agent.system),
                 path=agent.system_path or agent.source,
@@ -441,7 +436,6 @@ def _skill_item(
         id=skill.id or skill.name,
         name=skill.name,
         group=skill.group,
-        module=skill.module,
         status="active",
         bytes=_size(body or ""),
         path=file,
@@ -482,7 +476,6 @@ def _command_item(
         id=command.id or command.name,
         name=command.name,
         group=command.group,
-        module=command.module,
         status="active",
         bytes=_size(body or ""),
         path=command.template_path or command.source,
@@ -506,7 +499,6 @@ def _flow_item(flow: ResolvedFlow) -> SessionItem:
         id=flow.id,
         name=flow.name,
         group=flow.group,
-        module=flow.module,
         status="active",
         path=flow.path,
         description=flow.description,
@@ -524,14 +516,13 @@ def _mcp_items(plan: ResolvedPlan) -> list[SessionItem]:
             detail = " ".join(str(part) for part in command)
         else:
             detail = str(data.get("url", "") or "")
-        group, module, server = _mcp_owner(plan, key)
+        group, server = _mcp_owner(plan, key)
         items.append(
             SessionItem(
                 kind="mcp",
                 id=key,
                 name=server or key,
                 group=group,
-                module=module,
                 status="active",
                 bytes=0,
                 description=transport,
@@ -542,21 +533,16 @@ def _mcp_items(plan: ResolvedPlan) -> list[SessionItem]:
     return items
 
 
-def _mcp_owner(plan: ResolvedPlan, key: str) -> tuple[str, str, str]:
-    """Recover group, module alias and server name from a mount key."""
+def _mcp_owner(plan: ResolvedPlan, key: str) -> tuple[str, str]:
+    """Recover group and server name from a mount key."""
     raw = key[len("capability:") :] if key.startswith("capability:") else key
     groups = [*([plan.core] if plan.core is not None else []), *plan.groups]
     for group in groups:
         prefix = f"{group.name}_"
         if not raw.startswith(prefix):
             continue
-        rest = raw[len(prefix) :]
-        for module in group.modules:
-            alias = str(module.get("alias") or "")
-            if alias and rest.startswith(f"{alias}_"):
-                return group.name, alias, rest[len(alias) + 1 :]
-        return group.name, "", rest
-    return "", "", raw
+        return group.name, raw[len(prefix) :]
+    return "", raw
 
 
 def _collect_rules(
@@ -577,7 +563,6 @@ def _collect_rules(
             id=rule.id or rule.name,
             name=rule.name,
             group=rule.group,
-            module=rule.module,
             scope=rule.scope,
             status="skipped",
             bytes=_size(read_body(rule.path) or ""),
@@ -609,7 +594,6 @@ def _rule_item(block: RuleBlock, with_text: bool, text_limit: int) -> SessionIte
         id=rule.id or rule.name,
         name=rule.name,
         group=rule.group,
-        module=rule.module,
         scope=rule.scope,
         status=block.status,
         bytes=block.bytes or _size(body),

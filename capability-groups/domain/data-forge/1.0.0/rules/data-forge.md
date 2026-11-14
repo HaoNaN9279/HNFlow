@@ -1,5 +1,6 @@
 ---
 name: data-forge
+description: DataForge 数据表与配置生成的使用规则和校验流程。
 ---
 
 # DataForge 使用规则

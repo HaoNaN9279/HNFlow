@@ -59,7 +59,7 @@ export function formatFlows(entries) {
   if (entries.length === 0) return 'This workspace has no flows in its active capability groups.'
   return entries
     .map((entry) => {
-      const owner = entry.module ? `${entry.group}/${entry.module}` : entry.group
+      const owner = entry.group
       const requires = Array.isArray(entry.requires) && entry.requires.length > 0 ? ` requires ${entry.requires.join(', ')}` : ''
       return `- ${entry.name || entry.flowId} (${entry.flowId}, group ${owner || '?'}${requires})${entry.description ? `: ${entry.description}` : ''}`
     })
@@ -95,7 +95,7 @@ export function createFlowTool(options) {
             .map((run) => {
               const summary = runSummary(run)
               const nodes = summary.nodes.map((node) => `${node.id}=${node.status}`).join(', ')
-              const origin = summary.group ? `${summary.group}${summary.module ? `/${summary.module}` : ''}` : 'capability'
+              const origin = summary.group ? `${summary.group}` : 'capability'
               return `${summary.runId} ${summary.status} ${summary.flowName ?? summary.flowId} (${origin})${nodes.length > 0 ? ` — ${nodes}` : ''}`
             })
             .join('\n')
@@ -105,7 +105,7 @@ export function createFlowTool(options) {
           const key = requireKey(args)
           const resolved = await service.describeFlow(cwd, key)
           return [
-            `flow ${resolved.flowName || resolved.flowId} (${resolved.flowId}, group ${resolved.group}${resolved.module ? `/${resolved.module}` : ''})`,
+            `flow ${resolved.flowName || resolved.flowId} (${resolved.flowId}, group ${resolved.group})`,
             `path: ${resolved.path}`,
             `definition: ${JSON.stringify(resolved.definition)}`,
           ].join('\n')
@@ -187,7 +187,6 @@ function runSummary(run) {
     flowId: run.flowId,
     flowName: run.flowName,
     group: run.group ?? null,
-    module: run.module ?? null,
     revision: run.revision,
     status: run.status,
     error: run.error,

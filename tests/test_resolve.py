@@ -218,7 +218,7 @@ def test_resolve_is_read_only_and_fingerprint_tracks_content(
     assert not lock_path(project).is_file()
     _write(
         repo / "capability-groups/core/0.1.0/rules/extra.md",
-        "---\nname: extra\n---\nbody\n",
+        "---\nname: extra\ndescription: extra rules\n---\nbody\n",
     )
     second = resolve_project(repo, project)
     assert first.fingerprint != second.fingerprint

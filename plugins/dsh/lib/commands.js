@@ -56,7 +56,7 @@ export function createFlowCommand(options) {
             kind: 'success',
             text: entries
               .map((entry) => {
-                const owner = entry.module ? `${entry.group}/${entry.module}` : entry.group
+                const owner = entry.group
                 return `- ${entry.name || entry.flowId}（${entry.flowId}，能力组 ${owner}）${entry.description ? `：${entry.description}` : ''}`
               })
               .join('\n'),

@@ -15,18 +15,17 @@ description: HNFlow 对话控制面：列出能力组中的工作流、创建与
 
 | 位置 | 路径 | 对谁可见 |
 | --- | --- | --- |
-| 组根流程 | `<group>/flows/<id>.flow.json` | 激活该组（含作为依赖）的工作区 |
-| 模块流程 | `<group>/modules/<module>/flows/<id>.flow.json` | 激活该模块的工作区 |
+| 仓库组流程 | `<group>/flows/<id>.flow.json` | 激活该组（含作为依赖）的工作区 |
 | 项目本地组 | `<workspace>/.hnflow/groups/<group>/flows/<id>.flow.json` | 仅本工作区 |
 
-流程键：组根 `<group>/<flow.id>`，模块 `<group>/<module-alias>/<flow.id>`。
+流程键：`<group>/<flow.id>`。
 
 ## `hnflow`：读与运行
 
 | 动作 | 参数 | 作用 / 返回 | 约束 |
 | --- | --- | --- | --- |
-| `list_flows` | 无 | 当前工作区激活能力组内的流程，含 `flowId`、`group`、`module`、`requires` | 只列可解析的流程 |
-| `describe_flow` | `flow` | 完整定义、所属组/模块、文件路径 | `flow` 可传 `<group>/<id>`、flow id 或名称；歧义时报错 |
+| `list_flows` | 无 | 当前工作区激活能力组内的流程，含 `flowId`、`group`、`requires` | 只列可解析的流程 |
+| `describe_flow` | `flow` | 完整定义、所属组、文件路径 | `flow` 可传 `<group>/<id>`、flow id 或名称；歧义时报错 |
 | `run` | `flow`、`input` | 启动一次运行，立即返回 `runId` | 不等待、不轮询；输入必须匹配流程 input |
 | `status` | `run_id` | 节点状态、错误、待人工数、usage、降级、产物 | 只读 |
 | `list_runs` | 无 | 最近 20 条运行摘要 | 只读 |

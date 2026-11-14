@@ -25,8 +25,8 @@ RULES_HEADER = (
 )
 RULES_FOOTER = "</system-reminder>"
 INDEX_LEAD = (
-    "Other HNFlow rules apply to specific directories and are not injected "
-    "here. Read the matching file when the task touches those paths:"
+    "Some HNFlow rules are loaded on demand: only their summary is listed here. "
+    "Read the file before working on its topic:"
 )
 INDEX_LINE_MAX = 120
 DEFAULT_RULES_BYTES = 65536
@@ -70,13 +70,7 @@ def rule_applies(rule: ResolvedRule, relative: str) -> bool:
     scope = rule.scope or "global"
     if scope == "global":
         return True
-    declared = [normalize_path(item) for item in rule.paths if item]
-    if declared:
-        patterns = declared
-    elif scope == "module" and rule.module:
-        patterns = [f"{normalize_path(rule.module)}/**"]
-    else:
-        patterns = []
+    patterns = [normalize_path(item) for item in rule.paths if item]
     if not patterns:
         return True
     if not relative:
@@ -129,12 +123,7 @@ def escape_reminder(text: str) -> str:
 
 def block_text(rule: ResolvedRule, body: str) -> str:
     """One injected rule block, exactly as the plugin renders it."""
-    scope = ""
-    if rule.group:
-        scope = f" (group: {rule.group}"
-        if rule.module:
-            scope += f", module: {rule.module}"
-        scope += ")"
+    scope = f" (group: {rule.group})" if rule.group else ""
     return f"Instructions from: {rule.path}{scope}\n\n{escape_reminder(body)}"
 
 
@@ -147,7 +136,9 @@ def index_summary(rule: ResolvedRule) -> str:
 
 
 def index_line(rule: ResolvedRule) -> str:
-    return f"- {rule.id or rule.name or rule.path}: {index_summary(rule)}"
+    """One summary line for an on-demand rule, with the file to read."""
+    label = rule.path or rule.id or rule.name or "rule"
+    return f"- {label}: {index_summary(rule)}"
 
 
 def _size(text: str) -> int:
@@ -206,7 +197,7 @@ def plan_rules(
         if stop:
             result.omitted.append(RuleBlock(rule, "omitted", 0, ""))
             continue
-        if rule.always is False:
+        if rule.on_demand:
             line = index_line(rule)
             indexed_lines.append(line)
             result.indexed.append(RuleBlock(rule, "indexed", _size(line), ""))

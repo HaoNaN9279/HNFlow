@@ -1,5 +1,7 @@
 ---
 name: unity-mono-enum-native-crash
+description: Unity Mono 泛型枚举引发的 Native Crash 记录与规避方式。
+on_demand: true
 ---
 
 ## 概述

@@ -1,5 +1,6 @@
 ---
 name: houdini
+description: Houdini DCC 开发规则：HDA、Python 与资产流程约定。
 ---
 
 # SideFX Houdini DCC 开发规则

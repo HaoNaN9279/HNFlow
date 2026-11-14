@@ -1,5 +1,6 @@
 ---
 name: hnflow-forge
+description: HNFlow 工作流制作规则：需求拆分、边界判定、节点约束与人类专属动作。
 ---
 
 # HNFlow 工作流制作

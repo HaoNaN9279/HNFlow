@@ -12,15 +12,15 @@ description: 校验一个或多个能力组的解析结果、目录边界与版�
 执行步骤：
 
 1. 运行 `hnflow-stack status` 确认当前项目激活项；如指定组，先确认其存在。
-2. 运行 `hnflow-stack validate`（严格解析、不写文件）；如指定组，用 `hnflow-stack list --tree` 与 `hnflow-stack info <group> --modules` 对照模块激活集。
+2. 运行 `hnflow-stack validate`（严格解析、不写文件）；如指定组，用 `hnflow-stack list` 与 `hnflow-stack info <group>` 对照内容清单。
 3. 检查解析结果：
    - `warnings` 是否涉及目标组；
-   - 目标组的规则、Agent、命令、技能是否出现；模块内容是否带正确的 `module` / 限定 id；
+   - 目标组的规则、Agent、命令、技能是否出现；规则是否都带 `description`，限定 id 是否为 `<group>/<name>`；
    - `group.json` 的 `name` / `version` 是否与目录一致；
-   - 模块路径、`alias`、`depends` 是否合法且不冲突；
+   - `scope: paths` 的规则是否写了合法 `paths`；
    - 能力组内是否误放 `tools/`、`mcp/`、`pyproject.toml` 或工具源码；
    - 已发布版本目录是否被修改。
-4. 需要写快照时运行 `hnflow-stack sync`；它会写 `.hnflow/lock.json`，缺失组或缺失模块直接报错。
+4. 需要写快照时运行 `hnflow-stack sync`；它会写 `.hnflow/lock.json`，缺失组或缺失工具直接报错。
 5. 按问题类型给出修复建议；不要自行修改已发布版本目录，升级请新建版本目录。
 
 

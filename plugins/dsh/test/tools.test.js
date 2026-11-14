@@ -23,8 +23,8 @@ function stubService() {
     pending: [{ id: 'gate-1', kind: 'gate', nodeId: 'approve' }],
   }
   return {
-    listFlows: async () => [{ id: 'team/fl', flowId: 'fl', name: 'demo', group: 'team', module: null, requires: ['base'], description: '说明' }],
-    describeFlow: async () => ({ flowId: 'fl', flowName: 'demo', group: 'team', module: null, path: '/w/.hnflow/groups/team/flows/fl.flow.json', definition: { flow: { id: 'fl' } } }),
+    listFlows: async () => [{ id: 'team/fl', flowId: 'fl', name: 'demo', group: 'team', requires: ['base'], description: '说明' }],
+    describeFlow: async () => ({ flowId: 'fl', flowName: 'demo', group: 'team', path: '/w/.hnflow/groups/team/flows/fl.flow.json', definition: { flow: { id: 'fl' } } }),
     run: async () => ({ runId: 'run-2', status: 'running' }),
     getRun: async () => run,
     listRuns: async () => [run],
@@ -94,6 +94,6 @@ test('a missing workspace or argument becomes an error line, not an exception', 
 test('formatRun and formatFlows stay compact', () => {
   assert.match(formatRun({ runId: 'r', status: 'failed', error: { code: 'x', message: 'y' }, nodes: [], pending: 0 }), /x: y/u)
   assert.equal(formatFlows([]), 'This workspace has no flows in its active capability groups.')
-  const text = formatFlows([{ id: 'team/fl', flowId: 'fl', name: '演示', group: 'team', module: 'battle', requires: ['base'], description: '说明' }])
-  assert.match(text, /演示.*group team\/battle.*requires base/u)
+  const text = formatFlows([{ id: 'team/fl', flowId: 'fl', name: '演示', group: 'team', requires: ['base'], description: '说明' }])
+  assert.match(text, /演示.*group team.*requires base/u)
 })

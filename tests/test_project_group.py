@@ -33,7 +33,10 @@ def _project_group(project: Path, name: str = "local") -> Path:
             "tools": [],
         },
     )
-    _write(root / "rules" / "local.md", "---\nname: local-rule\n---\n\n# local\n")
+    _write(
+        root / "rules" / "local.md",
+        "---\nname: local-rule\ndescription: local rules\n---\n\n# local\n",
+    )
     return root
 
 

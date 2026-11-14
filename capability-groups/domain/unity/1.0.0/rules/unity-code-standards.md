@@ -1,5 +1,6 @@
 ---
 name: unity-code-standards
+description: Unity 项目代码规范：命名、目录与生命周期约定。
 ---
 
 # unity 项目全局规则

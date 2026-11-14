@@ -1,5 +1,6 @@
 ---
 name: caveman-full
+description: 常驻沟通风格：精简表达，删填充词与客套话，保留全部技术信息。
 ---
 
 # Caveman — Full

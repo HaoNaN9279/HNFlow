@@ -48,7 +48,6 @@ function capabilityOver(flowDir) {
           flow_id: definition.flow.id,
           name: definition.flow.name,
           group: 'team',
-          module: null,
           path: path.join(flowDir, name),
           description: definition.flow.description ?? '',
           tags: definition.flow.tags ?? [],

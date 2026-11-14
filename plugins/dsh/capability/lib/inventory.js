@@ -82,7 +82,6 @@ function item(fields) {
     id: String(fields.id ?? fields.name ?? ''),
     name: String(fields.name ?? ''),
     group: String(fields.group ?? ''),
-    module: String(fields.module ?? ''),
     scope: String(fields.scope ?? ''),
     status: String(fields.status ?? 'active'),
     bytes: Number(fields.bytes ?? 0),
@@ -113,10 +112,10 @@ export function selectAgent(plan, name) {
 }
 
 /**
- * Split an MCP mount key into group, module alias and server name.
+ * Split an MCP mount key into group and server name.
  * @param {Record<string, any>} plan - normalized resolve plan.
- * @param {string} key - mount key such as `capability:game_battle_nav`.
- * @returns {{group: string, module: string, server: string}} owner parts.
+ * @param {string} key - mount key such as `capability:game_nav`.
+ * @returns {{group: string, server: string}} owner parts.
  */
 function mcpOwner(plan, key) {
   const raw = String(key ?? '').replace(/^capability:/u, '')
@@ -124,16 +123,9 @@ function mcpOwner(plan, key) {
   for (const group of groups) {
     const prefix = `${String(group.name)}_`
     if (!raw.startsWith(prefix)) continue
-    const rest = raw.slice(prefix.length)
-    for (const module of list(group.modules)) {
-      const alias = String(module?.alias ?? '')
-      if (alias.length > 0 && rest.startsWith(`${alias}_`)) {
-        return { group: String(group.name), module: alias, server: rest.slice(alias.length + 1) }
-      }
-    }
-    return { group: String(group.name), module: '', server: rest }
+    return { group: String(group.name), server: raw.slice(prefix.length) }
   }
-  return { group: '', module: '', server: raw }
+  return { group: '', server: raw }
 }
 
 /**
@@ -174,7 +166,6 @@ export async function buildInventory(input) {
     id: selected.id ?? selected.name,
     name: selected.name,
     group: selected.group,
-    module: selected.module,
     status: 'active',
     bytes: byteLength(selected.system),
     path: selected.system_path ?? selected.source ?? '',
@@ -192,7 +183,6 @@ export async function buildInventory(input) {
       id: skill.id ?? skill.name,
       name: skill.name,
       group: skill.group,
-      module: skill.module,
       bytes: byteLength(body),
       path: file,
       description: skill.description,
@@ -211,7 +201,6 @@ export async function buildInventory(input) {
       id: command.id ?? command.name,
       name: command.name,
       group: command.group,
-      module: command.module,
       bytes: byteLength(body),
       path: command.template_path ?? command.source ?? '',
       description: command.description,
@@ -233,7 +222,6 @@ export async function buildInventory(input) {
       id: key,
       name: owner.server || key,
       group: owner.group,
-      module: owner.module,
       description: transport,
       summary: `${transport}: ${detail}`.replace(/^: /u, ''),
       host_name: key,
@@ -245,7 +233,6 @@ export async function buildInventory(input) {
     id: entry.rule.id ?? entry.rule.name,
     name: entry.rule.name,
     group: entry.rule.group,
-    module: entry.rule.module,
     scope: entry.rule.scope ?? 'global',
     status: entry.status,
     bytes: entry.bytes || byteLength(entry.body),
@@ -272,7 +259,6 @@ export async function buildInventory(input) {
     id: entry.id ?? entry.name,
     name: entry.name,
     group: entry.group,
-    module: entry.module,
     bytes: byteLength(entry.system),
     path: entry.system_path ?? entry.source ?? '',
     description: entry.description,
@@ -300,7 +286,6 @@ export async function buildInventory(input) {
       name: selected.name,
       id: selected.id,
       group: selected.group,
-      module: selected.module ?? '',
       description: selected.description,
       model: selected.model ?? null,
       system_path: selected.system_path ?? '',

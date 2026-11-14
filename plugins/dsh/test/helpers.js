@@ -246,7 +246,7 @@ export async function makeService(options = {}) {
         for (const file of files.filter((entry) => entry.endsWith('.flow.json'))) {
           const definition = JSON.parse(await readFile(path.join(groupsDir, group.name, 'flows', file), 'utf8'))
           const flowId = String(definition.flow?.id ?? file.replace(/\.flow\.json$/u, ''))
-          flows.push({ id: `${group.name}/${flowId}`, flow_id: flowId, name: definition.flow?.name ?? flowId, path: path.join(groupsDir, group.name, 'flows', file), group: group.name, module: null, requires: [] })
+          flows.push({ id: `${group.name}/${flowId}`, flow_id: flowId, name: definition.flow?.name ?? flowId, path: path.join(groupsDir, group.name, 'flows', file), group: group.name, requires: [] })
         }
       }
       return { plan: { flows }, warnings: [] }

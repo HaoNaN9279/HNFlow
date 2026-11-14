@@ -94,7 +94,6 @@
 
 ```text
 <repo>/capability-groups/<group>/<version>/flows/<id>.flow.json          组根流程
-<repo>/capability-groups/<group>/<version>/modules/<module>/flows/<id>.flow.json  模块流程
 <workspace>/.hnflow/groups/<group>/flows/<id>.flow.json                  项目本地流程
 <workspace>/.hnflow/stack.json                                          激活的根组
 <workspace>/.hnflow/lock.json                                           解析闭包与 flow 文件清单
@@ -103,7 +102,7 @@
 <stateDir>/triggers-state.json                                          触发器去重游标（上次触发键）
 ```
 
-流程键：组根 `<group>/<id>`，模块 `<group>/<module-alias>/<id>`。修改仓库流程直接改仓库文件；项目流程用 `draft`。运行使用启动时的定义快照，不读取后续改动。
+流程键：`<group>/<id>`。修改仓库流程直接改仓库文件；项目流程用 `draft`。运行使用启动时的定义快照，不读取后续改动。
 
 ## 执行语义
 

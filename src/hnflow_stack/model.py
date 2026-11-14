@@ -1,4 +1,4 @@
-"""Data models for groups, modules, tools, and project stacks."""
+"""Data models for capability groups, tools, and project stacks."""
 
 from __future__ import annotations
 
@@ -10,80 +10,15 @@ from hnflow_stack.errors import HNFlowError
 from hnflow_stack.model_layers import DEFAULT_MODEL_LAYER
 
 STACK_SCHEMA_VERSION = 2
-DEFAULT_MODULES_DIR = "modules"
 
 
 @dataclass
 class GroupRef:
-    """Reference to one capability group version plus its module selection.
-
-    ``modules`` is ``None`` when the stack does not choose modules (the group's
-    own ``default_modules`` apply) and a list of module paths otherwise.
-    """
+    """Reference to one capability group version in the project stack."""
 
     name: str
     version: str = ""
-    modules: list[str] | None = None
-    exclude: list[str] = field(default_factory=list)
     disable: list[str] = field(default_factory=list)
-
-
-@dataclass
-class ModuleMeta:
-    """One nested module inside a capability group.
-
-    A module is a directory path such as ``battle/ai``. It is not versioned: it
-    inherits its group's version directory, and it never spans groups.
-    """
-
-    path: str
-    root: Path
-    alias: str
-    title: str = ""
-    description: str = ""
-    paths: list[str] = field(default_factory=list)
-    default: bool = False
-    depends: list[str] = field(default_factory=list)
-    tools: list[str] = field(default_factory=list)
-
-    @property
-    def depth(self) -> int:
-        return self.path.count("/")
-
-    @property
-    def rules(self) -> list[Path]:
-        return _md_rglob(self.root / "rules")
-
-    @property
-    def agents(self) -> list[Path]:
-        return _md_rglob(self.root / "agents")
-
-    @property
-    def commands(self) -> list[Path]:
-        return _md_rglob(self.root / "commands")
-
-    @property
-    def skills_dir(self) -> Path | None:
-        path = self.root / "skills"
-        return path if path.is_dir() else None
-
-    @property
-    def agents_md(self) -> Path | None:
-        path = self.root / "AGENTS.md"
-        return path if path.is_file() else None
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "path": self.path,
-            "alias": self.alias,
-            "title": self.title,
-            "description": self.description,
-            "root": self.root.as_posix(),
-            "paths": list(self.paths),
-            "default": self.default,
-            "depends": list(self.depends),
-            "tools": list(self.tools),
-        }
 
 
 @dataclass
@@ -99,23 +34,7 @@ class GroupMeta:
     tools: list[str] = field(default_factory=list)
     tool_permissions: dict[str, list[str]] = field(default_factory=dict)
     root: Path = field(default_factory=Path)
-    modules_dir: str = DEFAULT_MODULES_DIR
-    default_modules: list[str] = field(default_factory=list)
-    # Selection made by the project stack; ``None`` means "the group default".
-    selected_modules: list[str] | None = None
-    excluded_modules: list[str] = field(default_factory=list)
     disabled_rules: list[str] = field(default_factory=list)
-    # Filled by the resolver once module discovery and activation ran.
-    active_modules: list[ModuleMeta] = field(default_factory=list)
-
-    @property
-    def all_tools(self) -> list[str]:
-        """Group tools plus the tools contributed by active modules."""
-        seen: list[str] = []
-        for tool_id in [*self.tools, *(tool for m in self.active_modules for tool in m.tools)]:
-            if tool_id not in seen:
-                seen.append(tool_id)
-        return seen
 
     @property
     def rules_root(self) -> Path:
@@ -150,10 +69,6 @@ class GroupMeta:
     def agents_md(self) -> Path | None:
         path = self.root / "AGENTS.md"
         return path if path.is_file() else None
-
-    @property
-    def modules_root(self) -> Path:
-        return self.root / self.modules_dir
 
 
 @dataclass
@@ -195,7 +110,6 @@ class ResolvedGroup:
     permissions: list[str] = field(default_factory=list)
     extends: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
-    modules: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -207,23 +121,27 @@ class ResolvedGroup:
             "permissions": list(self.permissions),
             "extends": list(self.extends),
             "tools": list(self.tools),
-            "modules": [dict(module) for module in self.modules],
         }
 
 
 @dataclass
 class ResolvedRule:
-    """One validated rule file, scoped to a group root or a module."""
+    """One validated rule file with its injection policy.
+
+    ``scope`` is ``global`` (always injected) or ``paths`` (injected when the
+    session working directory matches ``paths``). ``on_demand`` rules are never
+    injected: only their description and file path reach the model, which reads
+    the full text when the task touches that topic.
+    """
 
     name: str
     path: str
     group: str
     id: str = ""
-    module: str = ""
     kind: str = "rule"
     scope: str = "global"
     paths: list[str] = field(default_factory=list)
-    always: bool = True
+    on_demand: bool = False
     priority: int = 0
     description: str = ""
 
@@ -233,11 +151,10 @@ class ResolvedRule:
             "id": self.id,
             "path": self.path,
             "group": self.group,
-            "module": self.module,
             "kind": self.kind,
             "scope": self.scope,
             "paths": list(self.paths),
-            "always": self.always,
+            "on_demand": self.on_demand,
             "priority": self.priority,
             "description": self.description,
         }
@@ -253,7 +170,6 @@ class ResolvedSkill:
     description: str = ""
     model: str | None = None
     id: str = ""
-    module: str = ""
     host: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -262,7 +178,6 @@ class ResolvedSkill:
             "id": self.id,
             "path": self.path,
             "group": self.group,
-            "module": self.module,
             "description": self.description,
         }
         if self.model:
@@ -282,7 +197,6 @@ class ResolvedAgent:
     group: str
     model: str | None = None
     id: str = ""
-    module: str = ""
     system_path: str = ""
     label: str = ""
 
@@ -296,7 +210,6 @@ class ResolvedAgent:
             "system_path": self.system_path,
             "source": self.source,
             "group": self.group,
-            "module": self.module,
             "label": self.label,
         }
         if self.model:
@@ -316,7 +229,6 @@ class ResolvedCommand:
     agent: str | None = None
     model: str | None = None
     id: str = ""
-    module: str = ""
     template_path: str = ""
 
     def to_dict(self) -> dict[str, object]:
@@ -328,7 +240,6 @@ class ResolvedCommand:
             "template_path": self.template_path,
             "source": self.source,
             "group": self.group,
-            "module": self.module,
         }
         if self.agent:
             data["agent"] = self.agent
@@ -339,14 +250,13 @@ class ResolvedCommand:
 
 @dataclass
 class ResolvedFlow:
-    """One workflow definition owned by a capability group or module."""
+    """One workflow definition owned by a capability group."""
 
     name: str
     group: str
     path: str
     id: str = ""
     flow_id: str = ""
-    module: str = ""
     description: str = ""
     tags: list[str] = field(default_factory=list)
     version: str = ""
@@ -359,7 +269,6 @@ class ResolvedFlow:
             "name": self.name,
             "path": self.path,
             "group": self.group,
-            "module": self.module,
             "description": self.description,
             "tags": list(self.tags),
             "version": self.version,
@@ -390,7 +299,6 @@ class ResolvedPlan:
     model_default: str = DEFAULT_MODEL_LAYER
     names: dict[str, dict[str, str]] = field(default_factory=dict)
     group_metas: list[GroupMeta] = field(default_factory=list, repr=False)
-    module_metas: dict[str, list[ModuleMeta]] = field(default_factory=dict, repr=False)
 
     def to_dict(self) -> dict[str, object]:
         """Serialize the plan into the single resolve API shape."""
@@ -468,25 +376,10 @@ class ProjectStack:
         for item in raw_groups:
             if not isinstance(item, dict) or not item.get("name"):
                 raise HNFlowError("stack.json group entries need a name")
-            modules_value = item.get("modules")
-            modules: list[str] | None
-            if isinstance(modules_value, list):
-                modules = [str(entry) for entry in modules_value]
-            elif isinstance(modules_value, str) and modules_value.strip():
-                modules = [modules_value.strip()]
-            elif modules_value is None:
-                modules = None
-            else:
-                raise HNFlowError(
-                    f"stack.json group '{item['name']}' modules must be "
-                    f"\"*\" or an array of module paths"
-                )
             groups.append(
                 GroupRef(
                     name=str(item["name"]),
                     version=str(item.get("version", "")),
-                    modules=modules,
-                    exclude=_str_list(item.get("exclude")),
                     disable=_str_list(item.get("disable")),
                 )
             )
@@ -510,10 +403,6 @@ def _group_ref_dict(ref: GroupRef) -> dict[str, object]:
     data: dict[str, object] = {"name": ref.name}
     if ref.version:
         data["version"] = ref.version
-    if ref.modules is not None:
-        data["modules"] = list(ref.modules)
-    if ref.exclude:
-        data["exclude"] = list(ref.exclude)
     if ref.disable:
         data["disable"] = list(ref.disable)
     return data

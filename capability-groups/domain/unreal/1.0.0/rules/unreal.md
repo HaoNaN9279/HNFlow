@@ -1,5 +1,6 @@
 ---
 name: unreal
+description: Unreal Engine 开发规则：C++、蓝图与资产流程约定。
 ---
 
 # Unreal Engine 开发规则

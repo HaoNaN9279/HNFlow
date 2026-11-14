@@ -36,7 +36,7 @@ def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def game(tmp_path: Path) -> tuple[Path, Path]:
-    """A repository + project with one module so scope filtering is exercised."""
+    """A repository + project with path-scoped rules so filtering is exercised."""
     repo = tmp_path / "repo"
     core = repo / "capability-groups/core/0.1.0"
     _json(
@@ -87,24 +87,24 @@ def game(tmp_path: Path) -> tuple[Path, Path]:
             "permissions": [],
             "extends": [],
             "tools": [],
-            "default_modules": ["battle"],
         },
     )
     _write(
         game / "rules/root.md",
         "---\nname: root\ndescription: Game root\n---\n\n# Game root\n",
     )
-    _json(game / "modules/battle/module.json", {"title": "Battle", "paths": ["Assets/Battle/**"]})
     _write(
-        game / "modules/battle/rules/physics.md",
-        "---\nname: physics\ndescription: Physics rules\n---\n\n# Physics\n",
+        game / "rules/physics.md",
+        '---\nname: physics\ndescription: Physics rules\n'
+        'scope: paths\npaths: ["Assets/Battle/**"]\n---\n\n# Physics\n',
     )
     _write(
-        game / "modules/battle/rules/lazy.md",
-        "---\nname: lazy\ndescription: Lazy rules\nalways: false\n---\n\n# Lazy\n",
+        game / "rules/lazy.md",
+        '---\nname: lazy\ndescription: Lazy rules\n'
+        'scope: paths\npaths: ["Assets/Battle/**"]\non_demand: true\n---\n\n# Lazy\n',
     )
     _write(
-        game / "modules/battle/agents/enemy.md",
+        game / "agents/enemy.md",
         "---\nname: EnemyAI\ndescription: enemy agent\nmode: subagent\n---\n\nEnemy body.\n",
     )
 
@@ -165,27 +165,23 @@ def test_rules_at_project_root_skip_path_scoped_rules(game: tuple[Path, Path]) -
 
     skipped = next(section for section in view.sections if section.kind == "rules-skipped")
     assert skipped.collapsed is True
-    assert [item.id for item in skipped.items] == ["game/battle/lazy", "game/battle/physics"]
+    assert [item.id for item in skipped.items] == ["game/lazy", "game/physics"]
     assert {item.status for item in skipped.items} == {"skipped"}
 
 
-def test_matching_cwd_injects_module_rules_and_indexes_lazy_ones(
+def test_matching_cwd_injects_scoped_rules_and_indexes_on_demand_ones(
     game: tuple[Path, Path],
 ) -> None:
     repo, project = game
     view = build_session(repo, project, cwd="Assets/Battle")
     assert view.cwd == "Assets/Battle"
     rules = next(section for section in view.sections if section.kind == "rules")
-    assert [item.id for item in rules.items] == [
-        "core/global",
-        "core/later",
-        "game/root",
-        "game/battle/physics",
-        "game/battle/lazy",
-    ]
+    ids = [item.id for item in rules.items]
+    assert ids[:3] == ["core/global", "core/later", "game/root"]
+    assert set(ids[3:]) == {"game/physics", "game/lazy"}
     status = {item.id: item.status for item in rules.items}
-    assert status["game/battle/physics"] == "injected"
-    assert status["game/battle/lazy"] == "indexed"
+    assert status["game/physics"] == "injected"
+    assert status["game/lazy"] == "indexed"
     assert all(section.kind != "rules-skipped" for section in view.sections)
 
 
@@ -204,16 +200,15 @@ def test_budget_omits_everything_that_does_not_fit(game: tuple[Path, Path]) -> N
     assert view.budget == {"limit": header + 20, "used": header, "omitted": 3}
 
 
-def test_module_agent_joins_the_roster(game: tuple[Path, Path]) -> None:
+def test_group_agent_joins_the_roster(game: tuple[Path, Path]) -> None:
     repo, project = game
     view = build_session(repo, project)
     roster = next(section for section in view.sections if section.kind == "agents")
     assert roster.collapsed is True
     assert [item.name for item in roster.items] == ["Main", "Sub", "EnemyAI"]
     enemy = next(item for item in roster.items if item.name == "EnemyAI")
-    assert enemy.id == "game/battle/EnemyAI"
+    assert enemy.id == "game/EnemyAI"
     assert enemy.group == "game"
-    assert enemy.module == "battle"
 
 
 def test_with_text_embeds_content(game: tuple[Path, Path]) -> None:
@@ -258,7 +253,6 @@ def test_json_view_is_serializable(game: tuple[Path, Path]) -> None:
         "id",
         "name",
         "group",
-        "module",
         "scope",
         "status",
         "bytes",

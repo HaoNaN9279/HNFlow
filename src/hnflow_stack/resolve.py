@@ -13,7 +13,6 @@ from hnflow_stack.loader import discover_tools
 from hnflow_stack.model import (
     GroupMeta,
     GroupRef,
-    ModuleMeta,
     ProjectStack,
     ResolvedAgent,
     ResolvedCommand,
@@ -31,17 +30,7 @@ from hnflow_stack.model_layers import (
     is_model_layer,
     model_layer_catalog,
 )
-from hnflow_stack.modules import (
-    activate_modules,
-    discover_modules,
-    nested_agents_md_files,
-)
-from hnflow_stack.naming import (
-    DEFAULT_PREFIX,
-    canonical_name,
-    content_key,
-    qualified_id,
-)
+from hnflow_stack.naming import DEFAULT_PREFIX, canonical_name, qualified_id
 from hnflow_stack.project import read_stack, resolve_order
 from hnflow_stack.repo import default_core
 
@@ -50,7 +39,7 @@ MODE_PROJECT = "project"
 MODE_CAPABILITIES = "capabilities"
 _AGENTS_MD_NESTED = "nested"
 _MODES = {MODE_PROJECT, MODE_CAPABILITIES}
-_RULE_SCOPES = {"global", "module", "paths"}
+_RULE_SCOPES = {"global", "paths"}
 _AGENT_MODES = {"primary", "subagent", "all"}
 _SKILL_NAME = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 _COMMAND_NAME = re.compile(r"^[a-z][a-z0-9_-]*$")
@@ -67,6 +56,21 @@ _HOST_MODEL_FIELDS = (
     "model_name",
 )
 _AGENTS_MD_NAME = "agents-md"
+#: Directories skipped when scanning for project-level ``AGENTS.md`` overlays.
+_NESTED_PROJECT_SKIP = {
+    ".git",
+    ".hnflow",
+    "node_modules",
+    "Library",
+    "Temp",
+    "obj",
+    "bin",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    "target",
+}
 
 
 def resolve_project(
@@ -146,7 +150,6 @@ def build_plan(
             )
     content = _collect_content(repo, project, stack, groups, warnings, strict)
     names: dict[str, dict[str, str]] = content["names"]  # type: ignore[assignment]
-    module_metas = {group.name: list(group.active_modules) for group in groups}
     return ResolvedPlan(
         schema_version=SCHEMA_VERSION,
         active=True,
@@ -173,7 +176,6 @@ def build_plan(
         model_default=DEFAULT_MODEL_LAYER,
         names=names,
         group_metas=groups,
-        module_metas=module_metas,
     )
 
 
@@ -232,16 +234,8 @@ def _collect_content(
     command_owners: dict[str, str] = {}
 
     for group in groups:
-        group.active_modules = activate_modules(
-            group,
-            discover_modules(group, warnings=warnings, strict=strict),
-            warnings=warnings,
-            strict=strict,
-        )
         rules.extend(_collect_group_rules(group, warnings, strict, files))
-        for module in group.active_modules:
-            _collect_skills(module.root / "skills", group, module.path, skills, warnings)
-        _collect_skills(group.root / "skills", group, "", skills, warnings)
+        _collect_skills(group.root / "skills", group, skills, warnings)
         _collect_agents(group, agents, names, agent_owners, warnings, strict, files)
         _collect_commands(group, commands, names, command_owners, warnings, strict, files)
         _collect_flows(group, flows, warnings, files)
@@ -270,31 +264,23 @@ def _collect_group_rules(
     strict: bool,
     files: set[Path],
 ) -> list[ResolvedRule]:
-    """Collect root and module rules, apply scope, ordering, and overrides."""
+    """Collect the group's rules, apply scope, ordering, and overrides."""
     entries: list[tuple[ResolvedRule, list[str]]] = []
-    for module_path, module_paths, rule_files, agents_md in _rule_scopes(group):
-        for file in rule_files:
-            parsed = _read_frontmatter(file, warnings)
-            if parsed is None:
-                continue
-            files.add(file)
-            entry = _rule_entry(
-                parsed.data, parsed.body, file, group, module_path, module_paths, warnings
-            )
-            if entry is not None:
-                entries.append(entry)
-        if agents_md is not None:
-            files.add(agents_md)
-            try:
-                agents_md.read_text(encoding="utf-8-sig")
-            except (OSError, UnicodeError) as exc:
-                warnings.append(f"cannot read {agents_md.name}: {exc}")
-                continue
-            entries.append(
-                _agents_md_entry(agents_md, group, module_path, module_paths)
-            )
+    for file in group.rules:
+        parsed = _read_frontmatter(file, warnings)
+        if parsed is None:
+            continue
+        files.add(file)
+        entry = _rule_entry(parsed.data, parsed.body, file, group, warnings)
+        if entry is not None:
+            entries.append(entry)
+    if group.agents_md is not None:
+        files.add(group.agents_md)
+        entries.append(_agents_md_entry(group.agents_md, group))
 
-    entries.sort(key=lambda item: (_scope_depth(item[0]), item[0].priority, item[0].path))
+    entries.sort(
+        key=lambda item: (item[0].scope != "global", item[0].priority, item[0].path)
+    )
     disabled = set(group.disabled_rules)
     kept: list[ResolvedRule] = []
     for rule, overrides in entries:
@@ -306,103 +292,71 @@ def _collect_group_rules(
     return kept
 
 
-def _rule_scopes(
-    group: GroupMeta,
-) -> list[tuple[str, list[str], list[Path], Path | None]]:
-    scopes: list[tuple[str, list[str], list[Path], Path | None]] = [
-        ("", [], group.rules, group.agents_md)
-    ]
-    scopes.extend(
-        (module.path, list(module.paths), module.rules, module.agents_md)
-        for module in group.active_modules
-    )
-    return scopes
-
-
-def _scope_depth(rule: ResolvedRule) -> int:
-    return rule.module.count("/") + 1 if rule.module else 0
-
-
 def _rule_entry(
     data: dict[str, object],
     body: str,
     file: Path,
     group: GroupMeta,
-    module_path: str,
-    module_paths: list[str],
     warnings: list[str],
 ) -> tuple[ResolvedRule, list[str]] | None:
     name = frontmatter_text(data.get("name"))
     if not name:
         warnings.append(f"rule {file.name} missing required frontmatter: name")
         return None
-    default_scope = _default_scope(module_path, module_paths)
-    declared_scope = frontmatter_text(data.get("scope"))
-    scope = declared_scope or default_scope
+    description = frontmatter_text(data.get("description"))
+    if not description:
+        warnings.append(
+            f"rule {file.name} missing required frontmatter: description"
+        )
+    if "always" in data:
+        warnings.append(
+            f"rule {file.name} uses retired field 'always'; use 'on_demand' instead"
+        )
+    scope = frontmatter_text(data.get("scope")) or "global"
     if scope not in _RULE_SCOPES:
         warnings.append(
             f"rule {file.name} has invalid scope: {scope} (expected one of "
             f"{', '.join(sorted(_RULE_SCOPES))})"
         )
-        scope = default_scope
-    if scope == "module" and not module_path:
-        warnings.append(
-            f"rule {file.name} uses scope 'module' outside a module; using 'global'"
-        )
         scope = "global"
     paths = _str_values(data.get("paths"))
-    if not declared_scope and paths:
+    if not frontmatter_text(data.get("scope")) and paths:
         # Declaring paths without a scope narrows the rule to those paths.
         scope = "paths"
     if scope == "paths" and not paths:
-        paths = list(module_paths)
-    if scope == "paths" and not paths:
         warnings.append(
-            f"rule {file.name} uses scope 'paths' without paths; using 'module'"
+            f"rule {file.name} uses scope 'paths' without paths; using 'global'"
         )
-        scope = default_scope if default_scope != "paths" else "global"
+        scope = "global"
     rule = ResolvedRule(
         name=name,
         path=_posix(file),
         group=group.name,
-        id=qualified_id(group.name, module_path, name),
-        module=module_path,
+        id=qualified_id(group.name, name),
         kind="rule",
         scope=scope,
         paths=paths,
-        always=_to_bool(data.get("always"), default=True),
+        on_demand=_to_bool(data.get("on_demand"), default=False),
         priority=_to_int(data.get("priority"), default=0),
-        description=frontmatter_text(data.get("description")),
+        description=description,
     )
     return rule, _str_values(data.get("overrides"))
 
 
-def _agents_md_entry(
-    file: Path,
-    group: GroupMeta,
-    module_path: str,
-    module_paths: list[str],
-) -> tuple[ResolvedRule, list[str]]:
+def _agents_md_entry(file: Path, group: GroupMeta) -> tuple[ResolvedRule, list[str]]:
     rule = ResolvedRule(
         name=_AGENTS_MD_NAME,
         path=_posix(file),
         group=group.name,
-        id=qualified_id(group.name, module_path, _AGENTS_MD_NAME),
-        module=module_path,
+        id=qualified_id(group.name, _AGENTS_MD_NAME),
         kind="agents",
-        scope=_default_scope(module_path, module_paths),
-        paths=list(module_paths),
-        always=True,
+        scope="global",
+        paths=[],
+        on_demand=False,
         priority=0,
         description="",
     )
     return rule, []
-
-
-def _default_scope(module_path: str, module_paths: list[str]) -> str:
-    if not module_path:
-        return "global"
-    return "paths" if module_paths else "module"
 
 
 def _collect_nested_agents_md(
@@ -432,35 +386,32 @@ def _collect_nested_agents_md(
                 name=_AGENTS_MD_NAME,
                 path=resolved.as_posix(),
                 group="project",
-                id=qualified_id("project", directory, _AGENTS_MD_NAME),
-                module=directory,
+                id=f"project/{directory}/{_AGENTS_MD_NAME}",
                 kind="agents",
                 scope="paths",
                 paths=[f"{directory}/**"],
-                always=True,
+                on_demand=False,
                 priority=0,
                 description="",
             )
         )
-    rules.sort(key=lambda rule: (_scope_depth(rule), rule.path))
+    rules.sort(key=lambda rule: (rule.priority, rule.path))
     return rules
 
 
 def _collect_skills(
     root: Path,
     group: GroupMeta,
-    module_path: str,
     skills: list[ResolvedSkill],
     warnings: list[str],
 ) -> None:
     for directory in _skill_dirs(root):
-        _collect_skill(directory, group, module_path, skills, warnings)
+        _collect_skill(directory, group, skills, warnings)
 
 
 def _collect_skill(
     directory: Path,
     group: GroupMeta,
-    module_path: str,
     skills: list[ResolvedSkill],
     warnings: list[str],
 ) -> None:
@@ -506,9 +457,8 @@ def _collect_skill(
             model=_read_model(
                 parsed.data, f"skill {directory.name}", warnings
             ),
-            id=qualified_id(group.name, module_path, name),
-            module=module_path,
-            host=canonical_name(DEFAULT_PREFIX, group.name, module_path, name),
+            id=qualified_id(group.name, name),
+            host=canonical_name(DEFAULT_PREFIX, group.name, name),
         )
     )
 
@@ -546,53 +496,49 @@ def _collect_agents(
     strict: bool,
     files: set[Path],
 ) -> None:
-    scopes = [("", group.agents)]
-    scopes.extend((module.path, module.agents) for module in group.active_modules)
-    for module_path, agent_files in scopes:
-        for file in agent_files:
-            parsed = _read_frontmatter(file, warnings)
-            if parsed is None:
-                continue
-            files.add(file)
-            label = f"agent {file.name}"
-            _check_host_model_fields(parsed.data, label, warnings)
-            name = frontmatter_text(parsed.data.get("name"))
-            description = frontmatter_text(parsed.data.get("description"))
-            mode = frontmatter_text(parsed.data.get("mode"))
-            missing = [
-                key
-                for key, value in (
-                    ("name", name),
-                    ("description", description),
-                    ("mode", mode),
-                )
-                if not value
-            ]
-            if missing:
-                warnings.append(
-                    f"{label} missing required frontmatter: {', '.join(missing)}"
-                )
-                continue
-            if mode not in _AGENT_MODES:
-                warnings.append(f"{label} has invalid mode: {mode}")
-                continue
-            agent_id = qualified_id(group.name, module_path, name)
-            key = content_key(module_path, name)
-            _claim(owners, key, agent_id, "agent", warnings, strict)
-            agents[key] = ResolvedAgent(
-                name=name,
-                description=description,
-                mode=mode,
-                system=parsed.body,
-                source=_posix(file),
-                group=group.name,
-                model=_read_model(parsed.data, label, warnings),
-                id=agent_id,
-                module=module_path,
-                system_path=_posix(file),
-                label=f"{group.name}/{module_path}" if module_path else group.name,
+    for file in group.agents:
+        parsed = _read_frontmatter(file, warnings)
+        if parsed is None:
+            continue
+        files.add(file)
+        label = f"agent {file.name}"
+        _check_host_model_fields(parsed.data, label, warnings)
+        name = frontmatter_text(parsed.data.get("name"))
+        description = frontmatter_text(parsed.data.get("description"))
+        mode = frontmatter_text(parsed.data.get("mode"))
+        missing = [
+            key
+            for key, value in (
+                ("name", name),
+                ("description", description),
+                ("mode", mode),
             )
-            names["agents"][agent_id] = key
+            if not value
+        ]
+        if missing:
+            warnings.append(
+                f"{label} missing required frontmatter: {', '.join(missing)}"
+            )
+            continue
+        if mode not in _AGENT_MODES:
+            warnings.append(f"{label} has invalid mode: {mode}")
+            continue
+        agent_id = qualified_id(group.name, name)
+        key = name
+        _claim(owners, key, agent_id, "agent", warnings, strict)
+        agents[key] = ResolvedAgent(
+            name=name,
+            description=description,
+            mode=mode,
+            system=parsed.body,
+            source=_posix(file),
+            group=group.name,
+            model=_read_model(parsed.data, label, warnings),
+            id=agent_id,
+            system_path=_posix(file),
+            label=group.name,
+        )
+        names["agents"][agent_id] = key
 
 
 def _collect_commands(
@@ -604,50 +550,46 @@ def _collect_commands(
     strict: bool,
     files: set[Path],
 ) -> None:
-    scopes = [("", group.commands)]
-    scopes.extend((module.path, module.commands) for module in group.active_modules)
-    for module_path, command_files in scopes:
-        for file in command_files:
-            parsed = _read_frontmatter(file, warnings)
-            if parsed is None:
-                continue
-            files.add(file)
-            label = f"command {file.name}"
-            _check_host_model_fields(parsed.data, label, warnings)
-            name = frontmatter_text(parsed.data.get("name"))
-            description = frontmatter_text(parsed.data.get("description"))
-            missing = [
-                key
-                for key, value in (("name", name), ("description", description))
-                if not value
-            ]
-            if missing:
-                warnings.append(
-                    f"{label} missing required frontmatter: {', '.join(missing)}"
-                )
-                continue
-            if len(name) > 64 or _COMMAND_NAME.match(name) is None:
-                warnings.append(f"{label} has invalid name: {name}")
-                continue
-            command_id = qualified_id(group.name, module_path, name)
-            key = content_key(module_path, name)
-            _claim(owners, key, command_id, "command", warnings, strict)
-            command = ResolvedCommand(
-                name=name,
-                description=description,
-                agent=frontmatter_text(parsed.data.get("agent")) or None,
-                template=parsed.body,
-                source=_posix(file),
-                group=group.name,
-                model=_read_model(parsed.data, label, warnings),
-                id=command_id,
-                module=module_path,
-                template_path=_posix(file),
+    for file in group.commands:
+        parsed = _read_frontmatter(file, warnings)
+        if parsed is None:
+            continue
+        files.add(file)
+        label = f"command {file.name}"
+        _check_host_model_fields(parsed.data, label, warnings)
+        name = frontmatter_text(parsed.data.get("name"))
+        description = frontmatter_text(parsed.data.get("description"))
+        missing = [
+            key
+            for key, value in (("name", name), ("description", description))
+            if not value
+        ]
+        if missing:
+            warnings.append(
+                f"{label} missing required frontmatter: {', '.join(missing)}"
             )
-            commands[key] = command
-            names["commands"][command_id] = canonical_name(
-                DEFAULT_PREFIX, group.name, module_path, name
-            )
+            continue
+        if len(name) > 64 or _COMMAND_NAME.match(name) is None:
+            warnings.append(f"{label} has invalid name: {name}")
+            continue
+        command_id = qualified_id(group.name, name)
+        key = name
+        _claim(owners, key, command_id, "command", warnings, strict)
+        command = ResolvedCommand(
+            name=name,
+            description=description,
+            agent=frontmatter_text(parsed.data.get("agent")) or None,
+            template=parsed.body,
+            source=_posix(file),
+            group=group.name,
+            model=_read_model(parsed.data, label, warnings),
+            id=command_id,
+            template_path=_posix(file),
+        )
+        commands[key] = command
+        names["commands"][command_id] = canonical_name(
+            DEFAULT_PREFIX, group.name, name
+        )
 
 
 def _collect_flows(
@@ -656,50 +598,46 @@ def _collect_flows(
     warnings: list[str],
     files: set[Path],
 ) -> None:
-    """Collect ``flows/*.flow.json`` from the group root and active modules."""
+    """Collect ``flows/*.flow.json`` from the group root."""
     seen = {flow.id for flow in flows}
-    roots = [("", group.root)]
-    roots.extend((module.path, module.root) for module in group.active_modules)
-    for module_path, root in roots:
-        for file in _flow_files(root / "flows"):
-            files.add(file)
-            try:
-                data = read_json(file)
-            except HNFlowError as exc:
-                warnings.append(str(exc))
-                continue
-            if data.get("schemaVersion") != 2:
-                warnings.append(f"{file}: unsupported flow schemaVersion")
-                continue
-            definition = data.get("flow")
-            if not isinstance(definition, dict):
-                warnings.append(f"{file}: missing flow object")
-                continue
-            flow_id = str(definition.get("id") or "").strip()
-            if not _FLOW_ID.match(flow_id):
-                warnings.append(f"{file}: invalid flow id '{flow_id}'")
-                continue
-            qualified = qualified_id(group.name, module_path, flow_id)
-            if qualified in seen:
-                warnings.append(f"{file}: duplicate flow id '{qualified}'")
-                continue
-            seen.add(qualified)
-            tags = definition.get("tags")
-            requires = definition.get("requires")
-            flows.append(
-                ResolvedFlow(
-                    id=qualified,
-                    flow_id=flow_id,
-                    name=str(definition.get("name") or flow_id),
-                    description=str(definition.get("description") or ""),
-                    group=group.name,
-                    module=module_path,
-                    path=file.as_posix(),
-                    tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
-                    version=str(definition.get("version") or group.version),
-                    requires=[str(name) for name in requires] if isinstance(requires, list) else [],
-                )
+    for file in _flow_files(group.root / "flows"):
+        files.add(file)
+        try:
+            data = read_json(file)
+        except HNFlowError as exc:
+            warnings.append(str(exc))
+            continue
+        if data.get("schemaVersion") != 2:
+            warnings.append(f"{file}: unsupported flow schemaVersion")
+            continue
+        definition = data.get("flow")
+        if not isinstance(definition, dict):
+            warnings.append(f"{file}: missing flow object")
+            continue
+        flow_id = str(definition.get("id") or "").strip()
+        if not _FLOW_ID.match(flow_id):
+            warnings.append(f"{file}: invalid flow id '{flow_id}'")
+            continue
+        qualified = qualified_id(group.name, flow_id)
+        if qualified in seen:
+            warnings.append(f"{file}: duplicate flow id '{qualified}'")
+            continue
+        seen.add(qualified)
+        tags = definition.get("tags")
+        requires = definition.get("requires")
+        flows.append(
+            ResolvedFlow(
+                id=qualified,
+                flow_id=flow_id,
+                name=str(definition.get("name") or flow_id),
+                description=str(definition.get("description") or ""),
+                group=group.name,
+                path=file.as_posix(),
+                tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
+                version=str(definition.get("version") or group.version),
+                requires=[str(name) for name in requires] if isinstance(requires, list) else [],
             )
+        )
 
 
 def _collect_mcp(
@@ -709,25 +647,21 @@ def _collect_mcp(
     mcp: dict[str, dict[str, object]],
     warnings: list[str],
 ) -> None:
-    scopes: list[tuple[str, list[str]]] = [("", group.tools)]
-    scopes.extend((module.alias, module.tools) for module in group.active_modules)
-    for alias, tool_ids in scopes:
-        for tool_id in tool_ids:
-            tool = tools.get(tool_id)
-            if tool is None:
-                warnings.append(f"tool not found for {group.name}: {tool_id}")
-                continue
-            used_tools[tool.id] = tool
-            if not isinstance(tool.mcp, dict):
-                continue
-            server = tool.mcp
-            if server.get("enabled") is False:
-                continue
-            server_name = str(server.get("name") or tool.name)
-            suffix = f"{group.name}_{alias}_{server_name}" if alias else f"{group.name}_{server_name}"
-            mcp[f"capability:{suffix}"] = {
-                str(name): value for name, value in server.items() if name != "name"
-            }
+    for tool_id in group.tools:
+        tool = tools.get(tool_id)
+        if tool is None:
+            warnings.append(f"tool not found for {group.name}: {tool_id}")
+            continue
+        used_tools[tool.id] = tool
+        if not isinstance(tool.mcp, dict):
+            continue
+        server = tool.mcp
+        if server.get("enabled") is False:
+            continue
+        server_name = str(server.get("name") or tool.name)
+        mcp[f"capability:{group.name}_{server_name}"] = {
+            str(name): value for name, value in server.items() if name != "name"
+        }
 
 
 def _claim(
@@ -818,6 +752,35 @@ def _skill_dirs(root: Path) -> list[Path]:
     return sorted(found)
 
 
+def nested_agents_md_files(
+    project: Path, *, max_depth: int = 4, limit: int = 64
+) -> list[Path]:
+    """Return project ``AGENTS.md`` files below *project*, bounded and sorted."""
+    base = project.resolve()
+    found: list[Path] = []
+    stack = [(base, 0)]
+    while stack:
+        directory, depth = stack.pop()
+        if depth > max_depth:
+            continue
+        try:
+            children = sorted(directory.iterdir())
+        except OSError:
+            continue
+        for child in children:
+            if child.name in _NESTED_PROJECT_SKIP:
+                continue
+            if child.is_dir():
+                if child.name.startswith("."):
+                    continue
+                stack.append((child, depth + 1))
+            elif child.name == "AGENTS.md" and child.is_file():
+                found.append(child)
+                if len(found) >= limit:
+                    return sorted(found)
+    return sorted(found)
+
+
 def _tool_index(repo: Path) -> dict[str, ToolMeta]:
     index: dict[str, ToolMeta] = {}
     for tool in discover_tools(repo):
@@ -835,23 +798,8 @@ def _group_summary(group: GroupMeta) -> ResolvedGroup:
         root=_posix(group.root),
         permissions=list(group.permissions),
         extends=list(group.extends),
-        tools=list(group.all_tools),
-        modules=[_module_summary(module) for module in group.active_modules],
+        tools=list(group.tools),
     )
-
-
-def _module_summary(module: ModuleMeta) -> dict[str, object]:
-    return {
-        "path": module.path,
-        "alias": module.alias,
-        "title": module.title,
-        "description": module.description,
-        "root": _posix(module.root),
-        "paths": list(module.paths),
-        "default": module.default,
-        "depends": list(module.depends),
-        "tools": list(module.tools),
-    }
 
 
 def _fingerprint(
@@ -877,10 +825,6 @@ def _fingerprint(
     for group in groups:
         digest.update(f"group:{group.name}@{group.version}\0".encode("utf-8"))
         _hash_file(digest, group.root / "group.json", repo)
-        for module in group.active_modules:
-            meta_path = module.root / "module.json"
-            if meta_path.is_file():
-                _hash_file(digest, meta_path, repo)
     collected = files if isinstance(files, set) else set()
     for file in sorted(collected):
         _hash_file(digest, file, repo)

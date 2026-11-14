@@ -1,7 +1,7 @@
 /**
  * Resolve a workspace key to a runnable definition.
  *
- * Order (docs/dsh-plugin-plan-v2.md §8.1):
+ * Order (docs/architecture.md):
  *
  * 1. an override in this workspace;
  * 2. the ref's pinned revision snapshot;

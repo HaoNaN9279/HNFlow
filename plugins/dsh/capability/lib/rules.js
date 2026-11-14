@@ -7,9 +7,9 @@
  * validated the frontmatter.
  *
  * Only the session working directory is known when a step starts, so scoping is
- * decided per directory subtree: `global` rules always apply, `module`/`paths`
- * rules apply when the working directory matches. Rules pinned with
- * `always: false` are listed by title only; the model can read them on demand.
+ * decided per directory subtree: `global` rules always apply, `paths` rules
+ * apply when the working directory matches. Rules pinned with `on_demand: true`
+ * are listed by path and description only; the model can read them on demand.
  *
  * `planRules` is the single decision point: the injection path only formats its
  * result, and the session inventory panel reuses it, so what the panel reports
@@ -27,7 +27,7 @@ export const RULES_HEADER = [
 ].join('\n\n')
 export const RULES_FOOTER = '</system-reminder>'
 export const INDEX_LEAD =
-  'Other Capability-group rules apply to specific directories and are not injected here. Read the matching file when the task touches those paths:'
+  'Some HNFlow rules are loaded on demand: only their summary is listed here. Read the file before working on its topic:'
 
 /**
  * Remove a leading YAML frontmatter block.
@@ -112,10 +112,7 @@ export function ruleApplies(rule, relative) {
   const declared = Array.isArray(rule.paths)
     ? rule.paths.filter((item) => typeof item === 'string' && item.length > 0)
     : []
-  const module = normalizePath(rule.module)
-  const patterns = declared.length > 0
-    ? declared
-    : (scope === 'module' && module.length > 0 ? [`${module}/**`] : [])
+  const patterns = declared
   if (patterns.length === 0) return true
   if (relative.length === 0) return false
   return patterns.some((pattern) => matchPath(relative, pattern))
@@ -133,12 +130,12 @@ export function indexSummary(rule) {
 }
 
 /**
- * One index line for a rule pinned with `always: false`.
+ * One index line for a rule pinned with `on_demand: true`.
  * @param {Record<string, unknown>} rule - plan rule entry.
  * @returns {string} rendered index line.
  */
 export function indexLine(rule) {
-  return `- ${String(rule.id ?? rule.name ?? rule.path)}: ${indexSummary(rule)}`
+  return `- ${String(rule.path ?? rule.id ?? rule.name)}: ${indexSummary(rule)}`
 }
 
 /**
@@ -175,7 +172,7 @@ export async function planRules(plan, options = {}) {
       omitted.push({ rule, status: 'omitted', bytes: 0, body: '' })
       continue
     }
-    if (rule.always === false) {
+    if (rule.on_demand === true) {
       const line = indexLine(rule)
       indexLines.push(line)
       indexed.push({ rule, status: 'indexed', bytes: Buffer.byteLength(line, 'utf8'), body: '' })
@@ -192,7 +189,7 @@ export async function planRules(plan, options = {}) {
       omitted.push({ rule, status: 'omitted', bytes: 0, body: '' })
       continue
     }
-    const scope = rule.group ? ` (group: ${String(rule.group)}${rule.module ? `, module: ${String(rule.module)}` : ''})` : ''
+    const scope = rule.group ? ` (group: ${String(rule.group)})` : ''
     const block = `Instructions from: ${rule.path}${scope}\n\n${escapeReminder(body)}`
     const size = Buffer.byteLength(block, 'utf8')
     if (bytes + size > limit) {

@@ -50,11 +50,11 @@ const EMPTY_STATE = Object.freeze({
 /**
  * Describe agents from a plan.
  *
- * Module agents are keyed `<module>/<Name>` by the resolver, so the roster name
- * is already unique across groups and modules. `system_path` is kept beside the
- * inline body so callers that need the file later do not re-derive it.
+ * Agents are keyed `<Name>` by the resolver, so the roster name is unique across
+ * loaded groups. `system_path` is kept beside the inline body so callers that
+ * need the file later do not re-derive it.
  * @param {Record<string, unknown>} plan - normalized resolve plan.
- * @returns {{name: string, description: string, mode: string, system: string, systemPath: string, group: string, module: string, id: string}[]} agents in plan order.
+ * @returns {{name: string, description: string, mode: string, system: string, systemPath: string, group: string, id: string}[]} agents in plan order.
  */
 export function agentList(plan) {
   const agents = plan?.agents && typeof plan.agents === 'object' ? plan.agents : {}
@@ -69,7 +69,6 @@ export function agentList(plan) {
       system: typeof value.system === 'string' ? value.system : '',
       systemPath: typeof value.system_path === 'string' ? value.system_path : '',
       group: typeof value.group === 'string' ? value.group : '',
-      module: typeof value.module === 'string' ? value.module : '',
       id: typeof value.id === 'string' ? value.id : '',
       model: typeof value.model === 'string' ? value.model : '',
     })
@@ -88,8 +87,8 @@ export function personaAgents(list) {
 
 /**
  * Strip host-only fields before publishing the roster.
- * @param {{name: string, description: string, mode: string, group?: string, module?: string}[]} list - agent list.
- * @returns {{name: string, description: string, mode: string, group: string, module: string, model: string}[]} publishable rows.
+ * @param {{name: string, description: string, mode: string, group?: string}[]} list - agent list.
+ * @returns {{name: string, description: string, mode: string, group: string, model: string}[]} publishable rows.
  */
 export function agentSummaries(list) {
   return list.map((agent) => ({
@@ -97,7 +96,6 @@ export function agentSummaries(list) {
     description: agent.description,
     mode: agent.mode,
     group: typeof agent.group === 'string' ? agent.group : '',
-    module: typeof agent.module === 'string' ? agent.module : '',
     model: typeof agent.model === 'string' ? agent.model : '',
   }))
 }
@@ -135,7 +133,6 @@ export function sameRoster(left, right) {
       agent.description === other.description &&
       agent.mode === other.mode &&
       (agent.group ?? '') === (other.group ?? '') &&
-      (agent.module ?? '') === (other.module ?? '') &&
       (agent.model ?? '') === (other.model ?? '')
     )
   })
@@ -204,7 +201,6 @@ export function rosterFromEvent(event) {
         description: typeof row.description === 'string' ? row.description : '',
         mode: typeof row.mode === 'string' ? row.mode : 'all',
         group: typeof row.group === 'string' ? row.group : '',
-        module: typeof row.module === 'string' ? row.module : '',
         model: typeof row.model === 'string' ? row.model : '',
       })
     }

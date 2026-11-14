@@ -48,7 +48,7 @@ def repo(tmp_path: Path) -> Path:
     )
     _write(
         root / "capability-groups/core/0.1.0/rules/00-global.md",
-        "---\nname: global\n---\n\n# global\n",
+        "---\nname: global\ndescription: global rules\n---\n\n# global\n",
     )
     _write(
         root / "capability-groups/core/0.1.0/agents/helper.md",
@@ -73,7 +73,7 @@ def repo(tmp_path: Path) -> Path:
     )
     _write(
         root / "capability-groups/domain/data/1.0.0/rules/data.md",
-        "---\nname: data\n---\n\n# data\n",
+        "---\nname: data\ndescription: data rules\n---\n\n# data\n",
     )
 
     _write_json(
@@ -90,7 +90,7 @@ def repo(tmp_path: Path) -> Path:
     )
     _write(
         root / "capability-groups/domain/base/1.0.0/rules/base.md",
-        "---\nname: base\n---\n\n# base\n",
+        "---\nname: base\ndescription: base rules\n---\n\n# base\n",
     )
 
     for guid, name, version in (

@@ -20,7 +20,7 @@ agents-md → persona → skills → commands → flows → mcp → rules → ru
 - `skills` / `commands` / `flows`：能力组内容目录。
 - `mcp`：为当前 Agent 挂载的 MCP 服务。
 - `rules`：最后追加的规则消息；内部按 `injected → indexed → omitted`。
-- `rules-skipped`：当前目录不匹配、不会加载的规则。
+- `rules-skipped`：当前目录不匹配 `paths`、不会加载的规则。
 - `agents`：人设候选，仅界面可见，不进上下文。
 
 `rules` 段与注入共用 `plan_rules`，预算、索引行与截断标记和真实注入一致。
@@ -30,7 +30,7 @@ agents-md → persona → skills → commands → flows → mcp → rules → ru
 | 符号 | 状态 | 含义 |
 | --- | --- | --- |
 | `+` | injected | 已并入规则消息 |
-| `~` | indexed | `always: false`，只贡献一行索引 |
+| `~` | indexed | `on_demand: true`，只贡献一行「路径 + 描述」索引 |
 | `!` | omitted | 超预算或正文为空，未注入 |
 | `-` | skipped | 当前目录不匹配作用域 |
 | `*` | active | 技能 / 命令 / 流程 / MCP / 人设已生效 |

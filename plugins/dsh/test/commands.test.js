@@ -19,7 +19,7 @@ function command(service) {
 }
 
 const service = {
-  listFlows: async () => [{ id: 'team/fl', flowId: 'fl', name: '演示', group: 'team', module: null, requires: ['base'], description: '说明' }],
+  listFlows: async () => [{ id: 'team/fl', flowId: 'fl', name: '演示', group: 'team', requires: ['base'], description: '说明' }],
   listRuns: async () => [],
   getRun: async () => ({
     runId: 'run-1',

@@ -176,7 +176,6 @@ export async function hostInstructions(input) {
       id: posix(entry.file),
       name: entry.label,
       group: 'host',
-      module: '',
       scope: entry.scope,
       status,
       bytes: byteLength(body),

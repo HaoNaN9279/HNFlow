@@ -1,5 +1,6 @@
 ---
 name: unity
+description: Unity 项目全局规则：工程结构与开发约定。
 ---
 
 # unity 项目全局规则

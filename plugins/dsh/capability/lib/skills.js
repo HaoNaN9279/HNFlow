@@ -25,7 +25,7 @@ export const SKILL_RANK = 250
  * @param {Record<string, unknown>} plan - normalized resolve plan.
  * @param {{prefix?: string, maxLength?: number, rank?: number}} [options] - namespace options.
  * @param {string[]} [warnings] - collector for dropped or colliding entries.
- * @returns {{name: string, originalName: string, description: string, directory: string, group: string, module: string, model: string}[]} unique candidates in plan order.
+ * @returns {{name: string, originalName: string, description: string, directory: string, group: string, model: string}[]} unique candidates in plan order.
  */
 export function skillCandidates(plan, options = {}, warnings = []) {
   const published = plan?.names && typeof plan.names === 'object' ? plan.names : {}
@@ -37,12 +37,11 @@ export function skillCandidates(plan, options = {}, warnings = []) {
     if (!skill || typeof skill.name !== 'string' || typeof skill.path !== 'string') continue
     if (skill.name.length === 0 || skill.path.length === 0) continue
     const group = typeof skill.group === 'string' && skill.group.length > 0 ? skill.group : 'core'
-    const module = typeof skill.module === 'string' ? skill.module : ''
     const id = typeof skill.id === 'string' && skill.id.length > 0 ? skill.id : ''
     const mapped = id.length > 0 && typeof assigned[id] === 'string' ? assigned[id] : ''
     const canonical = mapped.length > 0
       ? mapped
-      : canonicalName(options.prefix, group, skill.name, { ...options, module })
+      : canonicalName(options.prefix, group, skill.name, options)
     if (canonical.length === 0) {
       warnings.push(`skill ${group}/${skill.name} has no usable name`)
       continue
@@ -62,7 +61,6 @@ export function skillCandidates(plan, options = {}, warnings = []) {
       description: typeof skill.description === 'string' ? skill.description : '',
       directory: skill.path,
       group,
-      module,
       model: typeof skill.model === 'string' ? skill.model : '',
     })
   }

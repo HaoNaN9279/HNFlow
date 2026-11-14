@@ -31,8 +31,7 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 ## 工作流属于能力组
 
 - 组根流程：`capability-groups/<layer>/<name>/<version>/flows/<id>.flow.json`
-- 模块流程：`.../modules/<module>/flows/<id>.flow.json`
-- 对外的键：`<group>/<id>`，模块流程为 `<group>/<alias>/<id>`
+- 对外的键：`<group>/<id>`
 - 项目内新建：`hnflow_author create` 写 `<workspace>/.hnflow/groups/<group>/flows/<id>.flow.json`
 - 组可用本组及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流
 
@@ -91,5 +90,5 @@ Python 解析器测试：
 python -m pytest tests -q
 ```
 
-详细架构见 [`docs/dsh-plugin-plan-v2.md`](../../docs/dsh-plugin-plan-v2.md) 与
-[`docs/architecture.md`](../../docs/architecture.md)。
+详细架构见 [`docs/architecture.md`](../../docs/architecture.md)，解析契约见
+[`docs/resolve-api.md`](../../docs/resolve-api.md)。

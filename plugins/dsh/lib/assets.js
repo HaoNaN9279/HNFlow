@@ -8,7 +8,7 @@
  * ```
  *
  * Only an explicit publish (a user action) increments `revision`; nothing in
- * the agent path may call it. See `docs/dsh-plugin-plan-v2.md` §4.5.
+ * the agent path may call it. See `docs/architecture.md`.
  */
 
 import { randomUUID } from 'node:crypto'

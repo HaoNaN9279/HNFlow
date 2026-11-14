@@ -4,7 +4,7 @@
  * A workspace never copies an asset to use it. It records a reference
  * (`flows.json`) and, when the project needs different behaviour, a full
  * override copy. Deleting the override restores the asset revision — see
- * `docs/dsh-plugin-plan-v2.md` §8.1.
+ * `docs/architecture.md`.
  */
 
 import { readFile, readdir, rm } from 'node:fs/promises'

@@ -6,7 +6,7 @@ license: MIT
 
 # Custom Group — 能力组制作指南
 
-能力组是 HNFlow 的能力容器。它只描述“用什么能力”，不携带工具源码、宿主模型参数、凭据或 Agent 私有配置。本技能负责组这一层；组内具体内容分别由 `custom-rule`、`custom-agent`、`custom-command`、`custom-skill`、`custom-module`、`custom-tool`、`custom-mcp` 负责。
+能力组是 HNFlow 的能力容器。它只描述“用什么能力”，不携带工具源码、宿主模型参数、凭据或 Agent 私有配置。本技能负责组这一层；组内具体内容分别由 `custom-rule`、`custom-agent`、`custom-command`、`custom-skill`、`custom-tool`、`custom-mcp` 负责。
 
 ---
 
@@ -35,12 +35,11 @@ hnflow-stack sync
 capability-groups/domain/<name>/<version>/
 ├── group.json
 ├── AGENTS.md       # 可选，吸收为组根规则
-├── rules/          # 递归发现 *.md，必须含 frontmatter name
+├── rules/          # 递归发现 *.md，必须含 frontmatter name / description
 ├── agents/         # 递归发现 *.md，必须含 name / description / mode
 ├── commands/       # 递归发现 *.md，必须含 name / description
 ├── skills/         # 每个技能一个目录，内含 SKILL.md
-├── references/     # 可选参考资料，不参与解析
-└── modules/<path>/ # 可选，子系统内容，见 custom-module
+└── references/     # 可选参考资料，不参与解析
 ```
 
 硬性边界：
@@ -79,29 +78,8 @@ capability-groups/domain/<name>/<version>/
 | `extends` | 否 | 依赖的组名；解析时依赖先于依赖者 |
 | `tools` | 否 | 引用的工具包 ID：`tool:<guid>@v<version>` |
 | `tool_permissions` | 否 | 按工具 ID 覆盖权限 |
-| `modules_dir` | 否 | 模块目录名，默认 `modules` |
-| `default_modules` | 否 | 项目未指定模块时默认激活的模块路径 |
 
 `extends` 形成依赖图；同组只加载一次。依赖缺失时 `resolve` 记录告警并跳过，`sync` 直接报错。
-
-### 3.1 模块
-
-组根是全局默认，模块是局部覆盖。子系统内容放 `modules/<path>/`，由 `module.json` 描述
-`alias`、`paths`、`default`、`depends`、`tools`。模块不单独版本化、不跨组。详见
-`custom-module` 技能。
-
-```text
-<group>/modules/battle/
-├── module.json
-├── rules/
-├── agents/
-├── commands/
-└── skills/
-```
-
-模块内容的限定 id 为 `<group>/<alias>/<name>`，宿主名为
-`capability-<group>-<alias>-<name>`；组根内容不受影响。
-
 
 ---
 
@@ -109,10 +87,9 @@ capability-groups/domain/<name>/<version>/
 
 - 组名、技能名使用小写 kebab：`^[a-z0-9]+(-[a-z0-9]+)*$`。
 - Agent 名可以大写（如 `Athena`），但同一能力组内不要重复。
-- 命令名会被 DSH 适配器规范化为 `capability-<group>-<name>`（模块内加 `-<alias>-`）；能力组里写原始短名即可。
+- 命令名会被 DSH 适配器规范化为 `capability-<group>-<name>`；能力组里写原始短名即可。
 - 新组从 `0.1.0` 开始；破坏性变更升次版本或主版本，按仓库约定执行。
 - **已发布版本目录不可修改**：升级时新建 `<new-version>/`，复制并修改内容，`guid` 不变，然后更新项目 `stack.json` 的引用版本。
-- 模块不复用该版本机制：随组版本发布，不建 `modules/<path>/<version>/`。
 
 生成 GUID（标准库）：
 
@@ -129,7 +106,7 @@ python -c "import uuid; print(uuid.uuid4().hex)"
 2. 选择名称与版本，确认仓库中没有同名同版本目录
 3. 创建 <root>/group.json（guid、name、version、description）
 4. 按需创建 rules/、agents/、commands/、skills/
-5. 内容是否只属于某个子系统：是 → 拆到 modules/<path>/ 并写 module.json
+5. 内容是否只对某些目录生效：是 → 该规则加 scope: paths + paths；正文长且按需查阅 → on_demand: true
 6. 每个内容文件写 frontmatter（见对应 custom-* 技能）
 7. 在临时项目激活该组，运行 hnflow-stack validate 与 resolve --json 验证
 8. 发布：提交仓库；项目侧更新 stack.json 版本并 sync
@@ -138,8 +115,7 @@ python -c "import uuid; print(uuid.uuid4().hex)"
 验证命令：
 
 ```bash
-hnflow-stack list --tree
-hnflow-stack info <name> --modules
+hnflow-stack list
 hnflow-stack activate <name>@<version>
 hnflow-stack validate
 hnflow-stack resolve --json --project <project>
@@ -154,11 +130,11 @@ hnflow-stack sync
 ## 6. 解析与合并规则
 
 1. 加载顺序：Core → `groups` 数组顺序 → 每个组的 `extends` 依赖优先。
-2. 组内先组根内容，再激活模块：`depends` 拓扑 + 路径字典序。
+2. 组内内容按 `rules/`、`agents/`、`commands/`、`skills/`、`flows/` 收集，组间按加载顺序追加。
 3. 同名组只加载一次。
-4. 规则按作用域注入（`global` / `module` / `paths`），`priority` 排序，`overrides` 压掉同名早期规则，`stack.disable` 剔除。
+4. 规则按作用域注入（`global` / `paths`），`on_demand: true` 只注入摘要行，`priority` 排序，`overrides` 压掉同名早期规则，`stack.disable` 剔除。
 5. 技能路径追加；宿主名重复保留后者并告警，`sync` 报错。
-6. Agent、命令、MCP 同名时后加载者覆盖；模块内容键为 `<alias>/<name>`，不与其他模块冲突。
+6. Agent、命令、MCP 同名时后加载者覆盖。
 7. 同一个限定 id 重复才算真重复：`resolve` 告警、`sync` / `validate` 报错。
 8. 单个文件或工具失败只跳过该项并记 `warnings`，退出码仍为 0。
 
@@ -177,10 +153,8 @@ hnflow-stack sync
 | 规则/技能不出现 | frontmatter 缺 `name`，或技能目录名不匹配 | 补 frontmatter；技能目录名与 `name` 一致 |
 | `resolve` 有告警但退出码 0 | 内容被跳过 | 按告警逐条修复；`sync` 会严格报错 |
 | 新组激活后没内容 | 项目没 `sync`，或 DSH 插件缓存未失效 | 运行 `sync`；改 `stack.json` 会触发插件重新解析 |
-| 模块内容缺失 | 模块未激活或被 `exclude` | `hnflow-stack list --tree` / `info <group> --modules` |
-| 模块规则不生效 | 当前工作目录不在 `paths` / 模块目录内 | `hnflow-stack rules show --for <path>` |
-| `module path ... invalid` | 路径含大写、下划线或层级 >3 | 改成 kebab 路径 |
-| 工具缺失 | `group.json` 或 `module.json` 引用了不存在的工具 ID | 检查 `tools/` 与 `tool_permissions` |
+| 目录限定规则不生效 | 当前工作目录不在 `paths` 内 | `hnflow-stack rules show --for <path>` |
+| 工具缺失 | `group.json` 引用了不存在的工具 ID | 检查 `tools/` 与 `tool_permissions` |
 
 ---
 

@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from hnflow_stack.errors import GroupNotFoundError, ToolNotFoundError, HNFlowError
-from hnflow_stack.model import DEFAULT_MODULES_DIR, GroupMeta, ToolMeta, read_json
+from hnflow_stack.model import GroupMeta, ToolMeta, read_json
 
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 _CORE_GROUP = "core"
@@ -117,11 +117,6 @@ def _load_project_group(root: Path, name: str, version: str | None) -> GroupMeta
 def _group_meta(
     data: dict[str, object], root: Path, name: str, version: str
 ) -> GroupMeta:
-    modules_dir = str(data.get("modules_dir") or DEFAULT_MODULES_DIR)
-    if "/" in modules_dir or "\\" in modules_dir or modules_dir in {".", ".."}:
-        raise HNFlowError(
-            f"{root / 'group.json'} modules_dir must be a single directory name"
-        )
     return GroupMeta(
         guid=str(data["guid"]),
         name=name,
@@ -132,8 +127,6 @@ def _group_meta(
         tools=_str_list(data.get("tools")),
         tool_permissions=_str_map(data.get("tool_permissions")),
         root=root,
-        modules_dir=modules_dir,
-        default_modules=_str_list(data.get("default_modules")),
     )
 
 

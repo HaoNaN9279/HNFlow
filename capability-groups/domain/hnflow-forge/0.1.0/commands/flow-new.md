@@ -27,7 +27,7 @@ model: strong
 ## 交付报告
 
 ```text
-流程：<名称>（flowId / 组 / 模块）
+流程：<名称>（flowId / 组）
 节点图：node1 → node2 → …
 门禁/交付：每个点一句话“为什么必须由人”
 触发方式：手动 `hnflow run`｜定时/文件/流程完成（人写 `.hnflow/triggers.json`，需 `hnflow-pass` 行）

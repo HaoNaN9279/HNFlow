@@ -59,11 +59,11 @@ hnflow-stack --project . activate <group>[@version]
 
 ```bash
 hnflow-stack --project . validate
-hnflow-stack --project . list --tree
+hnflow-stack --project . list
 ```
 
-`validate` 必须成功；有告警就修 `stack.json`（组名、版本、模块名）后重跑。
-`list --tree` 用来确认激活集与模块展开符合预期。
+`validate` 必须成功；有告警就修 `stack.json`（组名、版本）后重跑。
+`list` 用来确认激活集符合预期。
 
 ## Step 5: 生成 lock（可选）
 

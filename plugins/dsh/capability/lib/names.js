@@ -50,27 +50,23 @@ export function shortHash(value, length = 6) {
  * @param {string} prefix - namespace prefix (`capability`).
  * @param {string} group - capability group name.
  * @param {string} name - command or skill name from the group.
- * @param {{maxLength?: number, module?: string}} [options] - length limit and module alias.
+ * @param {{maxLength?: number}} [options] - length limit.
  * @returns {string} canonical name, or an empty string when the name has no usable characters.
  */
 export function canonicalName(prefix, group, name, options = {}) {
   const lead = slug(prefix) || DEFAULT_PREFIX
   const groupSlug = slug(group) || 'unknown'
-  const moduleSlug = slug(options.module)
   const nameSlug = slug(name)
   if (nameSlug.length === 0) return ''
   const configured = Number(options.maxLength)
   const max = Number.isFinite(configured) && configured > 0
     ? Math.floor(configured)
     : DEFAULT_MAX_NAME_LENGTH
-  const parts = [lead, groupSlug]
-  if (moduleSlug.length > 0) parts.push(moduleSlug)
-  parts.push(nameSlug)
+  const parts = [lead, groupSlug, nameSlug]
   const joined = parts.join('-')
   if (joined.length <= max) return joined
 
-  const scoped = moduleSlug.length > 0 ? `${group}/${moduleSlug}/${name}` : `${group}/${name}`
-  const hash = shortHash(scoped)
+  const hash = shortHash(`${group}/${name}`)
   const head = joined.slice(0, Math.max(1, max - hash.length - 1)).replace(/-+$/gu, '')
   return `${head}-${hash}`
 }
