@@ -1,0 +1,11 @@
+{
+  "guid": "c2a77656d8fc57438a34c75d3e1da659",
+  "name": "blender",
+  "version": "1.0.0",
+  "description": "Blender 3D 创作套件集成与 AI 辅助工作流。",
+  "permissions": [
+    "fs"
+  ],
+  "extends": [],
+  "tools": []
+}

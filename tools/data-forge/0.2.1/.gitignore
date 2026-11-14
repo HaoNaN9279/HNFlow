@@ -1,0 +1,38 @@
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Cache directories
+.pytest_cache/
+.ruff_cache/
+
+# OpenCode internal
+.omo/
+
+# Resources (API keys, workflows)
+src/data_forge/resources/
+
+# Distribution
+dist/
+*.egg-info/
+
+# PyInstaller
+build/
+*.spec
+!data-forge.spec
+
+# Release scripts
+create_release.py
+create_release.ps1
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

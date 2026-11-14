@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "guid": "7a60d0109e5c51ae8dbd80113f45314e",
+  "name": "unity-mcp",
+  "tool_name": "unityMCP",
+  "version": "1.0.0",
+  "description": "MCP server: unityMCP",
+  "provider": "mcp",
+  "entrypoint": null,
+  "permissions": [
+    "net"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "builtin"
+  },
+  "run": null,
+  "mcp": {
+    "name": "unityMCP",
+    "type": "remote",
+    "url": "http://127.0.0.1:8080/mcp",
+    "enabled": true
+  }
+}

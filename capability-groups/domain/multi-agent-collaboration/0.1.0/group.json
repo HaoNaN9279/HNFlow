@@ -1,0 +1,12 @@
+{
+  "guid": "e2f19039b5114b03ae6c4f1b4c71f956",
+  "name": "multi-agent-collaboration",
+  "version": "0.1.0",
+  "description": "多 Agent 协作能力组：规划、审查、执行、检索、视觉分析与工作流编排。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [],
+  "tools": []
+}

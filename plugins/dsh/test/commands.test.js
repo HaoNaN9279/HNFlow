@@ -1,15 +1,11 @@
 /**
- * `/hnflow`: listing, publishing (preview + confirm), pinning and importing.
+ * `/hnflow`: listing runs and flows. No publish, revision or library verb.
  */
 
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdir, rm, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 
 import { createFlowCommand } from '../lib/commands.js'
-import { resolveConfig } from '../lib/config.js'
-import { gateFlow, seedWorkspace } from './helpers.js'
 
 const cwdOf = () => '/w'
 
@@ -19,171 +15,38 @@ const cwdOf = () => '/w'
  * @returns {Record<string, any>} command.
  */
 function command(service) {
-  return createFlowCommand({ service, cwdOf, config: resolveConfig({}), logger: {} })
+  return createFlowCommand({ service, cwdOf, config: {}, logger: {} })
 }
 
 const service = {
-  listFlows: async () => [{ alias: 'demo', flowId: 'fl', pinnedRevision: null, currentRevision: 1, hasOverride: false, drift: false, missing: false, description: '说明' }],
+  listFlows: async () => [{ id: 'team/fl', flowId: 'fl', name: '演示', group: 'team', module: null, requires: ['base'], description: '说明' }],
   listRuns: async () => [],
   getRun: async () => ({
     runId: 'run-1',
     flowId: 'fl',
-    flowName: '测试',
-    revision: 1,
+    flowName: '演示',
     status: 'waiting_human',
     nodes: { draft: { status: 'done', attempts: 1 }, approve: { status: 'waiting', attempts: 0 } },
     pending: [{ id: 'gate-1' }],
   }),
   inbox: async () => [{ id: 'gate-1', kind: 'gate', runId: 'run-1', nodeId: 'approve' }],
-  describeFlow: async () => ({ alias: 'demo', flowId: 'fl', source: 'latest', currentRevision: 1, definition: gateFlow() }),
-  validate: async () => ({ ok: true, errors: [], warnings: [] }),
-  publish: async () => ({ revision: 2, contentHash: 'sha256:abc' }),
-  previewPublish: async () => ({
-    alias: 'demo',
-    flowId: 'fl',
-    source: 'latest',
-    currentRevision: 1,
-    nextRevision: 2,
-    validation: { ok: true, errors: [], warnings: [] },
-    diff: { changed: true, summary: ['+节点 extra'] },
-  }),
-  history: async () => ({
-    alias: 'demo',
-    flowId: 'fl',
-    currentRevision: 1,
-    pinnedRevision: null,
-    source: 'latest',
-    revisions: [{ revision: 1, contentHash: 'sha256:abc', snapshotAt: '2026-01-01T00:00:00.000Z' }],
-  }),
-  rollback: async () => ({ revision: 2, contentHash: 'sha256:def', restoredFrom: 1 }),
-  pinRef: async (_cwd, key, target) => ({ alias: key, flowId: 'fl-test', revision: target === 'latest' ? null : Number(target) }),
-  promote: async () => ({ flowId: 'fl-new', name: '本地流程', folder: 'team/a', previousFlowId: 'fl-local' }),
 }
 
 test('usage and unknown subcommands never throw', async () => {
   assert.match((await command(service).handler({ rawInput: '' })).text, /HNFlow 用法/u)
-  const unknown = await command(service).handler({ rawInput: 'nope' })
+  const unknown = await command(service).handler({ rawInput: 'publish' })
   assert.equal(unknown.kind, 'error')
+  assert.match(unknown.text, /未知子命令/u)
 })
 
-test('list and status render the catalogue and the node timeline', async () => {
-  const list = await command(service).handler({ rawInput: 'list' })
-  assert.match(list.text, /demo/u)
-  const status = await command(service).handler({ rawInput: 'status run-1' })
-  assert.match(status.text, /draft: done/u)
-  assert.match(status.text, /待人工处理 1 项/u)
+test('list names the owning capability group', async () => {
+  const text = (await command(service).handler({ rawInput: 'list' })).text
+  assert.match(text, /演示/u)
+  assert.match(text, /能力组 team/u)
 })
 
-test('publish previews first and only confirms on the second word', async () => {
-  const preview = await command(service).handler({ rawInput: 'publish demo' })
-  assert.match(preview.text, /发布后为 r2/u)
-  assert.match(preview.text, /确认发布/u)
-  const confirmed = await command(service).handler({ rawInput: 'publish demo confirm' })
-  assert.match(confirmed.text, /已发布 demo 为 r2/u)
-  const noKey = await command(service).handler({ rawInput: 'publish' })
-  assert.equal(noKey.kind, 'error')
-})
-
-test('publish previews the diff, and history/rollback are two-step', async () => {
-  const preview = await command(service).handler({ rawInput: 'publish demo' })
-  assert.match(preview.text, /变更：/u)
-  assert.match(preview.text, /\+节点 extra/u)
-  const history = await command(service).handler({ rawInput: 'history demo' })
-  assert.match(history.text, /r1/u)
-  assert.match(history.text, /sha256:abc/u)
-  const rollbackPreview = await command(service).handler({ rawInput: 'rollback demo r1' })
-  assert.match(rollbackPreview.text, /确认回滚/u)
-  const rolled = await command(service).handler({ rawInput: 'rollback demo r1 confirm' })
-  assert.match(rolled.text, /已把 r1 发布为 r2/u)
-})
-
-test('promote turns a project draft into a library asset', async () => {
-  const promoted = await command(service).handler({ rawInput: 'promote 本地流程 team/a' })
-  assert.equal(promoted.kind, 'success')
-  assert.match(promoted.text, /fl-new/u)
-  assert.match(promoted.text, /后续修改仍需人工发布/u)
-})
-
-test('list marks a project-local draft and shows no revision', async () => {
-  const localService = {
-    ...service,
-    listFlows: async () => [{ alias: '', flowId: 'fl-local-1', name: '本地流程', local: true, pinnedRevision: null, currentRevision: 0, hasOverride: false, drift: false, missing: false, description: '草稿' }],
-  }
-  const listed = await command(localService).handler({ rawInput: 'list' })
-  assert.match(listed.text, /本地流程/u)
-  assert.match(listed.text, /项目草稿/u)
-  assert.match(listed.text, /本地，无版本/u)
-})
-
-test('a workspace command refuses to run without a workspace', async () => {
-  const orphan = createFlowCommand({ service, cwdOf: () => null, config: resolveConfig({}), logger: {} })
-  const result = await orphan.handler({ rawInput: 'list' })
-  assert.equal(result.kind, 'error')
-  // inbox is workspace-independent
-  assert.equal((await orphan.handler({ rawInput: 'inbox' })).kind, 'success')
-})
-
-test('pin re-points a reference, and import creates a new asset', async () => {
-  const seeded = await seedWorkspace(gateFlow(), { pinned: 1 })
-  try {
-    const config = resolveConfig({ libraryRoot: seeded.library })
-    const flowService = {
-      ...service,
-      describeFlow: async (cwd, key) => ({ alias: key, flowId: 'fl-test', source: 'ref', currentRevision: 1, definition: gateFlow() }),
-    }
-    const cmd = createFlowCommand({ service: flowService, cwdOf: () => seeded.workspace, config, logger: {} })
-    const pinned = await cmd.handler({ rawInput: 'pin demo latest' })
-    assert.match(pinned.text, /跟随最新/u)
-
-    const library = await cmd.handler({ rawInput: 'assets' })
-    assert.match(library.text, /fl-test/u)
-
-    const extra = gateFlow()
-    extra.flow = { id: 'fl-extra', name: '通用流程' }
-    await writeFile(
-      path.join(seeded.library, 'extra.flow.json'),
-      JSON.stringify({ asset: { id: 'fl-extra', name: '通用流程', revision: 1, tags: [] }, definition: extra }),
-      'utf8',
-    )
-    const added = await cmd.handler({ rawInput: 'add fl-extra shared' })
-    assert.match(added.text, /已引用/u)
-    assert.match(added.text, /别名 shared/u)
-    const missing = await cmd.handler({ rawInput: 'add fl-nope' })
-    assert.equal(missing.kind, 'error')
-
-    const file = path.join(seeded.workspace, 'new.flow.json')
-    await mkdir(path.dirname(file), { recursive: true })
-    const definition = gateFlow()
-    definition.flow = { id: 'fl-new', name: '新流程' }
-    await writeFile(file, JSON.stringify(definition), 'utf8')
-    const imported = await cmd.handler({ rawInput: 'import 新流程 new.flow.json' })
-    assert.match(imported.text, /已导入/u)
-
-    const legacyFile = path.join(seeded.workspace, 'old.workflow.json')
-    await writeFile(
-      legacyFile,
-      JSON.stringify({
-        id: 'old-hello',
-        name: '旧流程',
-        nodes: [
-          { id: 'start', type: 'flow:start' },
-          { id: 'greet', type: 'data:assign', outputs: [{ name: 'out' }], params: { value: 'hi' } },
-          { id: 'end', type: 'flow:end' },
-        ],
-        edges: [
-          { source: 'start', target: 'greet' },
-          { source: 'greet', target: 'end' },
-        ],
-      }),
-      'utf8',
-    )
-    const legacy = await cmd.handler({ rawInput: 'import 旧流程 old.workflow.json' })
-    assert.match(legacy.text, /旧格式导入报告/u)
-    assert.match(legacy.text, /data:assign → merge/u)
-
-    const outside = await cmd.handler({ rawInput: 'import x ../escape.json' })
-    assert.equal(outside.kind, 'error')
-  } finally {
-    await rm(seeded.root, { recursive: true, force: true })
-  }
+test('status renders the node timeline', async () => {
+  const text = (await command(service).handler({ rawInput: 'status run-1' })).text
+  assert.match(text, /waiting_human/u)
+  assert.match(text, /draft: done/u)
 })

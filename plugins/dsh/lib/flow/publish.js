@@ -3,12 +3,12 @@
  *
  * A publish freezes three things at once — the definition, its content hash and
  * a lockfile naming every contract the definition relied on (preset, output
- * schema hash, model route, plugin and VibeStack versions). A run pins that
+ * schema hash, model route, plugin and Capability versions). A run pins that
  * revision and the lockfile; resuming never re-reads "latest".
  */
 
 import { hashOf } from '../json.js'
-import { vibestackSnapshot } from '../layers.js'
+import { capabilitySnapshot } from '../layers.js'
 import { declaredOutput, nodeIndex } from './definition.js'
 
 /**
@@ -31,7 +31,7 @@ export function contentHash(definition) {
  *   definition: Record<string, any>,
  *   revision: number,
  *   pluginVersion: string,
- *   vibestack: Record<string, any> | undefined,
+ *   capability: Record<string, any> | undefined,
  *   layerStatus?: (id: string) => Promise<{ok: boolean, layer?: Record<string, any>, message?: string}>,
  *   presetStatus?: (id: string) => Promise<{ok: boolean, broken?: string}>,
  *   now?: Date,
@@ -96,7 +96,7 @@ export async function buildLockfile(input) {
     revision: input.revision,
     contentHash: contentHash(definition),
     pluginVersion: input.pluginVersion,
-    vibestack: vibestackSnapshot(input.vibestack),
+    capability: capabilitySnapshot(input.capability),
     nodes: nodeEntries,
     models,
     presets,
@@ -130,10 +130,10 @@ export async function publishFlow(input) {
  * Compare a lockfile's pinned facts with the current host.
  *
  * A different plugin minor version is a warning — the revision still runs under
- * the current code. A different major version, or a VibeStack contract newer
+ * the current code. A different major version, or a Capability contract newer
  * than the mounted one, is blocking: those change the meaning of the lockfile.
  * @param {Record<string, any> | null} lockfile - pinned facts.
- * @param {{pluginVersion: string, vibestack: Record<string, any> | undefined}} current - current host.
+ * @param {{pluginVersion: string, capability: Record<string, any> | undefined}} current - current host.
  * @returns {{ok: boolean, reasons: string[], warnings: string[]}} compatibility result.
  */
 export function lockfileProblems(lockfile, current) {
@@ -152,10 +152,10 @@ export function lockfileProblems(lockfile, current) {
   } else if (typeof lockfile.pluginVersion === 'string' && lockfile.pluginVersion !== current.pluginVersion) {
     warnings.push(`the revision was published by plugin ${lockfile.pluginVersion}, running ${current.pluginVersion}`)
   }
-  const wanted = Number(lockfile.vibestack?.apiVersion)
-  const actual = Number(vibestackSnapshot(current.vibestack).apiVersion)
+  const wanted = Number(lockfile.capability?.apiVersion)
+  const actual = Number(capabilitySnapshot(current.capability).apiVersion)
   if (Number.isFinite(wanted) && Number.isFinite(actual) && wanted > actual) {
-    reasons.push(`the revision needs VibeStack apiVersion ${wanted}, mounted ${actual}`)
+    reasons.push(`the revision needs Capability apiVersion ${wanted}, mounted ${actual}`)
   }
   return { ok: reasons.length === 0, reasons, warnings }
 }

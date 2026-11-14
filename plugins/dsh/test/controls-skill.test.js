@@ -30,13 +30,13 @@ test('the control skill names every hnflow and hnflow_author action', async () =
   assert.ok(content.includes('`hnflow_author`'))
 })
 
-test('the control skill keeps publishing, gates and deliveries human-only', async () => {
+test('the control skill keeps gates and deliveries human-only and exposes no publish entry', async () => {
   const { content } = readSkillFile(await readFile(file, 'utf8'))
-  assert.match(content, /publish/u)
-  assert.match(content, /rollback/u)
+  assert.doesNotMatch(content, /`publish`/u)
+  assert.doesNotMatch(content, /`rollback`/u)
   assert.match(content, /门禁/u)
   assert.match(content, /交付/u)
   assert.match(content, /只能由人完成/u)
   assert.match(content, /不要.*文件/u)
-  assert.match(content, /子流程/u)
+  assert.match(content, /直接改仓库文件/u)
 })

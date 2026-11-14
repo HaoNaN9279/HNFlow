@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "data-forge"
+version = "0.2.1"
+description = "AI training data pipeline toolkit — MCP server + CLI for image processing, caption management, LLM integration, and ComfyUI."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [
+    { name = "DataForge Contributors" },
+]
+keywords = ["ai", "training", "data", "image", "caption", "synthetic", "comfyui", "llm", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Graphics",
+]
+
+dependencies = [
+    "mcp>=1.12.0",
+    "onnxruntime>=1.26.0",
+    "openai>=2.38.0",
+    "pillow>=12.2.0",
+    "requests>=2.34.2",
+]
+
+[project.optional-dependencies]
+# Image processing backends
+pillow = ["Pillow>=11.0"]
+opencv = ["opencv-python>=4.10"]
+rembg = [
+    "rembg>=2.0.75",
+]
+
+[project.scripts]
+data-forge = "data_forge:main"
+data-forge-mcp = "data_forge.mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/data_forge"]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.20.0",
+    "pytest>=8.0",
+    "ruff>=0.12",
+]

@@ -12,7 +12,6 @@ import { defineTool } from './tool-schema.js'
 /** Actions the tool accepts. */
 export const ACTIONS = Object.freeze([
   'list_flows',
-  'list_library',
   'describe_flow',
   'run',
   'status',
@@ -21,11 +20,6 @@ export const ACTIONS = Object.freeze([
   'resume',
   'inbox',
   'artifact',
-  'add_ref',
-  'remove_ref',
-  'rename_ref',
-  'pin',
-  'history',
   'triggers',
 ])
 
@@ -35,8 +29,7 @@ export const ACTIONS = Object.freeze([
  * @returns {string} model-facing text.
  */
 export function formatRun(run) {
-  const revision = run.source === 'local' || run.revision === null ? 'project draft' : `r${run.revision}`
-  const lines = [`run ${run.runId}: ${run.status} (${run.flowName ?? run.flowId} ${revision})`]
+  const lines = [`run ${run.runId}: ${run.status} (${run.flowName ?? run.flowId} ${run.group ? `group ${run.group}` : 'capability flow'})`]
   if (run.error !== null && run.error !== undefined) lines.push(`error: ${run.error.code}: ${run.error.message}`)
   if (Array.isArray(run.nodes) && run.nodes.length > 0) {
     lines.push(`nodes: ${run.nodes.map((node) => `${node.id}=${node.status}${node.attempts > 1 ? `(x${node.attempts})` : ''}`).join(', ')}`)
@@ -63,59 +56,14 @@ export function formatRun(run) {
  * @returns {string} model-facing text.
  */
 export function formatFlows(entries) {
-  if (entries.length === 0) return 'This workspace references no HNFlow flows.'
+  if (entries.length === 0) return 'This workspace has no flows in its active capability groups.'
   return entries
     .map((entry) => {
-      const name = entry.alias.length > 0 ? entry.alias : entry.local ? entry.name?.length > 0 ? entry.name : entry.flowId : entry.flowId
-      const flags = [entry.local ? 'project-draft' : '', entry.missing ? 'missing' : '', entry.hasOverride ? 'draft-override' : '', entry.drift ? 'drift' : ''].filter((flag) => flag.length > 0)
-      const revision = entry.local ? 'local, no revision' : entry.pinnedRevision === null ? `r${entry.currentRevision ?? '?'} (follows latest)` : `pinned r${entry.pinnedRevision} of r${entry.currentRevision ?? '?'}`
-      return `- ${name} (${entry.flowId}, ${revision})${flags.length > 0 ? ` [${flags.join(', ')}]` : ''}${entry.description ? `: ${entry.description}` : ''}`
+      const owner = entry.module ? `${entry.group}/${entry.module}` : entry.group
+      const requires = Array.isArray(entry.requires) && entry.requires.length > 0 ? ` requires ${entry.requires.join(', ')}` : ''
+      return `- ${entry.name || entry.flowId} (${entry.flowId}, group ${owner || '?'}${requires})${entry.description ? `: ${entry.description}` : ''}`
     })
     .join('\n')
-}
-
-/**
- * Render the reusable library.
- * @param {Record<string, any>[]} assets - library assets.
- * @returns {string} model-facing text.
- */
-export function formatLibrary(assets) {
-  if (assets.length === 0) return 'The reusable library has no flows.'
-  return assets
-    .map((asset) => `- ${asset.name} (${asset.id}, r${asset.revision ?? 1}${asset.folder ? `, folder ${asset.folder}` : ''})${asset.description ? `: ${asset.description}` : ''}`)
-    .join('\n')
-}
-
-/**
- * Render one flow's revision history.
- * @param {Record<string, any>} history - service history result.
- * @returns {string} model-facing text.
- */
-export function formatHistory(history) {
-  const lines = [
-    `flow ${history.alias || history.flowId} (${history.flowId})`,
-    `source ${history.source}; current r${history.currentRevision}; reference ${history.pinnedRevision === null ? 'follows latest' : `pinned to r${history.pinnedRevision}`}`,
-  ]
-  for (const entry of history.revisions) {
-    lines.push(`- r${entry.revision} ${entry.contentHash}${entry.snapshotAt ? ` @ ${entry.snapshotAt}` : ''}${entry.revision === history.currentRevision ? ' [current]' : ''}${entry.revision === history.pinnedRevision ? ' [pinned]' : ''}`)
-  }
-  return lines.join('\n')
-}
-
-/**
- * Parse a pin argument.
- * @param {unknown} value - `latest`, `r3`, `3`, or undefined.
- * @returns {'latest' | number} target.
- */
-function parsePin(value) {
-  if (value === undefined || value === null || value === '') return 'latest'
-  const text = String(value).trim()
-  if (text === 'latest' || text === 'null') return 'latest'
-  const revision = Number(text.replace(/^r/u, ''))
-  if (!Number.isInteger(revision) || revision < 1) {
-    throw Object.assign(new Error(`revision must be "latest" or rN, got ${text}`), { code: 'revision-invalid' })
-  }
-  return revision
 }
 
 /**
@@ -139,8 +87,6 @@ export function createFlowTool(options) {
         case 'list_flows':
           if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
           return formatFlows(await service.listFlows(cwd))
-        case 'list_library':
-          return formatLibrary(await service.listLibrary())
         case 'list_runs': {
           const runs = await service.listRuns()
           if (runs.length === 0) return 'No HNFlow runs yet.'
@@ -149,7 +95,8 @@ export function createFlowTool(options) {
             .map((run) => {
               const summary = runSummary(run)
               const nodes = summary.nodes.map((node) => `${node.id}=${node.status}`).join(', ')
-              return `${summary.runId} ${summary.status} ${summary.flowName ?? summary.flowId} (${summary.source}${summary.revision === null ? '' : ` r${summary.revision}`})${nodes.length > 0 ? ` — ${nodes}` : ''}`
+              const origin = summary.group ? `${summary.group}${summary.module ? `/${summary.module}` : ''}` : 'capability'
+              return `${summary.runId} ${summary.status} ${summary.flowName ?? summary.flowId} (${origin})${nodes.length > 0 ? ` — ${nodes}` : ''}`
             })
             .join('\n')
         }
@@ -158,8 +105,8 @@ export function createFlowTool(options) {
           const key = requireKey(args)
           const resolved = await service.describeFlow(cwd, key)
           return [
-            `flow ${resolved.alias || resolved.flowId} (${resolved.flowId})`,
-            `source: ${resolved.source}; revision ${resolved.revision ?? 'latest'} of ${resolved.currentRevision}; drift: ${resolved.drift}`,
+            `flow ${resolved.flowName || resolved.flowId} (${resolved.flowId}, group ${resolved.group}${resolved.module ? `/${resolved.module}` : ''})`,
+            `path: ${resolved.path}`,
             `definition: ${JSON.stringify(resolved.definition)}`,
           ].join('\n')
         }
@@ -202,34 +149,6 @@ export function createFlowTool(options) {
           const artifact = await service.getArtifact(artifactId)
           return JSON.stringify(artifact, null, 2)
         }
-        case 'add_ref': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          const key = requireKey(args)
-          const added = await service.addRef(cwd, key, typeof args.alias === 'string' ? args.alias : '')
-          return `referenced ${added.name || added.flowId} as ${added.alias || added.flowId} (follows latest)`
-        }
-        case 'remove_ref': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          const removed = await service.removeRef({ cwd, key: requireKey(args) })
-          return `removed the reference ${removed.alias || removed.flowId}${removed.hadOverride ? ' (its workspace draft remains on disk but is no longer listed)' : ''}`
-        }
-        case 'rename_ref': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          const alias = typeof args.alias === 'string' ? args.alias.trim() : ''
-          if (alias.length === 0) return 'error alias-required: pass the new alias'
-          const renamed = await service.renameRef({ cwd, key: requireKey(args), alias })
-          return `reference renamed to ${renamed.alias}`
-        }
-        case 'pin': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          const target = parsePin(args.revision)
-          const pinned = await service.pinRef(cwd, requireKey(args), target)
-          return `${pinned.alias || pinned.flowId} now ${pinned.revision === null ? 'follows latest' : `is pinned to r${pinned.revision}`}`
-        }
-        case 'history': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          return formatHistory(await service.history(cwd, requireKey(args)))
-        }
         default:
           return `error invalid-action: expected one of ${ACTIONS.join(', ')}`
       }
@@ -241,15 +160,13 @@ export function createFlowTool(options) {
   return defineTool({
     name: 'hnflow',
     description:
-      'Operate HNFlow flows. `list_flows` lists this workspace\'s referenced and project-local flows, `list_library` lists reusable assets, `describe_flow` returns one definition, `run` starts one and returns immediately (never wait for it), `status`/`list_runs`/`inbox` answer later questions, `cancel`/`resume` control a run, `artifact` returns a node output, and `add_ref`/`remove_ref`/`rename_ref`/`pin`/`history` manage the workspace reference. Publishing and deciding human gates/deliveries are human-only and are not available here.',
+      'Operate HNFlow flows. `list_flows` lists the flows of this workspace\'s active capability groups, `describe_flow` returns one definition, `run` starts one and returns immediately (never wait for it), `status`/`list_runs`/`inbox` answer later questions, `cancel`/`resume` control a run, `artifact` returns a node output, and `triggers` lists host triggers. Flows belong to capability groups: there is no library, revision or publish action here. Deciding human gates/deliveries is human-only.',
     parameters: {
       action: { type: 'string', required: true, enum: ACTIONS, description: 'Operation to perform.' },
-      flow: { type: 'string', description: 'Flow alias, name, or id; used by describe_flow, run, history, add_ref, remove_ref, rename_ref and pin.' },
+      flow: { type: 'string', description: 'Flow id or name; used by describe_flow and run.' },
       run_id: { type: 'string', description: 'Run id; required by status, cancel and resume.' },
       artifact_id: { type: 'string', description: 'Artifact id from status; required by artifact.' },
       input: { type: 'object', additionalProperties: true, description: 'Start input matching the flow input schema (run only).' },
-      alias: { type: 'string', description: 'Reference alias for add_ref / rename_ref.' },
-      revision: { type: 'string', description: 'Pin target for pin: "latest" or "r3".' },
     },
     output: {
       schema: { type: 'string' },
@@ -269,6 +186,8 @@ function runSummary(run) {
     runId: run.runId,
     flowId: run.flowId,
     flowName: run.flowName,
+    group: run.group ?? null,
+    module: run.module ?? null,
     revision: run.revision,
     status: run.status,
     error: run.error,

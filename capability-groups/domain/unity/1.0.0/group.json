@@ -1,0 +1,19 @@
+{
+  "guid": "62a2249f66685eeba32b061565d9aec7",
+  "name": "unity",
+  "version": "1.0.0",
+  "description": "Unity 游戏引擎集成与 C# AI 辅助开发。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [],
+  "tools": [
+    "tool:7a60d0109e5c51ae8dbd80113f45314e@v1.0.0"
+  ],
+  "tool_permissions": {
+    "tool:7a60d0109e5c51ae8dbd80113f45314e@v1.0.0": [
+      "net"
+    ]
+  }
+}

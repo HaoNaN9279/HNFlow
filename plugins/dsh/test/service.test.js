@@ -24,7 +24,7 @@ async function startAndWait(service, cwd, input = { brief: 'hi' }) {
 /**
  * Build a service over a seeded workspace.
  * @param {Record<string, any>} definition - flow.
- * @param {{script?: Record<string, any[]>, vibestack?: Record<string, any> | null}} [options] - seams.
+ * @param {{script?: Record<string, any[]>, capability?: Record<string, any> | null}} [options] - seams.
  * @returns {Promise<{service: Record<string, any>, seeded: Record<string, any>}>} service and paths.
  */
 async function setup(definition, options = {}) {
@@ -32,7 +32,7 @@ async function setup(definition, options = {}) {
   const service = await makeService({
     script: options.script ?? {},
     config: { libraryRoot: seeded.library },
-    vibestack: options.vibestack,
+    capability: options.capability,
     runner: options.runner,
   })
   return { service, seeded }
@@ -199,7 +199,7 @@ test('a judge rejection returns the delivery to the human within the budget', as
   }
 })
 
-test('a run pins its revision, content hash and model route', async () => {
+test('a run snapshots its content hash and model route', async () => {
   const definition = gateFlow()
   definition.nodes[0].model = 'strong'
   const runner = fakeRunner({ draft: [{ status: 'done', output: { points: [] } }] })
@@ -207,7 +207,7 @@ test('a run pins its revision, content hash and model route', async () => {
   try {
     const run = await startAndWait(service, seeded.workspace)
     assert.match(run.contentHash, /^sha256:/u)
-    assert.equal(run.revision, 1)
+    assert.equal(run.revision, null)
     assert.deepEqual(run.routes.draft, { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' })
     assert.deepEqual(runner.calls[0].agentOptions, { provider: 'deepseek-account', model: 'deepseek-pro', reasoningEffort: 'high' })
   } finally {
@@ -228,13 +228,12 @@ test('a missing model layer refuses the run instead of falling back', async () =
   }
 })
 
-test('without VibeStack, starting and publishing are refused but listing still works', async () => {
-  const { service, seeded } = await setup(gateFlow(), { vibestack: null })
+test('without Capability, starting is refused and listing is empty', async () => {
+  const { service, seeded } = await setup(gateFlow(), { capability: null })
   try {
     const flows = await service.listFlows(seeded.workspace)
-    assert.equal(flows.length, 1)
-    await assert.rejects(() => service.run({ cwd: seeded.workspace, key: 'demo' }), (error) => error.code === 'vibestack-unavailable')
-    await assert.rejects(() => service.publish({ cwd: seeded.workspace, key: 'demo' }), (error) => error.code === 'vibestack-unavailable')
+    assert.equal(flows.length, 0)
+    await assert.rejects(() => service.run({ cwd: seeded.workspace, key: 'demo' }), (error) => error.code === 'capability-unavailable')
     const snapshot = await service.snapshot([{ path: seeded.workspace }])
     assert.equal(snapshot.degraded, true)
   } finally {
@@ -290,38 +289,6 @@ test('gate branches converge through a merge that tolerates the skipped side', a
     assert.equal(settled.status, 'succeeded')
     assert.equal(settled.nodes.decline.status, 'skipped')
     assert.deepEqual(settled.nodes.collect.output, { changes: ['x'] })
-  } finally {
-    await service.close()
-    await rm(seeded.root, { recursive: true, force: true })
-  }
-})
-
-test('a workspace override runs as a draft snapshot, not the published revision', async () => {
-  const runner = fakeRunner({ draft: [{ status: 'done', output: { points: ['a'] } }] })
-  const { service, seeded } = await setup(gateFlow(), { runner })
-  try {
-    const { WorkspaceStore } = await import('../lib/workspace.js')
-    const definition = gateFlow()
-    definition.nodes[0].instruction = '覆盖后的指令：{{input.brief}}'
-    await new WorkspaceStore(seeded.workspace, {}).writeOverride({ flowId: 'fl-test', definition, baseRevision: 1, origin: 'user' })
-    const run = await startAndWait(service, seeded.workspace)
-    assert.equal(run.source, 'override')
-    assert.match(runner.calls[0].prompt, /覆盖后的指令/u)
-  } finally {
-    await service.close()
-    await rm(seeded.root, { recursive: true, force: true })
-  }
-})
-
-test('publishing advances the revision and freezes the lockfile', async () => {
-  const { service, seeded } = await setup(gateFlow(), {})
-  try {
-    const published = await service.publish({ cwd: seeded.workspace, key: 'demo', note: 'test' })
-    assert.equal(published.revision, 2)
-    assert.match(published.contentHash, /^sha256:/u)
-    const { AssetStore } = await import('../lib/assets.js')
-    const record = await new AssetStore(seeded.library).readRevisionRecord('fl-test', 2)
-    assert.equal(record.lockfile.revision, 2)
   } finally {
     await service.close()
     await rm(seeded.root, { recursive: true, force: true })

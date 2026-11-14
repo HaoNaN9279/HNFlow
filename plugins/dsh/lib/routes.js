@@ -15,13 +15,6 @@ export const ROUTES = Object.freeze({
   gate: '/api/hnflow/gate',
   deliverable: '/api/hnflow/deliverable',
   start: '/api/hnflow/start',
-  publish: '/api/hnflow/publish',
-  preview: '/api/hnflow/preview',
-  history: '/api/hnflow/history',
-  pin: '/api/hnflow/pin',
-  add: '/api/hnflow/add',
-  promote: '/api/hnflow/promote',
-  rollback: '/api/hnflow/rollback',
   artifact: '/api/hnflow/artifact',
   cancel: '/api/hnflow/cancel',
   resume: '/api/hnflow/resume',
@@ -121,50 +114,6 @@ export function createRoutes(options) {
   }
 
   /**
-   * Read a flow's revision history.
-   * @param {Request} request - incoming request.
-   * @returns {Promise<Response>} response.
-   */
-  const historyRoute = {
-    path: ROUTES.history,
-    methods: ['GET'],
-    requestBody: 'buffered',
-    fetch: async (request) => {
-      try {
-        const url = new URL(request.url)
-        const workspace = url.searchParams.get('workspace') ?? ''
-        const flow = url.searchParams.get('flow') ?? ''
-        if (workspace.length === 0 || flow.length === 0) return json({ ok: false, code: 'field-required', message: 'workspace and flow are required' }, 400)
-        return json({ ok: true, history: await service.history(workspace, flow) })
-      } catch (error) {
-        return failure(error)
-      }
-    },
-  }
-
-  /**
-   * Preview a publish (validation + diff), without creating a revision.
-   * @param {Request} request - incoming request.
-   * @returns {Promise<Response>} response.
-   */
-  const previewRoute = {
-    path: ROUTES.preview,
-    methods: ['GET'],
-    requestBody: 'buffered',
-    fetch: async (request) => {
-      try {
-        const url = new URL(request.url)
-        const workspace = url.searchParams.get('workspace') ?? ''
-        const flow = url.searchParams.get('flow') ?? ''
-        if (workspace.length === 0 || flow.length === 0) return json({ ok: false, code: 'field-required', message: 'workspace and flow are required' }, 400)
-        return json({ ok: true, preview: await service.previewPublish(workspace, flow) })
-      } catch (error) {
-        return failure(error)
-      }
-    },
-  }
-
-  /**
    * Read one artifact by id.
    * @param {Request} request - incoming request.
    * @returns {Promise<Response>} response.
@@ -207,17 +156,10 @@ export function createRoutes(options) {
     flowRoute,
     inboxRoute,
     artifactRoute,
-    historyRoute,
-    previewRoute,
     triggersRoute,
     post(ROUTES.gate, async (body) => service.decide({ runId: required(body, 'runId'), gateId: required(body, 'gateId'), decision: required(body, 'decision'), reason: optional(body, 'reason'), revision: Number.isInteger(body?.revision) ? body.revision : undefined, artifact: body?.artifact })),
     post(ROUTES.deliverable, async (body) => service.deliver({ runId: required(body, 'runId'), requestId: required(body, 'requestId'), payload: body?.payload, revision: Number.isInteger(body?.revision) ? body.revision : undefined })),
     post(ROUTES.start, async (body) => service.run({ cwd: required(body, 'workspace'), key: required(body, 'flow'), input: body?.input ?? {} })),
-    post(ROUTES.publish, async (body) => service.publish({ cwd: required(body, 'workspace'), key: required(body, 'flow'), note: optional(body, 'note') ?? 'published from the HNFlow page' })),
-    post(ROUTES.pin, async (body) => service.pinRef(required(body, 'workspace'), required(body, 'flow'), body?.revision === undefined ? 'latest' : body.revision)),
-    post(ROUTES.add, async (body) => service.addRef(required(body, 'workspace'), required(body, 'flowId'), optional(body, 'alias'))),
-    post(ROUTES.promote, async (body) => service.promote({ cwd: required(body, 'workspace'), key: required(body, 'flow'), folder: optional(body, 'folder'), name: optional(body, 'name'), alias: optional(body, 'alias') })),
-    post(ROUTES.rollback, async (body) => service.rollback({ cwd: required(body, 'workspace'), key: required(body, 'flow'), revision: Number(body?.revision), note: optional(body, 'note') })),
     post(ROUTES.cancel, async (body) => service.cancel(required(body, 'runId'))),
     post(ROUTES.resume, async (body) => service.resume(required(body, 'runId'))),
   ]
@@ -304,7 +246,7 @@ function json(value, status = 200) {
  */
 function failure(error) {
   const code = /** @type {any} */ (error)?.code
-  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'vibestack-unavailable', 'model-layer-unknown', 'model-layer-unbound', 'model-layer-custom', 'model-layer-unroutable', 'local-flow', 'not-local', 'name-required', 'name-duplicate', 'alias-required', 'folder-invalid', 'ref-ambiguous'].includes(code)
+  const badRequest = typeof code === 'string' && ['invalid-json', 'field-required', 'input-invalid', 'definition-invalid', 'flow-invalid', 'payload-invalid', 'delivery-rejected', 'delivery-empty', 'invalid-decision', 'reason-required', 'capability-unavailable', 'model-layer-unknown', 'model-layer-unbound', 'model-layer-custom', 'model-layer-unroutable', 'local-flow', 'not-local', 'name-required', 'name-duplicate', 'alias-required', 'folder-invalid', 'ref-ambiguous'].includes(code)
   const conflict = typeof code === 'string' && ['stale-revision', 'already-decided', 'run-terminal'].includes(code)
   const status = badRequest ? 400 : conflict ? 409 : typeof code === 'string' && code.endsWith('-missing') ? 404 : 500
   return json(

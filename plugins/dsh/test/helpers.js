@@ -5,7 +5,7 @@
  * while every seam the orchestrator touches is a plain object.
  */
 
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -38,13 +38,13 @@ export function memoryStore() {
 }
 
 /**
- * A VibeStack service fake shaped like apiVersion 3: four bound platform
+ * A Capability service fake shaped like apiVersion 3: four bound platform
  * layers, an optional catalog-only layer (`unbound`) and an optional DSH-only
  * layer (`custom`).
  * @param {{apiVersion?: number, layers?: Record<string, any>, unbound?: string[], custom?: Record<string, any>[], warnings?: string[]}} [options] - overrides.
  * @returns {Record<string, any>} service.
  */
-export function fakeVibestack(options = {}) {
+export function fakeCapability(options = {}) {
   const layers = options.layers ?? {
     fast: { id: 'fast', provider: 'deepseek-account', model: 'deepseek-flash', kind: 'speed', rank: 1 },
     standard: { id: 'standard', provider: 'deepseek-account', model: 'deepseek-flash', kind: 'balanced', rank: 2 },
@@ -91,7 +91,7 @@ export function fakePresets() {
       throw Object.assign(new Error(`Unknown agent preset: ${id}`), { code: 'agent-preset/not-found' })
     },
     compositionInventory: async () => [
-      { id: 'hnflow', isDefault: false, rows: [{ entryId: 'preset-hnflow', moduleName: 'dsh-vibestack', enabled: true }] },
+      { id: 'hnflow', isDefault: false, rows: [{ entryId: 'preset-hnflow', moduleName: 'dsh-capability', enabled: true }] },
       { id: 'standard', isDefault: true, rows: [{ entryId: null, moduleName: 'dsh-agent-loop', enabled: true }] },
     ],
   }
@@ -213,31 +213,17 @@ export async function seedWorkspace(definition, options = {}) {
   const library = path.join(root, 'library')
   const workspace = path.join(root, 'ws')
   const flowId = String(definition.flow.id)
-  const assetPath = path.join(library, `${flowId}.flow.json`)
-  await mkdir(path.dirname(assetPath), { recursive: true })
-  await writeFile(
-    assetPath,
-    `${JSON.stringify({
-      asset: { id: flowId, name: definition.flow.name, description: 'test', revision: 1, tags: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
-      definition,
-    }, null, 2)}\n`,
-    'utf8',
-  )
-  await mkdir(path.join(workspace, '.hnflow'), { recursive: true })
-  const snapshot = path.join(library, '.hnflow-revisions', flowId, 'r1.json')
-  await mkdir(path.dirname(snapshot), { recursive: true })
-  await writeFile(snapshot, `${JSON.stringify({ flowId, revision: 1, snapshotAt: new Date().toISOString(), definition }, null, 2)}\n`, 'utf8')
-  await writeFile(
-    path.join(workspace, '.hnflow', 'flows.json'),
-    `${JSON.stringify({ version: 2, refs: [{ flowId, revision: options.pinned ?? null, alias: options.alias ?? 'demo', enabled: true }] }, null, 2)}\n`,
-    'utf8',
-  )
+  const groupDir = path.join(workspace, '.hnflow', 'groups', 'team')
+  await mkdir(path.join(groupDir, 'flows'), { recursive: true })
+  await writeFile(path.join(groupDir, 'group.json'), `${JSON.stringify({ guid: '11111111111111111111111111111111', name: 'team', version: '', description: 'test group' }, null, 2)}\n`, 'utf8')
+  await writeFile(path.join(workspace, '.hnflow', 'stack.json'), `${JSON.stringify({ schema_version: 2, core: { name: 'core', version: '0.1.0' }, groups: [{ name: 'team', version: '' }] }, null, 2)}\n`, 'utf8')
+  await writeFile(path.join(groupDir, 'flows', 'demo.flow.json'), `${JSON.stringify(definition, null, 2)}\n`, 'utf8')
   return { root, library, workspace, flowId }
 }
 
 /**
  * Build a service over fakes.
- * @param {{script?: Record<string, any[]>, config?: Record<string, any>, store?: Record<string, any>, vibestack?: Record<string, any> | null, agents?: Record<string, any>}} [options] - overrides.
+ * @param {{script?: Record<string, any[]>, config?: Record<string, any>, store?: Record<string, any>, capability?: Record<string, any> | null, agents?: Record<string, any>}} [options] - overrides.
  * @returns {Promise<Record<string, any>>} service.
  */
 export async function makeService(options = {}) {
@@ -247,10 +233,29 @@ export async function makeService(options = {}) {
   const config = resolveConfig({ role: 'core', ...(options.config ?? {}), stateDir })
   const store = options.store ?? memoryStore()
   const agents = options.agents ?? fakeAgents()
+  const capability = options.capability === undefined ? fakeCapability() : options.capability
+  if (capability !== null && typeof capability.planFor !== 'function') {
+    capability.planFor = async (cwd) => {
+      const groupsDir = path.join(cwd, '.hnflow', 'groups')
+      const flows = []
+      let groups = []
+      try { groups = await readdir(groupsDir, { withFileTypes: true }) } catch { return { plan: { flows }, warnings: [] } }
+      for (const group of groups.filter((entry) => entry.isDirectory())) {
+        let files = []
+        try { files = await readdir(path.join(groupsDir, group.name, 'flows')) } catch { continue }
+        for (const file of files.filter((entry) => entry.endsWith('.flow.json'))) {
+          const definition = JSON.parse(await readFile(path.join(groupsDir, group.name, 'flows', file), 'utf8'))
+          const flowId = String(definition.flow?.id ?? file.replace(/\.flow\.json$/u, ''))
+          flows.push({ id: `${group.name}/${flowId}`, flow_id: flowId, name: definition.flow?.name ?? flowId, path: path.join(groupsDir, group.name, 'flows', file), group: group.name, module: null, requires: [] })
+        }
+      }
+      return { plan: { flows }, warnings: [] }
+    }
+  }
   const ctx = {
     storageDomain: undefined,
     get(key) {
-      if (key === 'vibestack') return options.vibestack === undefined ? fakeVibestack() : options.vibestack
+      if (key === 'capability') return capability
       if (key === 'agentPresets') return fakePresets()
       if (key === 'agents') return agents
       if (key === 'fs') return options.fs

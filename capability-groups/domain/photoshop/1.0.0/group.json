@@ -1,0 +1,11 @@
+{
+  "guid": "237cf8c6e3a5545b8549b1ef4ec82a67",
+  "name": "photoshop",
+  "version": "1.0.0",
+  "description": "Adobe Photoshop UXP 插件与图像处理能力组。",
+  "permissions": [
+    "fs"
+  ],
+  "extends": [],
+  "tools": []
+}

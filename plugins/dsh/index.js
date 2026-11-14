@@ -22,11 +22,12 @@ import { createFlowCommand } from './lib/commands.js'
 import { createAuthorTool } from './lib/author.js'
 import { PLUGIN_VERSION, resolveConfig } from './lib/config.js'
 import { writeBreadcrumb } from './lib/diagnostics.js'
-import { vibestackAvailable, vibestackOf, vibestackWarnings } from './lib/layers.js'
+import { capabilityAvailable, capabilityOf, capabilityWarnings } from './lib/layers.js'
 import { createRoutes } from './lib/routes.js'
 import { createService } from './lib/service.js'
 import { readSkillFile } from './lib/skill.js'
 import { createFlowTool } from './lib/tools.js'
+import { apply as applyCapability, applyCore as applyCapabilityCore } from './capability/index.js'
 
 /** Plugin name shown in Loader diagnostics. */
 export const name = 'hnflow'
@@ -70,6 +71,28 @@ try {
       resumeOnStart: z.boolean().default(true),
       outboxMaxAttempts: z.number().default(8),
       triggersEnabled: z.boolean().default(true),
+      resolveMode: z.string().default('capabilities'),
+      autoActivate: z.boolean().default(true),
+      namePrefix: z.string().default('capability'),
+      modelSelector: z.string().default('replace'),
+      applyModelOnAgent: z.boolean().default(true),
+      applyModelOnCommand: z.boolean().default(true),
+      applyModelOnSkill: z.boolean().default(true),
+      applyDefaultLayer: z.boolean().default(true),
+      capabilityRules: z.boolean().default(true),
+      capabilitySkills: z.boolean().default(true),
+      capabilityCommands: z.boolean().default(true),
+      capabilityAgents: z.boolean().default(true),
+      capabilityMcp: z.boolean().default(true),
+      inventory: z.boolean().default(true),
+      inventoryTextBytes: z.number().default(65536),
+      defaultAgent: z.string().default(''),
+      modelsFile: z.string().default(''),
+      command: z.string().default(''),
+      timeoutMs: z.number().default(5000),
+      maxRulesBytes: z.number().default(65536),
+      maxCommandNameLength: z.number().default(48),
+      skillRank: z.number().default(250),
     })
   }
 } catch {
@@ -88,6 +111,11 @@ export function apply(ctx, rawConfig) {
   // UI rows own no host behaviour at all.
   if (config.host === false) return
   if (config.role === 'core') {
+    try {
+      applyCapabilityCore(ctx, { ...config, role: 'core', host: true })
+    } catch (error) {
+      ctx.logger?.warn?.('hnflow: capability core failed; model layers and preview stay unavailable: %o', error)
+    }
     applyCore(ctx, config)
     return
   }
@@ -97,6 +125,20 @@ export function apply(ctx, rawConfig) {
   }
   if (config.role !== 'preset') return
   applyPreset(ctx, config)
+  try {
+    applyCapability(ctx, {
+      ...config,
+      role: 'preset',
+      host: true,
+      rules: config.capabilityRules,
+      skills: config.capabilitySkills,
+      commands: config.capabilityCommands,
+      agents: config.capabilityAgents,
+      mcp: config.capabilityMcp,
+    })
+  } catch (error) {
+    ctx.logger?.warn?.('hnflow: capability preset failed; capability content stays unavailable: %o', error)
+  }
 }
 
 /**
@@ -172,7 +214,7 @@ export function applyCore(ctx, config) {
     subagents: safeHas(ctx, 'subagents'),
     presets: safeHas(ctx, 'agentPresets'),
     connection: safeHas(ctx, 'connection'),
-    vibestack: vibestackFactsOf(ctx),
+    capability: capabilityFactsOf(ctx),
   }
   void writeBreadcrumb('core', facts)
   try {
@@ -207,7 +249,7 @@ export function applyCore(ctx, config) {
     }
     void writeBreadcrumb('core', { ...facts, routes: registered.length, registered, routeErrors })
   })
-  // `/hnflow` is global: listing, assets and publish use the workspace of the
+  // `/hnflow` is global: listing and running flows use the workspace of the
   // session that typed it, and the command must exist outside HNFlow sessions
   // too (it is the human surface for the page's data).
   ctx.inject(['commands', 'workingDirectory'], (scope) => {
@@ -257,16 +299,16 @@ function safeHas(ctx, name) {
 }
 
 /**
- * The VibeStack contract as seen at load time, for the breadcrumb.
+ * The Capability contract as seen at load time, for the breadcrumb.
  * @param {Record<string, any>} ctx - Cordis context.
  * @returns {{available: boolean, apiVersion: number | null, warnings: string[]}} facts.
  */
-function vibestackFactsOf(ctx) {
-  const service = vibestackOf(ctx)
+function capabilityFactsOf(ctx) {
+  const service = capabilityOf(ctx)
   return {
-    available: vibestackAvailable(service),
+    available: capabilityAvailable(service),
     apiVersion: service === undefined || service === null ? null : Number(service.apiVersion) || null,
-    warnings: vibestackWarnings(service),
+    warnings: capabilityWarnings(service),
   }
 }
 

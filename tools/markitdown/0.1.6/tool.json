@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "guid": "927d3ae4489f5edc92a74fcfd3acf7ee",
+  "name": "markitdown",
+  "tool_name": "markitdown",
+  "version": "0.1.6",
+  "description": "Convert PDF, Office, HTML, images, audio and other files to Markdown.",
+  "provider": "python",
+  "entrypoint": "markitdown.__main__:main",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "git",
+    "url": "https://github.com/microsoft/markitdown.git",
+    "commit": "e144e0a2be95b34df17433bac904e635f2c5e551",
+    "tag": "v0.1.6"
+  },
+  "run": {
+    "kind": "uv",
+    "command": "markitdown"
+  },
+  "mcp": null
+}

@@ -1,7 +1,7 @@
 # HNFlow bundle layer for DeepSeek Harness.
 #
 # This patch only INSERTS rows: the shipped presets (standard / minimal / ptc)
-# and the VibeStack mode keep their own rows untouched. Everything HNFlow
+# and the HNFlow mode keep their own rows untouched. Everything HNFlow
 # specific lives inside the `hnflow` agent preset, which becomes a new
 # selectable mode, plus one root service row the page needs even when no HNFlow
 # session is open.
@@ -13,9 +13,9 @@
 #
 # Ownership rules:
 #
-# - `dsh-vibestack`'s own preset row is untouched; the `vibestack` row below
-#   mounts the same plugin inside THIS preset. HNFlow depends on VibeStack for
-#   capability groups and model layers; without it the mode is degraded.
+# - Capability groups and model layers are provided by this same bundle: the
+#   `hnflow` preset row mounts the capability surface, and `hnflow-core`
+#   provides `ctx.capability` for every session. There is no second plugin.
 # - `dsh-tool-workflow` already owns the `workflow` tool name, so the HNFlow
 #   tool is called `hnflow`.
 
@@ -55,12 +55,9 @@
           - id: persona
             name: '@deepseek-ai/dsh-persona'
             config:
-              prefix: You are a VibeStack agent powered by the {{model}} model.
-          # Capability groups (rules, skills, commands, MCP, agent persona) for
-          # the session. Remove this row for a flows-only mode; HNFlow itself
-          # only needs `ctx.vibestack` (the core row) for model layers.
-          - id: vibestack
-            name: dsh-vibestack
+              prefix: You are an HNFlow agent powered by the {{model}} model.
+          # Capability groups, model layers and preview are mounted by the
+          # `hnflow` row below; this bundle is a single plugin.
           # Host half of this bundle: the `hnflow` / `hnflow_author` tools,
           # `/hnflow`, the `hnflow-flows` skill and the flow index section.
           - id: hnflow

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "guid": "fee311c2959c5f739e8ee01baa644dc7",
+  "name": "parallel-search-mcp",
+  "tool_name": "parallel-search",
+  "version": "1.0.0",
+  "description": "MCP server: parallel-search",
+  "provider": "mcp",
+  "entrypoint": null,
+  "permissions": [
+    "net"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "builtin"
+  },
+  "run": null,
+  "mcp": {
+    "name": "parallel-search",
+    "type": "remote",
+    "url": "https://search.parallel.ai/mcp",
+    "enabled": true
+  }
+}

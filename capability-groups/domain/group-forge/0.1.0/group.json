@@ -1,0 +1,12 @@
+{
+  "guid": "7d4f2f52a1c94c1bb0e7f1c2f5a9d3e6",
+  "name": "group-forge",
+  "version": "0.1.0",
+  "description": "能力组开发：创建、扩展与校验 Core 和领域能力组，以及其中的规则、Agent、命令、技能与工具引用。",
+  "permissions": [
+    "fs",
+    "exec"
+  ],
+  "extends": [],
+  "tools": []
+}

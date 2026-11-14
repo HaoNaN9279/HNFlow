@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "guid": "55555555555555555555555555555555",
+  "name": "echo-tool",
+  "tool_name": "echo",
+  "version": "0.1.0",
+  "description": "Return the provided text unchanged. Minimal custom tool example.",
+  "provider": "python",
+  "entrypoint": "tool.py:build_tool",
+  "permissions": [],
+  "idempotent": true
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "guid": "79a8092f06b841a594899f346eae285b",
+  "name": "hnflow-forge",
+  "tool_name": "hnflow_forge",
+  "version": "0.1.0",
+  "description": "HNFlow 流程定义的离线静态预检（lint）与 Markdown 评审稿渲染（render）。",
+  "provider": "python",
+  "entrypoint": "hnflow_forge.cli:main",
+  "permissions": [
+    "fs"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "local"
+  },
+  "run": {
+    "kind": "uv",
+    "command": "hnflow-forge"
+  },
+  "mcp": null
+}

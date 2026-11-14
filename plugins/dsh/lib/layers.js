@@ -1,8 +1,8 @@
 /**
- * The VibeStack seam: HNFlow's only source of model routes.
+ * The Capability seam: HNFlow's only source of model routes.
  *
- * HNFlow never reads VibeStack's config, never keeps a model catalog and never
- * talks to a provider. A node names a layer id; `ctx.vibestack` turns it into
+ * HNFlow never reads Capability's config, never keeps a model catalog and never
+ * talks to a provider. A node names a layer id; `ctx.capability` turns it into
  * `{provider, model, reasoningEffort}` at run start, and the lockfile pins the
  * answer. Missing service or a missing layer is fail-loud — falling back to a
  * default route would make a published revision non-reproducible.
@@ -12,17 +12,17 @@
  * facts decide whether a flow may pin a layer at all.
  */
 
-/** Minimum VibeStack service contract HNFlow needs. */
+/** Minimum Capability service contract HNFlow needs. */
 export const REQUIRED_API_VERSION = 3
 
 /**
- * Read the VibeStack service from a context.
+ * Read the Capability service from a context.
  * @param {Record<string, any>} ctx - Cordis context.
  * @returns {Record<string, any> | undefined} service, when mounted.
  */
-export function vibestackOf(ctx) {
+export function capabilityOf(ctx) {
   try {
-    return ctx?.get?.('vibestack')
+    return ctx?.get?.('capability')
   } catch {
     return undefined
   }
@@ -30,10 +30,10 @@ export function vibestackOf(ctx) {
 
 /**
  * Whether the service satisfies the contract HNFlow requires.
- * @param {Record<string, any> | undefined} service - VibeStack service.
+ * @param {Record<string, any> | undefined} service - Capability service.
  * @returns {boolean} true when usable.
  */
-export function vibestackAvailable(service) {
+export function capabilityAvailable(service) {
   return service !== null
     && service !== undefined
     && Number(service.apiVersion) >= REQUIRED_API_VERSION
@@ -47,13 +47,13 @@ export function vibestackAvailable(service) {
  * Three failures are distinct on purpose: a typo'd id, a platform layer this
  * machine never bound a route for, and a DSH-only custom layer (usable in a
  * session, never portable inside a flow).
- * @param {Record<string, any> | undefined} service - VibeStack service.
+ * @param {Record<string, any> | undefined} service - Capability service.
  * @param {string} id - layer id.
  * @returns {Promise<{ok: true, layer: Record<string, any>} | {ok: false, code: string, message?: string}>} result.
  */
 export async function layerStatus(service, id) {
-  if (!vibestackAvailable(service)) {
-    return { ok: false, code: 'vibestack-unavailable', message: `VibeStack is not mounted or its apiVersion is below ${REQUIRED_API_VERSION}` }
+  if (!capabilityAvailable(service)) {
+    return { ok: false, code: 'capability-unavailable', message: `the capability service is not mounted or its apiVersion is below ${REQUIRED_API_VERSION}` }
   }
   let layer
   try {
@@ -66,7 +66,7 @@ export async function layerStatus(service, id) {
       return {
         ok: false,
         code: 'model-layer-unbound',
-        message: `model layer ${id} exists but has no route on this machine; bind it in .vibestack/models.json under bindings.dsh.${id}`,
+        message: `model layer ${id} exists but has no route on this machine; bind it in .capability/models.json under bindings.dsh.${id}`,
       }
     }
     return { ok: false, code: 'model-layer-unknown', message: `no model layer named ${id}` }
@@ -98,7 +98,7 @@ export async function layerStatus(service, id) {
 
 /**
  * Whether the catalog knows the id at all, bound or not.
- * @param {Record<string, any>} service - VibeStack service.
+ * @param {Record<string, any>} service - Capability service.
  * @param {string} id - layer id.
  * @returns {boolean} true when the platform or a custom layer defines it.
  */
@@ -123,24 +123,24 @@ export function agentOptionsOf(layer) {
 }
 
 /**
- * Snapshot the VibeStack contract for a lockfile.
+ * Snapshot the Capability contract for a lockfile.
  * @param {Record<string, any> | undefined} service - service.
  * @returns {{available: boolean, apiVersion: number | null}} snapshot.
  */
-export function vibestackSnapshot(service) {
+export function capabilitySnapshot(service) {
   return {
-    available: vibestackAvailable(service),
+    available: capabilityAvailable(service),
     apiVersion: service === undefined || service === null ? null : Number(service.apiVersion) || null,
   }
 }
 
 /**
- * VibeStack load warnings (legacy models files, unbound layers, …).
+ * Capability load warnings (legacy models files, unbound layers, …).
  * Diagnostics only: they never block a publish.
  * @param {Record<string, any> | undefined} service - service.
  * @returns {string[]} warnings.
  */
-export function vibestackWarnings(service) {
+export function capabilityWarnings(service) {
   try {
     const rows = service?.listWarnings?.()
     return Array.isArray(rows) ? rows.map((row) => String(row)) : []

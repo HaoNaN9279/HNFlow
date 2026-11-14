@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "guid": "a8a2ce51a3255a6ebb7c1705821b52f9",
+  "name": "context7-mcp",
+  "tool_name": "context7",
+  "version": "1.0.0",
+  "description": "MCP server: context7",
+  "provider": "mcp",
+  "entrypoint": null,
+  "permissions": [
+    "net"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "builtin"
+  },
+  "run": null,
+  "mcp": {
+    "name": "context7",
+    "type": "remote",
+    "url": "https://mcp.context7.com/mcp",
+    "enabled": true
+  }
+}

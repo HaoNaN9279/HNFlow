@@ -39,7 +39,7 @@ function flowWith(overrides = {}) {
  * @returns {Promise<string[]>} codes.
  */
 async function codes(definition) {
-  const result = await validateFlow(definition, { vibeStackAvailable: true })
+  const result = await validateFlow(definition, { capabilityAvailable: true })
   return result.errors.map((entry) => entry.code)
 }
 

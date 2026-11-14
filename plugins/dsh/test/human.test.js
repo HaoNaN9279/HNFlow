@@ -41,14 +41,14 @@ async function waitFor(check) {
   throw new Error('condition did not become true')
 }
 
-test('a gate records the revision, upstream hash, consumers and channel before it is asked', async () => {
+test('a gate records the upstream hash, consumers and channel before it is asked', async () => {
   const { service, seeded } = await setup(gateFlow(), { script: { draft: [{ status: 'done', output: { points: ['a'] } }] } })
   try {
     const run = await (await service.run({ cwd: seeded.workspace, key: 'demo', input: { brief: 'x' } })).settled
     const [item] = await service.inbox()
     assert.equal(item.askedVia, 'inbox')
-    assert.equal(item.flowRevision, 1)
-    assert.equal(item.flowSource, 'latest')
+    assert.equal(item.flowRevision, null)
+    assert.equal(item.flowSource, 'capability')
     assert.match(item.contentHash, /^sha256:/u)
     assert.match(item.upstreamHash, /^sha256:/u)
     assert.deepEqual(item.consumerNodeIds, [])
@@ -58,7 +58,7 @@ test('a gate records the revision, upstream hash, consumers and channel before i
     const [audit] = settled.audit
     assert.equal(audit.decidedBy, 'owner')
     assert.equal(audit.askedVia, 'inbox')
-    assert.equal(audit.flowRevision, 1)
+    assert.equal(audit.flowRevision, null)
     assert.equal(audit.contentHash, item.contentHash)
     assert.deepEqual(audit.consumerNodeIds, [])
   } finally {

@@ -1,0 +1,22 @@
+{
+  "guid": "dfaea662604b5821b4221b4a78d8cff8",
+  "name": "video-transcribe",
+  "version": "1.1.0",
+  "description": "视频下载、Qwen3-ASR 转写、关键帧截图与 Markdown 生成。",
+  "permissions": [
+    "fs",
+    "exec",
+    "net"
+  ],
+  "extends": [],
+  "tools": [
+    "tool:18e005b65da85f9ca19d53c8a0088008@v0.1.0"
+  ],
+  "tool_permissions": {
+    "tool:18e005b65da85f9ca19d53c8a0088008@v0.1.0": [
+      "fs",
+      "exec",
+      "net"
+    ]
+  }
+}

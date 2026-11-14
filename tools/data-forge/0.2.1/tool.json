@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "guid": "d0794c942e7050f589ac59d3bc79a4b2",
+  "name": "data-forge",
+  "tool_name": "data-forge",
+  "version": "0.2.1",
+  "description": "AI training data pipeline toolkit: image processing, caption management, LLM integration, ComfyUI, MCP server.",
+  "provider": "python",
+  "entrypoint": "data_forge.mcp.server:main",
+  "permissions": [
+    "fs",
+    "exec",
+    "net"
+  ],
+  "idempotent": false,
+  "source": {
+    "type": "git",
+    "url": "https://github.com/HaoNaN9279/data_forge.git",
+    "commit": "bf1c0eb323f61228de63445e2947cccd76baea98"
+  },
+  "run": {
+    "kind": "uv",
+    "command": "data-forge",
+    "serve_command": "data-forge-mcp"
+  },
+  "mcp": {
+    "name": "data-forge",
+    "type": "local",
+    "command": [
+      "hnflow-stack",
+      "tool",
+      "serve",
+      "tool:d0794c942e7050f589ac59d3bc79a4b2@v0.2.1"
+    ],
+    "enabled": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "guid": "0cde8f14e4915a7bb6e7bfb1b6a24149",
+  "name": "houdini",
+  "version": "1.0.0",
+  "description": "Houdini 程序化 3D 与 VFX 集成。",
+  "permissions": [
+    "fs"
+  ],
+  "extends": [],
+  "tools": []
+}

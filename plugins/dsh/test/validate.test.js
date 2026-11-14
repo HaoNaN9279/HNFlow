@@ -104,8 +104,8 @@ test('model layers are checked only when a node names one', async () => {
   const flow = clone(gateFlow())
   flow.nodes[0].model = 'strong'
   assert.ok((await codes(flow, { checkLayer: async () => ({ ok: false, code: 'model-layer-unknown' }) })).includes('model-layer-unknown'))
-  const unavailable = await codes(flow, { vibestackAvailable: false })
-  assert.ok(unavailable.includes('vibestack-unavailable'))
+  const unavailable = await codes(flow, { capabilityAvailable: false })
+  assert.ok(unavailable.includes('capability-unavailable'))
 })
 
 test('a request needs a deliverable and whyHuman', async () => {

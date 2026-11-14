@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "guid": "b906f036f7fb5ef0a858ffea70a735f3",
+  "name": "grep-app-mcp",
+  "tool_name": "grep_app_official",
+  "version": "1.0.0",
+  "description": "MCP server: grep_app_official",
+  "provider": "mcp",
+  "entrypoint": null,
+  "permissions": [
+    "net"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "builtin"
+  },
+  "run": null,
+  "mcp": {
+    "name": "grep_app_official",
+    "type": "remote",
+    "url": "https://mcp.grep.app",
+    "enabled": true
+  }
+}

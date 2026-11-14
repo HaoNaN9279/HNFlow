@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "default": "standard",
+  "bindings": {
+    "dsh": {
+      "fast": {
+        "provider": "deepseek-account",
+        "model": "deepseek-flash"
+      },
+      "standard": {
+        "provider": "deepseek-account",
+        "model": "deepseek-flash"
+      },
+      "strong": {
+        "provider": "deepseek-account",
+        "model": "deepseek-flash"
+      },
+      "vision": {
+        "provider": "deepseek-account",
+        "model": "deepseek-flash"
+      }
+    }
+  }
+}

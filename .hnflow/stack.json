@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "core": {
+    "name": "core",
+    "version": "0.1.0"
+  },
+  "groups": [
+    {
+      "name": "hnflow-forge",
+      "version": "0.1.0"
+    }
+  ],
+  "agents_md": "off"
+}

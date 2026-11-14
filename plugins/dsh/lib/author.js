@@ -1,10 +1,9 @@
 /**
- * The `hnflow_author` tool: schema, validation and drafting.
+ * The `hnflow_author` tool: schema, validation and project flow files.
  *
- * Deliberately missing: publish. A draft is a workspace override, which a run
- * may read but which never advances an asset revision — only `publish` does,
- * and it exists on the human command and page surfaces. I1 is therefore a
- * physical property of this file, not a promise.
+ * A flow is capability-group content. Creating one writes to
+ * `.hnflow/groups/<group>/flows/`; there is no separate library, revision or
+ * publish step. Human-only actions are absent by construction.
  */
 
 import { definitionProblems } from './assets.js'
@@ -21,7 +20,7 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
       id: 'concept',
       type: 'agent',
       preset: 'hnflow',
-      model: '可选：VibeStack 模型层 id',
+      model: '可选：模型层 id',
       instruction: '根据 {{input.brief}} 产出 3 个方向。',
       input: { type: 'object', properties: { brief: { type: 'string' } } },
       output: {
@@ -65,15 +64,14 @@ export const FLOW_SCHEMA_REFERENCE = Object.freeze({
     humanGap: 'agent 节点声明 allowHuman:true 时，子 Agent 可用 needs_human 上抛缺口，插件创建交付请求并继续同一节点',
     policies: 'gate/request 可用 deadline.hours + onExpire(remind|fail)；verify 的 onInconclusive(gate|fail) 决定 judge 不确定时是否转人工门禁；request 的 onReject 支持 return|fallback|arbitrate|fail',
     mergeSet: 'merge 可用 set 声明常量（from 可为空）；data:assign 旧节点导入后就是这种 merge',
-    scope: 'create 的 scope: project（默认，项目内草稿，只在本工作区可见/可运行）或 library（新资产 r1，并默认引用到本工作区）',
-    createIdentity: 'create 会生成 flow.id；definition.flow.id 可省略，名称可由 create 的 name 参数提供',
-    promote: 'promote 把项目草稿提升为库资产 r1 并替换为引用；之后修改它仍需人工发布',
-    publish: '不可由工具调用；由人经 /hnflow publish 或页面按钮完成',
+    scope: '流程属于能力组：create 写入项目本地组 .hnflow/groups/<group>/flows/ 并激活该组；group 省略时用 local',
+    createIdentity: 'create 会生成或采用 flow.id；definition.flow.id 可省略，名称可由 create 的 name 参数提供',
+    workflow: '流程可使用本组及依赖组的全部规则、技能、Agent、命令与工具；不存在的组内容不会被注入',
   },
 })
 
 /** Actions the authoring tool accepts. */
-export const AUTHOR_ACTIONS = Object.freeze(['schema', 'validate', 'create', 'draft', 'promote', 'delete', 'rename'])
+export const AUTHOR_ACTIONS = Object.freeze(['schema', 'validate', 'create', 'draft', 'delete', 'rename'])
 
 /**
  * Build the `hnflow_author` tool definition.
@@ -135,27 +133,11 @@ export function createAuthorTool(options) {
           const result = await service.createFlow({
             cwd,
             definition: args.definition,
-            scope: args.scope === 'library' ? 'library' : 'project',
             name: typeof args.name === 'string' ? args.name : undefined,
             folder: typeof args.folder === 'string' ? args.folder : '',
             note: typeof args.note === 'string' ? args.note : undefined,
-            alias: typeof args.alias === 'string' ? args.alias : '',
-            reference: args.reference !== false,
           })
           return JSON.stringify({ ok: true, created: true, ...result }, null, 2)
-        }
-        case 'promote': {
-          if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
-          const key = typeof args.flow === 'string' ? args.flow.trim() : ''
-          if (key.length === 0) return 'error flow-required: promote needs the project-local flow id or name'
-          const result = await service.promote({
-            cwd,
-            key,
-            name: typeof args.name === 'string' ? args.name : undefined,
-            folder: typeof args.folder === 'string' ? args.folder : undefined,
-            alias: typeof args.alias === 'string' ? args.alias : '',
-          })
-          return JSON.stringify({ ok: true, promoted: true, ...result }, null, 2)
         }
         case 'delete': {
           if (cwd === null) return 'error workspace-unavailable: this session has no workspace directory'
@@ -184,16 +166,13 @@ export function createAuthorTool(options) {
   return defineTool({
     name: 'hnflow_author',
     description:
-      'Author and manage HNFlow flows without publishing. `schema` returns the definition format, `validate` runs publish-time static checks, `create` creates a project-local draft (default) or a library asset r1, `draft` writes an agent draft, `promote` turns a project draft into a library asset, and `delete`/`rename` manage project-local drafts only. There is no publish action: changing an existing library asset still requires a human to publish it through /hnflow publish or the page.',
+      'Author HNFlow flows as capability-group content. `schema` returns the definition format, `validate` runs static checks, `create` writes a flow into a project-local capability group, `draft` updates a project-local flow file, and `delete`/`rename` manage project-local flows only. There is no publish, revision, or library step.',
     parameters: {
       action: { type: 'string', required: true, enum: [...AUTHOR_ACTIONS], description: 'Operation to perform.' },
-      flow: { type: 'string', description: 'Referenced/local flow alias, name or id (validate without a definition, draft, promote, delete, rename).' },
+      flow: { type: 'string', description: 'Flow qualified id, flow id or name (validate without a definition, draft, delete, rename).' },
       definition: { type: 'object', additionalProperties: true, description: 'Complete flow definition for validate/create/draft.' },
-      scope: { type: 'string', enum: ['project', 'library'], description: 'create only: project-local draft (default) or reusable library asset r1.' },
-      name: { type: 'string', description: 'create/promote/rename: display name.' },
-      folder: { type: 'string', description: 'create/promote: library- or project-relative folder (multi-level with /).' },
-      alias: { type: 'string', description: 'create/promote with scope library: reference alias in this workspace.' },
-      reference: { type: 'boolean', description: 'create scope=library: also reference it here (default true).' },
+      name: { type: 'string', description: 'create/rename: display name.' },
+      folder: { type: 'string', description: 'create: project-local capability group name (single path segment, default local).' },
       note: { type: 'string', description: 'Optional draft/creation note.' },
     },
     output: {

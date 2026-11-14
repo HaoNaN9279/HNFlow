@@ -1,0 +1,11 @@
+{
+  "guid": "3ca9ca0cc78e56f28350ba72447ac374",
+  "name": "unreal",
+  "version": "1.0.0",
+  "description": "Unreal Engine 5 集成与 C++ / Blueprint 开发。",
+  "permissions": [
+    "fs"
+  ],
+  "extends": [],
+  "tools": []
+}

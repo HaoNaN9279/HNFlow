@@ -34,7 +34,7 @@ export const NODE_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/u
  *   allowlist?: string[],
  *   checkPreset?: (id: string) => Promise<{ok: boolean, code?: string, message?: string}>,
  *   checkLayer?: (id: string) => Promise<{ok: boolean, code?: string, message?: string}>,
- *   vibestackAvailable?: boolean,
+ *   capabilityAvailable?: boolean,
  * }} [options] - host facts the declaration cannot answer itself.
  * @returns {Promise<{ok: boolean, errors: {code: string, message: string, nodeId?: string, edgeId?: string, path?: string}[], warnings: string[]}>} result.
  */
@@ -101,8 +101,8 @@ export async function validateFlow(definition, options = {}) {
     if (node.model !== undefined) {
       if (typeof node.model !== 'string' || node.model.trim().length === 0) {
         fail('definition-invalid', `node ${id}.model must be a non-empty layer id`, at)
-      } else if (options.vibestackAvailable === false) {
-        fail('vibestack-unavailable', `node ${id} references model layer ${node.model} but VibeStack is unavailable`, at)
+      } else if (options.capabilityAvailable === false) {
+        fail('capability-unavailable', `node ${id} references model layer ${node.model} but the capability service is unavailable`, at)
       }
     }
     switch (node.type) {
@@ -170,8 +170,8 @@ export async function validateFlow(definition, options = {}) {
         if (node.judge?.model !== undefined) {
           if (typeof node.judge.model !== 'string' || node.judge.model.trim().length === 0) {
             fail('definition-invalid', `verify ${id}.judge.model must be a non-empty layer id`, at)
-          } else if (options.vibestackAvailable === false) {
-            fail('vibestack-unavailable', `verify ${id} references model layer ${node.judge.model} but VibeStack is unavailable`, at)
+          } else if (options.capabilityAvailable === false) {
+            fail('capability-unavailable', `verify ${id} references model layer ${node.judge.model} but the capability service is unavailable`, at)
           }
         }
         if (node.onInconclusive !== undefined && !['gate', 'fail'].includes(node.onInconclusive)) {

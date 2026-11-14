@@ -1,0 +1,27 @@
+[project]
+name = "hnflow-stack"
+version = "1.0.0"
+description = "Capability groups, tools and workflows for HNFlow"
+requires-python = ">=3.11"
+authors = [{ name = "HNFlow contributors" }]
+
+[project.scripts]
+hnflow-stack = "hnflow_stack.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hnflow_stack"]
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]

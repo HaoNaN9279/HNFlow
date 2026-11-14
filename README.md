@@ -1,17 +1,22 @@
 # HNFlow
 
-HNFlow 是运行在 DeepSeek Harness 上的**约束式工作流插件**。
-它把工作流定义为节点契约、边条件和人工门禁，由插件自己的状态机编排，节点执行交给 DSH subagent。
+HNFlow 是运行在 DeepSeek Harness 上的统一插件与能力组仓库。工作流是能力组的一种内容，
+和能力组的规则、技能、Agent、命令、工具一起被解析、注入和运行。
 
-本仓库只保留 DSH 插件 `dsh-hnflow`；旧的 Python/Next.js 单体、Docker 编排、旧画布与旧引擎已移除。
+仓库只保留一个 DSH 插件 `dsh-hnflow`。旧版独立插件、旧资产库与旧预设都不再保留；
+旧仓库内容已复制进本仓库，并按 HNFlow 命名。
 
 ## 入口
 
 | 内容 | 位置 |
 | --- | --- |
-| 安装、页面、命令、工具、测试 | [`plugins/dsh/README.md`](plugins/dsh/README.md) |
-| 设计、边界、实现差异 | [`docs/dsh-plugin-plan-v2.md`](docs/dsh-plugin-plan-v2.md) |
-| v0.8 单人化与自动化 | [`docs/hnflow-v0.8-plan.md`](docs/hnflow-v0.8-plan.md) |
+| DSH 插件安装、页面、命令、工具、数据布局 | [`plugins/dsh/README.md`](plugins/dsh/README.md) |
+| 统一架构、能力组、工作流解析 | [`docs/architecture.md`](docs/architecture.md) |
+| 能力组与工作流开发方案 | [`docs/dsh-plugin-plan-v2.md`](docs/dsh-plugin-plan-v2.md) |
+| 解析 API | [`docs/resolve-api.md`](docs/resolve-api.md) |
+| 模型层 | [`docs/model-layers.md`](docs/model-layers.md) |
+| 上下文预览 | [`docs/session-preview.md`](docs/session-preview.md) |
+| 模块 | [`docs/nested-modules.md`](docs/nested-modules.md) |
 | 为什么做约束式流程 | [`docs/新开发理念.md`](docs/新开发理念.md) |
 | DSH 升级回归 | [`docs/dsh-upgrade-checklist.md`](docs/dsh-upgrade-checklist.md) |
 
@@ -21,10 +26,7 @@ HNFlow 是运行在 DeepSeek Harness 上的**约束式工作流插件**。
 dsh plugin --profile desktop add "D:/workspace/HNFlow/plugins/dsh"
 ```
 
-安装后在会话模式中选择 **HNFlow**。详细依赖（VibeStack ≥ 0.8.0 / `apiVersion >= 3`）与配置见
-[`plugins/dsh/README.md`](plugins/dsh/README.md)。
-
-## 测试
+安装后在会话模式中选择 **HNFlow**。
 
 ```sh
 cd plugins/dsh
@@ -34,7 +36,13 @@ node test/run.mjs
 ## 目录
 
 ```text
-plugins/dsh/       插件源码、技能、示例与测试（本仓库唯一代码交付物）
-docs/              当前设计、理念与升级回归文档
-LICENSE
+capability-groups/     Core 与领域能力组（规则/技能/Agent/命令/工作流）
+tools/                 MCP 与工具包
+src/hnflow_stack/      Python 解析器与 CLI（hnflow-stack）
+plugins/dsh/           唯一的 DSH 插件 dsh-hnflow
+docs/                  架构、解析 API、模型层、预览与升级文档
+tests/                 Python 测试
 ```
+
+项目激活能力组只写 `.hnflow/stack.json`。工作流放在能力组的 `flows/` 下，不再有独立的
+流程资产库、revision、publish 或 rollback。

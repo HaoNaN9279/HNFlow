@@ -1,11 +1,13 @@
 ---
 name: hnflow-flows
-description: 起草和运行 HNFlow 约束式流程：六种节点原语、节点信封三态、边契约与门禁/人工交付的规则。当用户想新增或修改流程、解释一次运行为何被拦住、或需要构造交付请求时使用。
+description: 起草和运行 HNFlow 约束式流程：六种节点原语、节点信封三态、边契约与门禁/人工交付的规则，以及流程作为能力组内容的存放方式。当用户想新增或修改流程、解释一次运行为何被拦住、或需要构造交付请求时使用。
 ---
 
 # HNFlow 流程
 
 HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物契约，边声明什么条件下产物才能被下游消费，人通过门禁与交付进入流程，验收不由生成者自己完成。
+
+流程是**能力组的内容**。组根放 `flows/<id>.flow.json`，模块放 `modules/<module>/flows/<id>.flow.json`；激活组后，组内流程可使用本组及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与流程。
 
 ## 六种节点
 
@@ -18,9 +20,7 @@ HNFlow 把流程定义为**约束**而不是步骤：节点声明角色与产物
 | `request` | 人 + 验收 | 要 AI 生成不了的东西 | `deliverable`、`whyHuman`、`deadline` |
 | `verify` | 插件（+ 可选 judge） | 验收人的交付物 | `against`、`checks`、`onReject` |
 
-`model` 只写 **VibeStack 平台层 id**（`fast` / `standard` / `strong` / `vision`，默认 `standard`），不是 provider/model。
-层在目录里但本机没绑路由时发布失败（`model-layer-unbound`），写错的层名失败（`model-layer-unknown`），
-DSH 本机自定义层不能写进流程（`model-layer-custom`）；都不回落。
+`model` 只写 **HNFlow 平台层 id**（`fast` / `standard` / `strong` / `vision`，默认 `standard`），不是 provider/model。层名写错报 `model-layer-unknown`，层存在但本机未绑定报 `model-layer-unbound`；都不回落。
 
 ## 节点信封
 
@@ -38,14 +38,16 @@ DSH 本机自定义层不能写进流程（`model-layer-custom`）；都不回�
 
 ```jsonc
 { "from": "concept", "to": "review",
-  "accepts": { … },                              // 下游输入契约，发布前与上游 output 做可赋值校验
-  "when": { "kind": "status", "is": "done" },     // status | verdict | gate | artifact.accepted | always
-  "onFail": { "kind": "block" } }                 // block | skip | fallback
+  "accepts": { … },                              // 下游输入契约，与上游 output 做可赋值校验
+  "when": { "kind": "status", "is": "done" },    // status | verdict | gate | artifact.accepted | always
+  "onFail": { "kind": "block" } }                // block | skip | fallback
+}
 ```
 
-- `accepts` 写不出来就说明契约不成立——发布时会报 `contract-unsatisfiable`。
+- `accepts` 写不出来就说明契约不成立——静态校验报 `contract-unsatisfiable`。
 - 一个 `gate` 的三条出边必须分别覆盖 `approved`、`rejected`、`modified`，否则 `gate-branches-incomplete`。
 - 同一个输入端口只允许一条入边；多个上游汇合用 `merge`。
+- 图必须单起点、单终点、无环；驳回重做走 `onReject`，不要连回上游。
 
 ## 人工交付
 
@@ -53,29 +55,26 @@ DSH 本机自定义层不能写进流程（`model-layer-custom`）；都不回�
 
 ## 起草步骤
 
-1. 用 `hnflow_author` 的 `schema` 看完整格式。
-2. 写出定义后先 `validate`，把错误全部修掉；常见的几个：`input-unbound`、`gate-branches-incomplete`、`judge-same-as-producer`、`model-layer-unknown`。
-3. 新建项目内流程用 `create`（默认 `scope: "project"`；`flow.id` 可省略，插件会生成；名称可用 `name` 参数）；确定要放进通用资产库时用 `create` + `scope: "library"`（新资产 r1，并默认引用到本工作区）。`folder` 支持 `a/b` 这样的多级路径。
-4. 修改流程用 `draft`。项目草稿可以改；库流程的草稿仍是工作区覆盖，**还没发布**。
-5. 项目草稿可以 `rename` / `delete` / `promote`；`promote` 把它提升为库资产 r1 并改为引用。
-6. 明确告诉用户：**已有资产的发布是人的动作**（`/hnflow publish <流程>` 或页面按钮），Agent 没有 publish 入口。
-
-## 对话管理
-
-- `hnflow` 的 `list_library` 查通用资产库；`add_ref` / `remove_ref` / `rename_ref` 管本工作区引用；`pin` / `history` 看版本与钉住状态。
-- `list_flows` 会同时列出本工作区引用和项目草稿；项目草稿标 `[project-draft]`，没有 revision，`source: "local"`。
-- 运行与观察：`run` 只启动并立即返回 `runId`；`status` / `list_runs` 用于后续问题；`inbox` 列出待人工处理项；`artifact` 按 id 取节点产物。
-- 不要对项目草稿调用 publish/pin/rollback：它们没有 revision，插件会返回 `local-flow`。
+1. `hnflow_author schema` 看完整格式与宿主当前注册的节点类型；不要编造节点 `kind`。
+2. 写出定义后先 `validate`，把错误全部修掉；常见的几个：`input-unbound`、`gate-branches-incomplete`、`judge-same-as-producer`、`model-layer-unknown`、`schema-unsupported`。
+3. 项目内新建用 `create`，默认写到 `<workspace>/.hnflow/groups/<group>/flows/<id>.flow.json`；`folder` 是组名，不含 `/`。插件会创建组清单并把组加入 `.hnflow/stack.json`。
+4. 修改项目内流程用 `draft`，它只允许写项目本地组；仓库组流程报 `flow-not-local`，应直接编辑仓库文件。
+5. `delete` / `rename` 也只作用于项目本地组；`rename` 只改 `flow.name`，不改 `flow.id`。
+6. 要把流程共享给其他项目，把文件移入仓库能力组的 `flows/` 并随该组版本发布；这是人的改动，不是工具动作。
 
 ## 运行与观察
 
-- `hnflow` 工具的 `run` 只启动并立即返回 `runId`，不要轮询或等它。
-- `status` 用于回答后续问题；`inbox` 列出待人工处理的门禁/交付；`artifact` 按 id 读取一个节点产物。
-- 页面：左侧 HNFlow 图标（流程 / 运行 / 收件箱）。运行页可看节点状态、产物、token 用量与降级标记；版本历史可钉住或回滚（回滚由人确认）。项目草稿在页面里只提供画布、运行和“提升到通用资产库”。
+- `run` 只启动并立即返回 `runId`，不要轮询或等它。
+- `status` / `list_runs` 回答后续问题；`inbox` 列出待人工处理的门禁/交付；`artifact` 按 id 读取一个节点产物。
+- 运行固定启动时的定义快照；之后改文件不影响已启动的运行。
+- 页面：左栏 HNFlow 三页签（流程 / 运行 / 收件箱）；流程页只读画布；运行页显示节点状态、产物、token 用量与降级标记。
+- 触发器在 `.hnflow/triggers.json`，只决定何时新开运行，不绕门禁、不接管授权；只读查看用 `triggers`，新增/修改是改文件。
 
 ## 不要做
 
 - 不要在节点里内联工具或 persona：节点只能引用 `preset`。
 - 不要用流程表达权限：`model` 与交付物都不携带工具或审批。
 - 不要让 judge 用生产者的 preset（`judge-same-as-producer`）。
-- 不要承诺"自动续跑"：`interrupted` 必须由人/模型显式 `resume`。
+- 不要手改 `.hnflow/stack.json` 或资产文件来绕开解析与校验。
+- 不要把“文件已写”说成“已发布”“已运行”或“已验收”。
+- 不要承诺自动续跑：中断的运行需要显式 `resume`，或依宿主 `resumeOnStart` 配置。

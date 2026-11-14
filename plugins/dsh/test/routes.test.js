@@ -35,18 +35,6 @@ function stubService() {
       calls.push({ kind: 'run', ...input })
       return { runId: 'run-new', status: 'running', settled: Promise.resolve(null) }
     },
-    publish: async (input) => {
-      calls.push({ kind: 'publish', ...input })
-      return { revision: 2, contentHash: 'sha256:x' }
-    },
-    addRef: async (workspace, flowId, alias) => {
-      calls.push({ kind: 'addRef', workspace, flowId, alias })
-      return { flowId, alias: alias ?? 'demo', revision: null }
-    },
-    promote: async (input) => {
-      calls.push({ kind: 'promote', ...input })
-      return { flowId: 'fl-new', previousFlowId: 'fl-local', revision: 1 }
-    },
   }
 }
 
@@ -121,32 +109,13 @@ test('POST deliverable forwards the payload', async () => {
   assert.equal(service.calls[0].kind, 'deliver')
 })
 
-test('POST add references a library asset', async () => {
+test('POST start validates its required fields', async () => {
   const service = stubService()
-  const result = await post(route(createRoutes({ service }), ROUTES.add), { workspace: '/w', flowId: 'fl-lib', alias: 'lib' })
-  assert.equal(result.body.ok, true)
-  assert.equal(result.body.alias, 'lib')
-  assert.deepEqual(service.calls[0], { kind: 'addRef', workspace: '/w', flowId: 'fl-lib', alias: 'lib' })
-})
-
-test('POST promote forwards the project draft and its folder', async () => {
-  const service = stubService()
-  const entry = route(createRoutes({ service }), ROUTES.promote)
-  const { status, body } = await post(entry, { workspace: '/w', flow: 'fl-local', folder: 'team/a' })
-  assert.equal(status, 200)
-  assert.equal(body.flowId, 'fl-new')
-  assert.equal(service.calls[0].kind, 'promote')
-  assert.equal(service.calls[0].folder, 'team/a')
-})
-
-test('POST start and publish validate their required fields', async () => {  const service = stubService()
   const routes = createRoutes({ service })
   const bad = await post(route(routes, ROUTES.start), { flow: 'demo' })
   assert.equal(bad.status, 400)
   const started = await post(route(routes, ROUTES.start), { workspace: '/w', flow: 'demo', input: { brief: 'x' } })
   assert.equal(started.body.runId, 'run-new')
-  const published = await post(route(routes, ROUTES.publish), { workspace: '/w', flow: 'demo' })
-  assert.equal(published.body.revision, 2)
 })
 
 test('invalid JSON and service errors map to JSON failures', async () => {

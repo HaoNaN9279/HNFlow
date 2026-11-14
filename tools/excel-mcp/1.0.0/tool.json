@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "guid": "5e722fc477d75d9982a53f3a92f48cf7",
+  "name": "excel-mcp",
+  "tool_name": "excelMCP",
+  "version": "1.0.0",
+  "description": "MCP server: excelMCP",
+  "provider": "mcp",
+  "entrypoint": null,
+  "permissions": [
+    "fs",
+    "exec"
+  ],
+  "idempotent": true,
+  "source": {
+    "type": "builtin"
+  },
+  "run": null,
+  "mcp": {
+    "name": "excelMCP",
+    "type": "local",
+    "command": [
+      "uvx",
+      "excel-mcp-server",
+      "stdio"
+    ],
+    "enabled": true
+  }
+}

@@ -87,13 +87,14 @@ async function waitFor(check, timeoutMs = 2000) {
   }
 }
 
-test('the core row provides ctx.hnflow, the page routes and the global command', async () => {
+test('the core row provides ctx.hnflow and ctx.capability, the page routes and the global command', async () => {
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   assert.notEqual(ctx.services.hnflow, undefined)
-  assert.equal(ctx.routes.length, 18)
+  assert.notEqual(ctx.services.capability, undefined)
+  assert.equal(ctx.routes.length, 15)
   assert.equal(typeof ctx.services.hnflow.status, 'function')
-  assert.equal(ctx.effects.length, 1)
+  assert.equal(ctx.effects.length, 2)
   assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
   await ctx.services.hnflow.close()
 })
@@ -102,8 +103,8 @@ test('the pass row only starts a ticker and never registers routes or tools', as
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   apply(ctx, { role: 'pass' })
-  await waitFor(() => ctx.effects.length === 2)
-  assert.equal(ctx.effects.length, 2)
+  await waitFor(() => ctx.effects.length === 3)
+  assert.equal(ctx.effects.length, 3)
   assert.equal(ctx.registered.tools.length, 0)
   assert.equal(ctx.registered.commands.length, 1)
   for (const dispose of ctx.effects) dispose()
@@ -114,18 +115,19 @@ test('the preset row registers the tools, skill and prompt section', async () =>
   const ctx = fakeContext()
   apply(ctx, { role: 'core' })
   apply(ctx, { role: 'preset' })
-  await waitFor(() => ctx.registered.tools.length === 2 && ctx.registered.skills.length === 2)
+  await waitFor(() => ctx.registered.tools.length === 2 && ctx.registered.skills.length === 3)
   assert.deepEqual(ctx.registered.tools.map((tool) => tool.name), ['hnflow', 'hnflow_author'])
-  // The command is global (core row), so the preset must not double-register it.
-  assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow'])
-  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-controls', 'hnflow-flows'])
+  // The `hnflow` command is global (core row); the capability row adds its own
+  // two management commands inside the preset.
+  assert.deepEqual(ctx.registered.commands.map((command) => command.name), ['hnflow', 'capability-agent', 'capability-layer'])
+  assert.deepEqual(ctx.registered.skills.map((skill) => skill.name), ['hnflow-controls', 'capability', 'hnflow-flows'])
   for (const skill of ctx.registered.skills) {
     assert.equal(skill.source, 'bundled')
     assert.equal(typeof skill.content, 'string')
     assert.ok(skill.content.length > 100)
   }
-  assert.deepEqual(ctx.registered.sections.map((section) => section.name), ['hnflow:flows'])
-  assert.equal(ctx.listeners['agent/pre-step'].length, 1)
+  assert.deepEqual(ctx.registered.sections.map((section) => section.name), ['hnflow:flows', 'capability:agent'])
+  assert.equal(ctx.listeners['agent/pre-step'].length, 2)
   await ctx.services.hnflow.close()
 })
 

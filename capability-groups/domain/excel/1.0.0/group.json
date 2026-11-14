@@ -1,0 +1,19 @@
+{
+  "guid": "e7faae00cbdd568f84138f957b69aa08",
+  "name": "excel",
+  "version": "1.0.0",
+  "description": "Microsoft Excel 集成能力组。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [],
+  "tools": [
+    "tool:5e722fc477d75d9982a53f3a92f48cf7@v1.0.0"
+  ],
+  "tool_permissions": {
+    "tool:5e722fc477d75d9982a53f3a92f48cf7@v1.0.0": [
+      "net"
+    ]
+  }
+}

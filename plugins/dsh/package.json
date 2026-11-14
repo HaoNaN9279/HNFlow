@@ -1,6 +1,6 @@
 {
   "name": "dsh-hnflow",
-  "version": "0.8.0",
+  "version": "1.0.0",
   "private": true,
   "description": "HNFlow constraint flows as a DeepSeek Harness mode",
   "type": "module",
@@ -14,6 +14,7 @@
     "index.js",
     "client.js",
     "lib/",
+    "capability/",
     "skills/",
     "examples/",
     "cordis.patch.yml"

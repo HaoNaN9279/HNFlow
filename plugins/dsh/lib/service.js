@@ -13,6 +13,7 @@
 
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
+import { mkdir, rm } from 'node:fs/promises'
 
 import { createStore } from './store.js'
 import { AssetStore, definitionProblems, normalizeFolder, readJsonOrNull, withFlowIdentity, writeJson } from './assets.js'
@@ -21,7 +22,7 @@ import { nodeIndex, outgoingEdges } from './flow/definition.js'
 import { envelopeSchema, judgeEnvelopeSchema, parseEnvelope, parseVerdict } from './flow/envelope.js'
 import { validateValue } from './flow/schema.js'
 import { validateFlow } from './flow/validate.js'
-import { REQUIRED_API_VERSION, agentOptionsOf, layerStatus, vibestackAvailable, vibestackOf, vibestackWarnings } from './layers.js'
+import { REQUIRED_API_VERSION, agentOptionsOf, layerStatus, capabilityAvailable, capabilityOf, capabilityWarnings } from './layers.js'
 import { buildJudgeBrief, buildNodeBrief, renderRetrySection } from './prompt.js'
 import { createSubagentRunner, withTimeout } from './runner.js'
 import { activateFallbacks, impliedStatus, nodeState, runnableNodes, settle, upstreamArtifacts } from './scheduler.js'
@@ -106,6 +107,20 @@ function buildService(options) {
   let conductor = null
   /** Cached flow index per workspace. */
   const indexCache = new Map()
+
+  /**
+   * Drop the derived views after a flow file changes.
+   * @param {string} cwd - workspace root.
+   * @returns {void}
+   */
+  function invalidateViews(cwd) {
+    indexCache.delete(String(cwd))
+    try {
+      hosts.capability()?.invalidatePlan?.(cwd)
+    } catch {
+      // A capability core without the invalidation seam is still usable.
+    }
+  }
   /** Set when the service is closing. */
   let disposed = false
   /** @type {Promise<void> | null} */
@@ -135,10 +150,10 @@ function buildService(options) {
   /** Host services are read lazily: rows load in order. */
   const hosts = {
     /**
-     * @returns {Record<string, any> | undefined} VibeStack model-layer service.
+     * @returns {Record<string, any> | undefined} HNFlow model-layer service.
      */
-    vibestack() {
-      return vibestackOf(ctx)
+    capability() {
+      return capabilityOf(ctx)
     },
     /**
      * @returns {Record<string, any> | undefined} agent preset registry.
@@ -245,6 +260,72 @@ function buildService(options) {
   }
 
   /**
+   * The project-local group tree. Flows created in a workspace live here so
+   * they are ordinary capability content with a normal path and id.
+   * @param {string} cwd - workspace root.
+   * @returns {string} `.hnflow/groups`.
+   */
+  function projectGroupsDir(cwd) {
+    return path.join(cwd, '.hnflow', 'groups')
+  }
+
+  /**
+   * Assert a resolved flow belongs to a project-local group.
+   * @param {string} cwd - workspace root.
+   * @param {Record<string, any>} resolved - resolution.
+   * @returns {void}
+   */
+  function requireProjectFlow(cwd, resolved) {
+    const root = `${path.resolve(projectGroupsDir(cwd))}${path.sep}`
+    if (!path.resolve(String(resolved.path)).startsWith(root)) {
+      throw new HnflowError('flow-not-local', `${resolved.flowName} belongs to group ${resolved.group}; only project-local flows can be edited here`)
+    }
+  }
+
+  /**
+   * Add a group to `.hnflow/stack.json` once.
+   * @param {string} cwd - workspace root.
+   * @param {string} group - group name.
+   * @returns {Promise<void>}
+   */
+  async function ensureStackGroup(cwd, group) {
+    const file = path.join(cwd, '.hnflow', 'stack.json')
+    const stack = await readJsonOrNull(file) ?? {
+      schema_version: 2,
+      core: { name: 'core', version: '0.1.0' },
+      groups: [],
+    }
+    stack.groups = Array.isArray(stack.groups) ? stack.groups : []
+    if (!stack.groups.some((entry) => entry?.name === group)) {
+      stack.groups.push({ name: group, version: '' })
+      await writeJson(file, stack)
+    }
+  }
+
+  /**
+   * Ensure a project-local group exists on disk.
+   * @param {string} cwd - workspace root.
+   * @param {string} group - group name.
+   * @returns {Promise<string>} group directory.
+   */
+  async function ensureProjectGroup(cwd, group) {
+    if (!/^[a-z0-9][a-z0-9-]*$/u.test(group)) throw new HnflowError('group-invalid', `group must be a lowercase slug, got ${group}`)
+    const directory = path.join(projectGroupsDir(cwd), group)
+    const manifest = path.join(directory, 'group.json')
+    if (await readJsonOrNull(manifest) === null) {
+      await mkdir(directory, { recursive: true })
+      await writeJson(manifest, {
+        guid: randomUUID().replace(/-/gu, ''),
+        name: group,
+        version: '',
+        description: 'Project-local flows',
+      })
+    }
+    await ensureStackGroup(cwd, group)
+    return directory
+  }
+
+  /**
    * Read the flow definition a run pinned.
    *
    * A run carries its own definition snapshot. That is what makes a draft
@@ -268,13 +349,13 @@ function buildService(options) {
 
   /**
    * The current host facts used by static validation.
-   * @returns {{allowlist: string[], vibestackAvailable: boolean, extraNodeKinds: Set<string>, checkPreset: Function, checkLayer: Function}} facts.
+   * @returns {{allowlist: string[], capabilityAvailable: boolean, extraNodeKinds: Set<string>, checkPreset: Function, checkLayer: Function}} facts.
    */
   function hostFacts() {
-    const vibestack = hosts.vibestack()
+    const capability = hosts.capability()
     return {
       allowlist: config.presetAllowlist,
-      vibestackAvailable: vibestackAvailable(vibestack),
+      capabilityAvailable: capabilityAvailable(capability),
       extraNodeKinds: new Set(kinds.list().map((kind) => kind.id)),
       checkPreset: async (id) => {
         const presets = hosts.presets()
@@ -287,31 +368,31 @@ function buildService(options) {
           return { ok: false, code: 'preset-unknown', message: String(error?.message ?? error) }
         }
       },
-      checkLayer: (id) => layerStatus(vibestack, id),
+      checkLayer: (id) => layerStatus(capability, id),
     }
   }
 
   /**
-   * Refuse work while VibeStack is missing.
+   * Refuse work while the capability service is missing.
    * @returns {void}
-   * @throws {HnflowError} `vibestack-unavailable`.
+   * @throws {HnflowError} `capability-unavailable`.
    */
-  function requireVibestack() {
-    if (!vibestackAvailable(hosts.vibestack())) {
-      throw new HnflowError('vibestack-unavailable', `HNFlow needs the VibeStack plugin (apiVersion >= ${REQUIRED_API_VERSION}) for capability groups and model layers`)
+  function requireCapability() {
+    if (!capabilityAvailable(hosts.capability())) {
+      throw new HnflowError('capability-unavailable', `HNFlow needs the capability service (apiVersion >= ${REQUIRED_API_VERSION}) for capability groups and model layers`)
     }
   }
 
   /**
-   * The VibeStack contract as reported to the page and the breadcrumb.
+   * The Capability contract as reported to the page and the breadcrumb.
    * @returns {{available: boolean, apiVersion: number | null, warnings: string[]}} facts.
    */
-  function vibestackFacts() {
-    const service = hosts.vibestack()
+  function capabilityFacts() {
+    const service = hosts.capability()
     return {
-      available: vibestackAvailable(service),
+      available: capabilityAvailable(service),
       apiVersion: service === undefined || service === null ? null : Number(service.apiVersion) || null,
-      warnings: vibestackWarnings(service),
+      warnings: capabilityWarnings(service),
     }
   }
 
@@ -343,6 +424,102 @@ function buildService(options) {
    */
   async function resolveKey(cwd, key) {
     return storesFor(cwd).resolver.resolve(key)
+  }
+
+  /**
+   * Resolve the capability plan for a workspace.
+   *
+   * The capability core owns the only resolver; HNFlow never walks
+   * `capability-groups/` itself. A project without a usable plan has no flows,
+   * which is a normal state rather than a crash.
+   * @param {string} cwd - workspace root.
+   * @returns {Promise<Record<string, any>[]>} resolved flow entries.
+   */
+  async function capabilityFlows(cwd) {
+    const capability = hosts.capability()
+    if (!capabilityAvailable(capability)) return []
+    // The capability core exposes one plan for both injection and flows.
+    if (typeof capability.planFor !== 'function') {
+      throw new HnflowError('capability-unavailable', 'the capability core does not expose a plan')
+    }
+    let result
+    try {
+      result = await capability.planFor(cwd)
+    } catch (error) {
+      throw new HnflowError('capability-unavailable', `cannot resolve capability groups: ${String(error?.message ?? error)}`)
+    }
+    for (const warning of result?.warnings ?? []) logger?.warn?.('hnflow: %s', warning)
+    const flows = Array.isArray(result?.plan?.flows) ? result.plan.flows : []
+    return flows.filter((entry) => entry && typeof entry.path === 'string')
+  }
+
+  /**
+   * Load one flow from the capability plan.
+   * @param {string} cwd - workspace root.
+   * @param {string} key - qualified id, flow id, or display name.
+   * @returns {Promise<Record<string, any>>} resolution.
+   */
+  async function resolveGroupFlow(cwd, key) {
+    const flows = await capabilityFlows(cwd)
+    const wanted = String(key ?? '').trim()
+    const matches = flows.filter((entry) => entry.id === wanted
+      || entry.flow_id === wanted
+      || entry.name === wanted
+      || path.basename(entry.path, '.flow.json') === wanted)
+    if (matches.length === 0) {
+      throw new HnflowError('flow-missing', `no capability flow named ${wanted}; run list_flows to see the active groups`)
+    }
+    if (matches.length > 1) {
+      throw new HnflowError('flow-ambiguous', `flow name ${wanted} matches ${matches.map((entry) => entry.id).join(', ')}; use the qualified id`)
+    }
+    const entry = matches[0]
+    const definition = await readJsonOrNull(entry.path)
+    if (definition === null) throw new HnflowError('flow-missing', `flow file ${entry.path} disappeared`)
+    return {
+      key: String(entry.id),
+      flowId: String(entry.flow_id),
+      flowName: String(entry.name || entry.flow_id),
+      definition,
+      source: 'capability',
+      revision: null,
+      local: false,
+      lockfile: null,
+      group: String(entry.group ?? ''),
+      module: entry.module === undefined || entry.module === null ? null : String(entry.module),
+      path: entry.path,
+      requires: Array.isArray(entry.requires) ? entry.requires : [],
+    }
+  }
+
+  /**
+   * Project one plan flow into the catalogue shape the page already reads.
+   * @param {Record<string, any>} entry - plan flow.
+   * @returns {Record<string, any>} catalogue entry.
+   */
+  function catalogueEntry(entry) {
+    return {
+      alias: String(entry.id),
+      flowId: String(entry.flow_id),
+      assetId: String(entry.id),
+      local: false,
+      enabled: true,
+      pinnedRevision: null,
+      currentRevision: 0,
+      hasOverride: false,
+      overrideBaseRevision: null,
+      overrideChangedAt: null,
+      name: String(entry.name || entry.flow_id),
+      description: String(entry.description ?? ''),
+      folder: String(entry.group ?? ''),
+      group: String(entry.group ?? ''),
+      module: entry.module === undefined || entry.module === null ? null : String(entry.module),
+      path: entry.path,
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
+      requires: Array.isArray(entry.requires) ? entry.requires : [],
+      missing: false,
+      drift: false,
+      source: 'capability',
+    }
   }
 
   /**
@@ -389,14 +566,14 @@ function buildService(options) {
    */
   async function lockfileFor(resolved) {
     if (resolved.lockfile !== null && resolved.lockfile !== undefined) return resolved.lockfile
-    const vibestack = hosts.vibestack()
+    const capability = hosts.capability()
     const presets = hosts.presets()
     return buildLockfile({
       definition: resolved.definition,
       revision: Number.isInteger(resolved.revision) ? resolved.revision : 0,
       pluginVersion: PLUGIN_VERSION,
-      vibestack,
-      layerStatus: (id) => layerStatus(vibestack, id),
+      capability,
+      layerStatus: (id) => layerStatus(capability, id),
       presetStatus: async (id) => {
         if (presets === undefined || typeof presets.resolve !== 'function') return { ok: true }
         try {
@@ -471,7 +648,7 @@ function buildService(options) {
    * A conductor is created outside any UI session, so it has no session-level
    * model selection to inherit: without an explicit route its children cannot
    * start a model turn. Prefer the host's current default selection, then the
-   * VibeStack default layer.
+   * Capability default layer.
    * @returns {Record<string, any> | null} agent options, or null for the host default.
    */
   function conductorAgentOptions() {
@@ -487,10 +664,10 @@ function buildService(options) {
     } catch {
       // fall through to the layer default
     }
-    const vibestack = hosts.vibestack()
-    if (typeof vibestack?.defaultLayer === 'function' && typeof vibestack?.resolveLayer === 'function') {
+    const capability = hosts.capability()
+    if (typeof capability?.defaultLayer === 'function' && typeof capability?.resolveLayer === 'function') {
       try {
-        const layer = vibestack.resolveLayer(vibestack.defaultLayer())
+        const layer = capability.resolveLayer(capability.defaultLayer())
         if (typeof layer?.provider === 'string' && typeof layer?.model === 'string') return agentOptionsOf(layer)
       } catch {
         // fall through to the host default
@@ -1322,14 +1499,14 @@ function buildService(options) {
    */
   async function run(input) {
     await ready()
-    requireVibestack()
-    const resolved = await resolveKey(input.cwd, input.key)
+    requireCapability()
+    const resolved = await resolveGroupFlow(input.cwd, input.key)
     const validation = await validate(resolved.definition)
     if (!validation.ok) {
       throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
     }
     const lockfile = await lockfileFor(resolved)
-    const problems = lockfileProblems(resolved.lockfile, { pluginVersion: PLUGIN_VERSION, vibestack: hosts.vibestack() })
+    const problems = lockfileProblems(resolved.lockfile, { pluginVersion: PLUGIN_VERSION, capability: hosts.capability() })
     if (resolved.lockfile !== null && resolved.lockfile !== undefined && !problems.ok) {
       throw new HnflowError('lockfile-mismatch', problems.reasons.join('; '))
     }
@@ -1348,6 +1525,8 @@ function buildService(options) {
       flowId: resolved.flowId,
       flowName: resolved.flowName || resolved.definition?.flow?.name || resolved.key,
       key: resolved.key,
+      group: resolved.group ?? null,
+      module: resolved.module ?? null,
       revision: Number.isInteger(resolved.revision) ? resolved.revision : null,
       source: resolved.source,
       // Self-contained: a draft override is executable even though it has no
@@ -1627,65 +1806,41 @@ function buildService(options) {
    * @returns {Promise<Record<string, any>>} draft metadata and validation.
    */
   async function draft(input) {
-    const resolved = await resolveKey(input.cwd, input.key)
-    const { workspace } = storesFor(input.cwd)
+    const resolved = await resolveGroupFlow(input.cwd, input.key)
+    requireProjectFlow(input.cwd, resolved)
     const definition = {
       ...input.definition,
       flow: {
         ...(input.definition.flow ?? {}),
         id: resolved.flowId,
-        // Renaming goes through `rename` (local) or a reference alias; a
-        // definition edit must not silently create a duplicate display name.
         name: resolved.flowName,
       },
     }
-    if (resolved.local === true) {
-      const document = await workspace.writeOverride({
-        flowId: resolved.flowId,
-        definition,
-        baseRevision: 0,
-        note: input.note ?? '',
-        origin: input.origin === 'user' ? 'user' : 'agent',
-        local: true,
-        folder: resolved.folder ?? '',
-      })
-      const validation = await validate(definition)
-      indexCache.delete(String(input.cwd))
-      return {
-        draft: true,
-        local: true,
-        flowId: resolved.flowId,
-        baseRevision: 0,
-        updatedAt: document.updatedAt,
-        validation,
-        next: 'this is a project-local draft; run it here, or promote it to the library when it is ready',
-      }
-    }
-    const document = await workspace.writeOverride({
-      flowId: resolved.flowId,
-      definition,
-      baseRevision: resolved.currentRevision,
-      note: input.note ?? '',
-      origin: input.origin === 'user' ? 'user' : 'agent',
-    })
     const validation = await validate(definition)
-    indexCache.delete(String(input.cwd))
+    if (!validation.ok) {
+      throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
+    }
+    await writeJson(resolved.path, definition)
+    invalidateViews(input.cwd)
     return {
       draft: true,
+      local: true,
+      key: resolved.key,
       flowId: resolved.flowId,
-      baseRevision: document.baseRevision,
-      updatedAt: document.updatedAt,
+      group: resolved.group,
+      path: resolved.path,
       validation,
-      next: 'a human must publish it (/hnflow publish <flow>) before it becomes a revision',
+      next: 'the project-local flow file was updated; run it with hnflow run, or edit it again',
     }
   }
 
   /**
-   * Create a new flow: a project-local draft, or a library asset plus a ref.
+   * Create a flow in a project-local capability group.
    *
-   * Creating a library asset writes revision 1. It does not advance an existing
-   * revision; changing an existing asset still requires a human publish.
-   * @param {{cwd: string, definition: Record<string, any>, scope?: 'project'|'library', name?: string, folder?: string, note?: string, alias?: string, reference?: boolean}} input - creation input.
+   * This is the only creation path: a flow is capability content, so it lives
+   * under `.hnflow/groups/<group>/flows/` and the group is activated in the
+   * project stack. The agent never writes a global library.
+   * @param {{cwd: string, definition: Record<string, any>, name?: string, folder?: string, note?: string}} input - creation input.
    * @returns {Promise<Record<string, any>>} created flow facts.
    */
   async function createFlow(input) {
@@ -1693,71 +1848,33 @@ function buildService(options) {
     const definition = input.definition
     const flow = definition !== null && typeof definition === 'object' && definition.flow !== null && typeof definition.flow === 'object' && !Array.isArray(definition.flow) ? definition.flow : {}
     const inputName = String(input.name ?? '').trim()
-    // `create` generates the identity, so callers (especially a model in a
-    // conversation) do not have to invent a flow id before the first draft.
-    const candidate = {
-      ...definition,
-      flow: {
-        ...flow,
-        id: typeof flow.id === 'string' && flow.id.trim().length > 0 ? flow.id : 'fl-pending',
-        name: typeof flow.name === 'string' && flow.name.trim().length > 0 ? flow.name : inputName,
-      },
-    }
+    const name = String(inputName || flow.name || '').trim()
+    if (name.length === 0) throw new HnflowError('name-required', 'a new flow needs a name (or definition.flow.name)')
+    const group = normalizeFolder(input.folder) || 'local'
+    if (group.includes('/')) throw new HnflowError('group-invalid', 'a project-local flow group is a single path segment')
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/gu, '-').replace(/^-|-$/gu, '') || 'flow'
+    const flowId = typeof flow.id === 'string' && flow.id.trim().length > 0 ? flow.id.trim() : `fl-${slug}`
+    if (!/^[a-z0-9][a-z0-9._-]*$/u.test(flowId)) throw new HnflowError('flow-id-invalid', `flow id must be a lowercase slug, got ${flowId}`)
+    const candidate = withFlowIdentity({ ...definition, flow: { ...flow } }, flowId, name)
     const problems = definitionProblems(candidate)
     if (problems.length > 0) throw new HnflowError('definition-invalid', problems.join('; '), { problems })
-    const name = String(input.name ?? candidate.flow?.name ?? '').trim()
-    if (name.length === 0) throw new HnflowError('name-required', 'a new flow needs a name (or definition.flow.name)')
-    const folder = normalizeFolder(input.folder)
     const validation = await validate(candidate)
     if (!validation.ok) {
       throw new HnflowError('flow-invalid', `the flow does not pass validation: ${validation.errors[0].message}`, { errors: validation.errors })
     }
-    if (input.scope === 'library') {
-      const assets = new AssetStore(libraryRoot(config), { logger })
-      const created = await assets.create({
-        name,
-        definition: candidate,
-        folder,
-        description: typeof definition.flow?.description === 'string' ? definition.flow.description : '',
-      })
-      const { workspace } = storesFor(cwd)
-      const ref = input.reference === false ? null : await workspace.addRef({ flowId: String(created.asset.id), alias: input.alias ?? '', revision: null })
-      indexCache.delete(String(cwd))
-      return {
-        scope: 'library',
-        flowId: String(created.asset.id),
-        name,
-        folder,
-        revision: 1,
-        referenced: ref !== null,
-        alias: ref?.alias ?? '',
-        validation,
-      }
-    }
-    const flowId = `fl-local-${randomUUID().replace(/-/gu, '').slice(0, 12)}`
-    const localDefinition = withFlowIdentity(candidate, flowId, name)
-    const { workspace } = storesFor(cwd)
-    const existing = await workspace.listOverrides()
-    if ([...existing.values()].some((document) => document.local === true && String(document.definition?.flow?.name ?? '') === name)) {
-      throw new HnflowError('name-duplicate', `a project-local flow is already named ${name}`)
-    }
-    const document = await workspace.writeOverride({
-      flowId,
-      definition: localDefinition,
-      baseRevision: 0,
-      note: input.note ?? 'created in conversation',
-      origin: 'agent',
-      local: true,
-      folder,
-    })
-    indexCache.delete(String(cwd))
+    const directory = await ensureProjectGroup(cwd, group)
+    const file = path.join(directory, 'flows', `${flowId}.flow.json`)
+    if (await readJsonOrNull(file) !== null) throw new HnflowError('flow-duplicate', `group ${group} already has a flow ${flowId}`)
+    await mkdir(path.dirname(file), { recursive: true })
+    await writeJson(file, candidate)
+    invalidateViews(cwd)
     return {
       scope: 'project',
+      key: `${group}/${flowId}`,
       flowId,
       name,
-      folder,
-      local: true,
-      updatedAt: document.updatedAt,
+      group,
+      path: file,
       validation,
     }
   }
@@ -1806,14 +1923,11 @@ function buildService(options) {
    * @returns {Promise<{flowId: string, name: string, local: true}>} removed facts.
    */
   async function deleteLocal(input) {
-    const resolved = await resolveKey(input.cwd, input.key)
-    if (resolved.local !== true) {
-      throw new HnflowError('not-local', `${input.key} is a library reference; remove the reference instead of deleting the asset`)
-    }
-    const { workspace } = storesFor(input.cwd)
-    await workspace.removeOverride(resolved.flowId)
-    indexCache.delete(String(input.cwd))
-    return { flowId: resolved.flowId, name: resolved.flowName, local: true }
+    const resolved = await resolveGroupFlow(input.cwd, input.key)
+    requireProjectFlow(input.cwd, resolved)
+    await rm(resolved.path, { force: true })
+    invalidateViews(input.cwd)
+    return { key: resolved.key, flowId: resolved.flowId, name: resolved.flowName, group: resolved.group, local: true }
   }
 
   /**
@@ -1824,28 +1938,15 @@ function buildService(options) {
   async function renameLocal(input) {
     const name = String(input.name ?? '').trim()
     if (name.length === 0) throw new HnflowError('name-required', 'a local flow needs a non-empty name')
-    const resolved = await resolveKey(input.cwd, input.key)
-    if (resolved.local !== true) throw new HnflowError('not-local', `${input.key} is a library flow; change its reference alias instead`)
+    const resolved = await resolveGroupFlow(input.cwd, input.key)
+    requireProjectFlow(input.cwd, resolved)
     const definition = {
       ...resolved.definition,
       flow: { ...(resolved.definition.flow ?? {}), id: resolved.flowId, name },
     }
-    const { workspace } = storesFor(input.cwd)
-    const existing = await workspace.listOverrides()
-    if ([...existing.values()].some((document) => document.local === true && document.flowId !== resolved.flowId && String(document.definition?.flow?.name ?? '') === name)) {
-      throw new HnflowError('name-duplicate', `another project-local flow is already named ${name}`)
-    }
-    const document = await workspace.writeOverride({
-      flowId: resolved.flowId,
-      definition,
-      baseRevision: 0,
-      note: `renamed to ${name}`,
-      origin: 'agent',
-      local: true,
-      folder: resolved.folder ?? '',
-    })
-    indexCache.delete(String(input.cwd))
-    return { flowId: resolved.flowId, name, local: true, updatedAt: document.updatedAt }
+    await writeJson(resolved.path, definition)
+    invalidateViews(input.cwd)
+    return { key: resolved.key, flowId: resolved.flowId, name, group: resolved.group, local: true }
   }
 
   /**
@@ -1896,7 +1997,7 @@ function buildService(options) {
    * @returns {Promise<Record<string, any>>} publish result.
    */
   async function publish(input) {
-    requireVibestack()
+    requireCapability()
     const resolved = await resolveKey(input.cwd, input.key)
     rejectLocal(resolved, 'publish')
     const validation = await validate(resolved.definition)
@@ -1942,7 +2043,7 @@ function buildService(options) {
    * @returns {Promise<Record<string, any>>} preview.
    */
   async function previewPublish(cwd, key) {
-    requireVibestack()
+    requireCapability()
     const resolved = await resolveKey(cwd, key)
     rejectLocal(resolved, 'publish')
     const validation = await validate(resolved.definition)
@@ -1992,7 +2093,7 @@ function buildService(options) {
    * @returns {Promise<Record<string, any>>} publish result plus `restoredFrom`.
    */
   async function rollback(input) {
-    requireVibestack()
+    requireCapability()
     const resolved = await resolveKey(input.cwd, input.key)
     rejectLocal(resolved, 'roll back')
     const { assets } = storesFor(input.cwd)
@@ -2013,22 +2114,23 @@ function buildService(options) {
   }
 
   /**
-   * List the workspace's referenced flows.
+   * List the flows of the workspace's active capability groups.
    * @param {string} cwd - workspace root.
    * @returns {Promise<Record<string, any>[]>} catalogue entries.
    */
   async function listFlows(cwd) {
-    return storesFor(cwd).resolver.catalogue()
+    const flows = await capabilityFlows(cwd)
+    return flows.map(catalogueEntry)
   }
 
   /**
-   * Describe one referenced flow.
+   * Describe one capability-group flow.
    * @param {string} cwd - workspace root.
    * @param {string} key - alias or flow id.
    * @returns {Promise<Record<string, any>>} resolution.
    */
   async function describeFlow(cwd, key) {
-    return resolveKey(cwd, key)
+    return resolveGroupFlow(cwd, key)
   }
 
   /**
@@ -2146,13 +2248,6 @@ function buildService(options) {
       }
     }
     /** @type {Record<string, any>[]} */
-    let library = []
-    try {
-      library = await libraryAssets()
-    } catch (error) {
-      logger.warn?.('hnflow: the library could not be listed: %o', error)
-    }
-    /** @type {Record<string, any>[]} */
     const triggers = []
     /** @type {{workspace: string, id: string, error: string}[]} */
     const triggerErrors = []
@@ -2181,14 +2276,13 @@ function buildService(options) {
         triggerErrors.push({ workspace: root, id: '*', error: String(error?.message ?? error) })
       }
     }
-    const degraded = !vibestackAvailable(hosts.vibestack())
+    const degraded = !capabilityAvailable(hosts.capability())
     return {
       ok: true,
       degraded,
-      vibestack: vibestackFacts(),
+      capability: capabilityFacts(),
       storage: store.mode(),
       warnings: store.warnings(),
-      library,
       workspaces: groups,
       runs: (await listRuns()).map((run) => summariseRun(run)),
       inbox: await inbox(),
@@ -2199,7 +2293,7 @@ function buildService(options) {
       facts: {
         degraded,
         storage: store.mode(),
-        vibestack: vibestackFacts(),
+        capability: capabilityFacts(),
         triggersEnabled: config.triggersEnabled !== false,
         passIntervalMs: config.passIntervalMs,
         runBudgetMs: config.runBudgetMs,
@@ -2218,16 +2312,16 @@ function buildService(options) {
     const rows = await listFlows(cwd)
     if (rows.length === 0) return ''
     const lines = rows.slice(0, config.maxIndexEntries).map((row) => {
-      const name = row.alias.length > 0 ? row.alias : row.flowId
-      const marker = row.local === true ? ' [项目草稿，仅本工作区]' : row.missing ? ' [资产缺失]' : ''
-      return `- ${name}：${row.description?.length > 0 ? row.description : '（未写说明）'}${marker}`
+      const name = row.name || row.flowId
+      const owner = row.module ? `${row.group}/${row.module}` : row.group
+      return `- ${name}（${row.flowId}，能力组 ${owner}）：${row.description?.length > 0 ? row.description : '（未写说明）'}`
     })
     const section = [
       '## 本工作区的 HNFlow 流程',
       '',
       ...lines,
       '',
-      '用 `hnflow` 工具（list_flows / list_library / describe_flow / run / status / add_ref / pin / history）操作；用 `hnflow_author`（schema / validate / create / draft / promote / delete / rename）创建和管理。新建默认是项目草稿，`scope:"library"` 才写通用资产；发布已有资产仍是人的动作。',
+      '用 `hnflow` 工具（list_flows / describe_flow / run / status / inbox / cancel / resume / artifact / triggers）运行；用 `hnflow_author`（schema / validate / create / draft / delete / rename）创建和管理。流程属于能力组：项目草稿写 `.hnflow/groups/<group>/flows/`，共享流程写能力组目录；没有发布、版本或资产库动作。',
     ].join('\n')
     indexCache.set(cwd, section)
     return section
@@ -2620,18 +2714,8 @@ function buildService(options) {
     deliver,
     draft,
     createFlow,
-    promote,
     deleteLocal,
     renameLocal,
-    removeRef,
-    renameRef,
-    listLibrary,
-    publish,
-    previewPublish,
-    history,
-    rollback,
-    pinRef,
-    addRef,
     listFlows,
     describeFlow,
     getRun,
@@ -2642,14 +2726,13 @@ function buildService(options) {
     indexSection,
     cachedIndex,
     validate,
-    resolveKey,
     sweepExpired,
     pass,
     triggers,
     registerNodeKind,
     registerChannel,
     nodeKinds: () => [...NODE_TYPES, ...kinds.list().map((kind) => kind.id)],
-    status: () => ({ degraded: !vibestackAvailable(hosts.vibestack()), vibestack: vibestackFacts(), storage: store.mode(), warnings: store.warnings(), runner: runner.available(), pass: lastPass }),
+    status: () => ({ degraded: !capabilityAvailable(hosts.capability()), capability: capabilityFacts(), storage: store.mode(), warnings: store.warnings(), runner: runner.available(), pass: lastPass }),
   }
 }
 
@@ -2668,8 +2751,10 @@ export function summariseRun(run) {
     health: runHealth(run),
     workspace: run.workspace,
     hostSessionId: run.hostSessionId,
+    group: run.group ?? null,
+    module: run.module ?? null,
     revision: run.revision,
-    source: run.source ?? 'latest',
+    source: run.source ?? 'capability',
     trigger: run.trigger ?? null,
     startedAt: run.startedAt,
     updatedAt: run.updatedAt ?? null,

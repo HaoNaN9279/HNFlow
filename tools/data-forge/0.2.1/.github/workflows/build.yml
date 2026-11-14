@@ -1,0 +1,96 @@
+name: Build DataForge MCP Server
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g., v0.3.0)"
+        required: false
+        default: "v0.3.0"
+
+permissions:
+  contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Build with PyInstaller (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          uv run pyinstaller --onefile --name data-forge --console --noconfirm --clean --additional-hooks-dir . --hidden-import mcp --hidden-import mcp.server.fastmcp src/data_forge/main.py
+          Move-Item dist/data-forge.exe dist/data-forge-windows-x64.exe -Force
+
+      - name: Build with PyInstaller (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          uv run pyinstaller --onefile --name data-forge --console --noconfirm --clean --strip --additional-hooks-dir . --hidden-import mcp --hidden-import mcp.server.fastmcp src/data_forge/main.py
+          mv dist/data-forge dist/data-forge-linux-x64
+          chmod +x dist/data-forge-linux-x64
+
+      - name: Build with PyInstaller (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          uv run pyinstaller --onefile --name data-forge --console --noconfirm --clean --strip --additional-hooks-dir . --hidden-import mcp --hidden-import mcp.server.fastmcp src/data_forge/main.py
+          mv dist/data-forge dist/data-forge-macos-x64
+          chmod +x dist/data-forge-macos-x64
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: data-forge-${{ matrix.os }}
+          path: dist/*
+          retention-days: 1
+
+  release:
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

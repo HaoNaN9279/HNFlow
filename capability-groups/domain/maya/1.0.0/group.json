@@ -1,0 +1,11 @@
+{
+  "guid": "ba1f2df55efc5422814955de7ac22e0a",
+  "name": "maya",
+  "version": "1.0.0",
+  "description": "Autodesk Maya 3D 动画与建模集成。",
+  "permissions": [
+    "fs"
+  ],
+  "extends": [],
+  "tools": []
+}

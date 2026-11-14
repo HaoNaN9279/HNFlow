@@ -1,0 +1,22 @@
+{
+  "guid": "a5ad9fe88f635b209cc38784fe649fdb",
+  "name": "data-forge",
+  "version": "1.0.0",
+  "description": "DataForge 数据转换与 AI 训练数据流水线。",
+  "permissions": [
+    "fs",
+    "exec",
+    "net"
+  ],
+  "extends": [],
+  "tools": [
+    "tool:d0794c942e7050f589ac59d3bc79a4b2@v0.2.1"
+  ],
+  "tool_permissions": {
+    "tool:d0794c942e7050f589ac59d3bc79a4b2@v0.2.1": [
+      "fs",
+      "exec",
+      "net"
+    ]
+  }
+}
