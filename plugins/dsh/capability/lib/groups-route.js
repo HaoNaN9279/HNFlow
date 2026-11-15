@@ -79,6 +79,8 @@ export function createGroupsRoutes(options) {
         if (workspace === null) return badWorkspace()
         const group = typeof body?.group === 'string' ? body.group.trim() : ''
         if (group.length === 0) return json({ ok: false, code: 'group-required', message: 'group is required' }, 400)
+        const problem = groupPathProblem(group)
+        if (problem !== null) return json({ ok: false, code: 'invalid-group', message: problem }, 400)
         if (typeof body?.active !== 'boolean') {
           return json({ ok: false, code: 'active-required', message: 'active must be a boolean' }, 400)
         }
@@ -130,6 +132,29 @@ export function createGroupsRoutes(options) {
   }
 
   return [listRoute, selectRoute, textRoute]
+}
+
+/**
+ * Validate a capability-group path before it reaches the CLI.
+ *
+ * The CLI validates again; this keeps a malformed selection from becoming an
+ * argv value and gives the window a specific 400 instead of a generic failure.
+ * @param {string} group - trimmed group path such as `unity/framework/editor`.
+ * @returns {string | null} a message when invalid, otherwise null.
+ */
+export function groupPathProblem(group) {
+  if (group.length > 256) return 'group path is too long'
+  if (group.includes('\\')) return 'group path must use forward slashes'
+  if (group.startsWith('/') || group.endsWith('/')) return 'group path must not start or end with a slash'
+  const parts = group.split('/')
+  if (parts.length > 8) return 'group path has too many levels'
+  for (const part of parts) {
+    if (part === '' || part === '.' || part === '..' || part === 'levels') {
+      return `group path segment '${part}' is not allowed`
+    }
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(part)) return `group path segment '${part}' is not allowed`
+  }
+  return null
 }
 
 /**

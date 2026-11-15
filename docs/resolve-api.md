@@ -36,11 +36,13 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
   "groups": [
     {
       "guid": "32hex",
-      "name": "unity-framework",
+      "name": "unity/framework/editor",
       "version": "1.0.0",
-      "root": ".../capability-groups/domain/unity-framework/1.0.0",
+      "root": ".../capability-groups/domain/unity/1.0.0/levels/framework/levels/editor",
       "extends": [],
-      "tools": ["tool:..."]
+      "tools": ["tool:..."],
+      "parent": "unity/framework",
+      "depth": 2
     }
   ],
   "rules": [
@@ -105,7 +107,7 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
 | `active` | 计划是否生效；`mode=capabilities` 时始终为 `true` |
 | `mode` | `project` 或 `capabilities` |
 | `core` | 已解析的 Core 摘要；`project` 模式无 stack 时为 `null` |
-| `groups` | 已解析的领域组摘要，按加载顺序 |
+| `groups` | 已解析的组摘要，按加载顺序；`parent` 为父层路径（根为 `null`），`depth` 从 0 起 |
 | `rules` | 规则列表，按注入顺序；带作用域与 `on_demand` |
 | `skills` | 技能目录，按加载顺序；可带 `model`（层 id） |
 | `agents` | 已合并 Agent；可带 `model`（层 id） |
@@ -124,10 +126,11 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
 
 | 位置 | 格式 |
 |---|---|
-| 内容的 `id` | `<group>/<name>` |
+| 内容的 `id` | `<group-path>/<name>` |
 | `agents` / `commands` 的键 | `<name>` |
-| `skills` 的宿主名 | `capability-<group>-<name>` |
-| 流程的 `id` | `<group>/<flow.id>` |
+| `skills` 的宿主名 | `capability-<slug(group-path)>-<name>` |
+| 流程的 `id` | `<group-path>/<flow.id>` |
+| MCP 的键 | `capability:<group-path>_<server>` |
 
 `rules` 的 `kind` 为 `rule` 或 `agents`（吸收的 `AGENTS.md`）。`scope` 为 `global` 或
 `paths`。`on_demand: true` 的规则只进索引（`- <路径>: <description>`），不注入正文。
@@ -139,6 +142,39 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
 未知或非法值写入 `warnings` 并省略该字段。层到 provider/model/reasoningEffort 的绑定属于
 用户本机配置，由插件按 `model_layers` 解析。能力组不得写 provider、具体模型名、
 temperature、permission 等宿主参数。
+
+## groups 清单
+
+`hnflow-stack groups --json` 返回同一棵能力组树，每个路径一项：
+
+```json
+{
+  "schema_version": 2,
+  "stack": { "groups": [{ "name": "unity/framework/editor", "version": "1.0.0" }] },
+  "groups": [
+    {
+      "name": "unity/framework/editor",
+      "version": "1.0.0",
+      "guid": "32hex",
+      "description": "编辑器层",
+      "source": "repo",
+      "fixed": false,
+      "active": true,
+      "explicit": true,
+      "parent": "unity/framework",
+      "depth": 2,
+      "ancestors": ["unity", "unity/framework"],
+      "root": ".../levels/editor",
+      "contents": { "rules": [], "agents": [], "commands": [], "skills": [], "references": [], "flows": [] }
+    }
+  ]
+}
+```
+
+- `explicit` 表示路径直接写在 `stack.json`；`active` 还包含被显式激活的子层隐式带上的祖先。
+- 同一路径只列一项：项目组覆盖仓库组，显式版本优先，否则取最高 semver；项目同名根组
+  同时隐藏该根下的仓库子树。
+- `contents` 只列本层自己的文件，不含祖先或子层。
 
 ## 工作流校验
 
@@ -155,9 +191,9 @@ temperature、permission 等宿主参数。
 
 1. Core（`mode=capabilities` 时无条件；`project` 模式仅当 stack 存在）
 2. `stack.groups` 数组顺序
-3. 每个组的 `extends` 依赖优先，支持 `name@version`；环报错
-4. 同名组只加载一次
-5. 每组内部按 `rules/`、`agents/`、`commands/`、`skills/`、`flows/` 收集
+3. 每条路径先按「根 → 父 → 子」补齐祖先层，再展开 `extends` 依赖；环报错
+4. 同一路径只加载一次
+5. 每层内部按 `rules/`、`agents/`、`commands/`、`skills/`、`flows/` 收集
 
 内容校验：
 
@@ -173,7 +209,7 @@ temperature、permission 等宿主参数。
 
 ## 合并与冲突
 
-- rules：`global` 规则先于 `paths` 规则，同作用域按 `priority` 排序；`overrides` 压掉同组已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
+- rules：祖先先于子层，`global` 规则先于 `paths` 规则，同作用域按 `priority` 排序；子层的 `overrides` 会压掉祖先与同层已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
 - skills：追加；宿主名重复保留后加载者并告警，`sync` 报错。
 - agents、commands、mcp：同名后加载者覆盖。
 - flows：同限定 id 重复时保留首个并告警；不存在跨组覆盖。

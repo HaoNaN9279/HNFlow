@@ -19,6 +19,10 @@ class GroupNotActiveError(HNFlowError):
     """A capability group is not active in the project."""
 
 
+class GroupRequiredError(HNFlowError):
+    """A capability group is still required by an active group or level."""
+
+
 class ToolNotFoundError(HNFlowError):
     """A tool package does not exist."""
 

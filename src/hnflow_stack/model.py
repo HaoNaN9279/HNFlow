@@ -35,6 +35,8 @@ class GroupMeta:
     tool_permissions: dict[str, list[str]] = field(default_factory=dict)
     root: Path = field(default_factory=Path)
     disabled_rules: list[str] = field(default_factory=list)
+    parent: str | None = None
+    depth: int = 0
 
     @property
     def rules_root(self) -> Path:
@@ -110,6 +112,8 @@ class ResolvedGroup:
     permissions: list[str] = field(default_factory=list)
     extends: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    parent: str | None = None
+    depth: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -121,6 +125,8 @@ class ResolvedGroup:
             "permissions": list(self.permissions),
             "extends": list(self.extends),
             "tools": list(self.tools),
+            "parent": self.parent,
+            "depth": self.depth,
         }
 
 

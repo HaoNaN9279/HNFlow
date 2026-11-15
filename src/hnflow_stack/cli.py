@@ -344,14 +344,16 @@ def _groups(repo: Path, project: Path, as_json: bool) -> int:
     print(f"repo: {document['repo']}")
     print(f"project: {document['project']}")
     for group in document["groups"]:
-        mark = "*" if group["active"] else " "
+        explicit = bool(group.get("explicit")) or bool(group.get("fixed"))
+        mark = "*" if explicit else ("~" if group["active"] else " ")
         label = f"{group['name']}@{group['version']}" if group["version"] else group["name"]
+        indent = "  " * int(group.get("depth") or 0)
         counts = ", ".join(
             f"{kind} {len(items)}" for kind, items in group["contents"].items() if items
         )
-        print(f" {mark} {label}  {group['description']}")
+        print(f" {mark} {indent}{label}  {group['description']}")
         if counts:
-            print(f"     {counts}")
+            print(f"     {'  ' * int(group.get('depth') or 0)}{counts}")
     return 0
 
 
@@ -425,6 +427,9 @@ def _info(repo: Path, project: Path, name: str, version: str) -> int:
     print(label)
     print(f"guid: {group.guid}")
     print(f"description: {group.description}")
+    if group.parent is not None:
+        print(f"parent: {group.parent}")
+        print(f"level: {group.depth + 1}")
     print(f"extends: {', '.join(group.extends) or '(none)'}")
     print(f"tools: {', '.join(group.tools) or '(none)'}")
     print(f"rules: {len(group.rules)}")

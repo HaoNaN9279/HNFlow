@@ -15,8 +15,11 @@ HNFlow 用一个仓库同时管理：
 
 ```text
 Layer (core / domain / project)
-  └── Group (版本边界, group.json)
-        └── 内容目录 rules/ agents/ commands/ skills/ flows/ references/
+  └── Group tree (根版本目录, group.json)
+        ├── 内容目录 rules/ agents/ commands/ skills/ flows/ references/
+        └── levels/<子层>/group.json
+              ├── 内容目录 ...
+              └── levels/<孙层>/group.json
 ```
 
 - **Core**：常驻规则、基础 Agent/命令/技能，以及能力组与流程的制作内容（`custom-*`、
@@ -24,9 +27,17 @@ Layer (core / domain / project)
   仓库内 `capability-groups/core/<version>/`。HNFlow 模式固定加载，不需要写进 `stack.json`。
 - **领域组**：`capability-groups/domain/<name>/<version>/`，显式激活。
 - **项目组**：`<project>/.hnflow/groups/<name>/`，无版本目录；同名覆盖仓库组，天然承载
-  未发布的项目内工作流。
-- 组内不再有子模块层：需要「只对某些目录生效」的内容用规则的 `scope: paths`，
-  需要「正文长、按需查阅」的内容用规则的 `on_demand: true`。
+  未发布的项目内工作流。项目同名根组覆盖整棵仓库子树（含该根的 `levels/`）。
+- **层级**：任意组（Core、领域组、项目组）都可以在根版本目录下用 `levels/<name>/group.json`
+  定义子层，子层可以继续嵌套；最多 8 层。层的 `group.json` 至少写 `guid`、`name`、
+  `description`，`name` 必须等于目录名；`version` 可省略，写了必须等于根版本。
+- 组的唯一标识是路径：根组是 `unity`，子层是 `unity/framework`、`unity/framework/editor`。
+  路径段只允许小写字母、数字与连字符，`levels` 是保留段。
+- 激活一个子层只把它自己的路径写进 `stack.json`；解析时祖先层自动按「根 → 父 → 子」加载，
+  子层拥有全部祖先内容。停用一个仍被活跃子层需要的祖先会被拒绝；停用一个兄弟层不会影响
+  另一个兄弟层。
+- 同一层内需要「只对某些目录生效」的内容用规则的 `scope: paths`，需要「正文长、按需查阅」
+  的内容用规则的 `on_demand: true`。
 
 ## 3. 依赖
 
@@ -37,8 +48,9 @@ Layer (core / domain / project)
 ```
 
 - 依赖先于依赖者加载，按组名去重；同一依赖可写 `name@version`。
-- 激活只把**根组**写进 `.hnflow/stack.json`，不展开依赖。
-- 解析时递归依赖闭包；`extends` 环是硬错误。
+- 激活只把**被选中的组**写进 `.hnflow/stack.json`，不展开 `extends` 依赖，也不展开祖先层；
+  祖先层在解析时隐式加载。
+- 解析时先展开路径父链，再递归 `extends` 闭包；`extends` 环与路径自依赖都是硬错误。
 - 停用一个仍被其他活跃组依赖的组会被拒绝。
 - 依赖组的内容对依赖者完全可见：规则、技能、Agent、命令、MCP、工具与工作流。
 - 组内工作流可以使用本组及依赖闭包内的全部内容；解析器不校验节点 instruction 里引用的
@@ -76,19 +88,20 @@ hnflow-stack --repo <repo> --project <project> resolve --json --mode capabilitie
 
 1. 定位仓库与 Core；
 2. 读 `.hnflow/stack.json`；
-3. Core → `stack.groups` → 每组递归 `extends`；
-4. 按组名去重；
+3. Core → `stack.groups` → 每条路径先补祖先层，再递归 `extends`；
+4. 按组路径去重；
 5. 按组顺序收集 rules / skills / agents / commands / mcp / flows；
 7. 计算限定 id 与宿主名；
 8. 输出注入计划与 `fingerprint`。
 
-限定 id：`<group>/<name>`。
-DSH 宿主名：`capability-<group>-<name>`。
+限定 id：`<group-path>/<name>`（如 `arena/framework/editor/editor-rule`）。
+DSH 宿主名：`capability-<slug(group-path)>-<name>`。
 
 合并规则：
 
-- rules 追加，`global` 规则先于 `paths` 规则，按 `priority` 排序，`overrides` 压掉同名早期规则；
-  `on_demand: true` 的规则只注入 `- <路径>: <description>` 摘要行，正文由 Agent 按需读取；
+- rules 追加，祖先先于子层，`global` 规则先于 `paths` 规则，按 `priority` 排序；子层的
+  `overrides` 会压掉祖先与同层同名规则，`on_demand: true` 的规则只注入
+  `- <路径>: <description>` 摘要行，正文由 Agent 按需读取；
 - skills 追加，同名宿主名保留后者并告警；
 - agents / commands / mcp 同名后加载覆盖；
 - 同限定 id 重复才是真冲突：`resolve` 告警，`sync` / `validate` 报错。

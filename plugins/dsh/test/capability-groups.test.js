@@ -19,6 +19,7 @@ import {
   GROUPS_SELECT_PATH,
   GROUPS_TEXT_PATH,
   createGroupsRoutes,
+  groupPathProblem,
   workspaceOf,
 } from "../capability/lib/groups-route.js";
 
@@ -165,6 +166,52 @@ test("the select route validates the body", async () => {
   );
   assert.equal(broken.status, 400);
   assert.equal((await broken.json()).code, "invalid-json");
+});
+
+test("nested group paths pass through argv and are validated", () => {
+  assert.deepEqual(selectArgs("D:/work/demo", null, "activate", "unity/framework/editor"), [
+    "--project",
+    "D:/work/demo",
+    "activate",
+    "unity/framework/editor",
+  ]);
+  assert.equal(groupPathProblem("unity/framework/editor"), null);
+  assert.equal(groupPathProblem("core"), null);
+  assert.match(groupPathProblem("../unity"), /not allowed|forward/u);
+  assert.match(groupPathProblem("unity/../editor"), /not allowed/u);
+  assert.match(groupPathProblem("unity\\editor"), /forward slashes/u);
+  assert.match(groupPathProblem("/unity"), /slash/u);
+  assert.match(groupPathProblem("unity/levels"), /not allowed/u);
+  assert.match(groupPathProblem("Unity"), /not allowed/u);
+  assert.match(groupPathProblem("a/b/c/d/e/f/g/h/i"), /too many levels/u);
+});
+
+test("the select route rejects a malformed nested path", async () => {
+  const { calls, execute } = fakeCli();
+  const routes = createGroupsRoutes({ config: {}, execute });
+  const response = await route(routes, GROUPS_SELECT_PATH).fetch(
+    new Request(`http://x${GROUPS_SELECT_PATH}`, {
+      method: "POST",
+      body: JSON.stringify({ workspace, group: "unity/../secret", active: true }),
+    }),
+  );
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).code, "invalid-group");
+  assert.equal(calls.length, 0);
+});
+
+test("the select route forwards a nested path unchanged", async () => {
+  const { calls, execute } = fakeCli();
+  const routes = createGroupsRoutes({ config: {}, execute });
+  const response = await route(routes, GROUPS_SELECT_PATH).fetch(
+    new Request(`http://x${GROUPS_SELECT_PATH}`, {
+      method: "POST",
+      body: JSON.stringify({ workspace, group: "unity/framework/editor", active: true }),
+    }),
+  );
+  assert.equal(response.status, 200);
+  const activation = calls.find((call) => call.args.includes("activate"));
+  assert.deepEqual(activation.args.slice(-2), ["activate", "unity/framework/editor"]);
 });
 
 test("the text route reads one catalog entry and truncates to the budget", async () => {

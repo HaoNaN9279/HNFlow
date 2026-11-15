@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from hnflow_stack.frontmatter import frontmatter_text, parse_frontmatter
-from hnflow_stack.loader import discover_groups, project_groups_dir
+from hnflow_stack.loader import _version_key, discover_groups, project_groups_dir
 from hnflow_stack.model import GroupMeta, ProjectStack, read_json
 from hnflow_stack.project import read_stack
 
@@ -31,11 +31,15 @@ def groups_document(repo: Path, project: Path) -> dict[str, object]:
     always active.
     """
     stack = read_stack(project)
-    active = {ref.name for ref in stack.groups} if stack is not None else set()
+    active = {ref.name: ref for ref in stack.groups} if stack is not None else {}
+    loaded = _active_paths(active)
+    wanted = _wanted_versions(active)
     core_name = stack.core.name if stack is not None and stack.core is not None else "core"
     groups = []
-    for group in discover_groups(repo, project=project):
-        fixed = group.name == core_name
+    for group in _visible_groups(repo, project, wanted):
+        parts = group.name.split("/")
+        ancestors = ["/".join(parts[:index]) for index in range(1, len(parts))]
+        fixed = group.name == core_name or group.name.startswith(f"{core_name}/")
         groups.append(
             {
                 "name": group.name,
@@ -44,7 +48,11 @@ def groups_document(repo: Path, project: Path) -> dict[str, object]:
                 "description": group.description,
                 "source": _source(group, project),
                 "fixed": fixed,
-                "active": fixed or group.name in active,
+                "active": fixed or group.name in loaded,
+                "explicit": group.name in active,
+                "parent": "/".join(parts[:-1]) or None,
+                "depth": len(parts) - 1,
+                "ancestors": ancestors,
                 "root": str(group.root),
                 "contents": _contents(group),
             }
@@ -56,6 +64,68 @@ def groups_document(repo: Path, project: Path) -> dict[str, object]:
         "stack": stack.to_dict() if stack is not None else None,
         "groups": groups,
     }
+
+
+def _active_paths(active: dict[str, object]) -> set[str]:
+    """Explicitly active paths plus every ancestor a level implicitly loads."""
+    paths: set[str] = set()
+    for name in active:
+        parts = name.split("/")
+        for index in range(1, len(parts) + 1):
+            paths.add("/".join(parts[:index]))
+    return paths
+
+
+def _wanted_versions(active: dict[str, object]) -> dict[str, str]:
+    """Version requested per path, including versions inherited by ancestors."""
+    wanted: dict[str, str] = {}
+    for name, ref in active.items():
+        version = str(getattr(ref, "version", "") or "")
+        parts = name.split("/")
+        for index in range(1, len(parts) + 1):
+            path = "/".join(parts[:index])
+            wanted.setdefault(path, version)
+    return wanted
+
+
+def _visible_groups(
+    repo: Path, project: Path, wanted_versions: dict[str, str]
+) -> list[GroupMeta]:
+    """One entry per path: project shadows repo, explicit version wins, else newest.
+
+    A project-local root shadows the whole repository tree of the same name, so
+    repository levels below that root are not offered either: loading them would
+    resolve through the project root and fail.
+    """
+    base = project_groups_dir(project)
+    project_roots = (
+        {config.parent.name for config in base.glob("*/group.json")}
+        if base.is_dir()
+        else set()
+    )
+    best: dict[str, tuple[GroupMeta, str]] = {}
+    for group in discover_groups(repo, project=project):
+        source = _source(group, project)
+        if source == "repo" and group.name.split("/", 1)[0] in project_roots:
+            continue
+        current = best.get(group.name)
+        if current is None:
+            best[group.name] = (group, source)
+            continue
+        current_group, current_source = current
+        if source == "project" and current_source != "project":
+            best[group.name] = (group, source)
+            continue
+        if source != current_source:
+            continue
+        wanted = wanted_versions.get(group.name, "")
+        if wanted:
+            if group.version == wanted and current_group.version != wanted:
+                best[group.name] = (group, source)
+            continue
+        if _version_key(group.version) > _version_key(current_group.version):
+            best[group.name] = (group, source)
+    return [group for group, _source_name in best.values()]
 
 
 def _source(group: GroupMeta, project: Path) -> str:

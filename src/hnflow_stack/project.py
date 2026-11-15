@@ -9,10 +9,11 @@ from pathlib import Path
 from hnflow_stack.errors import (
     GroupAlreadyActiveError,
     GroupNotActiveError,
+    GroupRequiredError,
     ProjectConfigError,
     HNFlowError,
 )
-from hnflow_stack.loader import discover_tools, load_group
+from hnflow_stack.loader import discover_tools, load_group, split_group_path
 from hnflow_stack.model import GroupMeta, GroupRef, ProjectStack, ToolMeta
 from hnflow_stack.repo import default_core
 
@@ -125,14 +126,23 @@ def deactivate(project_root: Path, name: str) -> ProjectStack:
             pending = [root]
             while pending:
                 current = pending.pop()
-                if current in seen:
-                    continue
+                parts = split_group_path(str(current).split("@", 1)[0])
+                parents = ["/".join(parts[:index]) for index in range(1, len(parts))]
+                for item in [*parents, *graph.get(current, [])]:
+                    token = str(item).split("@", 1)[0]
+                    if token not in seen:
+                        pending.append(token)
                 seen.add(current)
-                pending.extend(str(item).split("@", 1)[0] for item in graph.get(current, []))
             return seen
 
-        if any(name in closure(root) for root in roots - {name}):
-            raise ProjectConfigError(f"group '{name}' is required by another active group")
+        dependent = next(
+            (root for root in sorted(roots - {name}) if name in closure(root)),
+            None,
+        )
+        if dependent is not None:
+            raise GroupRequiredError(
+                f"group '{name}' is required by another active group"
+            )
     stack.groups = kept
     write_stack(project_root, stack)
     return stack
@@ -165,8 +175,16 @@ def resolve_order(
                 if warnings is not None:
                     warnings.append(message)
             return
+        parts = split_group_path(name)
         seen.add(name)
         visiting.add(name)
+        # A level's content always includes every ancestor level. Ancestors are
+        # resolved first so collection order is root -> parent -> child.
+        for index in range(1, len(parts)):
+            ancestor = "/".join(parts[:index])
+            ref = refs.get(ancestor)
+            inherited = ref.version if ref is not None and ref.version else version
+            add(ancestor, inherited)
         try:
             group = load_group(repo, name, version or None, project=project)
         except HNFlowError as exc:

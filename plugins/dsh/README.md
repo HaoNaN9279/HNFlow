@@ -21,8 +21,8 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 
 | 面 | 行为 |
 | --- | --- |
-| 能力组 | 按项目 `.hnflow/stack.json` 解析，注入 rules、skills、commands、agents、MCP、模型层 |
-| 能力组开关 | 工作区标题右键或 `…` 菜单里的「HNFlow 能力组…」：新窗口列出全部能力组，勾选启停，展开看组内内容，悬停 `◉` 预览全文。需要 DSH 客户端提供 `contextMenus` 服务与 `workspace` 目标（0.2.2 起）；更早的客户端没有入口，插件其余功能不受影响 |
+| 能力组 | 按项目 `.hnflow/stack.json` 解析，注入 rules、skills、commands、agents、MCP、模型层；子层激活时祖先层自动加载 |
+| 能力组开关 | 工作区标题右键或 `…` 菜单里的「HNFlow 能力组…」：新窗口按层级树列出全部能力组，勾选启停，展开看本层内容，悬停 `◉` 预览全文。需要 DSH 客户端提供 `contextMenus` 服务与 `workspace` 目标（0.2.2 起）；更早的客户端没有入口，插件其余功能不受影响 |
 | 工作流 | 能力组的 `flows/*.flow.json`，与规则/技能同一条解析链 |
 | 模型层 | 平台层 `fast` / `standard` / `strong` / `vision`，项目与全局绑定由 Python Core 读取；HNFlow 模式下接管输入框右下角的模型位 |
 | 上下文预览 | 输入框左下角 `▤` 按钮，查看本次会话实际注入的人设、规则、技能、命令、Agent、MCP 与工作流（左下角只放 Agent 选择与预览） |
@@ -32,9 +32,10 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 ## 工作流属于能力组
 
 - 组根流程：`capability-groups/<layer>/<name>/<version>/flows/<id>.flow.json`
-- 对外的键：`<group>/<id>`
+- 对外的键：`<group>/<id>`；子层为 `<group>/<level>/<id>`
+- 组内层级：根版本目录下 `levels/<level>/group.json` 可继续嵌套；子层的规则/技能/Agent/命令/流程与祖先层一起加载
 - 项目内新建：`hnflow_author create` 写 `<workspace>/.hnflow/groups/<group>/flows/<id>.flow.json`
-- 组可用本组及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流
+- 组可用本组、祖先层及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流
 
 没有独立资产库，没有 `list_library` / `add_ref` / `pin` / `publish` / `rollback` /
 `promote` / `import`，也没有独立的 revision 文件。`.hnflow/lock.json` 只记录能力组解析闭包，
@@ -65,13 +66,17 @@ Agent 不能裁决门禁或替人交付；也没有发布/回滚动作。
 
 ```text
 <repo>/capability-groups/.../group.json
+<repo>/capability-groups/.../levels/<level>/group.json
 <repo>/capability-groups/.../flows/<id>.flow.json
-<workspace>/.hnflow/stack.json                 激活的根能力组
-<workspace>/.hnflow/groups/<name>/             项目本地能力组（无版本目录）
+<workspace>/.hnflow/stack.json                 显式激活的能力组路径
+<workspace>/.hnflow/groups/<name>/             项目本地能力组（无版本目录，可含 levels/）
 <workspace>/.hnflow/groups/<name>/flows/       项目本地工作流
 <workspace>/.hnflow/triggers.json              触发器（由人维护）
 $DSH_HOME/hnflow/runs                          运行状态（storage 不可用时的降级文件）
 ```
+
+激活子层时只写该子层路径，例如 `{"name": "unity/framework/editor", "version": "1.0.0"}`；
+`unity` 与 `unity/framework` 在解析时自动加载，不写入 `stack.json`。
 
 ## 页面
 

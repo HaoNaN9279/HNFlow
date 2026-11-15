@@ -2330,6 +2330,30 @@ function GroupsWindow() {
   const groups = catalog && Array.isArray(catalog.groups) ? catalog.groups : [];
   const activeCount = groups.filter((group) => group.active === true).length;
 
+  const childrenByParent = new Map();
+  for (const group of groups) {
+    const parent = typeof group.parent === "string" ? group.parent : "";
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent).push(group);
+  }
+  const flatGroups = [];
+  const walkTree = (parent, depth) => {
+    for (const group of childrenByParent.get(parent) || []) {
+      flatGroups.push({ group, depth });
+      walkTree(group.name, depth + 1);
+    }
+  };
+  walkTree("", 0);
+  const totalOf = (group) => {
+    const contents = group.contents && typeof group.contents === "object" ? group.contents : {};
+    const own = GROUP_KINDS.reduce(
+      (sum, { kind }) => sum + (Array.isArray(contents[kind]) ? contents[kind].length : 0),
+      0
+    );
+    const children = childrenByParent.get(group.name) || [];
+    return own + children.reduce((sum, child) => sum + totalOf(child), 0);
+  };
+
   const card = hover !== null && preview !== null
     ? h(GroupPreviewCard, {
         item: hover.item,
@@ -2388,16 +2412,18 @@ function GroupsWindow() {
             ? h("div", { style: inventoryStyles.muted }, "加载中…")
             : catalog === null
               ? h("div", { style: inventoryStyles.muted }, "没有可显示的能力组。")
-              : groups.map((group) => {
+              : flatGroups.map(({ group, depth }) => {
                   const isOpen = expanded[group.name] === true;
                   const contents = group.contents && typeof group.contents === "object" ? group.contents : {};
-                  const total = GROUP_KINDS.reduce(
-                    (sum, { kind }) => sum + (Array.isArray(contents[kind]) ? contents[kind].length : 0),
-                    0
-                  );
+                  const total = totalOf(group);
+                  const children = childrenByParent.get(group.name) || [];
+                  const implicit = group.active === true && group.explicit !== true && group.fixed !== true;
                   return h(
                     "div",
-                    { key: group.name, style: groupsStyles.group },
+                    {
+                      key: `${group.name}@${group.version || ""}`,
+                      style: depth > 0 ? { ...groupsStyles.group, marginLeft: `${depth * 18}px` } : groupsStyles.group
+                    },
                     h(
                       "div",
                       { style: groupsStyles.groupHead },
@@ -2405,8 +2431,12 @@ function GroupsWindow() {
                         type: "checkbox",
                         style: groupsStyles.checkbox,
                         checked: group.active === true || group.fixed === true,
-                        disabled: group.fixed === true || pending[group.name] === true,
-                        title: group.fixed === true ? "Core 固定加载，不能关闭" : "激活/关闭该能力组",
+                        disabled: group.fixed === true || implicit || pending[group.name] === true,
+                        title: group.fixed === true
+                          ? "Core 固定加载，不能关闭"
+                          : implicit
+                            ? "由子层激活而加载，需先停用所有子层"
+                            : "激活/关闭该能力组",
                         "aria-label": `${group.name} 激活`,
                         onChange: () => void toggleGroup(group)
                       }),
@@ -2430,6 +2460,9 @@ function GroupsWindow() {
                           h("span", null, group.version ? `${group.name}@${group.version}` : group.name),
                           group.fixed === true ? h("span", { style: groupsStyles.badge }, "常驻") : null,
                           group.source === "project" ? h("span", { style: groupsStyles.badge }, "项目") : null,
+                          depth > 0 ? h("span", { style: groupsStyles.badge }, `层级 ${depth + 1}`) : null,
+                          implicit ? h("span", { style: groupsStyles.badge }, "随子层加载") : null,
+                          children.length > 0 ? h("span", { style: groupsStyles.badge }, `${children.length} 个子层`) : null,
                           h("span", { style: inventoryStyles.count }, `${total} 项`)
                         ),
                         h("div", { style: groupsStyles.groupDescription }, group.description || "")

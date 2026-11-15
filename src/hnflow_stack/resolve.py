@@ -234,7 +234,7 @@ def _collect_content(
     command_owners: dict[str, str] = {}
 
     for group in groups:
-        rules.extend(_collect_group_rules(group, warnings, strict, files))
+        rules = _collect_group_rules(group, warnings, strict, files, rules)
         _collect_skills(group.root / "skills", group, skills, warnings)
         _collect_agents(group, agents, names, agent_owners, warnings, strict, files)
         _collect_commands(group, commands, names, command_owners, warnings, strict, files)
@@ -263,8 +263,14 @@ def _collect_group_rules(
     warnings: list[str],
     strict: bool,
     files: set[Path],
+    prior: list[ResolvedRule] | None = None,
 ) -> list[ResolvedRule]:
-    """Collect the group's rules, apply scope, ordering, and overrides."""
+    """Collect the group's rules on top of already collected ancestor rules.
+
+    ``overrides`` removes rules with the same name from the ancestor levels and
+    from earlier rules of the same level, which is how a child level replaces a
+    parent rule without a duplicate id.
+    """
     entries: list[tuple[ResolvedRule, list[str]]] = []
     for file in group.rules:
         parsed = _read_frontmatter(file, warnings)
@@ -282,14 +288,26 @@ def _collect_group_rules(
         key=lambda item: (item[0].scope != "global", item[0].priority, item[0].path)
     )
     disabled = set(group.disabled_rules)
-    kept: list[ResolvedRule] = []
+    ancestors = _ancestor_paths(group.name)
+    kept: list[ResolvedRule] = list(prior or [])
     for rule, overrides in entries:
         if rule.id in disabled or rule.name in disabled:
             continue
         if overrides:
-            kept = [existing for existing in kept if existing.name not in overrides]
+            kept = [
+                existing
+                for existing in kept
+                if existing.name not in overrides
+                or (existing.group not in ancestors and existing.group != group.name)
+            ]
         kept.append(rule)
     return kept
+
+
+def _ancestor_paths(name: str) -> set[str]:
+    """Every path above *name*, e.g. ``a/b/c`` -> ``{a, a/b}``."""
+    parts = name.split("/")
+    return {"/".join(parts[:index]) for index in range(1, len(parts))}
 
 
 def _rule_entry(
@@ -799,6 +817,8 @@ def _group_summary(group: GroupMeta) -> ResolvedGroup:
         permissions=list(group.permissions),
         extends=list(group.extends),
         tools=list(group.tools),
+        parent=group.parent,
+        depth=group.depth,
     )
 
 
