@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
+  "agents": [],
+  "groups": [],
   "core": {
     "name": "core",
     "version": "0.1.0"
-  },
-  "groups": [],
-  "agents_md": "off"
+  }
 }
