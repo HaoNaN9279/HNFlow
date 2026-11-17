@@ -1,0 +1,37 @@
+== \dsh-api-session-controller\src\client\contract\session.ts hits=1 lines=175
+>64:   faceOf(key: string): ObservableSnapshot<unknown>
+== \dsh-api-session-controller\src\client\sessions\projection-store.ts hits=1 lines=245
+>106:   faceOf(key: string): ObservableSnapshot<unknown> {
+== \dsh-api-session-controller\src\client\sessions\session.ts hits=2 lines=1056
+>172:    * yield to them (projection-store.ts). Keys are read via `projections.faceOf(key)`
+>210:     this.stopObservingInbox = this.projections.faceOf('inbox').subscribe(() => {
+== \dsh-client-ui-chat\src\client\apply.ts hits=1 lines=356
+>276:             const current = session.projections.faceOf('workingDirectory').getSnapshot() as string | null | undefined
+== \dsh-client-ui-chat\src\client\file-path.ts hits=1 lines=20
+>16:     const current = ctx.sessions.binding(sessionId)?.session.projections.faceOf('workingDirectory').getSnapshot() as string | null | undefined
+== \dsh-client-ui-conversation\src\client\input\hub.ts hits=8 lines=332
+>107:         const model = session.projections.faceOf('modelSelection').getSnapshot() as ModelSelectionProjection | undefined
+>108:         const plan = session.projections.faceOf('plan').getSnapshot() as PlanProjection | undefined
+>109:         const goal = session.projections.faceOf('goal').getSnapshot() as GoalProjection | null | undefined
+>110:         const agentPreset = session.projections.faceOf('agentPreset').getSnapshot()
+>127:       inbox: session.projections.faceOf('inbox') as ObservableSnapshot<InboxState | undefined>,
+== \dsh-client-ui-goal\src\client\index.ts hits=2 lines=156
+>91:     const face = sessions.binding(sessionId)?.session.projections.faceOf('goal')
+>111:         projection: binding.session.projections.faceOf('goal') as HostObservable<GoalProjection | null | undefined>,
+== \dsh-client-ui-model-selection\src\client\service.ts hits=1 lines=93
+>81:       binding.session.projections.faceOf('modelSelection'),
+== \dsh-client-ui-permission-presets\src\client\index.ts hits=1 lines=203
+>74:   return session?.projections.faceOf('permissions').getSnapshot() as PermissionSelection | undefined
+== \dsh-client-ui-session\src\client\index.ts hits=1 lines=740
+>272:     keyedHooks: { projection: key => binding.session.projections.faceOf(key) },
+== \dsh-client-ui-tool\src\client\tool\file-menu.ts hits=1 lines=27
+>22:       const current = ctx.sessions.binding(sessionId)?.session.projections.faceOf('workingDirectory').getSnapshot() as string | null | undefined
+== \dsh-client-ui-user-questions\src\client\index.ts hits=4 lines=405
+>311:       const stopQuestions = binding.session.projections.faceOf('userQuestions').subscribe(reconcile)
+>312:       const stopInbox = binding.session.projections.faceOf('inbox').subscribe(reconcile)
+>317:       const projected = binding.session.projections.faceOf('userQuestions').getSnapshot() as
+>319:       const inbox = binding.session.projections.faceOf('inbox').getSnapshot() as InboxWireState | undefined
+== \dsh-cordis-client-runner\src\client\api-catalog.ts hits=1 lines=1209
+>800:     declaration: 'export interface ProjectionsFace {\n    faceOf(key: string): ObservableSnapshot<unknown>;\n}',
+== \dsh-experimental-liveshare\src\client\viewer-model.tsx hits=1 lines=216
+>204:         selection: scope.sessions.binding(sessionId)?.session.projections.faceOf('modelSelection'),

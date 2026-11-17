@@ -1,0 +1,1 @@
+session.v4.jsonl.zstd	{"type":"session","version":4,"id":"session-7c5d6c0e-c925-4568-81d7-8bb8574e97aa","createdAt":1794921285837,"cwd":"D:\\workspace\\HNFlow","isSeeded":false,"delegationDepth":0,"agentPreset":"standard"}

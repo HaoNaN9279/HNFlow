@@ -15,7 +15,7 @@ HNFlow 是运行在 DeepSeek Harness 上的统一插件与能力组仓库。工�
 | 解析 API | [`docs/resolve-api.md`](docs/resolve-api.md) |
 | 模型层 | [`docs/model-layers.md`](docs/model-layers.md) |
 | 上下文预览 | [`docs/session-preview.md`](docs/session-preview.md) |
-| 游戏开发能力组与流程开发计划 | [`docs/game-dev/`](docs/game-dev/) |
+| 游戏开发与图像生成能力组 | [`docs/game-dev/`](docs/game-dev/)、[`docs/image-gen/`](docs/image-gen/) |
 
 ## 快速开始
 

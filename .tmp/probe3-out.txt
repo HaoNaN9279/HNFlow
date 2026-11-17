@@ -1,0 +1,7 @@
+dsh-client-ui-slots exists=false
+dsh-client-store exists=false
+dsh-client-ui-primitives exists=false
+dsh-client-ui-renderer exists=true
+LICENSE, README.i18n.yaml, README.md, README.zh.md, lib, locale, package.json, src
+dsh-client-modules exists=true
+LICENSE, README.i18n.yaml, README.md, README.zh.md, lib, locale, package.json, src

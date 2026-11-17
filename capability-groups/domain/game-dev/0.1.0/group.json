@@ -1,0 +1,12 @@
+{
+  "guid": "6b3bb0d5cd2245afa4e6d9c8c61f3e6b",
+  "name": "game-dev",
+  "version": "0.1.0",
+  "description": "游戏开发能力组：玩法与内容规划、资产规格、验收标准。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [],
+  "tools": []
+}

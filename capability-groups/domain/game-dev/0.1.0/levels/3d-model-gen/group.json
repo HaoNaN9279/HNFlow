@@ -1,0 +1,14 @@
+{
+  "guid": "4f8bee98aa054d6598d7fce6bef6779f",
+  "name": "3d-model-gen",
+  "version": "0.1.0",
+  "description": "使用 three.ws 免费 3D Studio 流程把文字或参考图生成可下载 GLB，并完成绑定、精修、预览与资产移交；需要独立图像时依赖 image-gen 组。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [
+    "image-gen"
+  ],
+  "tools": []
+}

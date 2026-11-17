@@ -1,0 +1,228 @@
+commit 245b3d320dc67047026d8c6c5345d49c02be8979
+Author: HaoNaN <1207185592@qq.com>
+Date:   Tue Nov 17 20:08:12 2026 +0800
+
+    feat(dsh-plugin): open capability groups from the session strip
+    
+    The group window used to hang off a workspace row's `...` menu, so the
+    directory it switched belonged to whichever row was right-clicked. A session
+    already owns one workspace, so the entry moves onto the session itself: an
+    icon in the composer's bottom-left strip opens the same window for the
+    workspace that owns that session, and the window writes
+    `<workspace>/.hnflow/stack.json` there.
+    
+    - The button is registered on `conversation.input.left` next to the Agent
+      picker and the inventory preview. It is not gated on the HNFlow mode, so a
+      session can switch groups before it switches its Agent.
+    - The workspace is the record whose `sessionIds` contain this session; the
+      session snapshot's `cwd` is only a fallback for a host without workspace
+      records, and it also covers a session working in a subdirectory.
+    - The `contextMenus` contribution and its host requirement are gone, so the
+      entry no longer depends on the DSH version that ships the workspace menu.
+    - The window header names the exact directory it writes to, and a body hint
+      repeats that path; the overlay registration is unchanged.
+    
+    Tests: the client contract drops the workspace-menu case and pins the strip
+    button, the workspace resolution order and the empty menu list;
+    `node test/run.mjs` and `python -m pytest tests -q` both pass.
+
+diff --git a/plugins/dsh/client.js b/plugins/dsh/client.js
+index c51410a..71cf817 100644
+--- a/plugins/dsh/client.js
++++ b/plugins/dsh/client.js
+@@ -1302,6 +1302,47 @@ function sessionCwdHint(sessions, sessionId) {
+   }
+ }
+ 
++/**
++ * Workspace the composer strip writes capability-group switches to.
++ *
++ * The window used to open from a workspace row, so the directory came from the
++ * clicked row. A session owns exactly one workspace: the workspace record lists
++ * its `sessionIds`, and that path, not the session's own `cwd`, is where
++ * `.hnflow/stack.json` lives. The session snapshot is only a fallback for a
++ * host that does not publish workspace records yet.
++ * @param {any} sessions - sessions snapshot.
++ * @param {any} workspaces - workspaces snapshot.
++ * @param {string} sessionId - window session id.
++ * @param {any} sessionsService - injectable client sessions service.
++ * @returns {string} absolute directory, or an empty string.
++ */
++function sessionWorkspace(sessions, workspaces, sessionId, sessionsService) {
++  if (typeof sessionId !== "string" || sessionId.length === 0) return "";
++  for (const record of workspaceRecords(workspaces)) {
++    if (record === null || typeof record !== "object") continue;
++    const owned = Array.isArray(record.sessionIds) && record.sessionIds.includes(sessionId);
++    if (owned && typeof record.path === "string" && record.path.length > 0) return record.path;
++  }
++  const projected = inventoryCwdHint(sessions, workspaces, sessionId);
++  if (projected.length > 0) return projected;
++  return sessionCwdHint(sessionsService, sessionId);
++}
++
++/**
++ * Last path segment of a directory, for the window title.
++ *
++ * Both separators are accepted because the client reports Windows paths with
++ * either one depending on where the value came from.
++ * @param {string} directory - absolute directory.
++ * @returns {string} bare name, or an empty string.
++ */
++function workspaceBaseName(directory) {
++  const text = typeof directory === "string" ? directory.trim().replace(/[\\/]+$/u, "") : "";
++  if (text.length === 0) return "";
++  const cut = Math.max(text.lastIndexOf("/"), text.lastIndexOf("\\"));
++  return cut >= 0 ? text.slice(cut + 1) : text;
++}
++
+ /**
+  * Read the session inventory.
+  * @param {string} sessionId - live session id.
+@@ -2050,8 +2091,8 @@ async function readWorkspaceGroupText(workspace, file) {
+ /**
+  * Open/close state of the workspace window.
+  *
+- * The context menu contribution and the overlay component live in the same
+- * module, but React cannot read the menu callback, so the state sits here and
++ * The composer-strip button and the overlay component live in the same module,
++ * but React cannot read the button's click handler, so the state sits here and
+  * both sides share it.
+  */
+ const groupsWindow = {
+@@ -2078,6 +2119,37 @@ const groupsWindow = {
+   }
+ };
+ 
++/**
++ * Composer-strip button that opens the workspace capability-group window.
++ *
++ * The entry sits in the bottom-left strip of every session window, next to the
++ * Agent picker and the inventory button. It is not gated on the HNFlow mode: a
++ * session may switch groups before it switches its Agent, and this window is
++ * the only place group switches happen. The directory it opens is the workspace
++ * that owns this session, so a switch lands in that workspace's
++ * `.hnflow/stack.json` rather than in whatever row was last clicked elsewhere.
++ * @param {{sessionId?: string, sessionsService?: any, useSessions?: Function, useWorkspaces?: Function}} props - slot props.
++ * @returns {object} react element.
++ */
++function WorkspaceGroupsButton(props) {
++  const sessionsSnapshot = useOptionalSnapshot(props.useSessions);
++  const workspacesSnapshot = useOptionalSnapshot(props.useWorkspaces);
++  const sessionId = typeof props.sessionId === "string" ? props.sessionId : "";
++  const workspace = sessionWorkspace(sessionsSnapshot, workspacesSnapshot, sessionId, props.sessionsService);
++  const label = workspace.length > 0 ? workspace : "工作区尚未确定";
++  return h(
++    "button",
++    {
++      type: "button",
++      style: inventoryStyles.button,
++      title: `工作区能力组：${label}`,
++      "aria-label": `工作区能力组：${label}`,
++      onClick: () => groupsWindow.show({ workspace, title: workspaceBaseName(workspace) })
++    },
++    "⚙"
++  );
++}
++
+ /** Styles for the capability-group window; the preview card reuses the inventory ones. */
+ const groupsStyles = {
+   dialog: {
+@@ -2394,7 +2466,7 @@ function GroupsWindow() {
+           h(
+             "span",
+             { style: inventoryStyles.subtitle },
+-            `${state.title || state.workspace || "未选择工作区"} · 已激活 ${activeCount}/${groups.length}`
++            `${state.title ? `${state.title} · ` : ""}${state.workspace || "未选择工作区"} · 已激活 ${activeCount}/${groups.length}`
+           ),
+           h("span", { style: inventoryStyles.spacer }),
+           h(
+@@ -2407,6 +2479,13 @@ function GroupsWindow() {
+         h(
+           "div",
+           { style: inventoryStyles.body },
++          state.workspace.length > 0
++            ? h(
++                "div",
++                { style: inventoryStyles.muted },
++                `开关直接写入 ${state.workspace}/.hnflow/stack.json，下一次解析按新组合注入。`
++              )
++            : null,
+           error.length > 0 ? h("div", { style: inventoryStyles.error }, error) : null,
+           loading && catalog === null
+             ? h("div", { style: inventoryStyles.muted }, "加载中…")
+@@ -2583,8 +2662,20 @@ function GroupsWindow() {
+           (props) => h(InventoryBoundary, null, h(InventoryPanel, props))
+         )
+       );
+-      // One overlay renders the workspace window; one context-menu entry opens
+-      // it. Both stay inert when the host does not offer the service.
++      // The workspace-group button closes the strip: it opens the window that
++      // switches the groups of the workspace this session belongs to. The
++      // window itself renders once, on the overlay.
++      ctx.slots.inject("conversation.input.left", () =>
++        ctx.slots.register(
++          {
++            name: "conversation.input.left",
++            id: "capability-workspace-groups",
++            order: 9,
++            inject: (sessionId) => ({ sessionId, sessionsService })
++          },
++          WorkspaceGroupsButton
++        )
++      );
+       try {
+         ctx.slots.inject("shell.overlay", () =>
+           ctx.slots.register({ name: "shell.overlay", id: "capability-groups-window" }, GroupsWindow)
+@@ -2592,35 +2683,9 @@ function GroupsWindow() {
+       } catch (failure) {
+         console.warn("[capability] group window is unavailable", failure);
+       }
+-      ctx.inject(["contextMenus"], (scope) => {
+-        const menus = scope.contextMenus;
+-        if (!menus || typeof menus.register !== "function") return;
+-        const contribution = {
+-          id: "capability-groups",
+-          target: "workspace",
+-          order: 900,
+-          resolve: (target) => {
+-            const value = target !== null && typeof target === "object" && "value" in target ? target.value : target;
+-            const workspace = typeof value?.path === "string" ? value.path : "";
+-            const title = typeof value?.displayTitle === "string" ? value.displayTitle : "";
+-            return [
+-              {
+-                id: "capability-groups.open",
+-                label: "HNFlow 能力组…",
+-                run: () => groupsWindow.show({ workspace, title })
+-              }
+-            ];
+-          }
+-        };
+-        if (typeof scope.effect === "function") {
+-          scope.effect(() => menus.register(contribution), "capability: workspace capability-group menu");
+-          return;
+-        }
+-        menus.register(contribution);
+-      });
+ 
+       // The model-layer selector lives in the right-hand model seat, not in the
+-      // left strip: that strip belongs to the Agent picker.
++      // left strip: that strip belongs to the session controls.
+       ctx.slots.inject("settings.section", () =>
+         ctx.slots.register(
+           {
+@@ -2633,10 +2698,11 @@ function GroupsWindow() {
+         )
+       );
+       // Full replacement, always: in the HNFlow mode the layer control owns the
+-      // right-hand model seat. The left strip belongs to the Agent picker alone,
+-      // so the old `additive` layer control is gone rather than competing with
+-      // it. The component falls back to the live native catalog outside HNFlow
+-      // sessions, so the model seat never goes blank.
++      // right-hand model seat. The left strip belongs to the session controls
++      // (Agent, inventory, workspace groups), so the old `additive` layer
++      // control is gone rather than competing with them. The component falls
++      // back to the live native catalog outside HNFlow sessions, so the model
++      // seat never goes blank.
+       if (typeof ctx.inject !== "function") return;
+       ctx.inject(["slots", "modelDirectories", "sessions"], (scope) => {
+         try {

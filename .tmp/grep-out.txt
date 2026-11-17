@@ -1,0 +1,396 @@
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\README.md hits=1 lines=258
+ 43: ```
+ 44: 
+ 45: | Field | Default | Meaning |
+ 46: |---|---|---|
+ 47: | `provider` | required | Provider name on `ctx.subagents` (e.g. `spawn`, `fork`, `acp`) |
+ 48: | `toolName` | `subagent` | Model-facing tool name; distinct for every loaded instance |
+ 49: | `modelSelection` | `false` | Expose optional child route fields; requires provider `agentOptions` support |
+ 50: | `modelDiscovery` | `false` | Register `list_subagent_models`; enable on one instance per tool scope |
+>51: | `agentOptions` | — | Configured child `provider`, `model`, adapter-owned `reasoningEffort`, and positive `maxTokens` defaults; requires provider `agentOptions` support and overlays any provider-owned route defaults |
+ 52: | `agentPreset` | — | Default independent child preset id; requires in-process spawn |
+ 53: | `allowedAgentPresets` | — | Non-empty preset-id allowlist exposed as the model's optional `agent_preset` enum; must include `agentPreset` when both are set |
+ 54: | `maxDepth` | Host setting (`1`) | Absolute delegation-depth cap (`0` forbids delegation); `'provider-managed'` sends no cap to an out-of-process provider |
+ 55: 
+ 56: The generated [configuration catalog](../../../docs/config-catalog.md#deepseek-aidsh-tool-subagent) is the exhaustive source for every accepted field and its JSDoc.
+ 57: 
+ 58: ### Managed delegation
+ 59: 
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\lib\index.js hits=9 lines=528
+ 87: 	if (policy === void 0 ? provider === parentOptions.provider && model === parentOptions.model : policy.routes.some((route) => route.provider === provider && route.model === model)) return;
+ 88: 	throw new Error(`child LLM route "${provider}/${model}" is not allowed for this Session` + (policy === void 0 ? "; without a recorded model-selection policy, explicit selection is limited to the parent route" : ""));
+ 89: }
+ 90: /**
+ 91: * Whether configured Agent options require route validation before delegation.
+ 92: * @param options - Tool-instance child defaults.
+ 93: * @returns Whether configured provider, model, or effort values must be resolved.
+ 94: */
+>95: function hasConfiguredLlmSelection(options) {
+ 96: 	return options?.provider !== void 0 || options?.model !== void 0 || options?.reasoningEffort !== void 0;
+ 97: }
+ 98: /**
+ 99: * Resolve an effective child route through its live adapter before the child is
+ 100: * created. The LLM runtime owns provider lookup, exact-model metadata, effort
+ 101: * validation, and adapter defaults.
+ 102: * @param llm - Live LLM runtime.
+ 103: * @param parentOptions - Current parent values whose compatible fields the child inherits.
+ 106: * @param inheritParentReasoningEffort - Whether an omitted effort may inherit from the parent route; false for explicit model selection.
+ 107: */
+ 108: async function preflightChildLlmRoute(llm, parentOptions, requested, signal, inheritParentReasoningEffort = true) {
+ 109: 	const provider = requested?.provider ?? parentOptions.provider;
+ 110: 	const model = requested?.model ?? parentOptions.model;
+ 111: 	if (provider === void 0 || model === void 0) throw new Error("cannot select child LLM values without an effective provider and model");
+ 112: 	const routeChanged = provider !== parentOptions.provider || model !== parentOptions.model;
+ 113: 	const reasoningEffort = requested?.reasoningEffort ?? (inheritParentReasoningEffort && !routeChanged ? parentOptions.reasoningEffort : void 0);
+>114: 	await llm.resolveCallConfig({
+ 115: 		provider,
+ 116: 		model,
+ 117: 		...reasoningEffort === void 0 ? {} : { reasoningEffort }
+ 118: 	}, signal);
+ 119: }
+ 120: /**
+ 121: * Host-only projection of the durable model-selection policy.
+ 122: * Each independently mounted consumer registers this shared definition; the registry reference-counts it.
+ 287: const name = "tool-subagent";
+ 288: const inject = [
+ 289: 	"tools",
+ 290: 	"subagents",
+ 291: 	"systemPrompt",
+ 292: 	"sessionProjections"
+ 293: ];
+ 294: const delegationTools = /* @__PURE__ */ new Set();
+>295: const Config = z.object({
+ 296: 	provider: z.string().required(),
+ 297: 	toolName: z.string().default("subagent"),
+ 298: 	modelSelection: z.boolean().default(false),
+ 299: 	modelDiscovery: z.boolean().default(false),
+ 300: 	agentOptions: z.object({
+ 301: 		provider: z.string(),
+ 302: 		model: z.string(),
+ 303: 		reasoningEffort: z.string().min(1),
+ 339: async function apply(ctx, config) {
+ 340: 	for (const field of ["persona", "toolFilter"]) if (Object.hasOwn(config, field)) throw new Error(`tool-subagent: ${field} is no longer supported; configure persona and tool plugins in an Agent Preset and select it with agentPreset (spawn only)`);
+ 341: 	const presets = new SubagentPresetSelection(config);
+ 342: 	if (presets.configured && ctx.get("agentPresets") === void 0) throw new Error("tool-subagent: agent preset selection requires the agent-presets service");
+ 343: 	if (config.maxDepth !== "provider-managed") assertSubagentMaxDepth(config.maxDepth);
+ 344: 	const toolName = config.toolName ?? "subagent";
+ 345: 	const modelSelectionEnabled = config.modelSelection === true;
+ 346: 	const subagentModelSelectionProjectionHandle = await ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition);
+>347: 	const assertSubagentProviderConfiguration = (subagentProvider) => {
+ 348: 		presets.assertProvider(subagentProvider);
+ 349: 		if (ctx.subagents.resolveMaxDepth(config.maxDepth) !== void 0 && !subagentProvider.capabilities.depthLimit) throw new Error(`tool-subagent: provider "${subagentProvider.name}" cannot enforce maxDepth (no depthLimit capability) — set maxDepth: 'provider-managed' to leave the recursion budget to the provider`);
+ 350: 		if (config.agentOptions !== void 0 && !subagentProvider.capabilities.agentOptions) throw new Error(`tool-subagent: provider "${subagentProvider.name}" does not support child agentOptions`);
+ 351: 		if (modelSelectionEnabled && !subagentProvider.capabilities.agentOptions) throw new Error(`tool-subagent: provider "${subagentProvider.name}" does not support child model selection`);
+ 352: 	};
+ 353: 	ctx.on("subagent/provider-added", (subagentProvider) => {
+ 354: 		if (subagentProvider.name === config.provider) assertSubagentProviderConfiguration(subagentProvider);
+ 355: 	});
+ 346: 	const subagentModelSelectionProjectionHandle = await ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition);
+ 347: 	const assertSubagentProviderConfiguration = (subagentProvider) => {
+ 348: 		presets.assertProvider(subagentProvider);
+ 349: 		if (ctx.subagents.resolveMaxDepth(config.maxDepth) !== void 0 && !subagentProvider.capabilities.depthLimit) throw new Error(`tool-subagent: provider "${subagentProvider.name}" cannot enforce maxDepth (no depthLimit capability) — set maxDepth: 'provider-managed' to leave the recursion budget to the provider`);
+ 350: 		if (config.agentOptions !== void 0 && !subagentProvider.capabilities.agentOptions) throw new Error(`tool-subagent: provider "${subagentProvider.name}" does not support child agentOptions`);
+ 351: 		if (modelSelectionEnabled && !subagentProvider.capabilities.agentOptions) throw new Error(`tool-subagent: provider "${subagentProvider.name}" does not support child model selection`);
+ 352: 	};
+ 353: 	ctx.on("subagent/provider-added", (subagentProvider) => {
+>354: 		if (subagentProvider.name === config.provider) assertSubagentProviderConfiguration(subagentProvider);
+ 355: 	});
+ 356: 	const initialProvider = ctx.subagents.getProvider(config.provider);
+ 357: 	if (initialProvider !== void 0) assertSubagentProviderConfiguration(initialProvider);
+ 358: 	if (config.modelDiscovery === true) registerListSubagentModels(ctx, subagentModelSelectionProjectionHandle);
+ 359: 	let mounted;
+ 360: 	const mount = (subagentProvider) => {
+ 361: 		assertSubagentProviderConfiguration(subagentProvider);
+ 362: 		const wording = providerWording(subagentProvider.inheritsParentContext);
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\lib\model-selection-settings.js hits=3 lines=122
+ 64: * @returns a detached route list, or undefined to restrict selection to the parent route.
+ 65: */
+ 66: function subagentModelSelectionPolicy(subagentModelSelectionProjectionHandle, session) {
+ 67: 	return subagentModelSelectionProjectionHandle.stateOf(session)?.map((route) => ({ ...route }));
+ 68: }
+ 69: //#endregion
+ 70: //#region lib/types/model-selection-settings.js
+ 71: /** Host settings owner that records Session authorization before the first model request. */
+>72: var SubagentModelSelectionConfig = class extends Service {
+ 73: 	config;
+ 74: 	static inject = ["sessionProjections", "sessions"];
+ 75: 	static Config = z.object({
+ 76: 		enabled: z.boolean().default(false).volatile(),
+ 77: 		allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile()
+ 78: 	});
+ 79: 	constructor(ctx, config) {
+ 80: 		super(ctx, "subagentModelSelection");
+ 67: 	return subagentModelSelectionProjectionHandle.stateOf(session)?.map((route) => ({ ...route }));
+ 68: }
+ 69: //#endregion
+ 70: //#region lib/types/model-selection-settings.js
+ 71: /** Host settings owner that records Session authorization before the first model request. */
+ 72: var SubagentModelSelectionConfig = class extends Service {
+ 73: 	config;
+ 74: 	static inject = ["sessionProjections", "sessions"];
+>75: 	static Config = z.object({
+ 76: 		enabled: z.boolean().default(false).volatile(),
+ 77: 		allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile()
+ 78: 	});
+ 79: 	constructor(ctx, config) {
+ 80: 		super(ctx, "subagentModelSelection");
+ 81: 		this.config = config;
+ 82: 	}
+ 83: 	async [Service.init]() {
+ 113: 		return {
+ 114: 			enabled,
+ 115: 			allowedModels: allowedModels.map((route) => ({ ...route }))
+ 116: 		};
+ 117: 	}
+ 118: };
+ 119: const name = "subagent-model-selection-settings";
+ 120: //#endregion
+>121: export { SubagentModelSelectionConfig, SubagentModelSelectionConfig as default, name };
+ 122: 
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\locale\model-selection-settings\es.json hits=1 lines=6
+ 1: {
+ 2:   "meta": {
+>3:     "title": "Configuración de selección de modelos de subagentes"
+ 4:   }
+ 5: }
+ 6: 
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\locale\model-selection-settings\pt.json hits=1 lines=6
+ 1: {
+ 2:   "meta": {
+>3:     "title": "Configurações de seleção de modelos dos subagentes"
+ 4:   }
+ 5: }
+ 6: 
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\package.json hits=1 lines=78
+ 1: {
+ 2:   "name": "@deepseek-ai/dsh-tool-subagent",
+ 3:   "description": "Model-facing subagent delegation tool over the ctx.subagents seam",
+ 4:   "version": "0.2.2-rc.3",
+>5:   "publishConfig": {
+ 6:     "access": "public"
+ 7:   },
+ 8:   "repository": {
+ 9:     "type": "git",
+ 10:     "url": "git+https://github.com/deepseek-ai/deepseek-harness.git",
+ 11:     "directory": "packages/subagent/tool-subagent"
+ 12:   },
+ 13:   "type": "module",
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\src\index.ts hits=11 lines=394
+ 16: import type { ContentBlock } from '@deepseek-ai/dsh-llm'
+ 17: import {
+ 18:   assertSubagentMaxDepth,
+ 19:   delegationDepthOf,
+ 20:   parentAgentOptionsForDelegation,
+ 21: } from '@deepseek-ai/dsh-subagent'
+ 22: import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
+ 23: import {
+>24:   hasConfiguredLlmSelection,
+ 25:   hasDelegationModelRequest,
+ 26:   preflightChildLlmRoute,
+ 27:   requestedAgentOptions,
+ 28: } from './model-selection.ts'
+ 29: import type { DelegationModelRequest } from './model-selection.ts'
+ 30: import { registerListSubagentModels } from './list-models.ts'
+ 31: import { SubagentPresetSelection, type PresetSelectionConfig, type PresetSelectionRequest } from './preset-selection.ts'
+ 32: import {
+ 23: import {
+ 24:   hasConfiguredLlmSelection,
+ 25:   hasDelegationModelRequest,
+ 26:   preflightChildLlmRoute,
+ 27:   requestedAgentOptions,
+ 28: } from './model-selection.ts'
+ 29: import type { DelegationModelRequest } from './model-selection.ts'
+ 30: import { registerListSubagentModels } from './list-models.ts'
+>31: import { SubagentPresetSelection, type PresetSelectionConfig, type PresetSelectionRequest } from './preset-selection.ts'
+ 32: import {
+ 33:   subagentModelSelectionProjectionDefinition,
+ 34:   subagentModelSelectionPolicy,
+ 35: } from './model-selection-state.ts'
+ 36: 
+ 37: export const name = 'tool-subagent'
+ 38: export const inject = ['tools', 'subagents', 'systemPrompt', 'sessionProjections']
+ 39: 
+ 36: 
+ 37: export const name = 'tool-subagent'
+ 38: export const inject = ['tools', 'subagents', 'systemPrompt', 'sessionProjections']
+ 39: 
+ 40: // Definition identity keeps shared guidance scoped to the actual visible tools,
+ 41: // including scoped overrides and independently loaded tool registries.
+ 42: const delegationTools = new Set<ToolDefinition>()
+ 43: 
+>44: /** Config: which registered provider this tool delegates to, plus child defaults. */
+ 45: export interface Config extends PresetSelectionConfig {
+ 46:   /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+ 47:   provider: string
+ 48:   /**
+ 49:    * Model-facing tool name (default `subagent`). Each loaded instance must use
+ 50:    * a distinct name.
+ 51:    */
+ 52:   toolName?: string
+ 37: export const name = 'tool-subagent'
+ 38: export const inject = ['tools', 'subagents', 'systemPrompt', 'sessionProjections']
+ 39: 
+ 40: // Definition identity keeps shared guidance scoped to the actual visible tools,
+ 41: // including scoped overrides and independently loaded tool registries.
+ 42: const delegationTools = new Set<ToolDefinition>()
+ 43: 
+ 44: /** Config: which registered provider this tool delegates to, plus child defaults. */
+>45: export interface Config extends PresetSelectionConfig {
+ 46:   /** The `ctx.subagents` provider name to start runs on (e.g. `spawn`, `acp`). */
+ 47:   provider: string
+ 48:   /**
+ 49:    * Model-facing tool name (default `subagent`). Each loaded instance must use
+ 50:    * a distinct name.
+ 51:    */
+ 52:   toolName?: string
+ 53:   /**
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\src\model-selection-settings.ts hits=6 lines=96
+ 13:   AllowedModelRouteSchema,
+ 14:   assertAllowedModelRoutes,
+ 15:   type AllowedModelRoute,
+ 16: } from './model-selection.ts'
+ 17: 
+ 18: declare module '@deepseek-ai/cordis' {
+ 19:   interface Context {
+ 20:     /** User preference sampled during Agent creation. */
+>21:     subagentModelSelection: SubagentModelSelectionConfig
+ 22:   }
+ 23: }
+ 24: 
+ 25: /** Stored user preference; the shipped composition defaults it off. */
+ 26: export interface SubagentModelSelectionSettings {
+ 27:   /** Whether new top-level Sessions receive model selection. */
+ 28:   enabled: boolean
+ 29:   /** Exact child LLM routes offered to new top-level Sessions. */
+ 26: export interface SubagentModelSelectionSettings {
+ 27:   /** Whether new top-level Sessions receive model selection. */
+ 28:   enabled: boolean
+ 29:   /** Exact child LLM routes offered to new top-level Sessions. */
+ 30:   allowedModels: AllowedModelRoute[]
+ 31: }
+ 32: 
+ 33: /** Optional deployment base for the preference. */
+>34: export interface Config {
+ 35:   /** Initial enabled state inherited when the user document does not override it. */
+ 36:   enabled: Volatile<boolean>
+ 37:   /** Initial route list inherited when the user document does not override it. */
+ 38:   allowedModels: Volatile<AllowedModelRoute[]>
+ 39: }
+ 40: 
+ 41: /** Host settings owner that records Session authorization before the first model request. */
+ 42: export class SubagentModelSelectionConfig extends Service {
+ 34: export interface Config {
+ 35:   /** Initial enabled state inherited when the user document does not override it. */
+ 36:   enabled: Volatile<boolean>
+ 37:   /** Initial route list inherited when the user document does not override it. */
+ 38:   allowedModels: Volatile<AllowedModelRoute[]>
+ 39: }
+ 40: 
+ 41: /** Host settings owner that records Session authorization before the first model request. */
+>42: export class SubagentModelSelectionConfig extends Service {
+ 43:   static inject = ['sessionProjections', 'sessions']
+ 44: 
+ 45:   static Config = z.object({
+ 46:     enabled: z.boolean().default(false).volatile(),
+ 47:     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),
+ 48:   })
+ 49: 
+ 50:   constructor(ctx: Context, private config: Config) {
+ 37:   /** Initial route list inherited when the user document does not override it. */
+ 38:   allowedModels: Volatile<AllowedModelRoute[]>
+ 39: }
+ 40: 
+ 41: /** Host settings owner that records Session authorization before the first model request. */
+ 42: export class SubagentModelSelectionConfig extends Service {
+ 43:   static inject = ['sessionProjections', 'sessions']
+ 44: 
+>45:   static Config = z.object({
+ 46:     enabled: z.boolean().default(false).volatile(),
+ 47:     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),
+ 48:   })
+ 49: 
+ 50:   constructor(ctx: Context, private config: Config) {
+ 51:     super(ctx, 'subagentModelSelection')
+ 52:   }
+ 53: 
+ 42: export class SubagentModelSelectionConfig extends Service {
+ 43:   static inject = ['sessionProjections', 'sessions']
+ 44: 
+ 45:   static Config = z.object({
+ 46:     enabled: z.boolean().default(false).volatile(),
+ 47:     allowedModels: z.array(AllowedModelRouteSchema).default([]).volatile(),
+ 48:   })
+ 49: 
+>50:   constructor(ctx: Context, private config: Config) {
+ 51:     super(ctx, 'subagentModelSelection')
+ 52:   }
+ 53: 
+ 54:   protected async [Service.init](): Promise<void> {
+ 55:     const ctx = this.ctx
+ 56:     const policyReady = ctx.sessionProjections.register(subagentModelSelectionProjectionDefinition)
+ 57:     ctx.on('agent/created', async ({ agent }) => {
+ 58:       const policy = await policyReady
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\src\model-selection.ts hits=2 lines=194
+ 149:       : ''))
+ 150: }
+ 151: 
+ 152: /**
+ 153:  * Whether configured Agent options require route validation before delegation.
+ 154:  * @param options - Tool-instance child defaults.
+ 155:  * @returns Whether configured provider, model, or effort values must be resolved.
+ 156:  */
+>157: export function hasConfiguredLlmSelection(options: AgentOptions | undefined): boolean {
+ 158:   return options?.provider !== undefined
+ 159:     || options?.model !== undefined
+ 160:     || options?.reasoningEffort !== undefined
+ 161: }
+ 162: 
+ 163: /**
+ 164:  * Resolve an effective child route through its live adapter before the child is
+ 165:  * created. The LLM runtime owns provider lookup, exact-model metadata, effort
+ 180:   const provider = requested?.provider ?? parentOptions.provider
+ 181:   const model = requested?.model ?? parentOptions.model
+ 182:   if (provider === undefined || model === undefined) {
+ 183:     throw new Error('cannot select child LLM values without an effective provider and model')
+ 184:   }
+ 185:   const routeChanged = provider !== parentOptions.provider || model !== parentOptions.model
+ 186:   const reasoningEffort = requested?.reasoningEffort
+ 187:     ?? (inheritParentReasoningEffort && !routeChanged ? parentOptions.reasoningEffort : undefined)
+>188:   await llm.resolveCallConfig({
+ 189:     provider,
+ 190:     model,
+ 191:     ...reasoningEffort === undefined ? {} : { reasoningEffort },
+ 192:   }, signal)
+ 193: }
+ 194: 
+== C:\Users\HaoNaN\AppData\Local\Programs\DeepSeek Harness\resources\app.asar\dsh\node_modules\@deepseek-ai\dsh-tool-subagent\src\preset-selection.ts hits=2 lines=73
+ 1: /** Deployment-owned preset choices for one delegation tool. */
+ 2: import type { SubagentProvider } from '@deepseek-ai/dsh-subagent'
+ 3: 
+ 4: /** Optional default and model-selectable preset ids for a spawn tool. */
+>5: export interface PresetSelectionConfig {
+ 6:   /** Default independent preset; omission inherits the parent when the model makes no selection. */
+ 7:   agentPreset?: string
+ 8:   /** Non-empty allowlist exposing agent_preset to the model; omission disables model selection. */
+ 9:   allowedAgentPresets?: string[] | undefined
+ 10: }
+ 11: 
+ 12: /** Untrusted preset selection from model/tool JSON. */
+ 13: export interface PresetSelectionRequest {
+ 11: 
+ 12: /** Untrusted preset selection from model/tool JSON. */
+ 13: export interface PresetSelectionRequest {
+ 14:   readonly agent_preset?: unknown
+ 15: }
+ 16: 
+ 17: /** Validates configured choices and resolves model input against the allowlist. */
+ 18: export class SubagentPresetSelection {
+>19:   constructor(private readonly config: PresetSelectionConfig) {
+ 20:     const { agentPreset, allowedAgentPresets } = config
+ 21:     if (allowedAgentPresets === undefined) return
+ 22:     if (new Set(allowedAgentPresets).size !== allowedAgentPresets.length) {
+ 23:       throw new Error('tool-subagent: allowedAgentPresets contains duplicate preset ids')
+ 24:     }
+ 25:     if (agentPreset !== undefined && !allowedAgentPresets.includes(agentPreset)) {
+ 26:       throw new Error('tool-subagent: agentPreset must be included in allowedAgentPresets')
+ 27:     }

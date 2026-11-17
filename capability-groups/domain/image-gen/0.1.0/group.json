@@ -1,0 +1,12 @@
+{
+  "guid": "ab758575f36e42db8bae42777e473dec",
+  "name": "image-gen",
+  "version": "0.1.0",
+  "description": "使用 three.ws 工具网关把文字描述生成图像，并沉淀提示词、调用、下载与元数据交付流程。",
+  "permissions": [
+    "fs",
+    "net"
+  ],
+  "extends": [],
+  "tools": []
+}

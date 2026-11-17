@@ -1,0 +1,17 @@
+HTTP/1.1 200 OK
+Date: Sun, 15 Nov 2026 05:34:30 GMT
+Content-Type: image/jpeg
+Content-Length: 34003
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+Cache-Control: public, max-age=31536000, immutable
+Content-Disposition: inline; filename="a-red-apple-on-a-white-background.jpg"
+Link: <https://pollinations.ai>; rel="service"
+Access-Control-Expose-Headers: Link,X-Pollinations-Logo,X-Powered-By,Payment-Required,Payment-Response,Retry-After
+X-Cache: HIT
+X-Cache-Type: EXACT
+X-Pollinations-Logo: https://raw.githubusercontent.com/pollinations/pollinations/main/packages/ui/src/brand/lockup-horizontal-black.svg
+X-Powered-By: Pollinations.AI
+Server: cloudflare
+CF-RAY: a5abe31adf5d2f39-LAX
+

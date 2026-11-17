@@ -1,0 +1,23 @@
+HTTP/1.1 200 OK
+Date: Sun, 15 Nov 2026 05:34:39 GMT
+Content-Type: image/jpeg
+Transfer-Encoding: chunked
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+Cache-Control: public, max-age=31536000, immutable
+Content-Disposition: inline; filename="unique-test-68439b840cf24ca5a33973c58c88105f-a-blue-ceramic-teapot-on-a-wooden-table.jpg"
+Link: <https://pollinations.ai>; rel="service"
+Access-Control-Allow-Headers: Content-Type, X-PAYMENT, Payment-Signature
+Access-Control-Allow-Methods: GET, POST, OPTIONS
+X-Auth-Result: NONE
+X-Auth-Status: unauthenticated
+X-Cache: MISS
+X-Pollinations-Logo: https://raw.githubusercontent.com/pollinations/pollinations/main/packages/ui/src/brand/lockup-horizontal-black.svg
+X-Powered-By: Pollinations.AI
+access-control-expose-headers: Link,X-Pollinations-Logo,X-Powered-By,Payment-Required,Payment-Response,Retry-After
+x-model-used: sana
+x-usage-completion-image-tokens: 1
+x-usage-total-tokens: 1
+Server: cloudflare
+CF-RAY: a5abe33679954bb4-LAX
+
