@@ -56,8 +56,8 @@ function loadBundle() {
 
 /**
  * Apply the bundle to a fake client context.
- * @param {{fetch?: Function}} [options] - fetch stand-in for the host routes.
- * @returns {{entries: Record<string, any>[], exports: Record<string, any>, injected: string[], menus: Record<string, any>[]}} registrations.
+ * @param {{fetch?: Function, mode?: string|null, currentSession?: string}} [options] - host-route stand-in, the agent preset of the displayed session, and its id.
+ * @returns {{entries: Record<string, any>[], exports: Record<string, any>, injected: string[], menus: Record<string, any>[], setMode: (mode: string|null) => void}} registrations.
  */
 function applyBundle(options = {}) {
   if (options.fetch !== undefined) globalThis.fetch = options.fetch;
@@ -68,11 +68,39 @@ function applyBundle(options = {}) {
   const injected = [];
   /** @type {Record<string, any>[]} */
   const menus = [];
+  const currentSession = options.currentSession ?? "session-1";
+  // The session's own agent-preset projection: the live source the standard
+  // `useProjection` hook and this bundle both read.
+  const mode = {
+    value: options.mode ?? null,
+    listeners: new Set(),
+    face: {
+      getSnapshot: () => mode.value,
+      subscribe: (listener) => {
+        mode.listeners.add(listener);
+        return () => {
+          mode.listeners.delete(listener);
+        };
+      },
+    },
+    set: (next) => {
+      mode.value = next;
+      for (const listener of [...mode.listeners]) listener(next);
+    },
+  };
   const ctx = {
     slots: {
       inject: (name, callback) => {
         injected.push(name);
+        const start = entries.length;
         callback();
+        const added = entries.slice(start);
+        return () => {
+          for (const entry of added) {
+            const index = entries.indexOf(entry);
+            if (index >= 0) entries.splice(index, 1);
+          }
+        };
       },
       register: (entry, component) => {
         entries.push({ entry, component });
@@ -94,7 +122,21 @@ function applyBundle(options = {}) {
             select: async () => {},
           }),
         },
-        sessions: { subagentAddress: () => undefined },
+        sessions: {
+          subagentAddress: () => undefined,
+          binding: (sessionId) =>
+            sessionId === currentSession
+              ? { session: { projections: { faceOf: (key) => (key === "agentPreset" ? mode.face : undefined) } } }
+              : undefined,
+        },
+        uiSession: {
+          adapter: {
+            current: {
+              getSnapshot: () => ({ key: currentSession }),
+              subscribe: () => () => {},
+            },
+          },
+        },
       }),
     effect: () => {},
     // The capability surface reads the live session list to learn the workspace
@@ -112,7 +154,7 @@ function applyBundle(options = {}) {
     },
   };
   exports.apply(ctx);
-  return { entries, exports, injected, menus };
+  return { entries, exports, injected, menus, setMode: mode.set };
 }
 
 /** Registered `slot:id-or-key` names, for readable assertions. */
@@ -225,7 +267,7 @@ test("the session strip opens the window for that session's workspace", () => {
   const props = control.entry.inject("session-1");
   assert.equal(props.sessionId, "session-1");
   assert.equal(typeof props.sessionsService?.list?.getSnapshot, "function");
-  const element = control.component(props);
+  const element = control.component({ ...props, useProjection: () => "hnflow" });
   assert.equal(element.type, "button");
   assert.equal(element.children[0], "⚙");
   assert.match(element.props.title, /工作区能力组/u);
@@ -236,11 +278,25 @@ test("the session strip opens the window for that session's workspace", () => {
   assert.equal(state.title, "HNFlow");
 });
 
+test("the workspace-group button belongs to the HNFlow mode only", () => {
+  const { entries } = applyBundle();
+  const control = entries.find((entry) => entry.entry.id === "capability-workspace-groups");
+  const props = control.entry.inject("session-1");
+  assert.equal(
+    control.component({ ...props, useProjection: () => "cordis" }),
+    null,
+    "the strip of every other mode must stay untouched",
+  );
+  assert.equal(control.component({ ...props, useProjection: () => null }), null, "an unknown mode shows no button");
+  assert.equal(control.component({ ...props, useProjection: () => "hnflow" }).type, "button");
+});
+
 test("the workspace record outranks the session cwd", () => {
   const { entries, exports } = applyBundle();
   const control = entries.find((entry) => entry.entry.id === "capability-workspace-groups");
   const element = control.component({
     ...control.entry.inject("session-1"),
+    useProjection: () => "hnflow",
     // A session whose cwd is a subdirectory still switches groups on the
     // workspace root, which is where `.hnflow/stack.json` lives.
     useSessions: () => ({
@@ -253,4 +309,21 @@ test("the workspace record outranks the session cwd", () => {
   });
   element.props.onClick();
   assert.equal(exports.internals.groupsWindow.snapshot().workspace, "D:/workspace/HNFlow");
+});
+
+test("the session tab exists only while the displayed session is HNFlow's", () => {
+  const bundle = applyBundle({ mode: "hnflow" });
+  const hasTab = () => entryNames(bundle.entries).includes("conversation.view:hnflow");
+  assert.ok(hasTab(), "an HNFlow session must carry the tab");
+  bundle.setMode("cordis");
+  assert.ok(!hasTab(), "switching the mode away must remove the tab");
+  bundle.setMode("hnflow");
+  assert.ok(hasTab(), "switching the mode back must restore the tab");
+});
+
+test("a session outside the HNFlow mode never registers the tab", () => {
+  const { entries } = applyBundle({ mode: "cordis" });
+  assert.ok(!entryNames(entries).includes("conversation.view:hnflow"));
+  const unknown = applyBundle();
+  assert.ok(!entryNames(unknown.entries).includes("conversation.view:hnflow"), "an unknown preset shows no tab");
 });

@@ -128,8 +128,9 @@ provider → commands → agents 投影 → MCP → 模型层应用。客户端�
 `dsh.client` 需要 `immediately: true`，否则页面启动时没人导入这个模块。两条 Loader 行
 （`hnflow-ui` 与 preset 内的 `hnflow`）共用这一个工厂，各自带挂载守卫。
 
-输入框的两个位置各有归属，不按服务端 selector 分支：左下角常驻三个会话级控件——Agent
+输入框的两个位置各有归属，不按服务端 selector 分支：左下角三个会话级控件——Agent
 选择器、`▤` 预览与 `⚙` 能力组开关（窗口按会话所属工作区读写 `.hnflow/stack.json`），
+其中 Agent 选择器与 `⚙` 只在 HNFlow 模式下出现，其它模式的输入框保持原样；
 模型层永远接管右下角的模型位（`conversation.input.model`，`priority -1`）。
 切换模式时客户端立刻请求 `GET /api/capability/prepare?sessionId=&cwd=`：宿主按会话
 工作区补写 `.hnflow/stack.json` 并解析一次计划，预览与模型层读同一份热计划，不必等首轮对话。

@@ -38,6 +38,14 @@ function createCapabilityModule(require) {
     const inject = ["slots", "remote", "remote.commands", "remote.session", "sessions"];
 
     /**
+     * Agent preset whose mode owns the HNFlow surfaces.
+     *
+     * The HNFlow half keys its session tab on the same id (`PRESET_ID`), so the
+     * strip and the tab cannot drift apart.
+     */
+    const HNFLOW_PRESET = "hnflow";
+
+    /**
      * The client context that owns the slot registration.
      *
      * Two Loader entries reference this package (the root UI row and the preset
@@ -952,7 +960,7 @@ function createCapabilityModule(require) {
       // The picker is part of the mode, not of the roster: a workspace whose
       // plan is still missing must show the control (with a retry) instead of
       // silently deleting it from the composer.
-      const visible = preset === "hnflow";
+      const visible = preset === HNFLOW_PRESET;
       const empty = agents.length === 0;
 
       const measure = react.useCallback(() => {
@@ -2122,21 +2130,24 @@ const groupsWindow = {
 /**
  * Composer-strip button that opens the workspace capability-group window.
  *
- * The entry sits in the bottom-left strip of every session window, next to the
- * Agent picker and the inventory button. It is not gated on the HNFlow mode: a
- * session may switch groups before it switches its Agent, and this window is
- * the only place group switches happen. The directory it opens is the workspace
- * that owns this session, so a switch lands in that workspace's
+ * The entry belongs to the HNFlow mode only: the strip of any other mode keeps
+ * the controls that mode owns, so a session that has not switched to HNFlow
+ * never sees a group switch it cannot act on. The directory the window opens is
+ * the workspace that owns this session, so a switch lands in that workspace's
  * `.hnflow/stack.json` rather than in whatever row was last clicked elsewhere.
- * @param {{sessionId?: string, sessionsService?: any, useSessions?: Function, useWorkspaces?: Function}} props - slot props.
- * @returns {object} react element.
+ * @param {{sessionId?: string, sessionsService?: any, useSessions?: Function, useWorkspaces?: Function, useProjection?: Function}} props - slot props.
+ * @returns {object|null} react element, or null outside the HNFlow mode.
  */
 function WorkspaceGroupsButton(props) {
+  // `useProjection` is a standard prop of this slot and a stable hook seat, so
+  // the conditional call cannot change the hook order between renders.
+  const preset = typeof props.useProjection === "function" ? props.useProjection("agentPreset") : null;
   const sessionsSnapshot = useOptionalSnapshot(props.useSessions);
   const workspacesSnapshot = useOptionalSnapshot(props.useWorkspaces);
   const sessionId = typeof props.sessionId === "string" ? props.sessionId : "";
   const workspace = sessionWorkspace(sessionsSnapshot, workspacesSnapshot, sessionId, props.sessionsService);
   const label = workspace.length > 0 ? workspace : "工作区尚未确定";
+  if (preset !== HNFLOW_PRESET) return null;
   return h(
     "button",
     {
@@ -2662,8 +2673,9 @@ function GroupsWindow() {
           (props) => h(InventoryBoundary, null, h(InventoryPanel, props))
         )
       );
-      // The workspace-group button closes the strip: it opens the window that
-      // switches the groups of the workspace this session belongs to. The
+      // The workspace-group button is the HNFlow mode's own control: it opens
+      // the window that switches the groups of the workspace this session
+      // belongs to, and the component hides itself in every other mode. The
       // window itself renders once, on the overlay.
       ctx.slots.inject("conversation.input.left", () =>
         ctx.slots.register(
@@ -3696,6 +3708,49 @@ function createHnflowModule(require) {
     }
 
     /**
+     * Read the agent-preset projection of one session.
+     *
+     * The session's own projection face is the source the standard
+     * `useProjection` hook reads, and it is live: switching the mode of the
+     * displayed session publishes here. The list row only carries a summary
+     * value once that session has been opened, so it is the fallback, never the
+     * source.
+     * @param {any} scope - injected `sessions` and `uiSession` services.
+     * @param {string|null} sessionId - displayed session.
+     * @returns {string|null} preset id, or null while unknown.
+     */
+    function sessionPreset(scope, sessionId) {
+      if (typeof sessionId !== "string" || sessionId.length === 0) return null;
+      try {
+        const face = scope.sessions?.binding?.(sessionId)?.session?.projections?.faceOf?.("agentPreset");
+        const live = face && typeof face.getSnapshot === "function" ? face.getSnapshot() : undefined;
+        if (typeof live === "string" || live === null) return live;
+      } catch {
+        // the binding is not materialized yet: read the list row below
+      }
+      const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
+      const value = snapshot?.byId?.[sessionId]?.projectionValues?.agentPreset;
+      return typeof value === "string" || value === null ? value : null;
+    }
+
+    /**
+     * Session the main view displays.
+     *
+     * `uiSession` follows the retained main view; its own fallback picks the row
+     * the main view retains, which keeps the tab tied to what the user sees.
+     * @param {any} scope - injected `sessions` and `uiSession` services.
+     * @returns {string|null} session id, or null when no session is open.
+     */
+    function mainSessionId(scope) {
+      const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
+      if (current && typeof current.key === "string" && current.key.length > 0) return current.key;
+      const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
+      const ids = Array.isArray(snapshot?.ids) ? snapshot.ids : [];
+      const held = ids.find((id) => (snapshot?.byId?.[id]?.retainedBy?.mainView ?? 0) > 0);
+      return typeof held === "string" ? held : null;
+    }
+
+    /**
      * Client plugin body.
      * @param {Record<string, any>} ctx - client context.
      * @returns {void}
@@ -3710,30 +3765,58 @@ function createHnflowModule(require) {
       let disposeView = null;
       try {
         ctx.inject(["sessions", "uiSession"], (scope) => {
-          let last = null;
-          const read = () => {
+          /** Session whose mode decides whether the tab exists. */
+          let watched = null;
+          /** Unsubscribe from that session's agent-preset projection. */
+          let stopPreset = null;
+          /** The tab exists exactly while the displayed session is HNFlow's. */
+          const syncView = () => {
+            const wanted = watched !== null && sessionPreset(scope, watched) === PRESET_ID;
+            if (wanted && disposeView === null) {
+              const dispose = ctx.slots.inject("conversation.view", () =>
+                ctx.slots.register({ name: "conversation.view", id: VIEW_ID, order: 20, label: () => "HNFlow", inject: (sessionId) => ({ ctx, sessionId }) }, SessionView),
+              );
+              disposeView = typeof dispose === "function" ? dispose : () => {};
+            } else if (!wanted && disposeView !== null) {
+              disposeView();
+              disposeView = null;
+            }
+          };
+          /** Follow the displayed session and the projection that names its mode. */
+          const sync = () => {
+            const next = mainSessionId(scope);
+            if (next === watched) {
+              syncView();
+              return;
+            }
+            watched = next;
+            if (stopPreset !== null) {
+              stopPreset();
+              stopPreset = null;
+            }
             try {
-              const current = scope.uiSession?.adapter?.current?.getSnapshot?.();
-              const snapshot = scope.sessions?.list?.getSnapshot?.() ?? null;
-              const id = current && typeof current.key === "string" ? current.key : Array.isArray(snapshot?.ids) ? snapshot.ids[0] : null;
-              const preset = id === null ? null : (snapshot?.byId?.[id]?.projectionValues?.agentPreset ?? null);
-              if (preset === last) return;
-              last = preset;
-              if (preset === PRESET_ID && disposeView === null) {
-                disposeView = ctx.slots.inject("conversation.view", () =>
-                  ctx.slots.register({ name: "conversation.view", id: VIEW_ID, order: 20, label: () => "HNFlow", inject: (sessionId) => ({ ctx, sessionId }) }, SessionView),
-                );
-              } else if (preset !== PRESET_ID && disposeView !== null) {
+              const face = scope.sessions?.binding?.(next)?.session?.projections?.faceOf?.("agentPreset");
+              if (face && typeof face.subscribe === "function") stopPreset = face.subscribe(syncView);
+            } catch {
+              // the binding is not materialized yet; the list read still syncs
+            }
+            syncView();
+          };
+          sync();
+          for (const store of [scope.sessions?.list, scope.uiSession?.adapter?.current]) {
+            if (store && typeof store.subscribe === "function") store.subscribe(sync);
+          }
+          if (typeof scope.effect === "function") {
+            scope.effect(() => () => {
+              if (stopPreset !== null) {
+                stopPreset();
+                stopPreset = null;
+              }
+              if (disposeView !== null) {
                 disposeView();
                 disposeView = null;
               }
-            } catch {
-              // a store that is not ready yet simply retries on the next frame
-            }
-          };
-          read();
-          for (const store of [scope.sessions?.list, scope.uiSession?.adapter?.current]) {
-            if (store && typeof store.subscribe === "function") store.subscribe(read);
+            }, "hnflow: session view");
           }
         });
       } catch {

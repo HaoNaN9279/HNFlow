@@ -68,8 +68,9 @@ JSON 条目带 `id`、`name`、`kind`、`status`、`summary`、`path`、`host_na
 
 ## 5. 工作区能力组窗口
 
-入口是会话输入框左下角的 `⚙` 按钮，与 `▤` 预览、Agent 选择器同排，且在
-`conversation.input.left` 上常驻，不按模式隐藏、不依赖 `contextMenus`。
+入口是会话输入框左下角的 `⚙` 按钮，与 `▤` 预览、Agent 选择器同排，挂在
+`conversation.input.left` 上；组件读会话的 `agentPreset` 投影，只在 HNFlow 模式下渲染，
+其它模式的输入框不出现这个按钮。不依赖 `contextMenus`。
 
 窗口按会话解析目录：优先用 workspaces 快照里 `sessionIds` 含该会话的记录 `path`，
 回退会话 `cwd`。标题栏显示该目录，启停写的是该目录的 `.hnflow/stack.json`，
