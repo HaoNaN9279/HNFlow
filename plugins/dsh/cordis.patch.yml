@@ -7,9 +7,12 @@
 # session is open.
 #
 # The preset's child list mirrors
-# `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` (DSH 0.2.1-rc.5).
+# `@deepseek-ai/dsh-web-app/presets/standard.patch.yml` (DSH 0.2.2-rc.3).
 # Presets have no inheritance, so this list is the anchor to revisit when the
-# DSH minor version changes.
+# DSH minor version changes. A child that no longer resolves makes the registry
+# mark the preset `broken`, which silently removes the mode from the picker.
+# `list_agents` moved into `@deepseek-ai/dsh-tool-subagent-control` in 0.2.2;
+# its old `dsh-tool-subagent-control/list-agents` subpath is gone.
 #
 # Ownership rules:
 #
@@ -134,14 +137,13 @@
             config:
               - id: tool-subagent-control
                 name: '@deepseek-ai/dsh-tool-subagent-control'
-              - id: tool-subagent-list-agents
-                name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'
               - id: tool-subagent
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:
                   provider: spawn
                   toolName: subagent
-                  modelSelectionSettings: true
+                  modelSelection: true
+                  modelDiscovery: true
               - id: tool-subagent-fork
                 name: '@deepseek-ai/dsh-tool-subagent'
                 config:

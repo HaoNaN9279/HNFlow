@@ -123,6 +123,11 @@ DSH 宿主名：`capability-<slug(group-path)>-<name>`。
 provider → commands → agents 投影 → MCP → 模型层应用。客户端同一 bundle 注册页面、
 上下文预览、Agent 选择器与模型层选择。
 
+preset 的子条目照抄 DSH 随包的标准预设（头部注释钉住版本），因为预设没有继承。任一子条目
+解析失败时 registry 把该 preset 标成 `broken`，而新建会话的模式列表只列出健康 preset：HNFlow
+会从模式列表里静默消失，Loader 行却仍是 `active`。诊断只在「设置 → Agent 预设」可见。
+`test/preset-patch.test.js` 在能读到已安装 DSH 时校验每条子条目仍可解析（否则跳过）。
+
 客户端 bundle 只调用一次 `window.__ModuleLoader__.load`，且 `id` 必须等于包名
 （`dsh-hnflow`）：Cordis Loader 按包名导入模块，其它 id 只被登记、永远不会被实例化。
 `dsh.client` 需要 `immediately: true`，否则页面启动时没人导入这个模块。两条 Loader 行

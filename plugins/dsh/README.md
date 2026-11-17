@@ -11,11 +11,14 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 
 升级插件后重启桌面应用：宿主侧（解析、初始化、路由）只在启动时加载，客户端半部会随页面热更新。
 
-- DSH `>=0.2.1-0 <0.3.0`
+- DSH `>=0.2.1-0 <0.3.0`（preset 子条目对齐 0.2.2-rc.3 的标准预设）
 - Python CLI：仓库内 `hnflow-stack`（`src/hnflow_stack`），插件通过它解析能力组
 - 插件对每次调用都钉住仓库（`--repo <repo> --project <dir> <cmd>`，从工作区或插件包路径向上找
   `capability-groups`），不依赖宿主进程的 cwd；因此 `HNFlow repository not found` 不会出现
 - 安装后在会话模式中选择 **HNFlow**；不存在单独的“能力组模式”
+- 新建会话的模式列表里没有 **HNFlow**：说明 preset 挂载失败（registry 标记 `broken`，只列健康
+  preset；诊断在“设置 → Agent 预设”）。多半是 DSH 升级后 preset 子条目失效，按
+  `cordis.patch.yml` 头部注释对齐随包标准预设后重启应用；`test/preset-patch.test.js` 会校验子条目
 
 ## 一个模式里有什么
 
