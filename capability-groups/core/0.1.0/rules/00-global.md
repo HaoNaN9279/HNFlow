@@ -1,6 +1,7 @@
 ---
 name: global
 description: 全局行为规则：中文沟通、先报告后动手、未经许可不改文件不提交、文档从简。
+priority: 10
 on_demand: false
 ---
 # 全局规则

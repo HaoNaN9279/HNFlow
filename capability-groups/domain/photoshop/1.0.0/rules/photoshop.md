@@ -1,6 +1,7 @@
 ---
 name: photoshop
 description: Photoshop DCC 开发规则：脚本与资产流程约定。
+priority: 10
 ---
 
 # Photoshop DCC 开发规则

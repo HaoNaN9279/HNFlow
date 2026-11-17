@@ -1,6 +1,7 @@
 ---
 name: blender
 description: Blender DCC 开发规则：脚本、插件与资产流程约定。
+priority: 10
 ---
 
 # Blender DCC 开发规则

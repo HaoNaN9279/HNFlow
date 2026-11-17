@@ -199,7 +199,7 @@ temperature、permission 等宿主参数。
 
 | 类型 | 规则 |
 |---|---|
-| rules | 递归发现 `rules/**/*.md`；必须有 `name`、`description`；可选 `scope`（`global`/`paths`）、`paths`、`on_demand`、`priority`、`overrides` |
+| rules | 递归发现 `rules/**/*.md`；必须有 `name`、`description`；可选 `scope`（`global`/`paths`）、`paths`、`on_demand`、`priority`（整数，升序加载，缺省 0）、`overrides` |
 | agents | 递归发现 `agents/**/*.md`；必须有 `name`、`description`、`mode`，`mode` 只能是 `primary`、`subagent`、`all` |
 | commands | 递归发现 `commands/**/*.md`；必须有 `name`、`description`，`agent` 可选 |
 | skills | 每个含 `SKILL.md` 的目录一项；`name` 匹配目录名和 `[a-z0-9]+(-[a-z0-9]+)*`；`description` 1-1024 字符；禁止 `metadata` |
@@ -209,7 +209,7 @@ temperature、permission 等宿主参数。
 
 ## 合并与冲突
 
-- rules：祖先先于子层，`global` 规则先于 `paths` 规则，同作用域按 `priority` 排序；子层的 `overrides` 会压掉祖先与同层已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
+- rules：祖先先于子层，`global` 规则先于 `paths` 规则，同作用域按 `priority` 升序、同值按路径加载；子层的 `overrides` 会压掉祖先与同层已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
 - skills：追加；宿主名重复保留后加载者并告警，`sync` 报错。
 - agents、commands、mcp：同名后加载者覆盖。
 - flows：同限定 id 重复时保留首个并告警；不存在跨组覆盖。

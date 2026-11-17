@@ -78,6 +78,25 @@ def test_resolve_core_groups_and_dependencies(repo: Path, project: Path) -> None
     assert plan.skills[0].name == "core-skill"
 
 
+def test_rules_load_in_priority_order_not_filename_order(
+    repo: Path, project: Path
+) -> None:
+    rules = repo / "capability-groups/domain/data/1.0.0/rules"
+    _write(
+        rules / "aaa-late.md",
+        "---\nname: aaa\ndescription: late rule\npriority: 30\n---\n\n# aaa\n",
+    )
+    _write(
+        rules / "zzz-early.md",
+        "---\nname: zzz\ndescription: early rule\npriority: 5\n---\n\n# zzz\n",
+    )
+    init_stack(project, GroupRef("core", "0.1.0"))
+    activate(project, GroupRef("data", ""), repo)
+    plan = resolve_project(repo, project)
+
+    assert [rule.name for rule in plan.rules] == ["global", "base", "data", "zzz", "aaa"]
+
+
 def test_resolve_missing_group_is_warning(repo: Path, project: Path) -> None:
     write_stack(
         project,

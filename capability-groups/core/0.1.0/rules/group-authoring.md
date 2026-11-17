@@ -1,6 +1,7 @@
 ---
 name: group-authoring
 description: 能力组制作规则：目录边界、路径写法、版本标识、校验与交付。
+priority: 30
 on_demand: true
 ---
 # 能力组制作规则

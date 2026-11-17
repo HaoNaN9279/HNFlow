@@ -1,6 +1,7 @@
 ---
 name: image-generation
 description: 图像生成组全局规则：只用免费端点、结果落盘、质量检查与内容边界。
+priority: 10
 ---
 
 # 图像生成规则

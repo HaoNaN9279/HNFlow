@@ -101,7 +101,7 @@ DSH 宿主名：`capability-<slug(group-path)>-<name>`。
 
 合并规则：
 
-- rules 追加，祖先先于子层，`global` 规则先于 `paths` 规则，按 `priority` 排序；子层的
+- rules 追加，祖先先于子层，`global` 规则先于 `paths` 规则，同作用域按 `priority` 升序、同值按路径；子层的
   `overrides` 会压掉祖先与同层同名规则，`on_demand: true` 的规则只注入
   `- <路径>: <description>` 摘要行，正文由 Agent 按需读取；
 - skills 追加，同名宿主名保留后者并告警；

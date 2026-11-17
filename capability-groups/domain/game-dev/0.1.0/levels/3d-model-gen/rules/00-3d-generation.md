@@ -1,6 +1,7 @@
 ---
 name: 3d-generation
 description: 3D 模型生成层规则：免费优先、限流与幂等、结果校验、元数据与图像依赖。
+priority: 10
 ---
 
 # 3D 模型生成规则
