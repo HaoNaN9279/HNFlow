@@ -146,6 +146,10 @@ test("the bundle registers the capability surface in the composer", () => {
   const names = entryNames(entries);
   assert.ok(names.includes("conversation.input.left:capability-agent"), "the agent picker is missing");
   assert.ok(names.includes("conversation.input.left:capability-inventory"), "the context preview is missing");
+  assert.ok(
+    names.includes("conversation.input.left:capability-workspace-groups"),
+    "the workspace-group button is missing",
+  );
   assert.ok(names.includes("settings.section:capability-models"), "the model-layer settings page is missing");
 });
 
@@ -209,21 +213,44 @@ test("the bundle registers the capability-group window on the overlay", () => {
   );
 });
 
-test("the workspace menu opens the window for that directory", () => {
-  const { menus, exports } = applyBundle();
-  const contribution = menus.find((entry) => entry.target === "workspace");
-  assert.ok(contribution, "the workspace context menu contribution is missing");
-  assert.equal(contribution.id, "capability-groups");
-  const actions = contribution.resolve({
-    kind: "workspace",
-    value: { workspaceId: "w1", path: "D:/workspace/HNFlow", displayTitle: "HNFlow" },
-  });
-  assert.equal(actions.length, 1, "the workspace menu must add exactly one entry");
-  assert.equal(actions[0].id, "capability-groups.open");
-  assert.equal(actions[0].label, "HNFlow 能力组…");
-  actions[0].run();
+test("the workspace menu no longer carries the capability-group entry", () => {
+  const { menus } = applyBundle();
+  assert.equal(menus.length, 0, "the entry moved to the session strip; the workspace menu must stay untouched");
+});
+
+test("the session strip opens the window for that session's workspace", () => {
+  const { entries, exports } = applyBundle();
+  const control = entries.find((entry) => entry.entry.id === "capability-workspace-groups");
+  assert.ok(control, "the workspace-group button is missing");
+  const props = control.entry.inject("session-1");
+  assert.equal(props.sessionId, "session-1");
+  assert.equal(typeof props.sessionsService?.list?.getSnapshot, "function");
+  const element = control.component(props);
+  assert.equal(element.type, "button");
+  assert.equal(element.children[0], "⚙");
+  assert.match(element.props.title, /工作区能力组/u);
+  element.props.onClick();
   const state = exports.internals.groupsWindow.snapshot();
   assert.equal(state.open, true);
   assert.equal(state.workspace, "D:/workspace/HNFlow");
   assert.equal(state.title, "HNFlow");
+});
+
+test("the workspace record outranks the session cwd", () => {
+  const { entries, exports } = applyBundle();
+  const control = entries.find((entry) => entry.entry.id === "capability-workspace-groups");
+  const element = control.component({
+    ...control.entry.inject("session-1"),
+    // A session whose cwd is a subdirectory still switches groups on the
+    // workspace root, which is where `.hnflow/stack.json` lives.
+    useSessions: () => ({
+      ids: ["session-1"],
+      byId: { "session-1": { sessionId: "session-1", cwd: "D:\\workspace\\HNFlow\\plugins\\dsh" } },
+    }),
+    useWorkspaces: () => ({
+      items: [{ workspaceId: "w1", path: "D:/workspace/HNFlow", sessionIds: ["session-1"] }],
+    }),
+  });
+  element.props.onClick();
+  assert.equal(exports.internals.groupsWindow.snapshot().workspace, "D:/workspace/HNFlow");
 });
