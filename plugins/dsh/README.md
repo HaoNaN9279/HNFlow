@@ -79,8 +79,8 @@ Agent 不能裁决门禁或替人交付；也没有发布/回滚动作。
 $DSH_HOME/hnflow/runs                          运行状态（storage 不可用时的降级文件）
 ```
 
-激活子层时只写该子层路径，例如 `{"name": "unity/framework/editor", "version": "1.0.0"}`；
-`unity` 与 `unity/framework` 在解析时自动加载，不写入 `stack.json`。
+激活子层时只写该子层路径，例如 `{"name": "game-dev/unity", "version": "0.1.0"}`；
+祖先 `game-dev` 在解析时自动加载，不写入 `stack.json`。子层声明的版本必须等于根版本。
 
 ## 页面
 
