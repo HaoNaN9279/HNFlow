@@ -14,12 +14,11 @@ HNFlow 用一个仓库同时管理：
 ## 2. 分层
 
 ```text
-Layer (core / domain / project)
-  └── Group tree (根版本目录, group.json)
-        ├── 内容目录 rules/ agents/ commands/ skills/ flows/ references/
-        └── levels/<子层>/group.json
-              ├── 内容目录 ...
-              └── levels/<孙层>/group.json
+Group tree (根版本目录, group.json)
+  ├── 内容目录 rules/ agents/ commands/ skills/ flows/ references/
+  └── <子组>/group.json
+        ├── 内容目录 ...
+        └── <孙组>/group.json
 ```
 
 - **Core**：常驻规则、基础 Agent/命令/技能，以及能力组与流程的制作内容（`custom-*`、
@@ -27,18 +26,22 @@ Layer (core / domain / project)
   仓库内 `capability-groups/core/<version>/`。HNFlow 模式固定加载，不需要写进 `stack.json`。
 - **领域组**：`capability-groups/domain/<name>/<version>/`，显式激活。
 - **项目组**：`<project>/.hnflow/groups/<name>/`，无版本目录；同名覆盖仓库组，天然承载
-  未发布的项目内工作流。项目同名根组覆盖整棵仓库子树（含该根的 `levels/`）。
-- **层级**：任意组（Core、领域组、项目组）都可以在根版本目录下用 `levels/<name>/group.json`
-  定义子层，子层可以继续嵌套；最多 8 层。层的 `group.json` 至少写 `guid`、`name`、
-  `description`，`name` 必须等于目录名；`version` 可省略，写了必须等于根版本。
-- 组的唯一标识是路径：根组是 `unity`，子层是 `unity/framework`、`unity/framework/editor`。
-  路径段只允许小写字母、数字与连字符，`levels` 是保留段。
-- 激活一个子层只把它自己的路径写进 `stack.json`；解析时祖先层自动按「根 → 父 → 子」加载，
-  子层拥有全部祖先内容。停用一个仍被活跃子层需要的祖先会被拒绝；停用一个兄弟层不会影响
-  另一个兄弟层。
-- 祖先层内容对子层天然可见，因此祖先层只写层通用内容：不引用子层名称、路径、工具或接口；
-  引擎与工具专用知识留在子层，需要复用时上移。删掉子层整棵目录，祖先内容仍应自洽。
-- 同一层内需要「只对某些目录生效」的内容用规则的 `scope: paths`，需要「正文长、按需查阅」
+  未发布的项目内工作流。项目同名根组覆盖整棵仓库子树（含该根的所有子组）。
+- **层级**：任意组（Core、领域组、项目组）都可以在组根下创建普通目录，并在其中放
+  `group.json` 定义子组；目录名即路径段，子组内同样递归，最多 8 层。子组的 `group.json`
+  至少写 `guid`、`name`、`description`，`name` 必须等于目录名；`version` 可省略，写了必须
+  等于根版本。
+- **内容目录**固定为 `rules/`、`agents/`、`commands/`、`skills/`、`references/`、`flows/`。
+  只有与内容目录同级、且含 `group.json` 的普通目录才是子组；隐藏目录、内容目录、没有
+  `group.json` 的目录都不参与层级。`levels` 只是普通目录名，不再有特殊含义。
+- 组的唯一标识是路径：根组是 `unity`，子组是 `unity/framework`、`unity/framework/editor`。
+  路径段只允许小写字母、数字与连字符。
+- 激活一个子组只把它自己的路径写进 `stack.json`；解析时祖先组自动按「根 → 父 → 子」加载，
+  子组拥有全部祖先内容。停用一个仍被活跃子组需要的祖先会被拒绝；停用一个兄弟组不会影响
+  另一个兄弟组。
+- 祖先组内容对子组天然可见，因此祖先组只写组通用内容：不引用子组名称、路径、工具或接口；
+  引擎与工具专用知识留在子组，需要复用时上移。删掉子组整棵目录，祖先内容仍应自洽。
+- 同一组内需要「只对某些目录生效」的内容用规则的 `scope: paths`，需要「正文长、按需查阅」
   的内容用规则的 `on_demand: true`。
 
 ## 3. 依赖

@@ -21,6 +21,24 @@ class GroupRef:
     disable: list[str] = field(default_factory=list)
 
 
+#: Fixed content directories. A directory with one of these names is content,
+#: never a child capability group, even when it contains its own ``group.json``.
+RULES_DIR = "rules"
+AGENTS_DIR = "agents"
+COMMANDS_DIR = "commands"
+SKILLS_DIR = "skills"
+REFERENCES_DIR = "references"
+FLOWS_DIR = "flows"
+CONTENT_DIRS = (
+    RULES_DIR,
+    AGENTS_DIR,
+    COMMANDS_DIR,
+    SKILLS_DIR,
+    REFERENCES_DIR,
+    FLOWS_DIR,
+)
+
+
 @dataclass
 class GroupMeta:
     """Metadata from ``group.json`` plus resolved paths."""
@@ -40,7 +58,7 @@ class GroupMeta:
 
     @property
     def rules_root(self) -> Path:
-        return self.root / "rules"
+        return self.root / RULES_DIR
 
     @property
     def rules(self) -> list[Path]:
@@ -48,24 +66,24 @@ class GroupMeta:
 
     @property
     def agents(self) -> list[Path]:
-        return _md_rglob(self.root / "agents")
+        return _md_rglob(self.root / AGENTS_DIR)
 
     @property
     def commands(self) -> list[Path]:
-        return _md_rglob(self.root / "commands")
+        return _md_rglob(self.root / COMMANDS_DIR)
 
     @property
     def skills_dir(self) -> Path | None:
-        path = self.root / "skills"
+        path = self.root / SKILLS_DIR
         return path if path.is_dir() else None
 
     @property
     def references(self) -> list[Path]:
-        return _md_rglob(self.root / "references")
+        return _md_rglob(self.root / REFERENCES_DIR)
 
     @property
     def flows(self) -> list[Path]:
-        return _flow_files(self.root / "flows")
+        return _flow_files(self.root / FLOWS_DIR)
 
     @property
     def agents_md(self) -> Path | None:

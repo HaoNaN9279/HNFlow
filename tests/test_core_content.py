@@ -56,4 +56,9 @@ def test_core_loads_the_authoring_content_without_a_group(tmp_path: Path) -> Non
     assert {"group-new", "group-validate", "flow-new"} <= set(plan.commands)
     skills = {skill.name for skill in plan.skills}
     assert {"custom-group", "flow-author"} <= skills
-    assert plan.rules and all(rule.on_demand for rule in plan.rules)
+    rules = {rule.name: rule for rule in plan.rules}
+    assert {"global", "caveman-full", "group-authoring", "hnflow-forge"} <= set(rules)
+    assert rules["global"].on_demand is False
+    assert rules["caveman-full"].on_demand is False
+    assert rules["group-authoring"].on_demand is True
+    assert rules["hnflow-forge"].on_demand is True

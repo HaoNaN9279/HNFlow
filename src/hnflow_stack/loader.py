@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 
 from hnflow_stack.errors import GroupNotFoundError, ToolNotFoundError, HNFlowError
-from hnflow_stack.model import GroupMeta, ToolMeta, read_json
+from hnflow_stack.model import CONTENT_DIRS, GroupMeta, ToolMeta, read_json
 
 _SEMVER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 _SEGMENT = re.compile(r"^[a-z0-9][a-z0-9-]*$")
@@ -14,7 +14,6 @@ _CORE_GROUP = "core"
 _DOMAIN_DIR = "domain"
 _PROJECT_DIR = ".hnflow"
 _PROJECT_GROUPS = "groups"
-_LEVELS_DIR = "levels"
 
 #: Deepest group path accepted, counting the root group as depth 1.
 MAX_GROUP_DEPTH = 8
@@ -30,9 +29,9 @@ def _version_key(version: str) -> tuple[int, ...]:
 def split_group_path(name: str) -> list[str]:
     """Split a capability-group path such as ``unity/framework/editor``.
 
-    A path segment is the directory name of one level. Segments are restricted
-    to lowercase letters, digits and hyphens; ``levels`` is reserved for the
-    nesting container and path traversal is rejected outright.
+    A path segment is the directory name of one group. Segments are restricted
+    to lowercase letters, digits and hyphens; path traversal is rejected
+    outright.
     """
     text = name.strip() if isinstance(name, str) else ""
     if not text:
@@ -47,7 +46,7 @@ def split_group_path(name: str) -> list[str]:
             f"invalid capability group path '{name}': at most {MAX_GROUP_DEPTH} levels"
         )
     for part in parts:
-        if part in {"", ".", "..", _LEVELS_DIR} or _SEGMENT.match(part) is None:
+        if part in {"", ".", ".."} or _SEGMENT.match(part) is None:
             raise HNFlowError(
                 f"invalid capability group path '{name}': segment '{part}' is not allowed"
             )
@@ -81,17 +80,19 @@ def load_group(
     *,
     project: Path | None = None,
 ) -> GroupMeta:
-    """Load one capability group or nested level.
+    """Load one capability group.
 
     The first path segment picks the tree root: core lives in
     ``capability-groups/core``; every other repository group lives in
     ``capability-groups/domain/<root>``. A project-local root at
     ``<project>/.hnflow/groups/<root>`` shadows the repository tree of the same
-    name. Further segments descend through ``levels/<segment>/`` directories.
+    name. Further segments descend into child group directories, each marked by
+    its own ``group.json``.
 
-    A level inherits the root version: its ``group.json`` may omit ``version``,
-    and a declared version must equal the root version. When *version* is
-    omitted for a repository group, the highest semver root is chosen.
+    A child group inherits the root version: its ``group.json`` may omit
+    ``version``, and a declared version must equal the root version. When
+    *version* is omitted for a repository group, the highest semver root is
+    chosen.
     """
     parts = split_group_path(name)
     root_name = parts[0]
@@ -127,7 +128,7 @@ def _select_version(base: Path, name: str, version: str | None) -> Path:
 def _load_tree(
     root: Path, parts: list[str], version: str | None, *, project: bool
 ) -> GroupMeta:
-    """Read every node from *root* down to the requested level."""
+    """Read every group from *root* down to the requested child."""
     split_group_path("/".join(parts))
     current = root
     parent: str | None = None
@@ -135,6 +136,8 @@ def _load_tree(
     for index, segment in enumerate(parts):
         config = current / "group.json"
         path_name = "/".join(parts[: index + 1])
+        if index > 0 and segment in CONTENT_DIRS:
+            raise GroupNotFoundError(f"capability group '{path_name}' not found")
         if not config.is_file():
             raise GroupNotFoundError(f"capability group '{path_name}' not found")
         data = read_json(config)
@@ -180,7 +183,7 @@ def _load_tree(
         if index == len(parts) - 1:
             return meta
         parent = path_name
-        current = current / _LEVELS_DIR / parts[index + 1]
+        current = current / parts[index + 1]
 
     raise GroupNotFoundError(f"capability group '{'/'.join(parts)}' not found")
 
@@ -250,16 +253,22 @@ def _discover_repo_groups(repo: Path) -> list[GroupMeta]:
 
 
 def _walk_tree(root: Path, parts: list[str], project: bool) -> list[GroupMeta]:
-    """Load one root and every valid level below it, depth first."""
+    """Load one root and every child group below it, depth first.
+
+    Child groups are ordinary sibling directories marked by ``group.json``.
+    Directories named like a content directory are content, never groups; other
+    directories without ``group.json`` are ignored.
+    """
     found = [_load_tree(root, parts, None, project=project)]
     current = root
     for segment in parts[1:]:
-        current = current / _LEVELS_DIR / segment
-    levels = current / _LEVELS_DIR
-    if not levels.is_dir():
-        return found
-    for child in sorted(levels.iterdir()):
-        if not child.is_dir() or not (child / "group.json").is_file():
+        current = current / segment
+    for child in sorted(current.iterdir()):
+        if not child.is_dir():
+            continue
+        if child.name in CONTENT_DIRS or child.name.startswith("."):
+            continue
+        if not (child / "group.json").is_file():
             continue
         try:
             found.extend(_walk_tree(root, [*parts, child.name], project))

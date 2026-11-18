@@ -104,7 +104,7 @@ View/UI/UIManager.cs                          → Addressables（预加载、回
 
 ## 4. 逐层内容
 
-各层目录均位于 `capability-groups/domain/game-dev/0.1.0/levels/unity/levels/<层名>/`，下文只写层内相对路径；`# 常驻` / `# 按需` 对应 §2.5 的注入方式。
+各层目录位于 `capability-groups/domain/game-dev/0.1.0/unity/` 下：`framework/`、`framework/runtime/`、`framework/runtime/assets/`、`framework/runtime/assets/gameplay/{presentation,animation}/`、`framework/runtime/network/`。下文只写层内相对路径；`# 常驻` / `# 按需` 对应 §2.5 的注入方式。
 
 ### 4.1 `framework`
 
@@ -277,7 +277,7 @@ hnflow-stack validate
 hnflow-stack resolve --json --project <项目>
 ```
 
-子层版本必须等于组根版本 `0.1.0`，层 `name` 必须等于目录名。激活只写被选中的层，祖先由解析器按路径补齐。
+子组版本必须等于组根版本 `0.1.0`，子组 `name` 必须等于目录名。激活只写被选中的组，祖先由解析器按路径补齐。
 
 ## 10. 风险与待确认
 

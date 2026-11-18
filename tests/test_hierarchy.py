@@ -1,4 +1,4 @@
-"""Nested capability-group levels."""
+"""Nested capability groups."""
 
 from __future__ import annotations
 
@@ -68,11 +68,11 @@ def arena(tmp_path: Path) -> Path:
     _group(root, "arena", "1" * 32, version="1.0.0", extends=[])
     _rule(root, "rules/00-arena.md", "arena-rule")
 
-    framework = root / "levels/framework"
+    framework = root / "framework"
     _group(framework, "framework", "2" * 32)
     _rule(framework, "rules/10-framework.md", "shared")
 
-    editor = framework / "levels/editor"
+    editor = framework / "editor"
     _group(editor, "editor", "3" * 32)
     _rule(editor, "rules/20-editor.md", "shared", overrides=["shared"])
     _write(
@@ -84,7 +84,7 @@ def arena(tmp_path: Path) -> Path:
         "---\nname: EditorAgent\ndescription: editor agent\nmode: subagent\n---\n\n# editor\n",
     )
 
-    docs = framework / "levels/docs"
+    docs = framework / "docs"
     _group(docs, "docs", "4" * 32)
     _rule(docs, "rules/docs.md", "docs-rule")
     return repo
@@ -101,7 +101,7 @@ def test_load_nested_level_exposes_ancestry(arena: Path) -> None:
     assert group.description == "editor group"
 
 
-def test_discover_groups_lists_every_level(arena: Path) -> None:
+def test_discover_groups_lists_every_group(arena: Path) -> None:
     names = {group.name for group in discover_groups(arena)}
 
     assert names == {
@@ -113,13 +113,55 @@ def test_discover_groups_lists_every_level(arena: Path) -> None:
     }
 
 
+def test_child_group_is_identified_by_group_json(arena: Path) -> None:
+    group = load_group(arena, "arena/framework")
+
+    assert group.name == "arena/framework"
+    assert group.parent == "arena"
+    assert group.root == arena / "capability-groups/domain/arena/1.0.0/framework"
+
+
+def test_directory_without_group_json_is_ignored(arena: Path) -> None:
+    stray = arena / "capability-groups/domain/arena/1.0.0/stray"
+    _write(stray / "notes.md", "# notes\n")
+
+    names = {group.name for group in discover_groups(arena)}
+    assert "arena/stray" not in names
+
+
+def test_content_directory_with_group_json_is_not_a_group(arena: Path) -> None:
+    root = arena / "capability-groups/domain/arena/1.0.0"
+    _group(root / "rules", "rules", "e" * 32)
+
+    names = {group.name for group in discover_groups(arena)}
+    assert "arena/rules" not in names
+    with pytest.raises(HNFlowError):
+        load_group(arena, "arena/rules")
+
+
+def test_levels_is_an_ordinary_group_segment(arena: Path) -> None:
+    root = arena / "capability-groups/domain/arena/1.0.0"
+    _group(root / "levels", "levels", "f" * 32)
+
+    group = load_group(arena, "arena/levels")
+    assert group.name == "arena/levels"
+    assert group.parent == "arena"
+
+
+def test_child_group_name_must_match_directory(arena: Path) -> None:
+    root = arena / "capability-groups/domain/arena/1.0.0"
+    _group(root / "wrong-name", "other", "a" * 32)
+
+    with pytest.raises(HNFlowError):
+        load_group(arena, "arena/wrong-name")
+
+
 @pytest.mark.parametrize(
     "name",
     [
         "arena//framework",
         "/arena",
         "arena/",
-        "arena/levels",
         "arena/../framework",
         "Arena",
         "arena/framework/editor/deep/too/many/levels/here",
@@ -172,7 +214,7 @@ def test_groups_document_keeps_ancestor_version_of_explicit_child(
 ) -> None:
     newer = arena / "capability-groups/domain/arena/2.0.0"
     _group(newer, "arena", "7" * 32, version="2.0.0")
-    _group(newer / "levels/framework", "framework", "8" * 32)
+    _group(newer / "framework", "framework", "8" * 32)
 
     init_stack(project, GroupRef("core", "0.1.0"))
     activate(project, GroupRef("arena/framework/editor", "1.0.0"), arena)
@@ -218,7 +260,7 @@ def test_same_level_override_replaces_earlier_rule(arena: Path, project: Path) -
 def test_project_root_shadows_repo_descendants(arena: Path, project: Path) -> None:
     repo_local = arena / "capability-groups/domain/local/1.0.0"
     _group(repo_local, "local", "a" * 32, version="1.0.0")
-    _group(repo_local / "levels/child", "child", "b" * 32)
+    _group(repo_local / "child", "child", "b" * 32)
     local = project / ".hnflow/groups/local"
     _group(local, "local", "c" * 32)
 
@@ -232,7 +274,7 @@ def test_project_root_shadows_repo_descendants(arena: Path, project: Path) -> No
 def test_project_local_nested_group(arena: Path, project: Path) -> None:
     local = project / ".hnflow/groups/local"
     _group(local, "local", "5" * 32)
-    child = local / "levels/child"
+    child = local / "child"
     _group(child, "child", "6" * 32)
 
     group = load_group(arena, "local/child", project=project)

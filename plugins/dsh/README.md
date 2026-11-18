@@ -36,10 +36,10 @@ dsh plugin --profile desktop add "<repo>/plugins/dsh"
 ## 工作流属于能力组
 
 - 组根流程：`capability-groups/<layer>/<name>/<version>/flows/<id>.flow.json`
-- 对外的键：`<group>/<id>`；子层为 `<group>/<level>/<id>`
-- 组内层级：根版本目录下 `levels/<level>/group.json` 可继续嵌套；子层的规则/技能/Agent/命令/流程与祖先层一起加载
+- 对外的键：`<group>/<id>`；子组为 `<group>/<child>/<id>`
+- 组内层级：组根下与内容目录同级、含 `group.json` 的普通目录即子组，可继续嵌套；子组的规则/技能/Agent/命令/流程与祖先组一起加载
 - 项目内新建：`hnflow_author create` 写 `<workspace>/.hnflow/groups/<group>/flows/<id>.flow.json`
-- 组可用本组、祖先层及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流
+- 组可用本组、祖先组及 `extends` 依赖组的全部规则、技能、Agent、命令、工具与工作流
 
 没有独立资产库，没有 `list_library` / `add_ref` / `pin` / `publish` / `rollback` /
 `promote` / `import`，也没有独立的 revision 文件。`.hnflow/lock.json` 只记录能力组解析闭包，
@@ -70,17 +70,17 @@ Agent 不能裁决门禁或替人交付；也没有发布/回滚动作。
 
 ```text
 <repo>/capability-groups/.../group.json
-<repo>/capability-groups/.../levels/<level>/group.json
+<repo>/capability-groups/.../<child>/group.json
 <repo>/capability-groups/.../flows/<id>.flow.json
 <workspace>/.hnflow/stack.json                 显式激活的能力组路径
-<workspace>/.hnflow/groups/<name>/             项目本地能力组（无版本目录，可含 levels/）
+<workspace>/.hnflow/groups/<name>/             项目本地能力组（无版本目录，可含子组目录）
 <workspace>/.hnflow/groups/<name>/flows/       项目本地工作流
 <workspace>/.hnflow/triggers.json              触发器（由人维护）
 $DSH_HOME/hnflow/runs                          运行状态（storage 不可用时的降级文件）
 ```
 
-激活子层时只写该子层路径，例如 `{"name": "game-dev/unity", "version": "0.1.0"}`；
-祖先 `game-dev` 在解析时自动加载，不写入 `stack.json`。子层声明的版本必须等于根版本。
+激活子组时只写该子组路径，例如 `{"name": "game-dev/unity/framework", "version": "0.1.0"}`；
+祖先 `game-dev` 与 `game-dev/unity` 在解析时自动加载，不写入 `stack.json`。子组声明的版本必须等于根版本。
 
 ## 页面
 

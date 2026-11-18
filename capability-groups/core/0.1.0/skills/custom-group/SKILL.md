@@ -39,7 +39,9 @@ capability-groups/domain/<name>/<version>/
 ├── agents/         # 递归发现 *.md，必须含 name / description / mode
 ├── commands/       # 递归发现 *.md，必须含 name / description
 ├── skills/         # 每个技能一个目录，内含 SKILL.md
-└── references/     # 可选参考资料，不参与解析
+├── references/     # 可选参考资料，不参与解析
+├── flows/          # 可选，工作流 *.flow.json
+└── <child>/        # 可选，子能力组：目录名即路径段，内含 group.json
 ```
 
 硬性边界：
@@ -99,16 +101,16 @@ python -c "import uuid; print(uuid.uuid4().hex)"
 
 ---
 
-## 5. 层级与内容归属
+## 5. 子能力组与内容归属
 
-层用 `levels/<name>/group.json` 定义，路径形如 `unity/framework/editor`；祖先内容对子层天然可见。
+在组根下创建普通目录并在其中放 `group.json`，该目录就成为子能力组，路径形如 `unity/framework/editor`；目录名即路径段，子组内同样递归，最多 8 层。内容目录固定为 `rules/`、`agents/`、`commands/`、`skills/`、`references/`、`flows/`；只有与内容目录同级、含 `group.json` 的普通目录才是子组，隐藏目录、内容目录和无 `group.json` 的目录都不参与层级。祖先内容对子组天然可见。
 
-- 祖先层只放层通用、与子层无关的内容：不写子层名、路径、工具、端点、接口或流程，也不按某个子层的需求定制措辞。
-- 祖先内容用正面陈述，不写「引擎无关」「不绑定某引擎/工具」这类否定式标注：子层会继承祖先，标注在具体引擎里会显得自相矛盾。
-- 子层只写增量，不复制祖先内容；引擎/工具/接口专用知识留在使用它的层。
-- 要跨层复用下层经验时，抽象掉专用名词后上移到共同祖先。
-- 引用只从子层指向祖先；祖先不反向引用子层。根的 `group.json` 的 `description` 同样不提子层。
-- 检查：删掉子层整棵目录后，祖先层内容仍完整自洽。
+- 祖先组只放组通用、与子组无关的内容：不写子组名、路径、工具、端点、接口或流程，也不按某个子组的需求定制措辞。
+- 祖先内容用正面陈述，不写「引擎无关」「不绑定某引擎/工具」这类否定式标注：子组会继承祖先，标注在具体引擎里会显得自相矛盾。
+- 子组只写增量，不复制祖先内容；引擎/工具/接口专用知识留在使用它的组。
+- 要跨组复用下层经验时，抽象掉专用名词后上移到共同祖先。
+- 引用只从子组指向祖先；祖先不反向引用子组。根的 `group.json` 的 `description` 同样不提子组。
+- 检查：删掉子组整棵目录后，祖先组内容仍完整自洽。
 
 ---
 
@@ -118,11 +120,12 @@ python -c "import uuid; print(uuid.uuid4().hex)"
 1. 确认位置：Core / 领域组 / 项目激活
 2. 选择名称与版本，确认仓库中没有同名同版本目录
 3. 创建 <root>/group.json（guid、name、version、description）
-4. 按需创建 rules/、agents/、commands/、skills/
-5. 内容是否只对某些目录生效：是 → 该规则加 scope: paths + paths；正文长且按需查阅 → on_demand: true
-6. 每个内容文件写 frontmatter（见对应 custom-* 技能）
-7. 在临时项目激活该组，运行 hnflow-stack validate 与 resolve --json 验证
-8. 发布：提交仓库；项目侧更新 stack.json 版本并 sync
+4. 按需创建 rules/、agents/、commands/、skills/、references/、flows/
+5. 需要子能力组：创建 <root>/<child>/group.json，目录名与 name 一致
+6. 内容是否只对某些目录生效：是 → 该规则加 scope: paths + paths；正文长且按需查阅 → on_demand: true
+7. 每个内容文件写 frontmatter（见对应 custom-* 技能）
+8. 在临时项目激活该组，运行 hnflow-stack validate 与 resolve --json 验证
+9. 发布：提交仓库；项目侧更新 stack.json 版本并 sync
 ```
 
 验证命令：

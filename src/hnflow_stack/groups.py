@@ -16,11 +16,11 @@ from pathlib import Path
 
 from hnflow_stack.frontmatter import frontmatter_text, parse_frontmatter
 from hnflow_stack.loader import _version_key, discover_groups, project_groups_dir
-from hnflow_stack.model import GroupMeta, ProjectStack, read_json
+from hnflow_stack.model import CONTENT_DIRS, GroupMeta, ProjectStack, read_json
 from hnflow_stack.project import read_stack
 
 #: Content kinds reported per group, in display order.
-CONTENT_KINDS = ("rules", "agents", "commands", "skills", "references", "flows")
+CONTENT_KINDS = CONTENT_DIRS
 
 
 def groups_document(repo: Path, project: Path) -> dict[str, object]:

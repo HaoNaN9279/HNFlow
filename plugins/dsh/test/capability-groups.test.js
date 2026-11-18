@@ -181,7 +181,7 @@ test("nested group paths pass through argv and are validated", () => {
   assert.match(groupPathProblem("unity/../editor"), /not allowed/u);
   assert.match(groupPathProblem("unity\\editor"), /forward slashes/u);
   assert.match(groupPathProblem("/unity"), /slash/u);
-  assert.match(groupPathProblem("unity/levels"), /not allowed/u);
+  assert.equal(groupPathProblem("unity/levels"), null);
   assert.match(groupPathProblem("Unity"), /not allowed/u);
   assert.match(groupPathProblem("a/b/c/d/e/f/g/h/i"), /too many levels/u);
 });

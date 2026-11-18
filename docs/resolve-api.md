@@ -38,7 +38,7 @@ hnflow-stack resolve --json [--mode project|capabilities] [--project <project-di
       "guid": "32hex",
       "name": "unity/framework/editor",
       "version": "1.0.0",
-      "root": ".../capability-groups/domain/unity/1.0.0/levels/framework/levels/editor",
+      "root": ".../capability-groups/domain/unity/1.0.0/framework/editor",
       "extends": [],
       "tools": ["tool:..."],
       "parent": "unity/framework",
@@ -164,17 +164,17 @@ temperature、permission 等宿主参数。
       "parent": "unity/framework",
       "depth": 2,
       "ancestors": ["unity", "unity/framework"],
-      "root": ".../levels/editor",
+      "root": ".../framework/editor",
       "contents": { "rules": [], "agents": [], "commands": [], "skills": [], "references": [], "flows": [] }
     }
   ]
 }
 ```
 
-- `explicit` 表示路径直接写在 `stack.json`；`active` 还包含被显式激活的子层隐式带上的祖先。
+- `explicit` 表示路径直接写在 `stack.json`；`active` 还包含被显式激活的子组隐式带上的祖先。
 - 同一路径只列一项：项目组覆盖仓库组，显式版本优先，否则取最高 semver；项目同名根组
   同时隐藏该根下的仓库子树。
-- `contents` 只列本层自己的文件，不含祖先或子层。
+- `contents` 只列本组自己的文件，不含祖先或子组。
 
 ## 工作流校验
 
@@ -209,7 +209,7 @@ temperature、permission 等宿主参数。
 
 ## 合并与冲突
 
-- rules：祖先先于子层，`global` 规则先于 `paths` 规则，同作用域按 `priority` 升序、同值按路径加载；子层的 `overrides` 会压掉祖先与同层已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
+- rules：祖先先于子组，`global` 规则先于 `paths` 规则，同作用域按 `priority` 升序、同值按路径加载；子组的 `overrides` 会压掉祖先与同组已收集的同名规则；`stack` 的 `disable` 按限定 id 或裸名剔除。
 - skills：追加；宿主名重复保留后加载者并告警，`sync` 报错。
 - agents、commands、mcp：同名后加载者覆盖。
 - flows：同限定 id 重复时保留首个并告警；不存在跨组覆盖。

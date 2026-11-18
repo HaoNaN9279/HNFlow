@@ -149,7 +149,7 @@ export function groupPathProblem(group) {
   const parts = group.split('/')
   if (parts.length > 8) return 'group path has too many levels'
   for (const part of parts) {
-    if (part === '' || part === '.' || part === '..' || part === 'levels') {
+    if (part === '' || part === '.' || part === '..') {
       return `group path segment '${part}' is not allowed`
     }
     if (!/^[a-z0-9][a-z0-9-]*$/.test(part)) return `group path segment '${part}' is not allowed`
