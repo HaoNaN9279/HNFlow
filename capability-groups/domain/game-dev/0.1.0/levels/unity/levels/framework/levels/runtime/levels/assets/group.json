@@ -1,0 +1,7 @@
+{
+  "guid": "a9c0407a906f4f9e9e7bd7fea68049d3",
+  "name": "assets",
+  "version": "0.1.0",
+  "description": "资源与内容数据：Addressables 加载释放、场景组、配置表与本地化文本。",
+  "extends": []
+}

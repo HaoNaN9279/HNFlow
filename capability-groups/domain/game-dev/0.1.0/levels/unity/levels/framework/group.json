@@ -1,0 +1,7 @@
+{
+  "guid": "e128cf10a2494de1a58c97aa858197f1",
+  "name": "framework",
+  "version": "0.1.0",
+  "description": "Unity 游戏框架的使用入口与通用约定：工程接入、启动顺序、程序集边界、构建与模块状态核对。",
+  "extends": []
+}

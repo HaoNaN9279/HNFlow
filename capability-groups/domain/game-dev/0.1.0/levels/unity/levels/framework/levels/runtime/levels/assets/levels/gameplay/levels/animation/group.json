@@ -1,0 +1,7 @@
+{
+  "guid": "d1fa962dc48641e08f7c1c35bb5987de",
+  "name": "animation",
+  "version": "0.1.0",
+  "description": "动画：逻辑状态机与请求、表现层快照消费、Playable 使用限制与编辑器工具。",
+  "extends": []
+}

@@ -1,0 +1,7 @@
+{
+  "guid": "9541f05b6a494b5ea855ff22e2d572b7",
+  "name": "runtime",
+  "version": "0.1.0",
+  "description": "运行期基础设施：流程与 MVC、对象池、通用工具库、物理世界。",
+  "extends": []
+}

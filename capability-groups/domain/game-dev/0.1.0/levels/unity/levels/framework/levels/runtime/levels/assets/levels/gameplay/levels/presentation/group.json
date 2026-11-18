@@ -1,0 +1,7 @@
+{
+  "guid": "3562d8117bc34f87917c13501393bdf8",
+  "name": "presentation",
+  "version": "0.1.0",
+  "description": "表现层：UI 面板与弹窗、输入映射、相机、过场播放与实体视图接线。",
+  "extends": []
+}

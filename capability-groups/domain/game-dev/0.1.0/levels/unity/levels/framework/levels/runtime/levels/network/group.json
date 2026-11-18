@@ -1,0 +1,7 @@
+{
+  "guid": "4a40e778639b42189c265d6e7dd00ebc",
+  "name": "network",
+  "version": "0.1.0",
+  "description": "网络与热更：锁步帧同步、FishNet 传输、预测回滚、Lua 与 HybridCLR 脚本热更。",
+  "extends": []
+}

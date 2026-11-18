@@ -1,0 +1,7 @@
+{
+  "guid": "b39e947e0f4a46928f529b8bd0435ce9",
+  "name": "gameplay",
+  "version": "0.1.0",
+  "description": "玩法逻辑：GameplayTag 与 HFSM、实体与图数据、战斗数值、任务与背包。",
+  "extends": []
+}
