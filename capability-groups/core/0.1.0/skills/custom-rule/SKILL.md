@@ -30,7 +30,7 @@ HNFlow 不写入任何 Agent 的专有配置目录，也不复制或链接内容
 
 ```text
 capability-groups/core/0.1.0/rules/
-├── 00-global.md          # 适用于所有会话的全局规则
+├── <name>.md             # 一个文件一个主题
 └── <category>-<name>.md  # 其他全局规则
 ```
 
@@ -88,7 +88,7 @@ overrides: ["conventions"]                 # 可选：压掉同组已收集的�
 
 格式要求：
 
-- **文件名**：使用 `<name>.md`，数字前缀控制加载顺序（如 `00-global.md`）
+- **文件名**：使用 `<name>.md`，不加数字前缀；需要固定先后时调 `priority`，不要靠文件名排序
 - **frontmatter**：位于文件开头，必须包含 `name` 与 `description`
 - **内容**：frontmatter 之后以 `# 规则标题` 开头，后续为具体规则内容
 - **语言**：使用简体中文，专有名词保留原文
@@ -157,12 +157,12 @@ description: 一句话说明这条规则管什么
 
 | 规则类型 | 放置位置 | 示例 |
 |----------|----------|------|
-| 全局行为规范 | `capability-groups/core/0.1.0/rules/00-global.md` | 沟通风格、安全策略 |
-| 编码规范 | `capability-groups/core/0.1.0/rules/01-coding.md` | TypeScript 规范、命名约定 |
+| 全局行为规范 | `capability-groups/core/0.1.0/rules/global.md` | 沟通风格、安全策略 |
+| 编码规范 | `capability-groups/core/0.1.0/rules/coding.md` | TypeScript 规范、命名约定 |
 | 领域通用规则 | `capability-groups/domain/<group>/<version>/rules/<name>.md` | 框架级目录约定 |
 | 目录限定规则 | 同组 `rules/<name>.md` + `scope: paths` | Unity 战斗物理规范 |
 | 按需长文档 | 同组 `rules/<name>.md` + `on_demand: true` | 已知 bug 清单、API 速查 |
-| 工作流规则 | `capability-groups/core/0.1.0/rules/02-workflow.md` | Git 流程、PR 规范 |
+| 工作流规则 | `capability-groups/core/0.1.0/rules/workflow.md` | Git 流程、PR 规范 |
 
 ---
 
