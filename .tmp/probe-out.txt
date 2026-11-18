@@ -1,5 +1,0 @@
-argv=["C:\\Users\\HaoNaN\\AppData\\Local\\Programs\\DeepSeek Harness\\DeepSeek Harness.exe","D:\\workspace\\HNFlow\\.tmp\\probe.js"]
-versions="44.7.0"
-existsRoot=true
-existsAsar=true
-names=8

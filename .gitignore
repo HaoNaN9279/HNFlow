@@ -9,6 +9,7 @@ plugins/dsh/dist/
 # Local runtime state, test harnesses and logs
 temp/
 testtmp/
+.tmp/
 .hnflow/lock.json
 .pytest-tmp/
 .vibestack/
